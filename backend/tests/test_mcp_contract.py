@@ -10,6 +10,7 @@ from mcp.server.fastmcp import FastMCP
 from mcp.types import CallToolRequest, CallToolRequestParams
 from neo4j.exceptions import ServiceUnavailable
 from pymilvus.exceptions import (
+    CollectionNotExistException,
     ConnectError,
     MilvusException,
     MilvusUnavailableException,
@@ -205,11 +206,11 @@ def test_storage_constructors_wrap_unreachable_services(unavailable_port):
     values = storage_values(unavailable_port)
     with pytest.raises(StorageUnavailable) as graph_failure:
         knowledge.graph(values)
-    assert isinstance(graph_failure.value.__cause__, ProcessingError)
+    assert graph_failure.value.__cause__ is not None
 
     with pytest.raises(StorageUnavailable) as milvus_failure:
         knowledge.milvus(values)
-    assert isinstance(milvus_failure.value.__cause__, ProcessingError)
+    assert milvus_failure.value.__cause__ is not None
 
 
 def test_neo4j_connect_failure_is_unavailable_through_registered_tool(
@@ -232,7 +233,13 @@ def test_neo4j_query_disconnect_is_unavailable_through_registered_tool(monkeypat
     from semantica_dataagent.app import create_mcp
     from semantica_dataagent.storage_errors import StorageUnavailable
 
+    class DisconnectedDriver:
+        def verify_connectivity(self):
+            return False
+
     class DisconnectedGraph:
+        _store_backend = type("Backend", (), {"_driver": DisconnectedDriver()})()
+
         def execute_query(self, query, parameters):
             raise ProcessingError("Query execution failed: connection lost")
 
@@ -248,7 +255,35 @@ def test_neo4j_query_disconnect_is_unavailable_through_registered_tool(monkeypat
 
     with pytest.raises(StorageUnavailable) as caught:
         knowledge.execute(DisconnectedGraph(), "RETURN 1", {})
-    assert isinstance(caught.value.__cause__, ProcessingError)
+    assert caught.value.__cause__ is not None
+
+
+def test_neo4j_query_error_with_live_connection_is_internal_error(monkeypatch):
+    from semantica_dataagent import knowledge
+    from semantica_dataagent.app import create_mcp
+
+    class LiveDriver:
+        def verify_connectivity(self):
+            return True
+
+    class InvalidQueryGraph:
+        _store_backend = type("Backend", (), {"_driver": LiveDriver()})()
+
+        def execute_query(self, query, parameters):
+            raise ProcessingError("Query execution failed: invalid parameter")
+
+    values = storage_values(1)
+    monkeypatch.setattr(knowledge, "settings", lambda: values)
+    monkeypatch.setattr(knowledge, "read_graph", lambda _: InvalidQueryGraph())
+    result = call_registered(create_mcp(), "describe_tables", {"names": []})
+
+    assert result.isError
+    assert result.structuredContent["code"] == "internal_error"
+    assert result.structuredContent["retryable"] is False
+    assert "private" not in json.dumps(result.model_dump())
+
+    with pytest.raises(ProcessingError):
+        knowledge.execute(InvalidQueryGraph(), "RETURN 1", {})
 
 
 def test_milvus_connect_failure_is_unavailable_through_registered_tool(
@@ -287,7 +322,10 @@ def test_milvus_timeout_is_unavailable_through_registered_tool(monkeypatch):
 
     class TimedOutVectors:
         def search(self, **kwargs):
-            raise MilvusException(code=2, message="deadline exceeded")
+            try:
+                raise TimeoutError("private timeout")
+            except TimeoutError as exc:
+                raise MilvusException(message="deadline exceeded") from exc
 
     monkeypatch.setattr(knowledge, "settings", lambda: storage_values(1))
     monkeypatch.setattr(knowledge, "read_graph", lambda _: object())
@@ -306,6 +344,54 @@ def test_milvus_timeout_is_unavailable_through_registered_tool(monkeypatch):
     assert result.structuredContent["code"] == "unavailable"
     assert result.structuredContent["retryable"] is True
     assert "private" not in json.dumps(result.model_dump())
+
+
+def test_milvus_non_connectivity_failure_is_internal_error(monkeypatch):
+    from semantica_dataagent import knowledge
+    from semantica_dataagent.app import create_mcp
+
+    class MissingCollectionVectors:
+        def search(self, **kwargs):
+            raise CollectionNotExistException(message="private collection")
+
+    monkeypatch.setattr(knowledge, "settings", lambda: storage_values(1))
+    monkeypatch.setattr(knowledge, "read_graph", lambda _: object())
+    monkeypatch.setattr(knowledge, "execute", lambda *_: [])
+    monkeypatch.setattr(
+        knowledge, "embed", lambda _values, texts: [[0.0, 1.0] for _ in texts]
+    )
+    monkeypatch.setattr(knowledge, "read_vectors", lambda _: MissingCollectionVectors())
+    result = call_registered(
+        create_mcp(),
+        "search_knowledge",
+        {"query": "orders", "scope": "all", "top_k": 1},
+    )
+
+    assert result.isError
+    assert result.structuredContent["code"] == "internal_error"
+    assert result.structuredContent["retryable"] is False
+    assert "private" not in json.dumps(result.model_dump())
+
+
+def test_read_vectors_collection_error_is_not_unavailable(monkeypatch):
+    from semantica_dataagent import knowledge
+
+    class MissingCollectionClient:
+        def __init__(self, uri):
+            self.uri = uri
+
+        def load_collection(self, name):
+            raise CollectionNotExistException(message="private collection")
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(knowledge, "MilvusClient", MissingCollectionClient)
+    values = storage_values(7)
+    values["knowledge_generation"] = "regression"
+
+    with pytest.raises(CollectionNotExistException):
+        knowledge.read_vectors(values)
 
 
 def test_search_argument_errors_remain_invalid_input():

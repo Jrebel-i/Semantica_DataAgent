@@ -11,9 +11,18 @@ from pathlib import Path
 from threading import Lock
 from urllib.parse import quote, urlsplit
 
+import grpc
 import numpy as np
 from cryptography.fernet import Fernet
+from neo4j import GraphDatabase
+from neo4j.exceptions import DatabaseUnavailable, ServiceUnavailable, SessionExpired
 from pymilvus import MilvusClient, utility
+from pymilvus.client.types import Status
+from pymilvus.exceptions import (
+    ConnectError,
+    MilvusException,
+    MilvusUnavailableException,
+)
 from semantica.graph_store import GraphStore
 from semantica.vector_store.milvus_store import MilvusStore
 
@@ -42,6 +51,105 @@ def settings():
     return values
 
 
+def _close_quietly(resource):
+    if resource is None:
+        return
+    for name in ("close", "disconnect"):
+        close = getattr(resource, name, None)
+        if callable(close):
+            with suppress(Exception):
+                close()
+            return
+
+
+def _neo4j_unreachable(values):
+    driver = None
+    try:
+        driver = GraphDatabase.driver(
+            values["neo4j_uri"],
+            auth=(values["neo4j_user"], values["neo4j_password"]),
+            connection_timeout=2,
+        )
+        driver.verify_connectivity()
+    except (
+        ServiceUnavailable,
+        SessionExpired,
+        DatabaseUnavailable,
+        OSError,
+        TimeoutError,
+    ):
+        return True
+    except Exception:  # noqa: BLE001 - any other failure is not a connectivity outage
+        return False
+    finally:
+        _close_quietly(driver)
+    return False
+
+
+_GRPC_UNAVAILABLE = {
+    grpc.StatusCode.UNAVAILABLE,
+    grpc.StatusCode.DEADLINE_EXCEEDED,
+}
+
+
+def _milvus_unavailable(exc):
+    if isinstance(
+        exc,
+        (
+            TimeoutError,
+            ConnectionError,
+            ConnectError,
+            MilvusUnavailableException,
+        ),
+    ):
+        return True
+    if isinstance(exc, MilvusException):
+        code = getattr(exc, "code", None)
+        if callable(code):
+            with suppress(Exception):
+                code = code()
+        if code == Status.CONNECT_FAILED or code in _GRPC_UNAVAILABLE:
+            return True
+    if isinstance(exc, grpc.RpcError):
+        with suppress(Exception):
+            return exc.code() in _GRPC_UNAVAILABLE
+    return False
+
+
+def _unavailable(exc):
+    """Return True when the failure chain shows a service that cannot be reached."""
+    seen = set()
+    while exc is not None and id(exc) not in seen:
+        seen.add(id(exc))
+        if isinstance(
+            exc,
+            (
+                ServiceUnavailable,
+                SessionExpired,
+                DatabaseUnavailable,
+                OSError,
+                TimeoutError,
+            ),
+        ):
+            return True
+        if _milvus_unavailable(exc):
+            return True
+        exc = exc.__cause__ or exc.__context__
+    return False
+
+
+def _neo4j_reachable(store):
+    """Ask the live driver whether Neo4j can still be reached."""
+    driver = getattr(getattr(store, "_store_backend", None), "_driver", None)
+    verify = getattr(driver, "verify_connectivity", None)
+    if not callable(verify):
+        return True
+    try:
+        return verify() is not False
+    except Exception:  # noqa: BLE001 - a failed probe means the store is unreachable
+        return False
+
+
 def graph(values):
     store = GraphStore(
         backend="neo4j",
@@ -53,6 +161,8 @@ def graph(values):
         store.connect()
     except Exception as exc:
         _close_quietly(store)
+        if not _unavailable(exc) and not _neo4j_unreachable(values):
+            raise
         raise StorageUnavailable("Neo4j storage is unavailable") from exc
     return store
 
@@ -60,17 +170,6 @@ def graph(values):
 _read_lock = Lock()
 _read_graphs = {}
 _read_vectors = {}
-
-
-def _close_quietly(resource):
-    if resource is None:
-        return
-    for name in ("close", "disconnect"):
-        close = getattr(resource, name, None)
-        if callable(close):
-            with suppress(Exception):
-                close()
-            return
 
 
 def _reader(cache, key, factory):
@@ -101,6 +200,8 @@ def read_vectors(values):
             client.load_collection(key[1])
         except Exception as exc:
             _close_quietly(client)
+            if not _unavailable(exc):
+                raise
             raise StorageUnavailable("Milvus storage is unavailable") from exc
         return client
 
@@ -135,6 +236,8 @@ def execute(store, query, parameters):
     try:
         result = store.execute_query(query, parameters)
     except Exception as exc:
+        if not _unavailable(exc) and _neo4j_reachable(store):
+            raise
         raise StorageUnavailable("Neo4j storage is unavailable") from exc
     if not result.get("success"):
         raise RuntimeError("Graph query failed")
@@ -159,6 +262,8 @@ def milvus(values):
         store.connect(secure=uri.scheme == "https")
     except Exception as exc:
         _close_quietly(getattr(store, "client", None))
+        if not _unavailable(exc):
+            raise
         raise StorageUnavailable("Milvus storage is unavailable") from exc
     return store
 
@@ -379,6 +484,8 @@ def search(query, scope, top_k, category=None):
                 search_params={"metric_type": "COSINE"},
             )
         except Exception as exc:
+            if not _unavailable(exc):
+                raise
             raise StorageUnavailable("Milvus storage is unavailable") from exc
         return [hit["entity"]["metadata"] for hit in hits[0]]
 
