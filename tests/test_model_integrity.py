@@ -17,8 +17,7 @@ class ModelIntegrityTest(unittest.TestCase):
         self.content = Path('tests/fixtures/bge-m3-config.json').read_bytes()
         self.model = self.root / 'config.json'
         self.model.write_bytes(self.content)
-        source = Path('deploy/k8s/embedding.yaml').read_text().split('  model.py: |\n', 1)[1].split('---\n', 1)[0]
-        source = ''.join(line[4:] for line in source.splitlines(keepends=True))
+        source = Path('deploy/k8s/model.py').read_text()
         source = source.replace("pathlib.Path('/model/bge-m3')", f'pathlib.Path({str(self.root)!r})')
         expected = hashlib.sha256(self.content).hexdigest()
         self.source = re.sub(r'^files = .*$', f"files = {{'config.json': '{expected}'}}", source, flags=re.MULTILINE)
