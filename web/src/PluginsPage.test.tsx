@@ -43,7 +43,7 @@ test("renders schema, reports validation errors and saves enabled state", async 
                 name: { type: "string" },
                 count: { type: "integer", default: 2 },
                 active: { type: "boolean" },
-                mode: { type: "string", enum: ["a", "b"] },
+                mode: { type: "string", enum: [1, 2] },
                 tags: { type: "array", items: { type: "string" } },
               },
             },
@@ -70,7 +70,12 @@ test("renders schema, reports validation errors and saves enabled state", async 
   fireEvent.change(screen.getByLabelText("name"), {
     target: { value: "valid" },
   });
+  fireEvent.change(screen.getByLabelText("mode"), { target: { value: "1" } });
   fireEvent.click(screen.getByLabelText("Enabled"));
   await waitFor(() => expect(requests.at(-1)?.enabled).toBe(true));
-  expect(requests.at(-1)?.parameters).toEqual({ name: "valid", count: 2 });
+  expect(requests.at(-1)?.parameters).toEqual({
+    name: "valid",
+    count: 2,
+    mode: 2,
+  });
 });

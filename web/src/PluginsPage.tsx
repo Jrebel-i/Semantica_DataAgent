@@ -5,7 +5,7 @@ type Schema = {
   type?: string;
   title?: string;
   default?: unknown;
-  enum?: string[];
+  enum?: (string | number | boolean)[];
   items?: Schema;
   properties?: Record<string, Schema>;
   required?: string[];
@@ -168,13 +168,18 @@ export function PluginsPage({
                       {schema.enum ? (
                         <select
                           aria-label={name}
-                          value={String(value ?? "")}
-                          onChange={(e) => set(e.target.value)}
+                          value={schema.enum.findIndex(
+                            (item) => item === value,
+                          )}
+                          onChange={(e) => {
+                            const index = Number(e.target.value);
+                            if (index >= 0) set(schema.enum?.[index]);
+                          }}
                         >
-                          <option value=""></option>
-                          {schema.enum.map((v) => (
-                            <option key={v} value={v}>
-                              {v}
+                          <option value={-1}></option>
+                          {schema.enum.map((v, index) => (
+                            <option key={index} value={index}>
+                              {String(v)}
                             </option>
                           ))}
                         </select>
