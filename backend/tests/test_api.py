@@ -439,6 +439,8 @@ def test_parser_without_matching_type_is_unsupported(client):
 
 
 def test_third_party_plugin_validation_and_next_build(client, tmp_path, monkeypatch):
+    from contextlib import nullcontext
+
     from semantica_dataagent import knowledge, stages
     from semantica_dataagent.db import Build, sessions
     from semantica_dataagent.stage_contract import StageResult
@@ -485,6 +487,7 @@ def test_third_party_plugin_validation_and_next_build(client, tmp_path, monkeypa
         "settings",
         lambda: {"source_directory": str(tmp_path), "knowledge_generation": "test"},
     )
+    monkeypatch.setattr(knowledge, "build_storage", lambda values: nullcontext(None))
     monkeypatch.setattr(knowledge, "read_graph", lambda values: None)
     monkeypatch.setattr(knowledge, "read_vectors", lambda values: None)
     monkeypatch.setattr(

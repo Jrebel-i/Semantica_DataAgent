@@ -1,11 +1,36 @@
-"""Shared contract for entity-writing stages."""
+"""Shared append-only interface for entity-writing stages."""
 
 from dataclasses import dataclass, field
 
 
-@dataclass(frozen=True)
+@dataclass
 class StorageHandles:
-    settings: dict[str, str]
+    generation: str
+    _graph: object
+    _vectors: object
+    _settings: dict[str, str]
+
+    def execute(self, query, parameters):
+        from .knowledge import execute
+
+        return execute(self._graph, query, parameters)
+
+    def add_vectors(self, ids, texts, metadata):
+        from .knowledge import embed
+
+        if not (len(ids) == len(texts) == len(metadata)):
+            raise ValueError("Vector ids, texts and metadata must have equal lengths")
+        if any(not item.get("scope") for item in metadata):
+            raise ValueError("Each vector must have a scope")
+        for offset in range(0, len(texts), 32):
+            batch = slice(offset, offset + 32)
+            self._vectors.add_vectors(
+                embed(self._settings, texts[batch]),
+                ids=ids[batch],
+                metadata=[
+                    {**item, "generation": self.generation} for item in metadata[batch]
+                ],
+            )
 
 
 @dataclass(frozen=True)

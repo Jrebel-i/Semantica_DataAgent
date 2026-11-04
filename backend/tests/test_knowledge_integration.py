@@ -33,9 +33,10 @@ def test_build_and_retrieve_through_http(tmp_path, monkeypatch):
     from mcp.client.streamable_http import streamable_http_client
     from neo4j._sync.work.session import Session
 
-    from semantica_dataagent import knowledge
+    from semantica_dataagent import knowledge, stages
     from semantica_dataagent.app import app
     from semantica_dataagent.cli import initialize
+    from semantica_dataagent.stage_contract import StageResult
 
     calls = {"neo4j": 0, "milvus": 0}
     original_run = Session.run
@@ -51,6 +52,21 @@ def test_build_and_retrieve_through_http(tmp_path, monkeypatch):
 
     monkeypatch.setattr(Session, "run", counted_run)
     monkeypatch.setattr(MilvusClient, "search", counted_search)
+
+    def extra_stage(records, generation, storage):
+        storage.execute(
+            "CREATE (n:SDAEntity:SDATest {generation:$generation, ref:$ref})",
+            {"generation": generation, "ref": "test:extra"},
+        )
+        storage.add_vectors(
+            ["test:extra"],
+            ["independent stage"],
+            [{"scope": "tests", "ref": "test:extra"}],
+        )
+        return StageResult(counts={"test_stage": 1})
+
+    # Run the additional stage first: table writes must preserve its data.
+    monkeypatch.setattr(stages, "STAGES", [extra_stage, *stages.STAGES])
 
     generation = "test_" + uuid.uuid4().hex
     monkeypatch.setenv("DATAAGENT_DB_PATH", str(tmp_path / "app.db"))
@@ -113,6 +129,27 @@ def test_build_and_retrieve_through_http(tmp_path, monkeypatch):
                     break
                 time.sleep(0.2)
             assert build["status"] == "succeeded", build.get("error")
+            assert build["counts"]["test_stage"] == 1
+            with GraphDatabase.driver(
+                os.environ["TEST_NEO4J_URI"],
+                auth=(os.environ["TEST_NEO4J_USER"], os.environ["TEST_NEO4J_PASSWORD"]),
+            ) as driver:
+                rows, _, _ = driver.execute_query(
+                    "MATCH (n:SDAEntity {generation:$generation}) RETURN labels(n) AS labels",
+                    generation=generation,
+                )
+                assert any("SDATest" in row["labels"] for row in rows)
+                assert any("SDATable" in row["labels"] for row in rows)
+            vector_client = MilvusClient(uri=os.environ["TEST_MILVUS_URI"])
+            try:
+                hits = vector_client.get(
+                    collection_name="sda_" + generation,
+                    ids=["test:extra", "table:shop.orders"],
+                    output_fields=["metadata"],
+                )
+                assert {hit["metadata"]["scope"] for hit in hits} == {"tests", "tables"}
+            finally:
+                vector_client.close()
             assert build["counts"]["table"] == 20
             assert build["counts"]["filtered"] == 1
             assert c.get("/api/v1/tables", params={"database": "tmp"}).json() == []
@@ -137,6 +174,15 @@ def test_build_and_retrieve_through_http(tmp_path, monkeypatch):
                 time.sleep(0.2)
             assert rebuilt["status"] == "succeeded", rebuilt.get("error")
             assert rebuilt["counts"]["filtered"] == 0
+            with GraphDatabase.driver(
+                os.environ["TEST_NEO4J_URI"],
+                auth=(os.environ["TEST_NEO4J_USER"], os.environ["TEST_NEO4J_PASSWORD"]),
+            ) as driver:
+                rows, _, _ = driver.execute_query(
+                    "MATCH (n:SDATest {generation:$generation}) RETURN count(n) AS count",
+                    generation=generation,
+                )
+                assert rows[0]["count"] == 1
             assert (
                 c.get("/api/v1/tables", params={"database": "tmp"}).json()[0]["name"]
                 == "scratch"

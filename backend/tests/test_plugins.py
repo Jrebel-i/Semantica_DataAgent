@@ -1,26 +1,68 @@
-import sys
+import json
+import os
+import subprocess
 from pathlib import Path
 
 from semantica_dataagent.canonical import Record
 from semantica_dataagent.filters import DEFAULT_FILTERS, filter_records
 
 
-def test_installed_entry_point_is_discovered(tmp_path, monkeypatch):
-    # A dist-info directory is the installed metadata read by importlib.metadata.
-    fixture = Path(__file__).parent / "fixtures" / "third_party"
-    monkeypatch.syspath_prepend(str(fixture))
-    info = tmp_path / "dataagent_test_plugin-1.0.0.dist-info"
-    info.mkdir()
-    (info / "METADATA").write_text("Name: dataagent-test-plugin\nVersion: 1.0.0\n")
-    (info / "entry_points.txt").write_text(
-        "[semantica_dataagent.source_adapters]\nthird_party = third_party:Adapter\n"
+def test_installed_entry_point_is_discovered(tmp_path):
+    backend = Path(__file__).resolve().parents[1]
+    venv = tmp_path / "venv"
+    env = os.environ.copy()
+    cache = subprocess.check_output(["uv", "cache", "dir"], text=True).strip()
+    env.update(
+        HOME=str(tmp_path),
+        UV_PROJECT_ENVIRONMENT=str(venv),
+        UV_OFFLINE="1",
+        UV_CACHE_DIR=cache,
     )
-    monkeypatch.syspath_prepend(str(tmp_path))
-    from semantica_dataagent.plugins import discover
-
-    assert discover()["source", "third_party"].display_name == "Third party"
-    assert discover()["source", "canonical"].id == "canonical"
-    sys.modules.pop("third_party", None)
+    env.pop("PYTHONPATH", None)
+    subprocess.run(
+        [
+            "uv",
+            "sync",
+            "--directory",
+            str(backend),
+            "--locked",
+            "--offline",
+            "--no-dev",
+        ],
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        [
+            "uv",
+            "pip",
+            "install",
+            "--offline",
+            "--python",
+            str(venv / "bin/python"),
+            "--no-deps",
+            str(backend / "tests/fixtures/third_party"),
+        ],
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    result = subprocess.run(
+        [
+            str(venv / "bin/python"),
+            "-c",
+            "import json; from semantica_dataagent.plugins import discover; print(json.dumps(sorted(p.id for p in discover().values())))",
+        ],
+        cwd=tmp_path,
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert {"canonical", "third_party"}.issubset(json.loads(result.stdout))
 
 
 def test_filter_defaults_and_custom_patterns():

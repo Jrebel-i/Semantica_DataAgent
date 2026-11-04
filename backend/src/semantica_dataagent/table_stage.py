@@ -2,12 +2,8 @@
 
 
 def write(records, generation, storage):
+    from .knowledge import reference
     from .stage_contract import StageResult
-
-    values = storage.settings
-    from pymilvus import utility
-
-    from .knowledge import collection_name, embed, execute, graph, milvus, reference
 
     tables = [
         dict(r.data, ref=reference(r.kind, r.data))
@@ -27,45 +23,18 @@ def write(records, generation, storage):
         raise ValueError("A field refers to a missing table")
     if not tables:
         raise ValueError("Source has no tables")
-    store = graph(values)
-    try:
-        execute(
-            store,
-            "MATCH (n:SDAEntity {generation:$generation}) WHERE n:SDATable OR n:SDAField DETACH DELETE n",
-            {"generation": generation},
-        )
-        execute(
-            store,
-            "UNWIND $rows AS row CREATE (n:SDAEntity:SDATable) SET n = row, n.generation = $generation",
-            {"rows": tables, "generation": generation},
-        )
-        execute(
-            store,
-            "UNWIND $rows AS row MATCH (t:SDATable {generation:$generation, database:row.database, name:row.table}) CREATE (f:SDAEntity:SDAField) SET f = row, f.generation = $generation CREATE (t)-[:HAS_FIELD]->(f)",
-            {"rows": fields, "generation": generation},
-        )
-    finally:
-        store.close()
+    storage.execute(
+        "UNWIND $rows AS row CREATE (n:SDAEntity:SDATable) SET n = row, n.generation = $generation",
+        {"rows": tables, "generation": generation},
+    )
+    storage.execute(
+        "UNWIND $rows AS row MATCH (t:SDATable {generation:$generation, database:row.database, name:row.table}) CREATE (f:SDAEntity:SDAField) SET f = row, f.generation = $generation CREATE (t)-[:HAS_FIELD]->(f)",
+        {"rows": fields, "generation": generation},
+    )
     entities = [("table", x) for x in tables] + [("field", x) for x in fields]
-    texts = [f"{x['name']} {x['comment']}" for _, x in entities]
-    vectors = []
-    for offset in range(0, len(texts), 32):
-        vectors.extend(embed(values, texts[offset : offset + 32]))
-    vectors_store = milvus(values)
-    try:
-        name = collection_name(values)
-        if utility.has_collection(name):
-            utility.drop_collection(name)
-        vectors_store.create_collection(name, len(vectors[0]), metric_type="COSINE")
-        vectors_store.add_vectors(
-            vectors,
-            ids=[x["ref"] for _, x in entities],
-            metadata=[
-                {"generation": generation, "scope": kind + "s", **x}
-                for kind, x in entities
-            ],
-        )
-        vectors_store.collection.load()
-    finally:
-        vectors_store.client.disconnect()
+    storage.add_vectors(
+        [x["ref"] for _, x in entities],
+        [f"{x['name']} {x['comment']}" for _, x in entities],
+        [{"scope": kind + "s", **x} for kind, x in entities],
+    )
     return StageResult(counts={"table": len(tables), "field": len(fields)})
