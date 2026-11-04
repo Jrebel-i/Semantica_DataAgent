@@ -1,5 +1,6 @@
 """SQL validation against a batch snapshot of the current knowledge generation."""
 
+import re
 from collections import deque
 from dataclasses import dataclass
 from difflib import get_close_matches
@@ -100,8 +101,11 @@ def evidence(a, b, left_key=None, right_key=None, snapshot=None):
     if left_key and right_key:
         for doc in snapshot.documents:
             content = doc["content"].lower()
-            if all(
-                x.lower() in content for x in (full(a), full(b), left_key, right_key)
+            left = re.escape(f"{full(a)}.{left_key}".lower())
+            right = re.escape(f"{full(b)}.{right_key}".lower())
+            if re.search(
+                rf"(?<![\w.])(?:{left}\s*=\s*{right}|{right}\s*=\s*{left})(?![\w.])",
+                content,
             ):
                 found.append({"type": "document", "ref": doc["ref"]})
     return found
@@ -211,15 +215,26 @@ def check_sql(sql, dialect, snapshot):
         for join in scope.expression.args.get("joins") or []:
             condition = join.args.get("on")
             supports = []
-            if condition:
+            if condition and not condition.find(exp.Or):
                 for eq in condition.find_all(exp.EQ):
                     l, r = eq.left, eq.right
-                    if isinstance(l, exp.Column) and isinstance(r, exp.Column):
+                    if (
+                        isinstance(l, exp.Column)
+                        and isinstance(r, exp.Column)
+                        and join.this.alias_or_name.lower()
+                        in {l.table.lower(), r.table.lower()}
+                    ):
                         a, b = (
                             sources.get(l.table.lower()),
                             sources.get(r.table.lower()),
                         )
-                        if a and b and "database" in a and "database" in b:
+                        if (
+                            a
+                            and b
+                            and a is not b
+                            and "database" in a
+                            and "database" in b
+                        ):
                             supports.extend(evidence(a, b, l.name, r.name, snapshot))
             result["joins"].append(
                 {

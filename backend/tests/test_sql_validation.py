@@ -98,3 +98,12 @@ def test_no_path_between_known_unrelated_tables():
         }
     )
     assert join_path(["shop.orders", "shop.isolated"], data)["status"] == "no_path"
+
+
+def test_disjunctive_join_is_not_approved():
+    result = check_sql(
+        "SELECT o.id FROM shop.orders o JOIN shop.customers c ON o.id = c.id OR 1 = 1",
+        "hive",
+        snapshot(),
+    )
+    assert result["joins"][0]["status"] != "supported"
