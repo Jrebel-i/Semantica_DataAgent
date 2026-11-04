@@ -1,10 +1,11 @@
 import asyncio
+import base64
 import json
 import os
 import re
 import secrets
 import time
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Literal
 from urllib.parse import urlsplit
@@ -22,7 +23,7 @@ from sqlalchemy import text, update
 from sqlalchemy.exc import IntegrityError
 
 from . import knowledge
-from .db import Build, Setting, Token, digest, sessions
+from .db import Build, PluginConfig, Setting, Token, digest, sessions
 from .embedding_client import validate_settings
 
 
@@ -563,3 +564,149 @@ def write_filters(body: FilterRules, _: Annotated[str, Depends(admin)]):
         else:
             row.value = body.model_dump_json()
     return body
+
+
+class SourceFileUpload(BaseModel):
+    path: str
+    content_base64: str
+
+
+class SourceUpload(BaseModel):
+    target: str
+    files: list[SourceFileUpload] = []
+    archive_base64: str | None = None
+    replace: bool = False
+
+
+class SourceCommit(BaseModel):
+    commit: str
+
+
+class SourceContent(BaseModel):
+    path: str
+    content: str
+    encoding: Literal["utf-8", "base64"]
+
+
+class SourceHistory(BaseModel):
+    commit: str
+    author: str
+    date: datetime
+    message: str
+
+
+class SourceDiff(BaseModel):
+    diff: str
+
+
+def source_path():
+    with sessions()() as db:
+        value = db.get(Setting, "source_directory")
+        if value is None or not value.value:
+            raise HTTPException(422, "Source directory is not configured")
+        return value.value
+
+
+@contextmanager
+def source_repository():
+    from . import source_directory
+
+    try:
+        with source_directory.repository(source_path()) as root:
+            yield root
+    except (ValueError, OSError) as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@app.post("/api/v1/source/upload", response_model=SourceCommit)
+def upload_sources(
+    body: SourceUpload,
+    _: Annotated[str, Depends(admin)],
+    credentials: Annotated[HTTPAuthorizationCredentials, Depends(bearer)],
+):
+    from . import source_directory as source
+
+    if body.archive_base64 is not None and body.files:
+        raise HTTPException(422, "Choose files or an archive")
+    try:
+        if body.archive_base64 is not None:
+            files = source.unpack_archive(source.decode(body.archive_base64))
+            target = source.relative(body.target)
+            prefix = target.name + "/"
+            if (
+                body.replace
+                and files
+                and all(name.startswith(prefix) for name in files)
+            ):
+                files = {name[len(prefix) :]: data for name, data in files.items()}
+        else:
+            if len(body.files) > source.MAX_FILES or sum(
+                len(item.content_base64) for item in body.files
+            ) > (source.MAX_BYTES + 2) // 3 * 4 + 4 * len(body.files):
+                raise ValueError("Upload too large")
+            files = {
+                item.path: source.decode(item.content_base64) for item in body.files
+            }
+            if len(files) != len(body.files):
+                raise ValueError("Duplicate path")
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    with sessions()() as db:
+        user = db.get(Token, digest(credentials.credentials))
+        author = user.name
+        config = db.get(PluginConfig, ("source", "markdown"))
+        category_root = (
+            json.loads(config.parameters).get("path", "knowledge")
+            if config
+            else "knowledge"
+        )
+    with source_repository() as root:
+        return SourceCommit(
+            commit=source.upload(
+                root, body.target, files, body.replace, author, category_root
+            )
+        )
+
+
+@app.get("/api/v1/source/files", response_model=list[str])
+def source_files(_: Annotated[str, Depends(admin)]):
+    from . import source_directory as source
+
+    with source_repository() as root:
+        return source.list_files(root)
+
+
+@app.get("/api/v1/source/file", response_model=SourceContent)
+def source_file(path: str, _: Annotated[str, Depends(admin)]):
+    from . import source_directory as source
+
+    with source_repository() as root:
+        file = source.safe(root, source.relative(path))
+        if not file.is_file():
+            raise HTTPException(404, "Source file not found")
+        raw = file.read_bytes()
+        try:
+            content = raw.decode("utf-8")
+            if "\x00" in content:
+                raise UnicodeDecodeError("utf-8", raw, 0, 1, "Binary content")
+            encoding = "utf-8"
+        except UnicodeDecodeError:
+            content = base64.b64encode(raw).decode("ascii")
+            encoding = "base64"
+        return SourceContent(path=path, content=content, encoding=encoding)
+
+
+@app.get("/api/v1/source/history", response_model=list[SourceHistory])
+def source_history(path: str, _: Annotated[str, Depends(admin)]):
+    from . import source_directory as source
+
+    with source_repository() as root:
+        return source.history(root, path)
+
+
+@app.get("/api/v1/source/diff", response_model=SourceDiff)
+def source_diff(path: str, before: str, after: str, _: Annotated[str, Depends(admin)]):
+    from . import source_directory as source
+
+    with source_repository() as root:
+        return SourceDiff(diff=source.diff(root, path, before, after))

@@ -6,6 +6,7 @@ import { KnowledgePage } from "./KnowledgePage";
 import { SearchPage } from "./SearchPage";
 import { LanguageSwitcher } from "./LanguageSwitcher";
 import { PluginsPage } from "./PluginsPage";
+import { SourcePage } from "./SourcePage";
 import { Login } from "./Login";
 import { StatusPage, type Health } from "./StatusPage";
 import { TokensPage } from "./TokensPage";
@@ -99,6 +100,7 @@ export function App() {
               { path: "/builds", label: t.builds },
               ...(role === "admin"
                 ? [
+                    { path: "/source", label: t.source },
                     { path: "/tokens", label: t.tokens },
                     { path: "/plugins", label: t.plugins },
                   ]
@@ -118,7 +120,13 @@ export function App() {
               </a>
             ))}
           </nav>
-          {path === "/plugins" ? (
+          {path === "/source" ? (
+            role === "admin" ? (
+              <SourcePage token={token} messages={t} />
+            ) : (
+              <Alert title={t.forbidden} type="warning" />
+            )
+          ) : path === "/plugins" ? (
             role === "admin" ? (
               <PluginsPage token={token} messages={t} />
             ) : (

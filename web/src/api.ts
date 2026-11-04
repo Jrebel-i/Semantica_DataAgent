@@ -194,17 +194,85 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/skill": {
+    "/api/v1/source/diff": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** Download Skill */
-        get: operations["download_skill_api_v1_skill_get"];
+        /** Source Diff */
+        get: operations["source_diff_api_v1_source_diff_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/source/file": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Source File */
+        get: operations["source_file_api_v1_source_file_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/source/files": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Source Files */
+        get: operations["source_files_api_v1_source_files_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/source/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Source History */
+        get: operations["source_history_api_v1_source_history_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/source/upload": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Upload Sources */
+        post: operations["upload_sources_api_v1_source_upload_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -494,6 +562,66 @@ export interface components {
             values: {
                 [key: string]: string | null;
             };
+        };
+        /** SourceCommit */
+        SourceCommit: {
+            /** Commit */
+            commit: string;
+        };
+        /** SourceContent */
+        SourceContent: {
+            /** Content */
+            content: string;
+            /**
+             * Encoding
+             * @enum {string}
+             */
+            encoding: "utf-8" | "base64";
+            /** Path */
+            path: string;
+        };
+        /** SourceDiff */
+        SourceDiff: {
+            /** Diff */
+            diff: string;
+        };
+        /** SourceFileUpload */
+        SourceFileUpload: {
+            /** Content Base64 */
+            content_base64: string;
+            /** Path */
+            path: string;
+        };
+        /** SourceHistory */
+        SourceHistory: {
+            /** Author */
+            author: string;
+            /** Commit */
+            commit: string;
+            /**
+             * Date
+             * Format: date-time
+             */
+            date: string;
+            /** Message */
+            message: string;
+        };
+        /** SourceUpload */
+        SourceUpload: {
+            /** Archive Base64 */
+            archive_base64?: string | null;
+            /**
+             * Files
+             * @default []
+             */
+            files: components["schemas"]["SourceFileUpload"][];
+            /**
+             * Replace
+             * @default false
+             */
+            replace: boolean;
+            /** Target */
+            target: string;
         };
         /** Status */
         Status: {
@@ -988,7 +1116,71 @@ export interface operations {
             };
         };
     };
-    download_skill_api_v1_skill_get: {
+    source_diff_api_v1_source_diff_get: {
+        parameters: {
+            query: {
+                path: string;
+                before: string;
+                after: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SourceDiff"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    source_file_api_v1_source_file_get: {
+        parameters: {
+            query: {
+                path: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SourceContent"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    source_files_api_v1_source_files_get: {
         parameters: {
             query?: never;
             header?: never;
@@ -997,13 +1189,77 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The retrieval skill as a Markdown attachment */
+            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "text/markdown": string;
+                    "application/json": string[];
+                };
+            };
+        };
+    };
+    source_history_api_v1_source_history_get: {
+        parameters: {
+            query: {
+                path: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SourceHistory"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    upload_sources_api_v1_source_upload_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SourceUpload"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SourceCommit"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
