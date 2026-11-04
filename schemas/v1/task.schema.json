@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://semantica-dataagent.org/schemas/v1/task.schema.json",
+  "title": "task",
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "sql": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "name",
+    "sql"
+  ],
+  "additionalProperties": false
+}

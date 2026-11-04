@@ -1,0 +1,14 @@
+[
+  {
+    "database": "shop",
+    "table": "channels",
+    "field": "id",
+    "value": "网页"
+  },
+  {
+    "database": "shop",
+    "table": "channels",
+    "field": "id",
+    "value": "移动端"
+  }
+]

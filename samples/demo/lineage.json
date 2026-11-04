@@ -1,0 +1,122 @@
+[
+  {
+    "upstream": "staging.orders",
+    "downstream": "shop.orders",
+    "evidence": "declared",
+    "parse_status": "unsupported"
+  },
+  {
+    "upstream": "staging.order_items",
+    "downstream": "shop.order_items",
+    "evidence": "declared",
+    "parse_status": "unsupported"
+  },
+  {
+    "upstream": "staging.customers",
+    "downstream": "shop.customers",
+    "evidence": "declared",
+    "parse_status": "unsupported"
+  },
+  {
+    "upstream": "staging.products",
+    "downstream": "shop.products",
+    "evidence": "declared",
+    "parse_status": "unsupported"
+  },
+  {
+    "upstream": "staging.payments",
+    "downstream": "shop.payments",
+    "evidence": "declared",
+    "parse_status": "unsupported"
+  },
+  {
+    "upstream": "staging.refunds",
+    "downstream": "shop.refunds",
+    "evidence": "declared",
+    "parse_status": "unsupported"
+  },
+  {
+    "upstream": "staging.shipments",
+    "downstream": "shop.shipments",
+    "evidence": "declared",
+    "parse_status": "unsupported"
+  },
+  {
+    "upstream": "staging.carts",
+    "downstream": "shop.carts",
+    "evidence": "declared",
+    "parse_status": "unsupported"
+  },
+  {
+    "upstream": "staging.visits",
+    "downstream": "shop.visits",
+    "evidence": "declared",
+    "parse_status": "unsupported"
+  },
+  {
+    "upstream": "staging.coupons",
+    "downstream": "shop.coupons",
+    "evidence": "declared",
+    "parse_status": "unsupported"
+  },
+  {
+    "upstream": "staging.promotions",
+    "downstream": "shop.promotions",
+    "evidence": "declared",
+    "parse_status": "unsupported"
+  },
+  {
+    "upstream": "staging.inventory",
+    "downstream": "shop.inventory",
+    "evidence": "declared",
+    "parse_status": "unsupported"
+  },
+  {
+    "upstream": "staging.suppliers",
+    "downstream": "shop.suppliers",
+    "evidence": "declared",
+    "parse_status": "unsupported"
+  },
+  {
+    "upstream": "staging.reviews",
+    "downstream": "shop.reviews",
+    "evidence": "declared",
+    "parse_status": "unsupported"
+  },
+  {
+    "upstream": "staging.categories",
+    "downstream": "shop.categories",
+    "evidence": "declared",
+    "parse_status": "unsupported"
+  },
+  {
+    "upstream": "staging.regions",
+    "downstream": "shop.regions",
+    "evidence": "declared",
+    "parse_status": "unsupported"
+  },
+  {
+    "upstream": "staging.channels",
+    "downstream": "shop.channels",
+    "evidence": "declared",
+    "parse_status": "unsupported"
+  },
+  {
+    "upstream": "staging.daily_sales",
+    "downstream": "shop.daily_sales",
+    "evidence": "declared",
+    "parse_status": "unsupported"
+  },
+  {
+    "upstream": "staging.customer_segments",
+    "downstream": "shop.customer_segments",
+    "evidence": "declared",
+    "parse_status": "unsupported"
+  },
+  {
+    "upstream": "staging.returns",
+    "downstream": "shop.returns",
+    "evidence": "declared",
+    "parse_status": "unsupported"
+  }
+]

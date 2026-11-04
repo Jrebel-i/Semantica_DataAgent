@@ -1,0 +1,82 @@
+[
+  {
+    "name": "load_orders",
+    "sql": "SELECT * FROM staging_orders"
+  },
+  {
+    "name": "load_order_items",
+    "sql": "SELECT * FROM staging_order_items"
+  },
+  {
+    "name": "load_customers",
+    "sql": "SELECT * FROM staging_customers"
+  },
+  {
+    "name": "load_products",
+    "sql": "SELECT * FROM staging_products"
+  },
+  {
+    "name": "load_payments",
+    "sql": "SELECT * FROM staging_payments"
+  },
+  {
+    "name": "load_refunds",
+    "sql": "SELECT * FROM staging_refunds"
+  },
+  {
+    "name": "load_shipments",
+    "sql": "SELECT * FROM staging_shipments"
+  },
+  {
+    "name": "load_carts",
+    "sql": "SELECT * FROM staging_carts"
+  },
+  {
+    "name": "load_visits",
+    "sql": "SELECT * FROM staging_visits"
+  },
+  {
+    "name": "load_coupons",
+    "sql": "SELECT * FROM staging_coupons"
+  },
+  {
+    "name": "load_promotions",
+    "sql": "SELECT * FROM staging_promotions"
+  },
+  {
+    "name": "load_inventory",
+    "sql": "SELECT * FROM staging_inventory"
+  },
+  {
+    "name": "load_suppliers",
+    "sql": "SELECT * FROM staging_suppliers"
+  },
+  {
+    "name": "load_reviews",
+    "sql": "SELECT * FROM staging_reviews"
+  },
+  {
+    "name": "load_categories",
+    "sql": "SELECT * FROM staging_categories"
+  },
+  {
+    "name": "load_regions",
+    "sql": "SELECT * FROM staging_regions"
+  },
+  {
+    "name": "load_channels",
+    "sql": "SELECT * FROM staging_channels"
+  },
+  {
+    "name": "load_daily_sales",
+    "sql": "SELECT * FROM staging_daily_sales"
+  },
+  {
+    "name": "load_customer_segments",
+    "sql": "SELECT * FROM staging_customer_segments"
+  },
+  {
+    "name": "load_returns",
+    "sql": "SELECT * FROM staging_returns"
+  }
+]

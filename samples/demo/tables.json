@@ -1,0 +1,102 @@
+[
+  {
+    "database": "shop",
+    "name": "orders",
+    "comment": "交易订单"
+  },
+  {
+    "database": "shop",
+    "name": "order_items",
+    "comment": "订单商品明细"
+  },
+  {
+    "database": "shop",
+    "name": "customers",
+    "comment": "顾客信息"
+  },
+  {
+    "database": "shop",
+    "name": "products",
+    "comment": "商品资料"
+  },
+  {
+    "database": "shop",
+    "name": "payments",
+    "comment": "支付流水"
+  },
+  {
+    "database": "shop",
+    "name": "refunds",
+    "comment": "退款记录"
+  },
+  {
+    "database": "shop",
+    "name": "shipments",
+    "comment": "发货物流"
+  },
+  {
+    "database": "shop",
+    "name": "carts",
+    "comment": "购物车"
+  },
+  {
+    "database": "shop",
+    "name": "visits",
+    "comment": "访问浏览"
+  },
+  {
+    "database": "shop",
+    "name": "coupons",
+    "comment": "优惠券"
+  },
+  {
+    "database": "shop",
+    "name": "promotions",
+    "comment": "促销活动"
+  },
+  {
+    "database": "shop",
+    "name": "inventory",
+    "comment": "库存余额"
+  },
+  {
+    "database": "shop",
+    "name": "suppliers",
+    "comment": "供应商"
+  },
+  {
+    "database": "shop",
+    "name": "reviews",
+    "comment": "商品评价"
+  },
+  {
+    "database": "shop",
+    "name": "categories",
+    "comment": "商品分类"
+  },
+  {
+    "database": "shop",
+    "name": "regions",
+    "comment": "地区维度"
+  },
+  {
+    "database": "shop",
+    "name": "channels",
+    "comment": "渠道维度"
+  },
+  {
+    "database": "shop",
+    "name": "daily_sales",
+    "comment": "每日销售额"
+  },
+  {
+    "database": "shop",
+    "name": "customer_segments",
+    "comment": "顾客分群"
+  },
+  {
+    "database": "shop",
+    "name": "returns",
+    "comment": "退货记录"
+  }
+]

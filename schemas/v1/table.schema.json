@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://semantica-dataagent.org/schemas/v1/table.schema.json",
+  "title": "table",
+  "type": "object",
+  "properties": {
+    "database": {
+      "type": "string",
+      "minLength": 1
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "comment": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "database",
+    "name",
+    "comment"
+  ],
+  "additionalProperties": false
+}
