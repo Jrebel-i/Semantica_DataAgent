@@ -123,7 +123,7 @@ def test_fusion_over_mcp(tmp_path, monkeypatch):
                 )
                 assert (
                     failure.isError
-                    and failure.structuredContent["code"] == "tool_error"
+                    and failure.structuredContent["code"] == "invalid_input"
                 )
                 for query, scope, expected in [
                     ("shop.orders", "tables", "table:shop.orders"),

@@ -4,8 +4,17 @@ import base64
 import hashlib
 import json
 
+import httpx
 import jsonschema
+from mcp.server.fastmcp.exceptions import ToolError
 from mcp.types import CallToolResult, TextContent
+from neo4j.exceptions import DatabaseUnavailable, ServiceUnavailable, SessionExpired
+from pymilvus.exceptions import (
+    ConnectError,
+    ConnectionNotExistException,
+    MilvusUnavailableException,
+)
+from semantica.utils.exceptions import ProcessingError
 
 PAGE_ITEMS = 25
 PAGE_CHARS = 12000
@@ -22,6 +31,49 @@ def error(code, message, retryable, next_action):
         content=[TextContent(type="text", text=json.dumps(body))],
         structuredContent=body,
         isError=True,
+    )
+
+
+def classify_error(exc):
+    # FastMCP and Semantica wrap errors; inspect only their known wrappers.
+    while isinstance(exc, (ToolError, ProcessingError)):
+        cause = exc.__cause__ or exc.__context__
+        if cause is None or cause is exc:
+            break
+        exc = cause
+    if isinstance(
+        exc,
+        (
+            httpx.ConnectError,
+            httpx.TimeoutException,
+            ServiceUnavailable,
+            SessionExpired,
+            DatabaseUnavailable,
+            ConnectError,
+            ConnectionNotExistException,
+            MilvusUnavailableException,
+            ConnectionError,
+            TimeoutError,
+        ),
+    ):
+        return error(
+            "unavailable",
+            "A required service is unavailable",
+            True,
+            "Check service connectivity and retry",
+        )
+    if isinstance(exc, ValueError):
+        return error(
+            "invalid_input",
+            "Invalid tool arguments",
+            False,
+            "Check the tool parameters and allowed values",
+        )
+    return error(
+        "internal_error",
+        "The tool could not complete the request",
+        False,
+        "Contact the service administrator",
     )
 
 
@@ -128,10 +180,5 @@ def install_contract(server):
                 ],
                 structuredContent=body,
             )
-        except Exception:  # noqa: BLE001 - sanitize all tool failures at the boundary
-            return error(
-                "tool_error",
-                "The tool could not complete the request",
-                True,
-                "Check arguments and service availability",
-            )
+        except Exception as exc:  # noqa: BLE001 - sanitize failures at the boundary
+            return classify_error(exc)

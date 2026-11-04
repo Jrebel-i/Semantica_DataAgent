@@ -99,7 +99,7 @@ def test_mcp_pagination_and_sanitized_error():
         )
         assert len(continuation.structuredContent["result"]) == 5
         bad = await call({"names": ["bad"]})
-        assert bad.isError and bad.structuredContent["code"] == "tool_error"
+        assert bad.isError and bad.structuredContent["code"] == "internal_error"
         assert "private backend detail" not in json.dumps(bad.model_dump())
 
     asyncio.run(run())
