@@ -1,6 +1,6 @@
 # 本项目代码规范
 
-通用规则见 `~/.claude/dev-standards/rules.md`。本文件只写本项目特有的规则；与通用规则冲突时以本文件为准。
+通用规则见 `~/.claude/dev-standards/rules.md`。本文件只写本项目特有的规则，以及从 LESSONS.md 升级来的规则；与通用规则冲突时，以本文件为准。review 时逐条检查。
 
 ## 命令
 
@@ -10,16 +10,34 @@
 | --- | --- |
 | 安装后端依赖 | `uv sync --directory backend --locked` |
 | 后端单测 | `uv run --directory backend pytest tests/test_api.py` |
-| 守护测试 | `uv run --directory backend pytest ../tests/test_agents_size.py` |
+| 守护测试 | `uv run --directory backend pytest ../tests/test_agents_size.py ../tests/test_data_ignore.py` |
 | lint / 格式检查 | `uv run --directory backend ruff check src tests`；`uv run --directory backend ruff format --check src tests` |
 | 前端安装 / 测试 | `pnpm --dir web install --frozen-lockfile`；`pnpm --dir web test` |
+| 前端格式检查 | `pnpm --dir web format:check`（生成的 `src/api.ts` 由类型漂移检查管理） |
 | 类型检查 / 构建 | `pnpm --dir web build` |
 | OpenAPI 与类型漂移 | `pnpm --dir web check:types`；更新时先 `uv run --directory backend python -m semantica_dataagent.openapi > web/contract/openapi.json`，再 `pnpm --dir web types` |
 | 全量套件 | 仅发布级验收时执行项目所有测试；本票按任务书只运行相关测试。 |
 
+## 平台与环境矩阵
+
+Python 3.12 / uv；Node 24 / pnpm 10；开发机 WSL2 Linux；存储运行在 k8s，见 [infrastructure.md](infrastructure.md)。
+
 ## 守护测试
 
-`tests/test_agents_size.py` 检查根目录 AGENTS.md 不超过 16,000 字节；每次改动都运行。`web check:types` 同时比较后端 OpenAPI、快照与生成类型。
+`tests/test_agents_size.py` 检查根目录 AGENTS.md 不超过 16,000 字节；每次改动都运行。`tests/test_data_ignore.py` 使用 `git check-ignore` 检查 `data/` 下的业务数据不会进入 git；每次改动都运行。`web check:types` 同时比较后端 OpenAPI、快照与生成类型。
+
+## Red check 复验做法
+
+后端通过 uv 可编辑安装；复制 worktree 时复制的 `backend/.venv` 仍指向原 worktree 源码，直接运行会测到原代码并假通过。在 Linux / WSL 的副本中删除复制的虚拟环境并重建，再应用回退补丁和运行测试：
+
+```sh
+python3 -c "import shutil; shutil.rmtree('backend/.venv')"
+uv sync --directory backend --locked
+patch -R -p1 < /path/to/rollback.patch
+PYTHONPYCACHEPREFIX="$(mktemp -d)" uv run --directory backend pytest -p no:cacheprovider tests/test_api.py::test_authentication -q
+```
+
+使用临时 HOME；清理新建的 pycache 和副本。
 
 ## 运行应用
 
@@ -37,3 +55,13 @@
 
 | 测试 | 失败摘要 | issue |
 | --- | --- | --- |
+
+## 从 LESSONS 升级的规则
+
+<!-- 每条规则后面附 2–3 条证据（spec / PR / commit）。 -->
+
+## 语言与框架规则
+
+## 发布
+
+<!-- 版本号规则、产物清单、发布渠道，以及如何确认发布成功。 -->

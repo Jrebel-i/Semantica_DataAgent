@@ -149,3 +149,26 @@ def test_connection_addresses_reject_embedded_credentials(client):
         assert response.status_code == 422
         assert credential not in response.text
         assert c.get("/api/v1/settings", headers=headers).json()[key] is None
+
+
+def test_sessions_reuse_engine_and_follow_database_path(tmp_path, monkeypatch):
+    from semantica_dataagent.db import Base, Token, sessions
+
+    first = str(tmp_path / "first.db")
+    second = str(tmp_path / "second.db")
+    monkeypatch.setenv("DATAAGENT_DB_PATH", first)
+    first_factory = sessions()
+    Base.metadata.create_all(first_factory.kw["bind"])
+    with first_factory.begin() as db:
+        db.add(Token(digest="first", name="first", role="admin"))
+    assert sessions().kw["bind"] is first_factory.kw["bind"]
+
+    monkeypatch.setenv("DATAAGENT_DB_PATH", second)
+    second_factory = sessions()
+    Base.metadata.create_all(second_factory.kw["bind"])
+    with second_factory() as db:
+        assert db.get(Token, "first") is None
+    monkeypatch.setenv("DATAAGENT_DB_PATH", first)
+    with sessions()() as db:
+        assert db.get(Token, "first") is not None
+    assert sessions().kw["bind"] is first_factory.kw["bind"]

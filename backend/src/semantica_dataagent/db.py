@@ -1,5 +1,6 @@
 import hashlib
 import os
+from threading import Lock
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
@@ -22,9 +23,19 @@ class Setting(Base):
     value: Mapped[str]
 
 
+_factories = {}
+_factory_lock = Lock()
+
+
+def _sessions_for_path(path: str):
+    with _factory_lock:
+        if path not in _factories:
+            _factories[path] = sessionmaker(create_engine(f"sqlite:///{path}"))
+        return _factories[path]
+
+
 def sessions():
-    path = os.environ["DATAAGENT_DB_PATH"]
-    return sessionmaker(create_engine(f"sqlite:///{path}"))
+    return _sessions_for_path(os.environ["DATAAGENT_DB_PATH"])
 
 
 def digest(token: str) -> str:
