@@ -28,6 +28,9 @@ if not SCHEMAS.exists():
 class Record:
     kind: str
     data: dict
+    source_file: str | None = None
+    source_key: str | None = None
+    source_files: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -53,12 +56,16 @@ class CanonicalAdapter:
         records = []
         hashes = {}
         for path in sorted(directory.rglob("*")):
+            if ".git" in path.relative_to(directory).parts:
+                continue
             if not path.is_file() or path.suffix.lower() not in {
                 ".json",
                 ".csv",
                 ".xlsx",
             }:
                 continue
+            if not path.resolve().is_relative_to(directory.resolve()):
+                raise ValueError("Canonical file escapes source directory")
             kind = KINDS.get(path.stem)
             if kind is None:
                 raise ValueError(f"Unknown entity file: {path}")
@@ -90,7 +97,9 @@ class CanonicalAdapter:
                         if value in {"true", "false"}:
                             row["partition"] = value == "true"
                     validate(row, schema)
-                    records.append(Record(kind, row))
+                    records.append(
+                        Record(kind, row, path.relative_to(directory).as_posix())
+                    )
             except (ValueError, ValidationError, TypeError) as exc:
                 raise ValueError(f"{path}: {exc}") from exc
         return ReadResult(records, hashes)

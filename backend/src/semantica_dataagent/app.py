@@ -321,6 +321,13 @@ class BuildView(BaseModel):
     counts: dict[str, int]
     error: str | None
     parse_failures: list[dict[str, str]]
+    build_type: Literal["full", "incremental"]
+    triggered_by: str | None
+    source_commit: str | None
+
+
+class BuildRequest(BaseModel):
+    build_type: Literal["full", "incremental"] = "full"
 
 
 def build_view(row: Build) -> BuildView:
@@ -332,15 +339,28 @@ def build_view(row: Build) -> BuildView:
         counts=json.loads(row.counts),
         error=row.error,
         parse_failures=json.loads(row.parse_failures or "[]"),
+        build_type=row.build_type or "full",
+        triggered_by=row.triggered_by,
+        source_commit=row.source_commit,
     )
 
 
 @app.post("/api/v1/builds", status_code=202, response_model=BuildView)
-def start_build(background: BackgroundTasks, _: Annotated[str, Depends(admin)]):
+def start_build(
+    background: BackgroundTasks,
+    _: Annotated[str, Depends(admin)],
+    credentials: Annotated[HTTPAuthorizationCredentials, Depends(bearer)],
+    body: BuildRequest | None = None,
+):
     try:
         with sessions().begin() as db:
+            token = db.get(Token, digest(credentials.credentials))
             row = Build(
-                status="running", started_at=datetime.now(UTC).isoformat(), counts="{}"
+                status="running",
+                started_at=datetime.now(UTC).isoformat(),
+                counts="{}",
+                build_type=body.build_type if body else "full",
+                triggered_by=token.name,
             )
             db.add(row)
             db.flush()

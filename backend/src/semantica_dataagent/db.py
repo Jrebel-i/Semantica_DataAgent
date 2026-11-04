@@ -57,6 +57,15 @@ class Build(Base):
     counts: Mapped[str]
     error: Mapped[str | None]
     parse_failures: Mapped[str] = mapped_column(default="[]", server_default="[]")
+    build_type: Mapped[str | None]
+    triggered_by: Mapped[str | None]
+    source_commit: Mapped[str | None]
+    generation: Mapped[str | None]
+    source_hashes: Mapped[str | None]
+    config_hash: Mapped[str | None]
+    affected_files: Mapped[str | None]
+    dimension_tables: Mapped[str | None]
+    generated_files: Mapped[str | None]
 
 
 class PluginConfig(Base):

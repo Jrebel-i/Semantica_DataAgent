@@ -5,7 +5,17 @@ from .stage_contract import StageResult
 
 
 def write(records, generation, storage):
-    docs = [r.data for r in records if r.kind == "document"]
+    docs = [
+        {
+            **r.data,
+            "source_file": r.source_file,
+            "source_key": r.source_key or r.source_file,
+            "source_files": list(r.source_files),
+            "build_id": storage.build_id,
+        }
+        for r in records
+        if r.kind == "document"
+    ]
     keys = [(d["category"], d["path"]) for d in docs]
     if len(keys) != len(set(keys)):
         raise ValueError("Duplicate document path")
@@ -27,20 +37,17 @@ def write(records, generation, storage):
                         "doc_id": ref,
                         "category": d["category"],
                         "path": d["path"],
+                        "source_file": d["source_file"],
+                        "source_key": d["source_key"],
+                        "source_files": d["source_files"],
+                        "build_id": d["build_id"],
                     }
                 )
             match = table_name(d["path"])
             if match:
                 links.append({"ref": ref, "database": match[0], "name": match[1]})
     storage.execute(
-        "UNWIND $rows AS row CREATE (c:SDAEntity:SDACategory {generation:$generation, name:row.name, ref:row.ref})",
-        {
-            "generation": generation,
-            "rows": [{"name": c, "ref": "category:" + c} for c in categories],
-        },
-    )
-    storage.execute(
-        "UNWIND $rows AS row MATCH (c:SDACategory {generation:$generation, name:row.category}) CREATE (d:SDAEntity:SDADocument) SET d = row, d.generation = $generation CREATE (c)-[:HAS_DOCUMENT]->(d)",
+        "UNWIND $rows AS row CREATE (d:SDAEntity:SDADocument) SET d = row, d.generation = $generation",
         {"generation": generation, "rows": rows},
     )
     storage.execute(
@@ -48,7 +55,7 @@ def write(records, generation, storage):
         {"generation": generation, "rows": parts},
     )
     storage.execute(
-        "UNWIND $rows AS row MATCH (d:SDADocument {generation:$generation, ref:row.ref}), (t:SDATable {generation:$generation, database:row.database, name:row.name}) CREATE (t)-[:HAS_DOCUMENT]->(d)",
+        "UNWIND $rows AS row MATCH (d:SDADocument {generation:$generation, ref:row.ref}), (t:SDATable {generation:$generation, database:row.database, name:row.name}) MERGE (t)-[:HAS_DOCUMENT]->(d)",
         {"generation": generation, "rows": links},
     )
     for offset in range(0, len(parts), 4):

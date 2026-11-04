@@ -369,8 +369,22 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** BuildRequest */
+        BuildRequest: {
+            /**
+             * Build Type
+             * @default full
+             * @enum {string}
+             */
+            build_type: "full" | "incremental";
+        };
         /** BuildView */
         BuildView: {
+            /**
+             * Build Type
+             * @enum {string}
+             */
+            build_type: "full" | "incremental";
             /** Counts */
             counts: {
                 [key: string]: number;
@@ -385,10 +399,14 @@ export interface components {
             parse_failures: {
                 [key: string]: string;
             }[];
+            /** Source Commit */
+            source_commit: string | null;
             /** Started At */
             started_at: string;
             /** Status */
             status: string;
+            /** Triggered By */
+            triggered_by: string | null;
         };
         /** CategoryView */
         CategoryView: {
@@ -767,7 +785,11 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["BuildRequest"] | null;
+            };
+        };
         responses: {
             /** @description Successful Response */
             202: {
@@ -776,6 +798,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BuildView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

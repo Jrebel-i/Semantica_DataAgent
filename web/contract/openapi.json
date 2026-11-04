@@ -1,8 +1,31 @@
 {
   "components": {
     "schemas": {
+      "BuildRequest": {
+        "properties": {
+          "build_type": {
+            "default": "full",
+            "enum": [
+              "full",
+              "incremental"
+            ],
+            "title": "Build Type",
+            "type": "string"
+          }
+        },
+        "title": "BuildRequest",
+        "type": "object"
+      },
       "BuildView": {
         "properties": {
+          "build_type": {
+            "enum": [
+              "full",
+              "incremental"
+            ],
+            "title": "Build Type",
+            "type": "string"
+          },
           "counts": {
             "additionalProperties": {
               "type": "integer"
@@ -46,6 +69,17 @@
             "title": "Parse Failures",
             "type": "array"
           },
+          "source_commit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Commit"
+          },
           "started_at": {
             "title": "Started At",
             "type": "string"
@@ -53,6 +87,17 @@
           "status": {
             "title": "Status",
             "type": "string"
+          },
+          "triggered_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Triggered By"
           }
         },
         "required": [
@@ -62,7 +107,10 @@
           "finished_at",
           "counts",
           "error",
-          "parse_failures"
+          "parse_failures",
+          "build_type",
+          "triggered_by",
+          "source_commit"
         ],
         "title": "BuildView",
         "type": "object"
@@ -1006,6 +1054,23 @@
       },
       "post": {
         "operationId": "start_build_api_v1_builds_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/BuildRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
         "responses": {
           "202": {
             "content": {
@@ -1016,6 +1081,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
           }
         },
         "security": [
