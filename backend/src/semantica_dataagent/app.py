@@ -358,6 +358,7 @@ def build_detail(build_id: int, _: Annotated[str, Depends(current_user)]):
 
 
 from .dimension_api import lookup_dim_values
+from .sql_validation import find_join_path, validate_sql
 from .table_api import describe_tables, search_knowledge
 from .table_api import router as table_router
 from .task_api import get_lineage, read_task_sql
@@ -388,6 +389,8 @@ def create_mcp():
     server.tool()(read_document)
     server.tool()(get_lineage)
     server.tool()(read_task_sql)
+    server.tool()(validate_sql)
+    server.tool()(find_join_path)
     for tool in server._tool_manager.list_tools():
         tool.parameters["additionalProperties"] = False
     server._mcp_server.call_tool(validate_input=True)(server.call_tool)

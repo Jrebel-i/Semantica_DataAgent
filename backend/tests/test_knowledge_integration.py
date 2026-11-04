@@ -3,6 +3,7 @@
 import asyncio
 import json
 import os
+import shutil
 import socket
 import threading
 import time
@@ -59,6 +60,10 @@ def test_build_and_retrieve_through_http(tmp_path, monkeypatch):
             "CREATE (n:SDAEntity:SDATest {generation:$generation, ref:$ref})",
             {"generation": generation, "ref": "test:extra"},
         )
+        storage.execute(
+            "CREATE (:SDAEntity:SDATable {generation:$generation, database:'shop', name:'isolated', comment:'Isolated test table', ref:'table:shop.isolated'})",
+            {"generation": generation},
+        )
         storage.add_vectors(
             ["test:extra"],
             ["independent stage"],
@@ -66,8 +71,25 @@ def test_build_and_retrieve_through_http(tmp_path, monkeypatch):
         )
         return StageResult(counts={"test_stage": 1})
 
+    def join_fixture(records, generation, storage):
+        storage.execute(
+            """UNWIND range(1, 25) AS n CREATE (:SDAEntity:SDATable {generation:$generation, database:'fixture', name:toString(n), comment:'test', ref:'table:fixture.' + toString(n)})""",
+            {"generation": generation},
+        )
+        storage.execute(
+            """MATCH (a:SDALineageTable {generation:$generation, name:'shop.orders'}), (b:SDALineageTable {generation:$generation, name:'shop.customers'}) CREATE (a)-[:DEPENDS_ON {upstream:'shop.orders', downstream:'shop.customers', ref:'task:test', task_id:'test', evidence:'declared', parse_status:'failed'}]->(b)""",
+            {"generation": generation},
+        )
+        storage.execute(
+            """MATCH (t:SDATable {generation:$generation, database:'shop'}) WHERE t.name IN ['orders','products'] CREATE (f:SDAEntity:SDAField {generation:$generation, name:'special_id', type:'string', comment:'test', partition:false, ref:'field:shop.' + t.name + '.special_id'}) CREATE (t)-[:HAS_FIELD]->(f)""",
+            {"generation": generation},
+        )
+        return StageResult()
+
     # Run the additional stage first: table writes must preserve its data.
-    monkeypatch.setattr(stages, "STAGES", [extra_stage, *stages.STAGES])
+    monkeypatch.setattr(stages, "STAGES", [extra_stage, *stages.STAGES, join_fixture])
+    source = tmp_path / "source"
+    shutil.copytree(Path(__file__).resolve().parents[2] / "samples/demo", source)
 
     generation = "test_" + uuid.uuid4().hex
     monkeypatch.setenv("DATAAGENT_DB_PATH", str(tmp_path / "app.db"))
@@ -109,9 +131,7 @@ def test_build_and_retrieve_through_http(tmp_path, monkeypatch):
                 "neo4j_password": os.environ["TEST_NEO4J_PASSWORD"],
                 "milvus_uri": os.environ["TEST_MILVUS_URI"],
                 "embedding_url": os.environ["TEST_EMBEDDING_URL"],
-                "source_directory": str(
-                    Path(__file__).resolve().parents[2] / "samples/demo"
-                ),
+                "source_directory": str(source),
                 "knowledge_generation": generation,
             }
             assert c.put("/api/v1/settings", json={"values": values}).status_code == 200
@@ -208,6 +228,48 @@ def test_build_and_retrieve_through_http(tmp_path, monkeypatch):
                 ).status_code
                 == 200
             )
+
+            async def check_cache_field():
+                async with (
+                    httpx.AsyncClient(
+                        headers=headers, timeout=180, trust_env=False
+                    ) as client,
+                    streamable_http_client(base + "/mcp/", http_client=client) as (
+                        read,
+                        write,
+                        _,
+                    ),
+                    ClientSession(read, write) as session,
+                ):
+                    await session.initialize()
+                    response = await session.call_tool(
+                        "validate_sql",
+                        {
+                            "sql": "SELECT cache_probe FROM shop.orders",
+                            "dialect": "hive",
+                        },
+                    )
+                    return json.loads(response.content[0].text)
+
+            calls.update(neo4j=0, milvus=0)
+            assert asyncio.run(check_cache_field())["fields"][0]["status"] == "error"
+            assert calls["neo4j"] <= 3
+            calls.update(neo4j=0, milvus=0)
+            assert asyncio.run(check_cache_field())["fields"][0]["status"] == "error"
+            assert calls["neo4j"] == 0
+            fields_path = source / "fields.json"
+            fields = json.loads(fields_path.read_text())
+            fields.append(
+                {
+                    "database": "shop",
+                    "table": "orders",
+                    "name": "cache_probe",
+                    "type": "string",
+                    "comment": "test",
+                    "partition": False,
+                }
+            )
+            fields_path.write_text(json.dumps(fields))
             third = c.post("/api/v1/builds").json()["id"]
             deadline = time.monotonic() + 900
             while time.monotonic() < deadline:
@@ -216,6 +278,9 @@ def test_build_and_retrieve_through_http(tmp_path, monkeypatch):
                     break
                 time.sleep(0.2)
             assert final_build["status"] == "succeeded", final_build.get("error")
+            calls.update(neo4j=0, milvus=0)
+            assert asyncio.run(check_cache_field())["fields"][0]["status"] == "pass"
+            assert calls["neo4j"] <= 3
             with GraphDatabase.driver(
                 os.environ["TEST_NEO4J_URI"],
                 auth=(os.environ["TEST_NEO4J_USER"], os.environ["TEST_NEO4J_PASSWORD"]),
@@ -374,6 +439,80 @@ def test_build_and_retrieve_through_http(tmp_path, monkeypatch):
                     "get_lineage", {"table": "shop.orders", "depth": 4}
                 )
                 assert invalid.isError
+                for dialect in ("hive", "spark", "doris"):
+                    checked = await session.call_tool(
+                        "validate_sql",
+                        {"sql": "SELECT o.id FROM shop.orders o", "dialect": dialect},
+                    )
+                    assert json.loads(checked.content[0].text)["status"] == "pass", (
+                        checked
+                    )
+                checked = await session.call_tool(
+                    "validate_sql", {"sql": "SELECT FROM", "dialect": "hive"}
+                )
+                assert (
+                    json.loads(checked.content[0].text)["syntax"]["status"] == "error"
+                )
+                checked = await session.call_tool(
+                    "validate_sql",
+                    {"sql": "SELECT missing FROM shop.orders", "dialect": "hive"},
+                )
+                assert (
+                    json.loads(checked.content[0].text)["fields"][0]["status"]
+                    == "error"
+                )
+                checked = await session.call_tool(
+                    "validate_sql",
+                    {"sql": "SELECT id FROM shop.ordrs", "dialect": "hive"},
+                )
+                assert (
+                    json.loads(checked.content[0].text)["tables"][0]["status"]
+                    == "error"
+                )
+                checked = await session.call_tool(
+                    "validate_sql",
+                    {
+                        "sql": "SELECT o.id FROM shop.orders o JOIN shop.products c ON o.created_at = c.id",
+                        "dialect": "hive",
+                    },
+                )
+                assert (
+                    json.loads(checked.content[0].text)["joins"][0]["status"]
+                    == "unsupported"
+                )
+                path = await session.call_tool(
+                    "find_join_path", {"tables": ["shop.orders", "shop.customers"]}
+                )
+                result = json.loads(path.content[0].text)
+                assert result["status"] == "found" and result["strength"] == "strong"
+                assert result["steps"][0]["evidence"][0]["parse_status"] == "failed"
+                weak = await session.call_tool(
+                    "validate_sql",
+                    {
+                        "sql": "SELECT o.id FROM shop.orders o JOIN shop.products p ON o.special_id = p.special_id",
+                        "dialect": "hive",
+                    },
+                )
+                assert json.loads(weak.content[0].text)["joins"][0]["status"] == "weak"
+                path = await session.call_tool(
+                    "find_join_path", {"tables": ["shop.orders", "shop.products"]}
+                )
+                assert json.loads(path.content[0].text)["strength"] == "weak"
+                generic = await session.call_tool(
+                    "validate_sql",
+                    {
+                        "sql": "SELECT o.id FROM shop.orders o JOIN shop.products p ON o.id = p.id",
+                        "dialect": "hive",
+                    },
+                )
+                assert (
+                    json.loads(generic.content[0].text)["joins"][0]["status"]
+                    == "unsupported"
+                )
+                path = await session.call_tool(
+                    "find_join_path", {"tables": ["shop.orders", "shop.isolated"]}
+                )
+                assert json.loads(path.content[0].text)["status"] == "no_path"
                 calls.update(neo4j=0, milvus=0)
                 start = time.monotonic()
                 exact = await session.call_tool(
