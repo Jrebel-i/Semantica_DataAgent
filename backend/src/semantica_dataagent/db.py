@@ -57,6 +57,7 @@ class Build(Base):
     counts: Mapped[str]
     error: Mapped[str | None]
     parse_failures: Mapped[str] = mapped_column(default="[]", server_default="[]")
+    logs: Mapped[str | None]
     build_type: Mapped[str | None]
     triggered_by: Mapped[str | None]
     source_commit: Mapped[str | None]

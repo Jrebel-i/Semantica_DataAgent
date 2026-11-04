@@ -369,6 +369,23 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** BuildLog */
+        BuildLog: {
+            /**
+             * Level
+             * @enum {string}
+             */
+            level: "info" | "error";
+            /** Message */
+            message: string;
+            /** Stage */
+            stage: string;
+            /**
+             * Timestamp
+             * Format: date-time
+             */
+            timestamp: string;
+        };
         /** BuildRequest */
         BuildRequest: {
             /**
@@ -395,16 +412,24 @@ export interface components {
             finished_at: string | null;
             /** Id */
             id: number;
+            /** Logs */
+            logs: components["schemas"]["BuildLog"][];
             /** Parse Failures */
             parse_failures: {
                 [key: string]: string;
             }[];
             /** Source Commit */
             source_commit: string | null;
-            /** Started At */
+            /**
+             * Started At
+             * Format: date-time
+             */
             started_at: string;
-            /** Status */
-            status: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "queued" | "running" | "succeeded" | "failed" | "cancelled";
             /** Triggered By */
             triggered_by: string | null;
         };

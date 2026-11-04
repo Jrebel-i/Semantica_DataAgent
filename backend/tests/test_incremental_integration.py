@@ -3,6 +3,7 @@
 import base64
 import json
 import os
+import time
 import uuid
 from pathlib import Path
 
@@ -111,10 +112,19 @@ def test_incremental_build_preserves_other_documents_and_removes_deleted(
                 == 200
             )
 
+            def wait_build(build_id):
+                deadline = time.monotonic() + 900
+                while time.monotonic() < deadline:
+                    build = client.get("/api/v1/builds/" + str(build_id)).json()
+                    if build["status"] in {"succeeded", "failed", "cancelled"}:
+                        return build
+                    time.sleep(0.1)
+                raise AssertionError(f"Build {build_id} did not finish: {build}")
+
             def build(kind):
                 result = client.post("/api/v1/builds", json={"build_type": kind})
                 assert result.status_code == 202, result.text
-                build = client.get("/api/v1/builds/" + str(result.json()["id"])).json()
+                build = wait_build(result.json()["id"])
                 assert build["status"] == "succeeded", build
                 return build
 
@@ -290,7 +300,7 @@ def test_incremental_build_preserves_other_documents_and_removes_deleted(
             )
             monkeypatch.setattr(knowledge, "embed", fail_embedding)
             response = client.post("/api/v1/builds", json={"build_type": "incremental"})
-            failed = client.get("/api/v1/builds/" + str(response.json()["id"])).json()
+            failed = wait_build(response.json()["id"])
             assert failed["status"] == "failed"
             monkeypatch.setattr(knowledge, "embed", original_embed)
             upload(
@@ -313,7 +323,7 @@ def test_incremental_build_preserves_other_documents_and_removes_deleted(
             )
             monkeypatch.setattr(knowledge, "embed", fail_embedding)
             result = client.post("/api/v1/builds", json={"build_type": "incremental"})
-            failed = client.get("/api/v1/builds/" + str(result.json()["id"])).json()
+            failed = wait_build(result.json()["id"])
             assert failed["status"] == "failed"
             monkeypatch.setattr(knowledge, "embed", original_embed)
             upload(
@@ -358,7 +368,7 @@ def test_incremental_build_preserves_other_documents_and_removes_deleted(
                 == 200
             )
             rejected = client.post("/api/v1/builds", json={"build_type": "incremental"})
-            rejected = client.get("/api/v1/builds/" + str(rejected.json()["id"])).json()
+            rejected = wait_build(rejected.json()["id"])
             assert (
                 rejected["status"] == "failed"
                 and "configuration changed" in rejected["error"]

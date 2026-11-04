@@ -347,7 +347,7 @@ def test_build_requires_admin_and_reports_failure_when_unconfigured(client):
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline:
         build = c.get(f"/api/v1/builds/{build_id}", headers=headers).json()
-        if build["status"] != "running":
+        if build["status"] in {"succeeded", "failed", "cancelled"}:
             break
         time.sleep(0.02)
     assert build["status"] == "failed"

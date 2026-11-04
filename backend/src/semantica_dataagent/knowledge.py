@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import re
+import time
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager, suppress
@@ -453,11 +454,47 @@ def dimension_sources(records):
     return result
 
 
+def _load_logs(value):
+    try:
+        logs = json.loads(value or "[]")
+    except (TypeError, json.JSONDecodeError):
+        return []
+    return logs if isinstance(logs, list) else []
+
+
+def _record_log(build_id, logs, stage, message, level="info"):
+    logs.append(
+        {
+            "timestamp": datetime.now(UTC).isoformat(),
+            "stage": stage,
+            "level": level,
+            "message": message,
+        }
+    )
+    with sessions().begin() as db:
+        row = db.get(Build, build_id)
+        if row is not None:
+            row.logs = json.dumps(logs, ensure_ascii=False)
+
+
+def _stage_name(stage):
+    module = stage.__module__.rsplit(".", 1)[-1]
+    return module.removesuffix("_stage")
+
+
 def run_build(build_id):
     status, counts, error = "failed", {}, None
     failures = []
     stats = EmbeddingStats()
+    logs = []
     try:
+        with sessions().begin() as db:
+            build = db.get(Build, build_id)
+            if build is None:
+                raise ValueError("Build record not found")
+            logs = _load_logs(build.logs)
+            build_type = build.build_type or "full"
+        _record_log(build_id, logs, "build", f"{build_type} build started")
         values = settings()
         generation = values["knowledge_generation"]
         plugins = configured()
@@ -487,6 +524,12 @@ def run_build(build_id):
         records, hashes, commit, adapter_stats = read_sources(values, plugins)
         records, filtered = filter_records(records, filters)
         validate_records(records)
+        _record_log(
+            build_id,
+            logs,
+            "source",
+            f"Read {len(records)} records from {len(hashes)} source files",
+        )
         dimensions = dimension_sources(records)
         generated = {
             r.source_key for r in records if r.source_key and r.data.get("generated")
@@ -566,6 +609,17 @@ def run_build(build_id):
         )
         counts.update({name: len(paths) for name, paths in physical_changes.items()})
         counts["filtered"] = filtered
+        _record_log(
+            build_id,
+            logs,
+            "plan",
+            "Files: "
+            + ", ".join(
+                f"{name}={len(paths)}"
+                for name, paths in sorted(physical_changes.items())
+            )
+            + f"; filtered={filtered}",
+        )
         touched = set().union(*changes.values()) | dirty
         selected = (
             records
@@ -644,26 +698,53 @@ def run_build(build_id):
                     and not any(record.kind == "field" for record in selected)
                 ):
                     continue
+                stage_started = time.monotonic()
                 result = stage(selected, generation, storage)
+                elapsed = time.monotonic() - stage_started
+                stage_counts = dict(result.counts)
                 counts.update(result.counts)
                 failures.extend(result.failures)
+                summary = ", ".join(
+                    f"{key}={value}" for key, value in sorted(stage_counts.items())
+                )
+                if result.errors:
+                    _record_log(
+                        build_id,
+                        logs,
+                        _stage_name(stage),
+                        f"Failed after {elapsed:.3f}s: " + "; ".join(result.errors),
+                        "error",
+                    )
+                else:
+                    _record_log(
+                        build_id,
+                        logs,
+                        _stage_name(stage),
+                        f"Completed in {elapsed:.3f}s"
+                        + (f": {summary}" if summary else ""),
+                    )
                 if result.errors:
                     raise ValueError("; ".join(result.errors))
             reconcile(storage, records, generation)
+            _record_log(build_id, logs, "relationships", "Reconciled relationships")
         read_graph(values)
         read_vectors(values)
         status = "succeeded"
+        _record_log(build_id, logs, "build", "Build succeeded")
     except Exception as exc:  # noqa: BLE001 - record failure of background work
         error = str(exc)
+        with suppress(Exception):
+            _record_log(build_id, logs, "build", f"Build failed: {error}", "error")
     finally:
         counts.update(stats.counts())
         with sessions().begin() as db:
             build = db.get(Build, build_id)
-            build.status = status
-            build.counts = json.dumps(counts)
-            build.error = error
-            build.parse_failures = json.dumps(failures, ensure_ascii=False)
-            build.finished_at = datetime.now(UTC).isoformat()
+            if build is not None:
+                build.status = status
+                build.counts = json.dumps(counts)
+                build.error = error
+                build.parse_failures = json.dumps(failures, ensure_ascii=False)
+                build.finished_at = datetime.now(UTC).isoformat()
 
 
 def describe(names=None, database=None, search=None):

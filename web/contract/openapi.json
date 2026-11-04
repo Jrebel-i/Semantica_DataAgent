@@ -1,6 +1,39 @@
 {
   "components": {
     "schemas": {
+      "BuildLog": {
+        "properties": {
+          "level": {
+            "enum": [
+              "info",
+              "error"
+            ],
+            "title": "Level",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "stage": {
+            "title": "Stage",
+            "type": "string"
+          },
+          "timestamp": {
+            "format": "date-time",
+            "title": "Timestamp",
+            "type": "string"
+          }
+        },
+        "required": [
+          "timestamp",
+          "stage",
+          "level",
+          "message"
+        ],
+        "title": "BuildLog",
+        "type": "object"
+      },
       "BuildRequest": {
         "properties": {
           "build_type": {
@@ -47,6 +80,7 @@
           "finished_at": {
             "anyOf": [
               {
+                "format": "date-time",
                 "type": "string"
               },
               {
@@ -58,6 +92,13 @@
           "id": {
             "title": "Id",
             "type": "integer"
+          },
+          "logs": {
+            "items": {
+              "$ref": "#/components/schemas/BuildLog"
+            },
+            "title": "Logs",
+            "type": "array"
           },
           "parse_failures": {
             "items": {
@@ -81,10 +122,18 @@
             "title": "Source Commit"
           },
           "started_at": {
+            "format": "date-time",
             "title": "Started At",
             "type": "string"
           },
           "status": {
+            "enum": [
+              "queued",
+              "running",
+              "succeeded",
+              "failed",
+              "cancelled"
+            ],
             "title": "Status",
             "type": "string"
           },
@@ -110,7 +159,8 @@
           "parse_failures",
           "build_type",
           "triggered_by",
-          "source_commit"
+          "source_commit",
+          "logs"
         ],
         "title": "BuildView",
         "type": "object"
