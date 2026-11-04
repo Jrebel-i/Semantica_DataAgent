@@ -1,0 +1,482 @@
+[
+  {
+    "database": "shop",
+    "table": "orders",
+    "name": "id",
+    "type": "string",
+    "comment": "业务编号",
+    "partition": false
+  },
+  {
+    "database": "shop",
+    "table": "orders",
+    "name": "created_at",
+    "type": "timestamp",
+    "comment": "创建时间",
+    "partition": false
+  },
+  {
+    "database": "shop",
+    "table": "orders",
+    "name": "dt",
+    "type": "string",
+    "comment": "日期分区",
+    "partition": true
+  },
+  {
+    "database": "shop",
+    "table": "order_items",
+    "name": "id",
+    "type": "string",
+    "comment": "业务编号",
+    "partition": false
+  },
+  {
+    "database": "shop",
+    "table": "order_items",
+    "name": "created_at",
+    "type": "timestamp",
+    "comment": "创建时间",
+    "partition": false
+  },
+  {
+    "database": "shop",
+    "table": "order_items",
+    "name": "dt",
+    "type": "string",
+    "comment": "日期分区",
+    "partition": true
+  },
+  {
+    "database": "shop",
+    "table": "customers",
+    "name": "id",
+    "type": "string",
+    "comment": "业务编号",
+    "partition": false
+  },
+  {
+    "database": "shop",
+    "table": "customers",
+    "name": "created_at",
+    "type": "timestamp",
+    "comment": "创建时间",
+    "partition": false
+  },
+  {
+    "database": "shop",
+    "table": "customers",
+    "name": "dt",
+    "type": "string",
+    "comment": "日期分区",
+    "partition": true
+  },
+  {
+    "database": "shop",
+    "table": "products",
+    "name": "id",
+    "type": "string",
+    "comment": "业务编号",
+    "partition": false
+  },
+  {
+    "database": "shop",
+    "table": "products",
+    "name": "created_at",
+    "type": "timestamp",
+    "comment": "创建时间",
+    "partition": false
+  },
+  {
+    "database": "shop",
+    "table": "products",
+    "name": "dt",
+    "type": "string",
+    "comment": "日期分区",
+    "partition": true
+  },
+  {
+    "database": "shop",
+    "table": "payments",
+    "name": "id",
+    "type": "string",
+    "comment": "业务编号",
+    "partition": false
+  },
+  {
+    "database": "shop",
+    "table": "payments",
+    "name": "created_at",
+    "type": "timestamp",
+    "comment": "创建时间",
+    "partition": false
+  },
+  {
+    "database": "shop",
+    "table": "payments",
+    "name": "dt",
+    "type": "string",
+    "comment": "日期分区",
+    "partition": true
+  },
+  {
+    "database": "shop",
+    "table": "refunds",
+    "name": "id",
+    "type": "string",
+    "comment": "业务编号",
+    "partition": false
+  },
+  {
+    "database": "shop",
+    "table": "refunds",
+    "name": "created_at",
+    "type": "timestamp",
+    "comment": "创建时间",
+    "partition": false
+  },
+  {
+    "database": "shop",
+    "table": "refunds",
+    "name": "dt",
+    "type": "string",
+    "comment": "日期分区",
+    "partition": true
+  },
+  {
+    "database": "shop",
+    "table": "shipments",
+    "name": "id",
+    "type": "string",
+    "comment": "业务编号",
+    "partition": false
+  },
+  {
+    "database": "shop",
+    "table": "shipments",
+    "name": "created_at",
+    "type": "timestamp",
+    "comment": "创建时间",
+    "partition": false
+  },
+  {
+    "database": "shop",
+    "table": "shipments",
+    "name": "dt",
+    "type": "string",
+    "comment": "日期分区",
+    "partition": true
+  },
+  {
+    "database": "shop",
+    "table": "carts",
+    "name": "id",
+    "type": "string",
+    "comment": "业务编号",
+    "partition": false
+  },
+  {
+    "database": "shop",
+    "table": "carts",
+    "name": "created_at",
+    "type": "timestamp",
+    "comment": "创建时间",
+    "partition": false
+  },
+  {
+    "database": "shop",
+    "table": "carts",
+    "name": "dt",
+    "type": "string",
+    "comment": "日期分区",
+    "partition": true
+  },
+  {
+    "database": "shop",
+    "table": "visits",
+    "name": "id",
+    "type": "string",
+    "comment": "业务编号",
+    "partition": false
+  },
+  {
+    "database": "shop",
+    "table": "visits",
+    "name": "created_at",
+    "type": "timestamp",
+    "comment": "创建时间",
+    "partition": false
+  },
+  {
+    "database": "shop",
+    "table": "visits",
+    "name": "dt",
+    "type": "string",
+    "comment": "日期分区",
+    "partition": true
+  },
+  {
+    "database": "shop",
+    "table": "coupons",
+    "name": "id",
+    "type": "string",
+    "comment": "业务编号",
+    "partition": false
+  },
+  {
+    "database": "shop",
+    "table": "coupons",
+    "name": "created_at",
+    "type": "timestamp",
+    "comment": "创建时间",
+    "partition": false
+  },
+  {
+    "database": "shop",
+    "table": "coupons",
+    "name": "dt",
+    "type": "string",
+    "comment": "日期分区",
+    "partition": true
+  },
+  {
+    "database": "shop",
+    "table": "promotions",
+    "name": "id",
+    "type": "string",
+    "comment": "业务编号",
+    "partition": false
+  },
+  {
+    "database": "shop",
+    "table": "promotions",
+    "name": "created_at",
+    "type": "timestamp",
+    "comment": "创建时间",
+    "partition": false
+  },
+  {
+    "database": "shop",
+    "table": "promotions",
+    "name": "dt",
+    "type": "string",
+    "comment": "日期分区",
+    "partition": true
+  },
+  {
+    "database": "shop",
+    "table": "inventory",
+    "name": "id",
+    "type": "string",
+    "comment": "业务编号",
+    "partition": false
+  },
+  {
+    "database": "shop",
+    "table": "inventory",
+    "name": "created_at",
+    "type": "timestamp",
+    "comment": "创建时间",
+    "partition": false
+  },
+  {
+    "database": "shop",
+    "table": "inventory",
+    "name": "dt",
+    "type": "string",
+    "comment": "日期分区",
+    "partition": true
+  },
+  {
+    "database": "shop",
+    "table": "suppliers",
+    "name": "id",
+    "type": "string",
+    "comment": "业务编号",
+    "partition": false
+  },
+  {
+    "database": "shop",
+    "table": "suppliers",
+    "name": "created_at",
+    "type": "timestamp",
+    "comment": "创建时间",
+    "partition": false
+  },
+  {
+    "database": "shop",
+    "table": "suppliers",
+    "name": "dt",
+    "type": "string",
+    "comment": "日期分区",
+    "partition": true
+  },
+  {
+    "database": "shop",
+    "table": "reviews",
+    "name": "id",
+    "type": "string",
+    "comment": "业务编号",
+    "partition": false
+  },
+  {
+    "database": "shop",
+    "table": "reviews",
+    "name": "created_at",
+    "type": "timestamp",
+    "comment": "创建时间",
+    "partition": false
+  },
+  {
+    "database": "shop",
+    "table": "reviews",
+    "name": "dt",
+    "type": "string",
+    "comment": "日期分区",
+    "partition": true
+  },
+  {
+    "database": "shop",
+    "table": "categories",
+    "name": "id",
+    "type": "string",
+    "comment": "业务编号",
+    "partition": false
+  },
+  {
+    "database": "shop",
+    "table": "categories",
+    "name": "created_at",
+    "type": "timestamp",
+    "comment": "创建时间",
+    "partition": false
+  },
+  {
+    "database": "shop",
+    "table": "categories",
+    "name": "dt",
+    "type": "string",
+    "comment": "日期分区",
+    "partition": true
+  },
+  {
+    "database": "shop",
+    "table": "regions",
+    "name": "id",
+    "type": "string",
+    "comment": "业务编号",
+    "partition": false
+  },
+  {
+    "database": "shop",
+    "table": "regions",
+    "name": "created_at",
+    "type": "timestamp",
+    "comment": "创建时间",
+    "partition": false
+  },
+  {
+    "database": "shop",
+    "table": "regions",
+    "name": "dt",
+    "type": "string",
+    "comment": "日期分区",
+    "partition": true
+  },
+  {
+    "database": "shop",
+    "table": "channels",
+    "name": "id",
+    "type": "string",
+    "comment": "业务编号",
+    "partition": false
+  },
+  {
+    "database": "shop",
+    "table": "channels",
+    "name": "created_at",
+    "type": "timestamp",
+    "comment": "创建时间",
+    "partition": false
+  },
+  {
+    "database": "shop",
+    "table": "channels",
+    "name": "dt",
+    "type": "string",
+    "comment": "日期分区",
+    "partition": true
+  },
+  {
+    "database": "shop",
+    "table": "daily_sales",
+    "name": "id",
+    "type": "string",
+    "comment": "业务编号",
+    "partition": false
+  },
+  {
+    "database": "shop",
+    "table": "daily_sales",
+    "name": "created_at",
+    "type": "timestamp",
+    "comment": "创建时间",
+    "partition": false
+  },
+  {
+    "database": "shop",
+    "table": "daily_sales",
+    "name": "dt",
+    "type": "string",
+    "comment": "日期分区",
+    "partition": true
+  },
+  {
+    "database": "shop",
+    "table": "customer_segments",
+    "name": "id",
+    "type": "string",
+    "comment": "业务编号",
+    "partition": false
+  },
+  {
+    "database": "shop",
+    "table": "customer_segments",
+    "name": "created_at",
+    "type": "timestamp",
+    "comment": "创建时间",
+    "partition": false
+  },
+  {
+    "database": "shop",
+    "table": "customer_segments",
+    "name": "dt",
+    "type": "string",
+    "comment": "日期分区",
+    "partition": true
+  },
+  {
+    "database": "shop",
+    "table": "returns",
+    "name": "id",
+    "type": "string",
+    "comment": "业务编号",
+    "partition": false
+  },
+  {
+    "database": "shop",
+    "table": "returns",
+    "name": "created_at",
+    "type": "timestamp",
+    "comment": "创建时间",
+    "partition": false
+  },
+  {
+    "database": "shop",
+    "table": "returns",
+    "name": "dt",
+    "type": "string",
+    "comment": "日期分区",
+    "partition": true
+  }
+]

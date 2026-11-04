@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://semantica-dataagent.org/schemas/v1/field.schema.json",
+  "title": "field",
+  "type": "object",
+  "properties": {
+    "database": {
+      "type": "string",
+      "minLength": 1
+    },
+    "table": {
+      "type": "string",
+      "minLength": 1
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "type": {
+      "type": "string",
+      "minLength": 1
+    },
+    "comment": {
+      "type": "string"
+    },
+    "partition": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "database",
+    "table",
+    "name",
+    "type",
+    "comment",
+    "partition"
+  ],
+  "additionalProperties": false
+}

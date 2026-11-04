@@ -1,0 +1,293 @@
+"""Build and query the current generation of warehouse metadata."""
+
+import json
+import math
+import os
+import re
+from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime
+from pathlib import Path
+from threading import Lock
+from urllib.parse import quote, urlsplit
+
+import httpx
+import numpy as np
+from cryptography.fernet import Fernet
+from pymilvus import MilvusClient, utility
+from semantica.graph_store import GraphStore
+from semantica.vector_store.milvus_store import MilvusStore
+
+from .canonical import KINDS, CanonicalAdapter
+from .db import Build, Setting, sessions
+
+
+def settings():
+    with sessions()() as db:
+        values = {row.key: row.value for row in db.query(Setting).all()}
+    if values.get("neo4j_password"):
+        values["neo4j_password"] = (
+            Fernet(os.environ["DATAAGENT_ENCRYPTION_KEY"].encode())
+            .decrypt(values["neo4j_password"].encode())
+            .decode()
+        )
+    values.setdefault("embedding_model", "model/bge-m3")
+    values.setdefault("knowledge_generation", "default")
+    if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,63}", values["knowledge_generation"]):
+        raise ValueError("Invalid generation")
+    return values
+
+
+def graph(values):
+    store = GraphStore(
+        backend="neo4j",
+        uri=values["neo4j_uri"],
+        user=values["neo4j_user"],
+        password=values["neo4j_password"],
+    )
+    store.connect()
+    return store
+
+
+_read_lock = Lock()
+_read_graphs = {}
+_read_vectors = {}
+
+
+def _reader(cache, key, factory):
+    with _read_lock:
+        existing = cache.get(key)
+    if existing is not None:
+        return existing
+    created = factory()
+    with _read_lock:
+        existing = cache.setdefault(key, created)
+    if existing is not created:
+        created.close()
+    return existing
+
+
+def read_graph(values):
+    key = (values["neo4j_uri"], values["neo4j_user"], values["neo4j_password"])
+    return _reader(_read_graphs, key, lambda: graph(values))
+
+
+def read_vectors(values):
+    key = (values["milvus_uri"], collection_name(values))
+
+    def connect():
+        client = MilvusClient(uri=key[0])
+        try:
+            client.load_collection(key[1])
+        except Exception:
+            client.close()
+            raise
+        return client
+
+    return _reader(_read_vectors, key, connect)
+
+
+def close_readers():
+    with _read_lock:
+        readers = list(_read_graphs.values()) + list(_read_vectors.values())
+        _read_graphs.clear()
+        _read_vectors.clear()
+    for reader in readers:
+        reader.close()
+
+
+def execute(store, query, parameters):
+    result = store.execute_query(query, parameters)
+    if not result.get("success"):
+        raise RuntimeError("Graph query failed")
+    return result["records"]
+
+
+def embed(values, texts):
+    with httpx.Client(timeout=120, trust_env=False) as client:
+        response = client.post(
+            values["embedding_url"].rstrip("/") + "/embeddings",
+            json={"model": values["embedding_model"], "input": texts},
+        )
+        response.raise_for_status()
+        data = response.json()["data"]
+        ordered = sorted(data, key=lambda item: item["index"])
+        if [item["index"] for item in ordered] != list(range(len(texts))):
+            raise ValueError("Embedding response has missing or duplicate indexes")
+        vectors = [item["embedding"] for item in ordered]
+        if (
+            not vectors
+            or not vectors[0]
+            or any(
+                len(v) != len(vectors[0]) or not all(math.isfinite(x) for x in v)
+                for v in vectors
+            )
+        ):
+            raise ValueError("Invalid embedding vectors")
+        return vectors
+
+
+def collection_name(values):
+    return "sda_" + values["knowledge_generation"]
+
+
+def milvus(values):
+    uri = urlsplit(values["milvus_uri"])
+    store = MilvusStore(
+        host=uri.hostname, port=uri.port or (443 if uri.scheme == "https" else 19530)
+    )
+    store.connect(secure=uri.scheme == "https")
+    return store
+
+
+def reference(kind, data):
+    key = ".".join(
+        quote(str(data[k]), safe="").replace(".", "%2E")
+        for k in (
+            ("database", "name") if kind == "table" else ("database", "table", "name")
+        )
+    )
+    return f"{kind}:{key}"
+
+
+def run_build(build_id):
+    status, counts, error = "failed", {}, None
+    try:
+        values = settings()
+        result = CanonicalAdapter().read(Path(values["source_directory"]), {})
+        counts = dict.fromkeys(KINDS.values(), 0)
+        counts.update(Counter(r.kind for r in result.records))
+        tables = [
+            dict(r.data, ref=reference(r.kind, r.data))
+            for r in result.records
+            if r.kind == "table"
+        ]
+        fields = [
+            dict(r.data, ref=reference(r.kind, r.data))
+            for r in result.records
+            if r.kind == "field"
+        ]
+        table_keys = {(table["database"], table["name"]) for table in tables}
+        refs = [item["ref"] for item in tables + fields]
+        if len(set(refs)) != len(refs):
+            raise ValueError("Duplicate table or field reference")
+        if any(
+            (field["database"], field["table"]) not in table_keys for field in fields
+        ):
+            raise ValueError("A field refers to a missing table")
+        if not tables:
+            raise ValueError("Source has no tables")
+        generation = values["knowledge_generation"]
+        store = graph(values)
+        try:
+            execute(
+                store,
+                "MATCH (n:SDAEntity {generation:$generation}) DETACH DELETE n",
+                {"generation": generation},
+            )
+            execute(
+                store,
+                "UNWIND $rows AS row CREATE (n:SDAEntity:SDATable) SET n = row, n.generation = $generation",
+                {"rows": tables, "generation": generation},
+            )
+            execute(
+                store,
+                "UNWIND $rows AS row MATCH (t:SDATable {generation:$generation, database:row.database, name:row.table}) CREATE (f:SDAEntity:SDAField) SET f = row, f.generation = $generation CREATE (t)-[:HAS_FIELD]->(f)",
+                {"rows": fields, "generation": generation},
+            )
+        finally:
+            store.close()
+        entities = [("table", x) for x in tables] + [("field", x) for x in fields]
+        texts = [f"{x['name']} {x['comment']}" for _, x in entities]
+        vectors = []
+        for offset in range(0, len(texts), 32):
+            vectors.extend(embed(values, texts[offset : offset + 32]))
+        vectors_store = milvus(values)
+        try:
+            name = collection_name(values)
+            if utility.has_collection(name):
+                utility.drop_collection(name)
+            vectors_store.create_collection(name, len(vectors[0]), metric_type="COSINE")
+            vectors_store.add_vectors(
+                vectors,
+                ids=[x["ref"] for _, x in entities],
+                metadata=[
+                    {"generation": generation, "scope": kind + "s", **x}
+                    for kind, x in entities
+                ],
+            )
+            vectors_store.collection.load()
+        finally:
+            vectors_store.client.disconnect()
+        read_graph(values)
+        read_vectors(values)
+        status = "succeeded"
+    except Exception as exc:  # noqa: BLE001 - record failure of background work
+        error = str(exc)
+    finally:
+        with sessions().begin() as db:
+            build = db.get(Build, build_id)
+            build.status = status
+            build.counts = json.dumps(counts)
+            build.error = error
+            build.finished_at = datetime.now(UTC).isoformat()
+
+
+def describe(names=None, database=None, search=None):
+    values = settings()
+    store = read_graph(values)
+    rows = execute(
+        store,
+        """MATCH (t:SDATable {generation:$generation})
+            WHERE ($names IS NULL OR t.name IN $names OR t.database + '.' + t.name IN $names)
+              AND ($database IS NULL OR t.database = $database)
+              AND ($search IS NULL OR toLower(t.name) CONTAINS toLower($search))
+            OPTIONAL MATCH (t)-[:HAS_FIELD]->(f:SDAField {generation:$generation})
+            RETURN properties(t) AS table, collect(properties(f)) AS fields ORDER BY table.database,table.name""",
+        {
+            "generation": values["knowledge_generation"],
+            "names": names,
+            "database": database,
+            "search": search,
+        },
+    )
+    return [{**r["table"], "fields": r["fields"]} for r in rows]
+
+
+def search(query, scope, top_k):
+    values = settings()
+    vector = np.array(embed(values, [query])[0], dtype=np.float32)
+
+    def exact():
+        store = read_graph(values)
+        label = "SDATable" if scope == "tables" else "SDAField"
+        return [
+            r["item"]
+            for r in execute(
+                store,
+                f"MATCH (n:{label} {{generation:$generation}}) WHERE toLower(n.name) = toLower($query) RETURN properties(n) AS item LIMIT $limit",
+                {
+                    "generation": values["knowledge_generation"],
+                    "query": query,
+                    "limit": top_k,
+                },
+            )
+        ]
+
+    def semantic():
+        client = read_vectors(values)
+        hits = client.search(
+            collection_name=collection_name(values),
+            data=[vector.tolist()],
+            limit=top_k,
+            filter=f'metadata["scope"] == "{scope}" and metadata["generation"] == "{values["knowledge_generation"]}"',
+            output_fields=["metadata"],
+            search_params={"metric_type": "COSINE"},
+        )
+        return [hit["entity"]["metadata"] for hit in hits[0]]
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        a, b = pool.submit(exact), pool.submit(semantic)
+        merged = a.result() + b.result()
+    unique = {item["ref"]: item for item in reversed(merged)}
+    return list(reversed(list(unique.values())))[:top_k]

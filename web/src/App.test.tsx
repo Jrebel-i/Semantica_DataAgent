@@ -137,3 +137,38 @@ test("user cannot see token navigation or open its page", async () => {
   expect(screen.queryByRole("link", { name: "令牌管理" })).toBeNull();
   history.replaceState(null, "", "/");
 });
+test("browse tables and view field details", async () => {
+  localStorage.setItem("token", "token");
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) => {
+      if (url === "/api/v1/me") return new Response("{}", { status: 200 });
+      if (url.startsWith("/api/v1/tables"))
+        return new Response(
+          JSON.stringify([
+            {
+              database: "shop",
+              name: "orders",
+              comment: "交易订单",
+              ref: "table:shop.orders",
+              fields: [
+                {
+                  name: "dt",
+                  type: "string",
+                  comment: "日期分区",
+                  partition: true,
+                },
+              ],
+            },
+          ]),
+          { status: 200 },
+        );
+      return new Response("{}", { status: 200 });
+    }),
+  );
+  render(<App />);
+  fireEvent.click(await screen.findByRole("link", { name: "知识浏览" }));
+  fireEvent.click(await screen.findByText("orders"));
+  expect(await screen.findByText("日期分区")).toBeTruthy();
+  expect(screen.getByText("string")).toBeTruthy();
+});

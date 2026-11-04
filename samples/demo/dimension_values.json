@@ -1,0 +1,26 @@
+[
+  {
+    "database": "shop",
+    "table": "channels",
+    "field": "id",
+    "value": "网页"
+  },
+  {
+    "database": "shop",
+    "table": "channels",
+    "field": "id",
+    "value": "移动端"
+  },
+  {
+    "database": "shop",
+    "table": "regions",
+    "field": "id",
+    "value": "华东"
+  },
+  {
+    "database": "shop",
+    "table": "categories",
+    "field": "id",
+    "value": "家居"
+  }
+]

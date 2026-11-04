@@ -26,6 +26,14 @@ def test_authentication(client):
         assert c.get(path, headers={"Authorization": "Bearer wrong"}).status_code == 401
     assert c.put("/api/v1/settings", json={"values": {}}).status_code == 401
     assert (
+        c.put(
+            "/api/v1/settings",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"values": {"knowledge_generation": "bad-name"}},
+        ).status_code
+        == 422
+    )
+    assert (
         c.get("/api/v1/me", headers={"Authorization": "Bearer wrong"}).status_code
         == 401
     )
@@ -158,6 +166,7 @@ def test_user_cannot_read_or_write_settings(client):
     headers = {"Authorization": "Bearer user-token"}
     assert c.get("/api/v1/me", headers=headers).json()["role"] == "user"
     assert c.get("/api/v1/settings", headers=headers).status_code == 403
+    assert c.post("/api/v1/builds", headers=headers).status_code == 403
     assert (
         c.put("/api/v1/settings", headers=headers, json={"values": {}}).status_code
         == 403
@@ -286,3 +295,100 @@ def test_sessions_reuse_engine_and_follow_database_path(tmp_path, monkeypatch):
     with sessions()() as db:
         assert db.get(Token, "first") is not None
     assert sessions().kw["bind"] is first_factory.kw["bind"]
+
+
+def test_build_requires_admin_and_reports_failure_when_unconfigured(client):
+    import time
+
+    c, token = client
+    assert c.post("/api/v1/builds").status_code == 401
+    for path in ("/mcp", "/mcp/"):
+        for authorization in (None, "Basic bad", "Bearer bad"):
+            headers = {"Authorization": authorization} if authorization else {}
+            assert (
+                c.post(path, headers=headers, follow_redirects=False).status_code == 401
+            )
+    headers = {"Authorization": f"Bearer {token}"}
+    response = c.post("/api/v1/builds", headers=headers)
+    assert response.status_code == 202
+    build_id = response.json()["id"]
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        build = c.get(f"/api/v1/builds/{build_id}", headers=headers).json()
+        if build["status"] != "running":
+            break
+        time.sleep(0.02)
+    assert build["status"] == "failed"
+    assert build["error"]
+    assert c.get("/api/v1/builds", headers=headers).json()[0]["id"] == build_id
+
+
+def test_revoked_personal_token_is_denied_by_mcp(client):
+    c, admin_token = client
+    admin_headers = {"Authorization": f"Bearer {admin_token}"}
+    issued = c.post(
+        "/api/v1/tokens",
+        headers=admin_headers,
+        json={"name": "MCP user", "role": "user"},
+    ).json()
+    headers = {
+        "Authorization": f"Bearer {issued['token']}",
+        "Accept": "application/json, text/event-stream",
+        "Host": "localhost:8000",
+    }
+    initialize = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-03-26",
+            "capabilities": {},
+            "clientInfo": {"name": "test", "version": "1"},
+        },
+    }
+    assert c.post("/mcp", headers=headers, follow_redirects=False).status_code == 307
+    assert c.post("/mcp/", headers=headers, json=initialize).status_code == 200
+    assert (
+        c.delete(f"/api/v1/tokens/{issued['id']}", headers=admin_headers).status_code
+        == 204
+    )
+    assert c.post("/mcp", headers=headers, follow_redirects=False).status_code == 401
+    assert c.post("/mcp/", headers=headers, json=initialize).status_code == 401
+
+
+def test_startup_marks_interrupted_build_failed_and_allows_another(
+    tmp_path, monkeypatch
+):
+    from semantica_dataagent.app import app
+    from semantica_dataagent.cli import initialize
+    from semantica_dataagent.db import Build, sessions
+
+    monkeypatch.setenv("DATAAGENT_DB_PATH", str(tmp_path / "recovery.db"))
+    monkeypatch.setenv("DATAAGENT_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    token = initialize()
+    with sessions().begin() as db:
+        db.add_all(
+            [
+                Build(
+                    status="running",
+                    started_at="2026-01-01T00:00:00+00:00",
+                    counts='{"table": 2}',
+                ),
+                Build(
+                    status="succeeded",
+                    started_at="2025-01-01T00:00:00+00:00",
+                    finished_at="2025-01-01T00:01:00+00:00",
+                    counts="{}",
+                ),
+            ]
+        )
+    with TestClient(app) as c:
+        headers = {"Authorization": f"Bearer {token}"}
+        builds = c.get("/api/v1/builds", headers=headers).json()
+        interrupted = next(b for b in builds if b["started_at"].startswith("2026"))
+        finished = next(b for b in builds if b["started_at"].startswith("2025"))
+        assert interrupted["status"] == "failed"
+        assert "interrupted" in interrupted["error"].lower()
+        assert interrupted["finished_at"] and interrupted["counts"] == {"table": 2}
+        assert finished["status"] == "succeeded" and finished["error"] is None
+        assert c.post("/api/v1/builds", headers=headers).status_code == 202

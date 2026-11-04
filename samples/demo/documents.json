@@ -1,0 +1,52 @@
+[
+  {
+    "category": "metrics",
+    "path": "index.md",
+    "content": "# index.md\n\n指标目录：销售额与订单。\n"
+  },
+  {
+    "category": "metrics",
+    "path": "sales.md",
+    "content": "# sales.md\n\n销售额按支付金额统计。\n"
+  },
+  {
+    "category": "metrics",
+    "path": "sales_order.md",
+    "content": "# sales_order.md\n\n销售额按下单金额统计，和支付口径不同。\n"
+  },
+  {
+    "category": "metrics",
+    "path": "orders.md",
+    "content": "# orders.md\n\n订单数按订单编号去重。\n"
+  },
+  {
+    "category": "operations",
+    "path": "index.md",
+    "content": "# index.md\n\n运营目录：顾客、商品与物流。\n"
+  },
+  {
+    "category": "operations",
+    "path": "customers.md",
+    "content": "# customers.md\n\n顾客按注册账号统计。\n"
+  },
+  {
+    "category": "operations",
+    "path": "products.md",
+    "content": "# products.md\n\n商品以商品编号识别。\n"
+  },
+  {
+    "category": "operations",
+    "path": "shipping.md",
+    "content": "# shipping.md\n\n发货时间记录物流状态。\n"
+  },
+  {
+    "category": "operations",
+    "path": "returns.md",
+    "content": "# returns.md\n\n退货与退款是不同流程。\n"
+  },
+  {
+    "category": "unindexed",
+    "path": "draft.md",
+    "content": "# draft.md\n\n此知识类故意没有索引。\n"
+  }
+]

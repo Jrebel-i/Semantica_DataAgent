@@ -1,27 +1,69 @@
 import asyncio
+import json
 import os
+import re
 import secrets
 import time
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Literal
 from urllib.parse import urlsplit
 
 import httpx
 from cryptography.fernet import Fernet
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from mcp.server.fastmcp import FastMCP
 from neo4j import AsyncGraphDatabase
 from pydantic import BaseModel, Field
 from pymilvus import MilvusClient
-from sqlalchemy import text
+from sqlalchemy import text, update
+from sqlalchemy.exc import IntegrityError
 
-from .db import Setting, Token, digest, sessions
+from . import knowledge
+from .db import Build, Setting, Token, digest, sessions
+
+
+@asynccontextmanager
+async def lifespan(application):
+    with sessions().begin() as db:
+        db.execute(
+            update(Build)
+            .where(Build.status == "running")
+            .values(
+                status="failed",
+                error="Build interrupted by application shutdown",
+                finished_at=datetime.now(UTC).isoformat(),
+            )
+        )
+    server = create_mcp()
+    application.state.mcp_app = server.streamable_http_app()
+    async with server.session_manager.run():
+        try:
+            yield
+        finally:
+            knowledge.close_readers()
+
 
 app = FastAPI(
-    title="Semantica DataAgent", docs_url=None, redoc_url=None, openapi_url=None
+    title="Semantica DataAgent",
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
+    lifespan=lifespan,
 )
 bearer = HTTPBearer(auto_error=False)
-KEYS = {"neo4j_uri", "neo4j_user", "neo4j_password", "milvus_uri", "embedding_url"}
+KEYS = {
+    "neo4j_uri",
+    "neo4j_user",
+    "neo4j_password",
+    "milvus_uri",
+    "embedding_url",
+    "embedding_model",
+    "source_directory",
+    "knowledge_generation",
+}
 SECRET = {"neo4j_password"}
 
 
@@ -148,6 +190,9 @@ def put_settings(
 ) -> dict[str, str | None]:
     if set(body.values) - KEYS:
         raise HTTPException(status_code=422, detail="Unknown setting")
+    generation = body.values.get("knowledge_generation")
+    if generation and not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,63}", generation):
+        raise HTTPException(status_code=422, detail="Invalid generation")
     for key in ("neo4j_uri", "milvus_uri", "embedding_url"):
         value = body.values.get(key)
         if value:
@@ -249,3 +294,136 @@ async def health() -> dict[str, Status]:
     names = ("neo4j", "milvus", "embedding")
     results = await asyncio.gather(*(probe(name, values) for name in names))
     return dict(zip(names, results, strict=True))
+
+
+class BuildView(BaseModel):
+    id: int
+    status: str
+    started_at: str
+    finished_at: str | None
+    counts: dict[str, int]
+    error: str | None
+
+
+def build_view(row: Build) -> BuildView:
+    return BuildView(
+        id=row.id,
+        status=row.status,
+        started_at=row.started_at,
+        finished_at=row.finished_at,
+        counts=json.loads(row.counts),
+        error=row.error,
+    )
+
+
+@app.post("/api/v1/builds", status_code=202, response_model=BuildView)
+def start_build(background: BackgroundTasks, _: Annotated[str, Depends(admin)]):
+    try:
+        with sessions().begin() as db:
+            row = Build(
+                status="running", started_at=datetime.now(UTC).isoformat(), counts="{}"
+            )
+            db.add(row)
+            db.flush()
+            result = build_view(row)
+    except IntegrityError:
+        raise HTTPException(status_code=409, detail="Build already running") from None
+    background.add_task(knowledge.run_build, result.id)
+    return result
+
+
+@app.get("/api/v1/builds", response_model=list[BuildView])
+def builds(_: Annotated[str, Depends(current_user)]):
+    with sessions()() as db:
+        return [
+            build_view(row) for row in db.query(Build).order_by(Build.id.desc()).all()
+        ]
+
+
+@app.get("/api/v1/builds/{build_id}", response_model=BuildView)
+def build_detail(build_id: int, _: Annotated[str, Depends(current_user)]):
+    with sessions()() as db:
+        row = db.get(Build, build_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="Build not found")
+        return build_view(row)
+
+
+class FieldView(BaseModel):
+    name: str
+    type: str
+    comment: str
+    partition: bool
+
+
+class TableView(BaseModel):
+    name: str
+    database: str
+    comment: str
+    ref: str
+    fields: list[FieldView]
+
+
+@app.get("/api/v1/tables", response_model=list[TableView])
+def tables(
+    _: Annotated[str, Depends(current_user)],
+    database: str | None = None,
+    search: str | None = None,
+):
+    return knowledge.describe(database=database, search=search)
+
+
+def describe_tables(names: list[str]) -> list[dict]:
+    return knowledge.describe(names=names)
+
+
+def search_knowledge(
+    query: str, scope: Literal["tables", "fields"], top_k: int = 5
+) -> list[dict]:
+    if not query or not 1 <= top_k <= 100:
+        raise ValueError("Invalid query or top_k")
+    return knowledge.search(query, scope, top_k)
+
+
+def create_mcp():
+    server = FastMCP(
+        "Semantica DataAgent",
+        host=os.environ.get("DATAAGENT_LISTEN", "127.0.0.1:8000").rsplit(":", 1)[0],
+        streamable_http_path="/",
+        stateless_http=True,
+        json_response=True,
+    )
+    server.tool()(describe_tables)
+    server.tool()(search_knowledge)
+    for tool in server._tool_manager.list_tools():
+        tool.parameters["additionalProperties"] = False
+    server._mcp_server.call_tool(validate_input=True)(server.call_tool)
+    return server
+
+
+@app.api_route("/mcp", methods=["GET", "POST", "DELETE"], include_in_schema=False)
+def mcp_redirect(_: Annotated[str, Depends(current_user)]):
+    return RedirectResponse("/mcp/", status_code=307)
+
+
+class MCPAuthentication:
+    def __init__(self, inner):
+        self.inner = inner
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http":
+            request = Request(scope, receive)
+            try:
+                credentials = await bearer(request)
+                current_user(credentials)
+            except HTTPException as exc:
+                await JSONResponse(
+                    {"detail": exc.detail},
+                    status_code=exc.status_code,
+                    headers=exc.headers,
+                )(scope, receive, send)
+                return
+        await self.inner.state.mcp_app(scope, receive, send)
+
+
+app.mount("/mcp", MCPAuthentication(app))
