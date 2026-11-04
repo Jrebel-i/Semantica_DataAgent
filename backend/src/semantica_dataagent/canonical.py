@@ -4,7 +4,7 @@ import csv
 import hashlib
 import io
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import ClassVar
 
@@ -34,6 +34,7 @@ class Record:
 class ReadResult:
     records: list[Record]
     hashes: dict[str, str]
+    stats: dict[str, int] = field(default_factory=dict)
 
 
 class CanonicalAdapter:

@@ -17,6 +17,9 @@
     "description": {
       "type": "string"
     },
+    "parameters": {
+      "type": "object"
+    },
     "dialect": {
       "enum": [
         "hive",

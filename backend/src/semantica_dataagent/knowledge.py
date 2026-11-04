@@ -171,14 +171,18 @@ def run_build(build_id):
     try:
         values = settings()
         records = []
+        adapter_stats = {}
         for category, plugin, enabled, parameters in configured():
             if category == "source" and enabled:
-                records.extend(
-                    plugin.read(Path(values["source_directory"]), parameters).records
+                result = plugin.read(Path(values["source_directory"]), parameters)
+                records.extend(result.records)
+                adapter_stats.update(
+                    {f"{plugin.id}_{key}": value for key, value in result.stats.items()}
                 )
         records, filtered = filter_records(records, get_filters())
         counts = dict.fromkeys(KINDS.values(), 0)
         counts.update(Counter(r.kind for r in records))
+        counts.update(adapter_stats)
         counts["filtered"] = filtered
         from .stages import STAGES
 

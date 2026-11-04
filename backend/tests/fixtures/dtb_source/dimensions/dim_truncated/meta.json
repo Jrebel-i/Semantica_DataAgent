@@ -1,0 +1,15 @@
+{
+  "database": "dimensions",
+  "table": "dim_truncated",
+  "qualified_table": "dimensions.dim_truncated",
+  "record_count": 2,
+  "truncated": true,
+  "columns": [
+    {
+      "name": "code"
+    },
+    {
+      "name": "name"
+    }
+  ]
+}

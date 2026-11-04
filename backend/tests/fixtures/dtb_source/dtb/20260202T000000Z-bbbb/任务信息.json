@@ -1,0 +1,219 @@
+{
+  "columns": [
+    {
+      "name": "version_id",
+      "type": "string"
+    },
+    {
+      "name": "version_code",
+      "type": "string"
+    },
+    {
+      "name": "message",
+      "type": "string"
+    },
+    {
+      "name": "committer",
+      "type": "string"
+    },
+    {
+      "name": "task_id",
+      "type": "string"
+    },
+    {
+      "name": "task_name",
+      "type": "string"
+    },
+    {
+      "name": "task_type",
+      "type": "string"
+    },
+    {
+      "name": "task_conf",
+      "type": "string"
+    },
+    {
+      "name": "task_src",
+      "type": "string"
+    },
+    {
+      "name": "project_name",
+      "type": "string"
+    },
+    {
+      "name": "upstream_tasks",
+      "type": "string"
+    },
+    {
+      "name": "output_table_name",
+      "type": "string"
+    },
+    {
+      "name": "create_time",
+      "type": "string"
+    },
+    {
+      "name": "modify_time",
+      "type": "string"
+    }
+  ],
+  "data": [
+    [
+      "1",
+      "1762586948240",
+      "2026-01-01",
+      "fixture.user",
+      "101",
+      "air_orders_spark",
+      "spark sql",
+      "{\"owner\": \"fixture.user\", \"scheduleInterval\": \"10 2 * * *\", \"params\": {\"day_num\": \"{{ ds }}\"}}",
+      "INSERT OVERWRITE TABLE dwd.air_orders_d PARTITION (day_num='2026-01-01') SELECT * FROM ods.air_orders_raw",
+      "航空",
+      "",
+      "dwd.air_orders_d",
+      "2026-01-01",
+      "2026-01-02"
+    ],
+    [
+      "1",
+      "1762586948240",
+      "2026-01-01",
+      "fixture.user",
+      "102",
+      "air_payments_livy",
+      "shell",
+      "{\"owner\": \"fixture.user\", \"scheduleInterval\": \"10 2 * * *\", \"params\": {\"day_num\": \"{{ ds }}\"}}",
+      "#!/bin/sh\n# Synthetic fixture modelled on real dtb shell exports.\norigin_schema=\"ods\"\norigin_table=\"air_payments_raw\"\ntarget_schema=\"dwd\"\ntarget_table=\"air_payments_d\"\ncreate_temp_view=\"CREATE TEMPORARY VIEW mysql_air_payments USING org.apache.spark.sql.jdbc OPTIONS (url 'jdbc:mysql://${mysql_host}:3306/ods',dbtable '\\`ods\\`.\\`air_payments_raw\\`',user 'reader',partitionColumn 'payment_id')\"\ninsert_data=\"INSERT OVERWRITE TABLE ${target_schema}.${target_table} PARTITION(day_num='${day_num}') SELECT payment_id FROM mysql_air_payments;\"\nsubmit_sql_and_wait \"${create_temp_view}\"\nsubmit_sql_and_wait \"${insert_data}\"\n",
+      "航空",
+      "101",
+      "dwd.air_payments_d",
+      "2026-01-01",
+      "2026-01-02"
+    ],
+    [
+      "1",
+      "1762586948240",
+      "2026-01-01",
+      "fixture.user",
+      "103",
+      "air_airport_beeline",
+      "shell",
+      "{\"owner\": \"fixture.user\", \"scheduleInterval\": \"10 2 * * *\", \"params\": {\"day_num\": \"{{ ds }}\"}}",
+      "#!/bin/sh\nairport=\"PVG\"\nbeeline -u jdbc:hive2://${hive_host}:10000 -n hadoop --silent=true --outputformat=tsv2 --showHeader=false -e \"select count(*) from dimensions.dim_airport where airport_code = '${airport}'\"\n",
+      "航空",
+      "102",
+      "",
+      "2026-01-01",
+      "2026-01-02"
+    ],
+    [
+      "1",
+      "1762586948240",
+      "2026-01-01",
+      "fixture.user",
+      "104",
+      "air_tickets_basic",
+      "shell",
+      "{\"owner\": \"fixture.user\", \"scheduleInterval\": \"10 2 * * *\", \"params\": {\"day_num\": \"{{ ds }}\"}}",
+      "#!/bin/sh\norigin_schema=\"ods\"\norigin_table=\"air_tickets_raw\"\ntarget_schema=\"dwd\"\ntarget_table=\"air_tickets_d\"\nhdfs dfs -ls /warehouse/${target_schema}.db/${target_table}\n",
+      "航空",
+      "101, 102",
+      "dwd.air_tickets_d",
+      "2026-01-01",
+      "2026-01-02"
+    ],
+    [
+      "1",
+      "1762586948240",
+      "2026-01-01",
+      "fixture.user",
+      "105",
+      "air_orders_merge",
+      "merge onself",
+      "\"{\\\"params\\\": {\\\"day_num\\\": \\\"{{ ds }}\\\", \\\"table\\\": \\\"dwd.air_orders_d\\\"}}\"",
+      "-- merges small files for the target table",
+      "航空",
+      "101",
+      "dwd.air_orders_d",
+      "2026-01-01",
+      "2026-01-02"
+    ],
+    [
+      "1",
+      "1762586948240",
+      "2026-01-01",
+      "fixture.user",
+      "106",
+      "air_report_python",
+      "python",
+      "{\"owner\": \"fixture.user\", \"scheduleInterval\": \"10 2 * * *\", \"params\": {\"day_num\": \"{{ ds }}\"}}",
+      "print('unsupported fixture')",
+      "航空",
+      "104",
+      "dm.air_report_d",
+      "2026-01-01",
+      "2026-01-02"
+    ],
+    [
+      "1",
+      "1762586948240",
+      "2026-01-01",
+      "fixture.user",
+      "107",
+      "air_broken_spark",
+      "spark sql",
+      "",
+      "INSERT INTO dwd.air_broken_d SELECT FROM",
+      "航空",
+      "999",
+      "dwd.air_broken_d",
+      "2026-01-01",
+      "2026-01-02"
+    ],
+    [
+      "1",
+      "1762586948240",
+      "2026-01-01",
+      "fixture.user",
+      "108",
+      "air_short_row",
+      "shell",
+      "{\"owner\": \"fixture.user\", \"scheduleInterval\": \"10 2 * * *\", \"params\": {\"day_num\": \"{{ ds }}\"}}",
+      "#!/bin/sh\norigin_schema=\"ods\"\norigin_table=\"air_tickets_raw\"\ntarget_schema=\"dwd\"\ntarget_table=\"air_tickets_d\"\nhdfs dfs -ls /warehouse/${target_schema}.db/${target_table}\n",
+      "航空",
+      "101"
+    ],
+    [
+      "1",
+      "1762586948240",
+      "2026-01-01",
+      "fixture.user",
+      "",
+      "air_no_id",
+      "shell",
+      "{\"owner\": \"fixture.user\", \"scheduleInterval\": \"10 2 * * *\", \"params\": {\"day_num\": \"{{ ds }}\"}}",
+      "#!/bin/sh\norigin_schema=\"ods\"\norigin_table=\"air_no_id_raw\"\ntarget_schema=\"dwd\"\ntarget_table=\"air_no_id_d\"\n",
+      "航空",
+      "101",
+      "dwd.air_no_id_d",
+      "2026-01-01",
+      "2026-01-02"
+    ],
+    [
+      "1",
+      "1762586948240",
+      "2026-01-01",
+      "fixture.user",
+      "110",
+      "air_bad_conf",
+      "merge onself",
+      "{not valid json",
+      "-- unknown configuration",
+      "航空",
+      "101",
+      "dwd.air_bad_conf_d",
+      "2026-01-01",
+      "2026-01-02"
+    ]
+  ]
+}
