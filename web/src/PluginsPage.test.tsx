@@ -20,6 +20,14 @@ test("renders schema, reports validation errors and saves enabled state", async 
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url: string, options?: RequestInit) => {
+      if (url === "/api/v1/settings") {
+        if (!options?.method)
+          return Response.json({ dimension_value_limit: "7" });
+        requests.push(
+          JSON.parse(String(options.body)) as Record<string, unknown>,
+        );
+        return Response.json({});
+      }
       if (url === "/api/v1/filters")
         return Response.json({
           database_include: [],
@@ -61,11 +69,21 @@ test("renders schema, reports validation errors and saves enabled state", async 
   );
   render(<PluginsPage token="token" messages={getMessages("en")} />);
   expect(await screen.findByLabelText("name")).toBeTruthy();
+  expect(
+    (screen.getByLabelText("Dimension value limit") as HTMLInputElement).value,
+  ).toBe("7");
+  fireEvent.change(screen.getByLabelText("Dimension value limit"), {
+    target: { value: "2" },
+  });
+  fireEvent.click(screen.getAllByText("Save")[0]);
+  await waitFor(() =>
+    expect(requests).toContainEqual({ values: { dimension_value_limit: "2" } }),
+  );
   expect((screen.getByLabelText("count") as HTMLInputElement).value).toBe("2");
   expect(screen.getByLabelText("active")).toBeTruthy();
   expect(screen.getByLabelText("mode")).toBeTruthy();
   expect(screen.getByLabelText("tags")).toBeTruthy();
-  fireEvent.click(screen.getAllByText("Save")[0]);
+  fireEvent.click(screen.getAllByText("Save")[1]);
   expect(await screen.findByText("Name is required")).toBeTruthy();
   fireEvent.change(screen.getByLabelText("name"), {
     target: { value: "valid" },

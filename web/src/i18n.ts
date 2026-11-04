@@ -2,6 +2,10 @@ export type Language = "zh" | "en";
 
 const messages = {
   zh: {
+    dimLimit: "维度值收录上限",
+    dimStatus: "维度值收录情况",
+    dimTooMany: "值过多，未收录",
+    dimCount: "已收录数量",
     plugins: "插件配置",
     enabled: "启用",
     save: "保存",
@@ -57,6 +61,10 @@ const messages = {
     navigation: "导航",
   },
   en: {
+    dimLimit: "Dimension value limit",
+    dimStatus: "Dimension values",
+    dimTooMany: "Too many values; not indexed",
+    dimCount: "Indexed count",
     plugins: "Plugins",
     enabled: "Enabled",
     save: "Save",

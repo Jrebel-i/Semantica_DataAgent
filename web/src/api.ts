@@ -220,6 +220,12 @@ export interface components {
         FieldView: {
             /** Comment */
             comment: string;
+            /** Dimension Count */
+            dimension_count?: number | null;
+            /** Dimension Samples */
+            dimension_samples?: string[] | null;
+            /** Dimension Too Many */
+            dimension_too_many?: boolean | null;
             /** Name */
             name: string;
             /** Partition */

@@ -22,5 +22,47 @@
     "table": "categories",
     "field": "id",
     "value": "家居"
+  },
+  {
+    "database": "shop",
+    "table": "channels",
+    "field": "os_type",
+    "value": "android",
+    "row_id": "0"
+  },
+  {
+    "database": "shop",
+    "table": "channels",
+    "field": "os_name",
+    "value": "安卓",
+    "row_id": "0"
+  },
+  {
+    "database": "shop",
+    "table": "channels",
+    "field": "os_type",
+    "value": "ios",
+    "row_id": "1"
+  },
+  {
+    "database": "shop",
+    "table": "channels",
+    "field": "os_name",
+    "value": "苹果",
+    "row_id": "1"
+  },
+  {
+    "database": "shop",
+    "table": "channels",
+    "field": "os_type",
+    "value": " HK ",
+    "row_id": "2"
+  },
+  {
+    "database": "shop",
+    "table": "channels",
+    "field": "os_name",
+    "value": "香港",
+    "row_id": "2"
   }
 ]

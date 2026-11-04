@@ -62,6 +62,42 @@
             "title": "Comment",
             "type": "string"
           },
+          "dimension_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dimension Count"
+          },
+          "dimension_samples": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dimension Samples"
+          },
+          "dimension_too_many": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dimension Too Many"
+          },
           "name": {
             "title": "Name",
             "type": "string"

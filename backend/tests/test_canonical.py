@@ -100,10 +100,10 @@ def test_demo_covers_all_six_entities():
     counts = Counter(item.kind for item in result.records)
     assert counts == {
         "table": 21,
-        "field": 60,
+        "field": 62,
         "task": 20,
         "lineage": 20,
-        "dimension_value": 4,
+        "dimension_value": 10,
         "document": 10,
     }
     assert len(result.hashes) == 6

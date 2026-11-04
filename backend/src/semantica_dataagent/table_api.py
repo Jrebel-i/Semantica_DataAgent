@@ -16,6 +16,9 @@ class FieldView(BaseModel):
     type: str
     comment: str
     partition: bool
+    dimension_count: int | None = None
+    dimension_too_many: bool | None = None
+    dimension_samples: list[str] | None = None
 
 
 class TableView(BaseModel):

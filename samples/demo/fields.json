@@ -478,5 +478,21 @@
     "type": "string",
     "comment": "日期分区",
     "partition": true
+  },
+  {
+    "database": "shop",
+    "table": "channels",
+    "name": "os_type",
+    "type": "string",
+    "comment": "操作系统代码",
+    "partition": false
+  },
+  {
+    "database": "shop",
+    "table": "channels",
+    "name": "os_name",
+    "type": "string",
+    "comment": "操作系统名称",
+    "partition": false
   }
 ]

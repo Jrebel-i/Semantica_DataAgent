@@ -37,6 +37,7 @@ export function PluginsPage({
   const [plugins, setPlugins] = useState<Plugin[]>([]);
   const [rules, setRules] = useState<Rules | null>(null);
   const [errors, setErrors] = useState<Record<string, Issue[]>>({});
+  const [dimLimit, setDimLimit] = useState("1000");
   const [failure, setFailure] = useState(false);
   const headers = {
     Authorization: `Bearer ${token}`,
@@ -47,11 +48,14 @@ export function PluginsPage({
     Promise.all([
       fetch("/api/v1/plugins", { headers: auth }),
       fetch("/api/v1/filters", { headers: auth }),
+      fetch("/api/v1/settings", { headers: auth }),
     ])
-      .then(async ([p, f]) => {
-        if (!p.ok || !f.ok) throw new Error();
+      .then(async ([p, f, settings]) => {
+        if (!p.ok || !f.ok || !settings.ok) throw new Error();
         setPlugins((await p.json()) as Plugin[]);
         setRules((await f.json()) as Rules);
+        const data = (await settings.json()) as Record<string, string | null>;
+        setDimLimit(data.dimension_value_limit || "1000");
       })
       .catch(() => setFailure(true));
   }, [token]);
@@ -120,6 +124,37 @@ export function PluginsPage({
     <section>
       <h2>{t.plugins}</h2>
       {failure && <p role="alert">{t.error}</p>}
+      <fieldset>
+        <label>
+          {t.dimLimit}
+          <input
+            aria-label={t.dimLimit}
+            type="number"
+            min="1"
+            max="1000000"
+            value={dimLimit}
+            onChange={(e) => setDimLimit(e.target.value)}
+          />
+        </label>
+        <button
+          onClick={() => {
+            void fetch("/api/v1/settings", {
+              method: "PUT",
+              headers,
+              body: JSON.stringify({
+                values: { dimension_value_limit: dimLimit },
+              }),
+            })
+              .then((response) => {
+                if (!response.ok) throw new Error();
+                setFailure(false);
+              })
+              .catch(() => setFailure(true));
+          }}
+        >
+          {t.save}
+        </button>
+      </fieldset>
       {plugins.map((plugin) => {
         const key = `${plugin.category}/${plugin.id}`;
         const issues = errors[key] || [];

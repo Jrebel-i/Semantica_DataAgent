@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Alert, Button, Input, Space, Table, Typography } from "antd";
 import type { paths } from "./api";
 import type { Messages } from "./i18n";
+import { DimensionStatus } from "./DimensionStatus";
 
 type WarehouseTable =
   paths["/api/v1/tables"]["get"]["responses"][200]["content"]["application/json"][number];
@@ -86,6 +87,16 @@ export function KnowledgePage({
               { title: messages.field, dataIndex: "name" },
               { title: messages.dataType, dataIndex: "type" },
               { title: messages.comment, dataIndex: "comment" },
+              {
+                title: messages.dimStatus,
+                render: (_, row) => (
+                  <DimensionStatus
+                    count={row.dimension_count}
+                    tooMany={row.dimension_too_many}
+                    messages={messages}
+                  />
+                ),
+              },
               {
                 title: messages.partition,
                 render: (_, row) =>

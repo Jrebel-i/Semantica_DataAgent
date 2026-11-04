@@ -165,6 +165,12 @@ def test_build_and_retrieve_through_http(tmp_path, monkeypatch):
                 ).status_code
                 == 200
             )
+            assert (
+                c.put(
+                    "/api/v1/settings", json={"values": {"dimension_value_limit": "2"}}
+                ).status_code
+                == 200
+            )
             second = c.post("/api/v1/builds").json()["id"]
             deadline = time.monotonic() + 180
             while time.monotonic() < deadline:
@@ -174,6 +180,27 @@ def test_build_and_retrieve_through_http(tmp_path, monkeypatch):
                 time.sleep(0.2)
             assert rebuilt["status"] == "succeeded", rebuilt.get("error")
             assert rebuilt["counts"]["filtered"] == 0
+            channel = next(
+                t for t in c.get("/api/v1/tables").json() if t["name"] == "channels"
+            )
+            assert next(f for f in channel["fields"] if f["name"] == "os_type")[
+                "dimension_too_many"
+            ]
+            assert (
+                c.put(
+                    "/api/v1/settings",
+                    json={"values": {"dimension_value_limit": "1000"}},
+                ).status_code
+                == 200
+            )
+            third = c.post("/api/v1/builds").json()["id"]
+            deadline = time.monotonic() + 180
+            while time.monotonic() < deadline:
+                final_build = c.get(f"/api/v1/builds/{third}").json()
+                if final_build["status"] != "running":
+                    break
+                time.sleep(0.2)
+            assert final_build["status"] == "succeeded", final_build.get("error")
             with GraphDatabase.driver(
                 os.environ["TEST_NEO4J_URI"],
                 auth=(os.environ["TEST_NEO4J_USER"], os.environ["TEST_NEO4J_PASSWORD"]),
@@ -188,7 +215,7 @@ def test_build_and_retrieve_through_http(tmp_path, monkeypatch):
                 == "scratch"
             )
             assert build["finished_at"]
-            assert c.get("/api/v1/builds").json()[0]["id"] == second
+            assert c.get("/api/v1/builds").json()[0]["id"] == third
             tables = c.get(
                 "/api/v1/tables", params={"database": "shop", "search": "orders"}
             ).json()
@@ -250,6 +277,31 @@ def test_build_and_retrieve_through_http(tmp_path, monkeypatch):
                     and f["partition"]
                     for f in table["fields"]
                 )
+                for keyword, field, value in [
+                    ("安卓", "os_type", "android"),
+                    ("android", "os_type", "android"),
+                    ("香港", "os_type", " HK "),
+                ]:
+                    found = await session.call_tool(
+                        "lookup_dim_values",
+                        {"table": "shop.channels", "field": field, "keyword": keyword},
+                    )
+                    assert any(
+                        x["value"] == value for x in found.structuredContent["result"]
+                    )
+                partial = await session.call_tool(
+                    "lookup_dim_values",
+                    {"table": "shop.channels", "field": "id", "keyword": "移动"},
+                )
+                assert any(
+                    x["value"] == "移动端" and x["match"] == "fulltext"
+                    for x in partial.structuredContent["result"]
+                )
+                bad_dim = await session.call_tool(
+                    "lookup_dim_values",
+                    {"table": "channels", "keyword": "安卓", "extra": 1},
+                )
+                assert bad_dim.isError
                 calls.update(neo4j=0, milvus=0)
                 start = time.monotonic()
                 exact = await session.call_tool(
