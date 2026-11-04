@@ -11,8 +11,9 @@ def test_local_embedding_configuration():
     assert server['ports'] == ['127.0.0.1:17997:7997']
     assert server['mem_limit'] == '4g'
     assert server['restart'] == 'unless-stopped'
-    assert '--batch-size 2' in server['command']
-    assert 'python /integrity/model.py &&' in server['command']
+    assert len(server['command']) == 1, 'shell must receive one complete command argument'
+    assert '--batch-size 2' in server['command'][0]
+    assert 'python /integrity/model.py &&' in server['command'][0]
     assert server['environment']['HF_HUB_OFFLINE'] == '1'
     assert server['environment']['TRANSFORMERS_OFFLINE'] == '1'
     assert server['environment']['DO_NOT_TRACK'] == '1'
