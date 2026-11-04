@@ -18,7 +18,7 @@ from mcp.server.fastmcp import FastMCP
 from neo4j import AsyncGraphDatabase
 from pydantic import BaseModel, Field
 from pymilvus import MilvusClient
-from sqlalchemy import text
+from sqlalchemy import text, update
 from sqlalchemy.exc import IntegrityError
 
 from . import knowledge
@@ -27,6 +27,16 @@ from .db import Build, Setting, Token, digest, sessions
 
 @asynccontextmanager
 async def lifespan(application):
+    with sessions().begin() as db:
+        db.execute(
+            update(Build)
+            .where(Build.status == "running")
+            .values(
+                status="failed",
+                error="Build interrupted by application shutdown",
+                finished_at=datetime.now(UTC).isoformat(),
+            )
+        )
     server = create_mcp()
     application.state.mcp_app = server.streamable_http_app()
     async with server.session_manager.run():

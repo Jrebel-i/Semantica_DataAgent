@@ -321,3 +321,74 @@ def test_build_requires_admin_and_reports_failure_when_unconfigured(client):
     assert build["status"] == "failed"
     assert build["error"]
     assert c.get("/api/v1/builds", headers=headers).json()[0]["id"] == build_id
+
+
+def test_revoked_personal_token_is_denied_by_mcp(client):
+    c, admin_token = client
+    admin_headers = {"Authorization": f"Bearer {admin_token}"}
+    issued = c.post(
+        "/api/v1/tokens",
+        headers=admin_headers,
+        json={"name": "MCP user", "role": "user"},
+    ).json()
+    headers = {
+        "Authorization": f"Bearer {issued['token']}",
+        "Accept": "application/json, text/event-stream",
+        "Host": "localhost:8000",
+    }
+    initialize = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-03-26",
+            "capabilities": {},
+            "clientInfo": {"name": "test", "version": "1"},
+        },
+    }
+    assert c.post("/mcp", headers=headers, follow_redirects=False).status_code == 307
+    assert c.post("/mcp/", headers=headers, json=initialize).status_code == 200
+    assert (
+        c.delete(f"/api/v1/tokens/{issued['id']}", headers=admin_headers).status_code
+        == 204
+    )
+    assert c.post("/mcp", headers=headers, follow_redirects=False).status_code == 401
+    assert c.post("/mcp/", headers=headers, json=initialize).status_code == 401
+
+
+def test_startup_marks_interrupted_build_failed_and_allows_another(
+    tmp_path, monkeypatch
+):
+    from semantica_dataagent.app import app
+    from semantica_dataagent.cli import initialize
+    from semantica_dataagent.db import Build, sessions
+
+    monkeypatch.setenv("DATAAGENT_DB_PATH", str(tmp_path / "recovery.db"))
+    monkeypatch.setenv("DATAAGENT_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    token = initialize()
+    with sessions().begin() as db:
+        db.add_all(
+            [
+                Build(
+                    status="running",
+                    started_at="2026-01-01T00:00:00+00:00",
+                    counts='{"table": 2}',
+                ),
+                Build(
+                    status="succeeded",
+                    started_at="2025-01-01T00:00:00+00:00",
+                    finished_at="2025-01-01T00:01:00+00:00",
+                    counts="{}",
+                ),
+            ]
+        )
+    with TestClient(app) as c:
+        headers = {"Authorization": f"Bearer {token}"}
+        builds = c.get("/api/v1/builds", headers=headers).json()
+        interrupted = next(b for b in builds if b["started_at"].startswith("2026"))
+        finished = next(b for b in builds if b["started_at"].startswith("2025"))
+        assert interrupted["status"] == "failed"
+        assert "interrupted" in interrupted["error"].lower()
+        assert interrupted["finished_at"] and interrupted["counts"] == {"table": 2}
+        assert finished["status"] == "succeeded" and finished["error"] is None
+        assert c.post("/api/v1/builds", headers=headers).status_code == 202
