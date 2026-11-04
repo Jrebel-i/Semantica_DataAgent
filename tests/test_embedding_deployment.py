@@ -1,18 +1,23 @@
-import yaml
 from pathlib import Path
-import subprocess
+
+import yaml
 
 
-def test_test_embedding_is_isolated():
-    overlay = Path('deploy/embedding-test')
-    assert overlay.exists(), 'test embedding deployment is missing'
-    rendered = subprocess.check_output(['kubectl', 'kustomize', str(overlay)], text=True)
-    objects = {item['kind']: item for item in yaml.safe_load_all(rendered)}
-    assert all(obj['metadata']['namespace'] == 'semantica-dataagent-test' for obj in objects.values())
-    assert objects['Service']['spec']['ports'][0]['nodePort'] == 31613
-    base = list(yaml.safe_load_all(Path('deploy/k8s/embedding.yaml').read_text()))
-    assert objects['ConfigMap']['data']['model.py'] == base[0]['data']['model.py']
-    pod = objects['Deployment']['spec']['template']['spec']
-    preferences = pod['affinity']['nodeAffinity']['preferredDuringSchedulingIgnoredDuringExecution']
-    assert any('k8s-worker-02' in term['preference']['matchExpressions'][0]['values'] for term in preferences)
-    assert 'tolerations' not in pod
+def test_local_embedding_configuration():
+    compose_path = Path('deploy/embedding-compose.yaml')
+    assert compose_path.exists(), 'local embedding compose is missing'
+    services = yaml.safe_load(compose_path.read_text())['services']
+    server = services['embedding']
+    assert server['ports'] == ['127.0.0.1:17997:7997']
+    assert server['mem_limit'] == '4g'
+    assert server['restart'] == 'unless-stopped'
+    assert '--batch-size 2' in server['command']
+    assert 'python /integrity/model.py &&' in server['command']
+    assert server['environment']['HF_HUB_OFFLINE'] == '1'
+    assert server['environment']['TRANSFORMERS_OFFLINE'] == '1'
+    assert server['environment']['DO_NOT_TRACK'] == '1'
+    assert any('${EMBEDDING_MODEL_DIR:-' in volume and volume.endswith(':/model/bge-m3:ro') for volume in server['volumes'])
+    generator = yaml.safe_load(Path('deploy/k8s/kustomization.yaml').read_text())['configMapGenerator'][0]
+    script = generator['files'][0].split('=', 1)[-1]
+    assert any(script in volume for volume in server['volumes'])
+    assert any(script in volume for volume in services['model-download']['volumes'])

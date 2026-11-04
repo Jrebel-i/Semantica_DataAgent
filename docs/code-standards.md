@@ -68,7 +68,7 @@ PYTHONPYCACHEPREFIX="$(mktemp -d)" uv run --directory backend pytest -p no:cache
 
 ## 共享测试存储隔离
 
-测试 embedding 使用 `TEST_EMBEDDING_URL=http://172.16.242.124:31613`。连接 `-test` Neo4j / Milvus / embedding 的集成测试，每次运行必须生成唯一知识代与集合前缀，只读取和清理本次创建的数据；在 `finally` 中删除这些节点和集合。不能清理或修改其他测试的代，缺少连接环境变量时必须明确跳过并说明原因。
+测试 embedding 使用 `TEST_EMBEDDING_URL=http://127.0.0.1:17997`。连接 `-test` Neo4j / Milvus / embedding 的集成测试，每次运行必须生成唯一知识代与集合前缀，只读取和清理本次创建的数据；在 `finally` 中删除这些节点和集合。不能清理或修改其他测试的代，缺少连接环境变量时必须明确跳过并说明原因。
 
 ## 构建和知识浏览
 

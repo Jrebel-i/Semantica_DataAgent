@@ -1,2 +1,9 @@
+namespace: semantica-dataagent
 resources:
   - embedding.yaml
+configMapGenerator:
+  - name: embedding-integrity
+    files:
+      - model.py
+    options:
+      disableNameSuffixHash: true
