@@ -96,17 +96,20 @@ def test_demo_covers_all_six_entities():
     from semantica_dataagent.canonical import CanonicalAdapter
 
     root = Path(__file__).resolve().parents[2] / "samples" / "demo"
+    from semantica_dataagent.markdown import MarkdownAdapter
+
     result = CanonicalAdapter().read(root, {})
-    counts = Counter(item.kind for item in result.records)
+    docs = MarkdownAdapter().read(root, {})
+    counts = Counter(item.kind for item in result.records + docs.records)
     assert counts == {
         "table": 21,
         "field": 62,
         "task": 20,
         "lineage": 20,
         "dimension_value": 10,
-        "document": 10,
+        "document": 15,
     }
-    assert len(result.hashes) == 6
+    assert len(result.hashes) == 5
 
 
 def test_missing_directory_fails(tmp_path):

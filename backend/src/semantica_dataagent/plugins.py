@@ -56,7 +56,7 @@ def configured():
             plugin,
             *saved.get(
                 (category, plugin.id),
-                (category == "source" and plugin.id == "canonical", {}),
+                (category == "source" and plugin.id in {"canonical", "markdown"}, {}),
             ),
         )
         for (category, _), plugin in plugins.items()
