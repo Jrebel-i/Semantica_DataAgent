@@ -4,6 +4,7 @@ import { getMessages, type Language } from "./i18n";
 import { LanguageSwitcher } from "./LanguageSwitcher";
 import { Login } from "./Login";
 import { StatusPage, type Health } from "./StatusPage";
+import { TokensPage } from "./TokensPage";
 
 export function App() {
   const [lang, setLang] = useState<Language>(() =>
@@ -11,6 +12,8 @@ export function App() {
   );
   const [token, setToken] = useState(() => localStorage.getItem("token") || "");
   const [loggedIn, setLoggedIn] = useState(false);
+  const [role, setRole] = useState("");
+  const [path, setPath] = useState(window.location.pathname);
   const [error, setError] = useState("");
   const [health, setHealth] = useState<Health | null>(null);
   const t = getMessages(lang);
@@ -29,6 +32,8 @@ export function App() {
         return;
       }
       localStorage.setItem("token", value);
+      const user = (await response.json()) as { role: string };
+      setRole(user.role);
       setToken(value);
       setLoggedIn(true);
       setError("");
@@ -39,6 +44,11 @@ export function App() {
   useEffect(() => {
     if (token) void authenticate(token);
   }, [authenticate, token]);
+  useEffect(() => {
+    const onPop = () => setPath(window.location.pathname);
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
   const refresh = useCallback(async () => {
     try {
       const response = await fetch("/healthz");
@@ -74,12 +84,43 @@ export function App() {
       {!loggedIn ? (
         <Login messages={t} onLogin={(value) => void authenticate(value)} />
       ) : (
-        <StatusPage
-          messages={t}
-          health={health}
-          onRefresh={() => void refresh()}
-          onLogout={logout}
-        />
+        <>
+          <nav aria-label={t.navigation}>
+            {[
+              { path: "/", label: t.statusPage },
+              ...(role === "admin"
+                ? [{ path: "/tokens", label: t.tokens }]
+                : []),
+            ].map((item) => (
+              <a
+                key={item.path}
+                href={item.path}
+                style={{ marginRight: 16 }}
+                onClick={(event) => {
+                  event.preventDefault();
+                  history.pushState(null, "", item.path);
+                  setPath(item.path);
+                }}
+              >
+                {item.label}
+              </a>
+            ))}
+          </nav>
+          {path === "/tokens" ? (
+            role === "admin" ? (
+              <TokensPage token={token} messages={t} />
+            ) : (
+              <Alert title={t.forbidden} type="warning" />
+            )
+          ) : (
+            <StatusPage
+              messages={t}
+              health={health}
+              onRefresh={() => void refresh()}
+              onLogout={logout}
+            />
+          )}
+        </>
       )}
     </main>
   );

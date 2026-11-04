@@ -35,6 +35,120 @@ def test_authentication(client):
     )
 
 
+def test_token_lifecycle(client):
+    c, admin_token = client
+    assert c.get("/api/v1/tokens").status_code == 401
+    assert (
+        c.post("/api/v1/tokens", json={"name": "x", "role": "user"}).status_code == 401
+    )
+    assert c.delete("/api/v1/tokens/unknown").status_code == 401
+    headers = {"Authorization": f"Bearer {admin_token}"}
+    created = c.post(
+        "/api/v1/tokens", headers=headers, json={"name": "Alice", "role": "user"}
+    )
+    assert created.status_code == 201
+    issued = created.json()
+    token = issued["token"]
+    assert token not in Path(os.environ["DATAAGENT_DB_PATH"]).read_bytes().decode(
+        "latin1"
+    )
+    listing = c.get("/api/v1/tokens", headers=headers)
+    assert token not in listing.text
+    row = next(item for item in listing.json() if item["id"] == issued["id"])
+    assert set(row) == {"id", "name", "role", "created_at", "last_used_at", "revoked"}
+    assert row["name"] == "Alice" and row["role"] == "user"
+    assert row["created_at"] and row["last_used_at"] is None
+    user_headers = {"Authorization": f"Bearer {token}"}
+    assert c.get("/api/v1/me", headers=user_headers).status_code == 200
+    updated = c.get("/api/v1/tokens", headers=headers).json()
+    assert (
+        next(item for item in updated if item["id"] == issued["id"])["last_used_at"]
+        is not None
+    )
+    first_used = next(item for item in updated if item["id"] == issued["id"])[
+        "last_used_at"
+    ]
+    assert c.get("/api/v1/me", headers=user_headers).status_code == 200
+    updated_again = c.get("/api/v1/tokens", headers=headers).json()
+    assert (
+        next(item for item in updated_again if item["id"] == issued["id"])[
+            "last_used_at"
+        ]
+        == first_used
+    )
+    assert c.get("/api/v1/tokens", headers=user_headers).status_code == 403
+    assert (
+        c.post(
+            "/api/v1/tokens", headers=user_headers, json={"name": "x", "role": "admin"}
+        ).status_code
+        == 403
+    )
+    assert (
+        c.delete(f"/api/v1/tokens/{issued['id']}", headers=user_headers).status_code
+        == 403
+    )
+    assert (
+        c.delete(f"/api/v1/tokens/{issued['id']}", headers=headers).status_code == 204
+    )
+    assert c.get("/api/v1/me", headers=user_headers).status_code == 401
+    admin_row = next(
+        item
+        for item in c.get("/api/v1/tokens", headers=headers).json()
+        if item["role"] == "admin"
+    )
+    assert (
+        c.delete(f"/api/v1/tokens/{admin_row['id']}", headers=headers).status_code
+        == 409
+    )
+    second = c.post(
+        "/api/v1/tokens",
+        headers=headers,
+        json={"name": "second admin", "role": "admin"},
+    ).json()
+    assert (
+        c.delete(f"/api/v1/tokens/{admin_row['id']}", headers=headers).status_code
+        == 204
+    )
+    assert c.get("/api/v1/me", headers=headers).status_code == 401
+    assert (
+        c.get(
+            "/api/v1/me", headers={"Authorization": f"Bearer {second['token']}"}
+        ).json()["role"]
+        == "admin"
+    )
+
+
+def test_existing_tokens_survive_upgrade(tmp_path, monkeypatch):
+    import sqlite3
+
+    from alembic import command
+    from alembic.config import Config
+
+    from semantica_dataagent import cli
+    from semantica_dataagent.app import app
+    from semantica_dataagent.db import digest
+
+    path = tmp_path / "old.db"
+    monkeypatch.setenv("DATAAGENT_DB_PATH", str(path))
+    config = Config()
+    config.set_main_option(
+        "script_location", str(Path(cli.__file__).parent / "migrations")
+    )
+    config.set_main_option("sqlalchemy.url", f"sqlite:///{path}")
+    command.upgrade(config, "0001")
+    with sqlite3.connect(path) as db:
+        db.execute(
+            "INSERT INTO tokens VALUES (?, ?, ?)",
+            (digest("old-token"), "existing", "admin"),
+        )
+    command.upgrade(config, "head")
+    with TestClient(app) as c:
+        headers = {"Authorization": "Bearer old-token"}
+        assert c.get("/api/v1/me", headers=headers).json() == {"role": "admin"}
+        row = c.get("/api/v1/tokens", headers=headers).json()[0]
+        assert row["name"] == "existing" and row["created_at"] and not row["revoked"]
+
+
 def test_user_cannot_read_or_write_settings(client):
     from semantica_dataagent.db import Token, digest, sessions
 

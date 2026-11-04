@@ -1,6 +1,8 @@
 import asyncio
 import os
+import secrets
 import time
+from datetime import UTC, datetime, timedelta
 from typing import Annotated, Literal
 from urllib.parse import urlsplit
 
@@ -9,8 +11,9 @@ from cryptography.fernet import Fernet
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from neo4j import AsyncGraphDatabase
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from pymilvus import MilvusClient
+from sqlalchemy import text
 
 from .db import Setting, Token, digest, sessions
 
@@ -31,14 +34,19 @@ def current_user(
             detail="Invalid token",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    with sessions()() as db:
+    with sessions().begin() as db:
         token = db.get(Token, digest(credentials.credentials))
-        if token is None:
+        if token is None or token.revoked:
             raise HTTPException(
                 status_code=401,
                 detail="Invalid token",
                 headers={"WWW-Authenticate": "Bearer"},
             )
+        now = datetime.now(UTC).replace(tzinfo=None)
+        if token.last_used_at is None or token.last_used_at < now - timedelta(
+            minutes=1
+        ):
+            token.last_used_at = now
         return token.role
 
 
@@ -55,6 +63,66 @@ class SettingsUpdate(BaseModel):
 class Status(BaseModel):
     status: Literal["up", "down", "not_configured"]
     elapsed_ms: float
+
+
+class TokenCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=200, pattern=r"\S")
+    role: Literal["user", "admin"]
+
+
+class TokenInfo(BaseModel):
+    id: str
+    name: str
+    role: Literal["user", "admin"]
+    created_at: datetime
+    last_used_at: datetime | None
+    revoked: bool
+
+    model_config = {"from_attributes": True}
+
+
+class TokenIssued(TokenInfo):
+    token: str
+
+
+@app.post("/api/v1/tokens", response_model=TokenIssued, status_code=201)
+def create_token(body: TokenCreate, _: Annotated[str, Depends(admin)]):
+    plaintext = secrets.token_urlsafe(32)
+    with sessions().begin() as db:
+        row = Token(digest=digest(plaintext), name=body.name, role=body.role)
+        db.add(row)
+        db.flush()
+        return TokenIssued(
+            **TokenInfo.model_validate(row).model_dump(), token=plaintext
+        )
+
+
+@app.get("/api/v1/tokens", response_model=list[TokenInfo])
+def list_tokens(_: Annotated[str, Depends(admin)]):
+    with sessions()() as db:
+        return [
+            TokenInfo.model_validate(row)
+            for row in db.query(Token).order_by(Token.created_at, Token.id).all()
+        ]
+
+
+@app.delete("/api/v1/tokens/{token_id}", status_code=204)
+def revoke_token(token_id: str, _: Annotated[str, Depends(admin)]):
+    with sessions()() as db:
+        db.execute(text("BEGIN IMMEDIATE"))
+        row = db.query(Token).filter_by(id=token_id).first()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Token not found")
+        if (
+            not row.revoked
+            and row.role == "admin"
+            and db.query(Token).filter_by(role="admin", revoked=False).count() <= 1
+        ):
+            raise HTTPException(
+                status_code=409, detail="Cannot revoke the last active admin token"
+            )
+        row.revoked = True
+        db.commit()
 
 
 @app.get("/api/v1/me")
