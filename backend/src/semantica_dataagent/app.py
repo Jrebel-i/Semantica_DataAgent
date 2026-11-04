@@ -23,6 +23,7 @@ from sqlalchemy.exc import IntegrityError
 
 from . import knowledge
 from .db import Build, Setting, Token, digest, sessions
+from .embedding_client import validate_settings
 
 
 @asynccontextmanager
@@ -64,6 +65,11 @@ KEYS = {
     "source_directory",
     "knowledge_generation",
     "dimension_value_limit",
+    "embedding_concurrency",
+    "embedding_timeout_seconds",
+    "embedding_timeout_per_input_seconds",
+    "embedding_retries",
+    "embedding_backoff_seconds",
 }
 SECRET = {"neo4j_password"}
 
@@ -191,6 +197,10 @@ def put_settings(
 ) -> dict[str, str | None]:
     if set(body.values) - KEYS:
         raise HTTPException(status_code=422, detail="Unknown setting")
+    try:
+        validate_settings(body.values)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
     limit = body.values.get("dimension_value_limit")
     if limit and (
         not limit.isascii() or not limit.isdigit() or not 1 <= int(limit) <= 1000000

@@ -44,6 +44,16 @@ export function BuildsPage({
               <div>
                 {build.started_at} {build.error}
               </div>
+              <div>
+                {messages.embeddingStats}: {messages.embeddingRequests}{" "}
+                {build.counts.embedding_requests ?? 0},{" "}
+                {messages.embeddingBatches}{" "}
+                {build.counts.embedding_successful_batches ?? 0},{" "}
+                {messages.embeddingRetriesCount}{" "}
+                {build.counts.embedding_retries ?? 0},{" "}
+                {messages.embeddingElapsed}{" "}
+                {build.counts.embedding_elapsed_ms ?? 0}
+              </div>
               <div>{messages.parseFailures}</div>
               <ul>
                 {build.parse_failures.map((failure, index) => (

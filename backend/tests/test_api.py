@@ -274,6 +274,38 @@ def test_connection_addresses_reject_embedded_credentials(client):
         assert c.get("/api/v1/settings", headers=headers).json()[key] is None
 
 
+def test_embedding_settings_are_validated_and_saved(client):
+    c, token = client
+    headers = {"Authorization": f"Bearer {token}"}
+    for key, value in [
+        ("embedding_concurrency", "0"),
+        ("embedding_concurrency", "many"),
+        ("embedding_timeout_seconds", "0"),
+        ("embedding_timeout_per_input_seconds", "-1"),
+        ("embedding_retries", "11"),
+        ("embedding_backoff_seconds", "nan"),
+    ]:
+        response = c.put(
+            "/api/v1/settings", headers=headers, json={"values": {key: value}}
+        )
+        assert response.status_code == 422, (key, value, response.text)
+        assert key in response.json()["detail"]
+    saved = {
+        "embedding_concurrency": "1",
+        "embedding_timeout_seconds": "90",
+        "embedding_timeout_per_input_seconds": "15",
+        "embedding_retries": "0",
+        "embedding_backoff_seconds": "0.5",
+    }
+    assert (
+        c.put("/api/v1/settings", headers=headers, json={"values": saved}).status_code
+        == 200
+    )
+    settings = c.get("/api/v1/settings", headers=headers).json()
+    for key, value in saved.items():
+        assert settings[key] == value
+
+
 def test_sessions_reuse_engine_and_follow_database_path(tmp_path, monkeypatch):
     from semantica_dataagent.db import Base, Token, sessions
 
@@ -487,7 +519,9 @@ def test_third_party_plugin_validation_and_next_build(client, tmp_path, monkeypa
         "settings",
         lambda: {"source_directory": str(tmp_path), "knowledge_generation": "test"},
     )
-    monkeypatch.setattr(knowledge, "build_storage", lambda values: nullcontext(None))
+    monkeypatch.setattr(
+        knowledge, "build_storage", lambda values, stats=None: nullcontext(None)
+    )
     monkeypatch.setattr(knowledge, "read_graph", lambda values: None)
     monkeypatch.setattr(knowledge, "read_vectors", lambda values: None)
     monkeypatch.setattr(

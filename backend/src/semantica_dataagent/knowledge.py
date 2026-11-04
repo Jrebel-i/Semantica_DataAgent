@@ -1,7 +1,6 @@
 """Build and query the current generation of warehouse metadata."""
 
 import json
-import math
 import os
 import re
 from collections import Counter
@@ -12,7 +11,6 @@ from pathlib import Path
 from threading import Lock
 from urllib.parse import quote, urlsplit
 
-import httpx
 import numpy as np
 from cryptography.fernet import Fernet
 from pymilvus import MilvusClient, utility
@@ -21,6 +19,8 @@ from semantica.vector_store.milvus_store import MilvusStore
 
 from .canonical import KINDS
 from .db import Build, Setting, sessions
+from .embedding_client import EmbeddingStats
+from .embedding_client import embed as embedding_embed
 from .filters import filter_records, get_filters
 from .plugins import configured
 
@@ -106,28 +106,8 @@ def execute(store, query, parameters):
     return result["records"]
 
 
-def embed(values, texts):
-    with httpx.Client(timeout=120, trust_env=False) as client:
-        response = client.post(
-            values["embedding_url"].rstrip("/") + "/embeddings",
-            json={"model": values["embedding_model"], "input": texts},
-        )
-        response.raise_for_status()
-        data = response.json()["data"]
-        ordered = sorted(data, key=lambda item: item["index"])
-        if [item["index"] for item in ordered] != list(range(len(texts))):
-            raise ValueError("Embedding response has missing or duplicate indexes")
-        vectors = [item["embedding"] for item in ordered]
-        if (
-            not vectors
-            or not vectors[0]
-            or any(
-                len(v) != len(vectors[0]) or not all(math.isfinite(x) for x in v)
-                for v in vectors
-            )
-        ):
-            raise ValueError("Invalid embedding vectors")
-        return vectors
+def embed(values, texts, stats=None):
+    return embedding_embed(values, texts, stats)
 
 
 def collection_name(values):
@@ -154,12 +134,13 @@ def reference(kind, data):
 
 
 @contextmanager
-def build_storage(values):
+def build_storage(values, embedding_stats=None):
     """Initialize the generation once, then share append-only stage handles."""
     from .stage_contract import StorageHandles
 
+    stats = embedding_stats if embedding_stats is not None else EmbeddingStats()
     generation = values["knowledge_generation"]
-    dimension = len(embed(values, ["knowledge"])[0])
+    dimension = len(embed(values, ["knowledge"], stats)[0])
     graph_store = graph(values)
     try:
         vector_store = milvus(values)
@@ -173,7 +154,9 @@ def build_storage(values):
             if utility.has_collection(name):
                 utility.drop_collection(name)
             vector_store.create_collection(name, dimension, metric_type="COSINE")
-            yield StorageHandles(generation, graph_store, vector_store, values)
+            yield StorageHandles(
+                generation, graph_store, vector_store, values, _embedding_stats=stats
+            )
             vector_store.collection.load()
         finally:
             vector_store.client.disconnect()
@@ -184,6 +167,7 @@ def build_storage(values):
 def run_build(build_id):
     status, counts, error = "failed", {}, None
     failures = []
+    stats = EmbeddingStats()
     try:
         values = settings()
         records = []
@@ -198,7 +182,7 @@ def run_build(build_id):
         counts["filtered"] = filtered
         from .stages import STAGES
 
-        with build_storage(values) as storage:
+        with build_storage(values, stats) as storage:
             for stage in STAGES:
                 result = stage(records, values["knowledge_generation"], storage)
                 counts.update(result.counts)
@@ -211,6 +195,7 @@ def run_build(build_id):
     except Exception as exc:  # noqa: BLE001 - record failure of background work
         error = str(exc)
     finally:
+        counts.update(stats.counts())
         with sessions().begin() as db:
             build = db.get(Build, build_id)
             build.status = status

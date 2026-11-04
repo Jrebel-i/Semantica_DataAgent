@@ -79,11 +79,29 @@ test("renders schema, reports validation errors and saves enabled state", async 
   await waitFor(() =>
     expect(requests).toContainEqual({ values: { dimension_value_limit: "2" } }),
   );
+  expect(
+    (screen.getByLabelText("Concurrency limit") as HTMLInputElement).value,
+  ).toBe("2");
+  fireEvent.change(screen.getByLabelText("Concurrency limit"), {
+    target: { value: "1" },
+  });
+  fireEvent.click(screen.getAllByText("Save")[1]);
+  await waitFor(() =>
+    expect(requests).toContainEqual({
+      values: {
+        embedding_concurrency: "1",
+        embedding_timeout_seconds: "60",
+        embedding_timeout_per_input_seconds: "20",
+        embedding_retries: "2",
+        embedding_backoff_seconds: "1",
+      },
+    }),
+  );
   expect((screen.getByLabelText("count") as HTMLInputElement).value).toBe("2");
   expect(screen.getByLabelText("active")).toBeTruthy();
   expect(screen.getByLabelText("mode")).toBeTruthy();
   expect(screen.getByLabelText("tags")).toBeTruthy();
-  fireEvent.click(screen.getAllByText("Save")[1]);
+  fireEvent.click(screen.getAllByText("Save")[2]);
   expect(await screen.findByText("Name is required")).toBeTruthy();
   fireEvent.change(screen.getByLabelText("name"), {
     target: { value: "valid" },
