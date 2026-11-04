@@ -99,7 +99,22 @@ def close_readers():
         reader.close()
 
 
+_round_trip_lock = Lock()
+_round_trips = {"neo4j": 0, "milvus": 0, "embedding": 0}
+
+
+def round_trip_counts():
+    with _round_trip_lock:
+        return dict(_round_trips)
+
+
+def _count_round_trip(kind):
+    with _round_trip_lock:
+        _round_trips[kind] += 1
+
+
 def execute(store, query, parameters):
+    _count_round_trip("neo4j")
     result = store.execute_query(query, parameters)
     if not result.get("success"):
         raise RuntimeError("Graph query failed")
@@ -107,6 +122,7 @@ def execute(store, query, parameters):
 
 
 def embed(values, texts, stats=None):
+    _count_round_trip("embedding")
     return embedding_embed(values, texts, stats)
 
 
@@ -239,53 +255,134 @@ def describe(names=None, database=None, search=None):
     ]
 
 
+# Ranking constants are versioned so clients can interpret scores consistently.
+RANKING_VERSION = "1"
+RRF_K = 60
+SOURCE_WEIGHTS = {"exact": 2.0, "fulltext": 1.0, "vector": 1.0, "graph": 0.5}
+
+
+def fuse(sources, limit):
+    merged = {}
+    for source, hits in sources.items():
+        for rank, item in enumerate(hits, 1):
+            entry = merged.setdefault(
+                item["ref"], {**item, "score": 0.0, "sources": []}
+            )
+            entry["score"] += SOURCE_WEIGHTS[source] / (RRF_K + rank)
+            entry["sources"].append(source)
+    for entry in merged.values():
+        if entry["ref"].startswith("task:") and not entry.get("has_output", False):
+            entry["score"] *= 0.5
+        entry["type"] = entry["ref"].split(":", 1)[0]
+        entry["confidence"] = (
+            "high"
+            if "exact" in entry["sources"] or len(entry["sources"]) >= 2
+            else "medium"
+            if "fulltext" in entry["sources"]
+            else "low"
+        )
+    return sorted(merged.values(), key=lambda x: (-x["score"], x["ref"]))[:limit]
+
+
+def mark_ambiguity(results, query):
+    """Flag possible conflicting definitions when different documents mention a term.
+
+    This is deliberately conservative: it signals a need to inspect the cited
+    passages, rather than claiming to understand or resolve their definitions.
+    """
+    candidates = [
+        item
+        for item in results
+        if item.get("doc_id") and query.casefold() in item.get("content", "").casefold()
+    ]
+    refs = sorted({item["ref"] for item in candidates})
+    ambiguous = len({item["doc_id"] for item in candidates}) > 1
+    for item in results:
+        item["ambiguous"] = ambiguous and item in candidates
+        item["ambiguity_refs"] = refs if item["ambiguous"] else []
+    return results
+
+
 def search(query, scope, top_k, category=None):
     values = settings()
     vector = np.array(embed(values, [query])[0], dtype=np.float32)
-    candidate_limit = 100 if scope == "tasks" else top_k
+    generation = values["knowledge_generation"]
+    limit = max(50, top_k)
+    scopes = ["tables", "fields", "tasks", "docs"] if scope == "all" else [scope]
+    params = {
+        "generation": generation,
+        "query": query,
+        "term": re.sub(r'([+\-&|!(){}\[\]^"~*?:\\/])', r"\\\1", query),
+        "limit": limit,
+        "scopes": scopes,
+        "category": category,
+    }
 
-    def exact():
-        if scope == "docs":
-            return []
-        store = read_graph(values)
-        label = {"tables": "SDATable", "fields": "SDAField", "tasks": "SDATask"}[scope]
-        return [
-            r["item"]
-            for r in execute(
-                store,
-                f"MATCH (n:{label} {{generation:$generation}}) WHERE toLower(n.name) = toLower($query) RETURN properties(n) AS item LIMIT $limit",
-                {
-                    "generation": values["knowledge_generation"],
-                    "query": query,
-                    "limit": candidate_limit,
-                },
-            )
-        ]
+    def lexical():
+        return execute(
+            read_graph(values),
+            """CALL {
+          MATCH (n:SDAEntity {generation:$generation})
+          WHERE ((n:SDATable AND 'tables' IN $scopes) OR (n:SDAField AND 'fields' IN $scopes) OR (n:SDATask AND 'tasks' IN $scopes))
+            AND (toLower(n.name) = toLower($query) OR toLower(coalesce(n.database,'') + '.' + n.name) = toLower($query))
+            AND $category IS NULL
+          RETURN 'exact' AS source, properties(n) AS item LIMIT $limit
+          UNION ALL
+          CALL db.index.fulltext.queryNodes('sda_knowledge', $term, {limit:$limit}) YIELD node, score
+          WHERE node.generation = $generation AND ((node:SDATable AND 'tables' IN $scopes) OR (node:SDAField AND 'fields' IN $scopes) OR (node:SDATask AND 'tasks' IN $scopes) OR (node:SDAChunk AND 'docs' IN $scopes))
+            AND ($category IS NULL OR node.category = $category)
+          RETURN 'fulltext' AS source, properties(node) AS item ORDER BY score DESC
+        } RETURN source, item""",
+            params,
+        )
 
     def semantic():
+        predicate = 'metadata["generation"] == ' + json.dumps(generation)
+        predicate += ' and metadata["scope"] in ' + json.dumps(scopes)
+        if category is not None:
+            predicate += ' and metadata["category"] == ' + json.dumps(
+                category, ensure_ascii=False
+            )
         client = read_vectors(values)
+        _count_round_trip("milvus")
         hits = client.search(
             collection_name=collection_name(values),
             data=[vector.tolist()],
-            limit=candidate_limit,
-            filter=f'metadata["scope"] == "{scope}" and metadata["generation"] == "{values["knowledge_generation"]}"'
-            + (
-                f' and metadata["category"] == {json.dumps(category, ensure_ascii=False)}'
-                if category is not None
-                else ""
-            ),
+            limit=limit,
+            filter=predicate,
             output_fields=["metadata"],
             search_params={"metric_type": "COSINE"},
         )
         return [hit["entity"]["metadata"] for hit in hits[0]]
 
     with ThreadPoolExecutor(max_workers=2) as pool:
-        a, b = pool.submit(exact), pool.submit(semantic)
-        merged = a.result() + b.result()
-    unique = {item["ref"]: item for item in reversed(merged)}
-    results = list(reversed(list(unique.values())))
-    if scope == "tasks":
-        from .task_stage import rank_task_hits
-
-        results = rank_task_hits(results)
-    return results[:top_k]
+        a, b = pool.submit(lexical), pool.submit(semantic)
+        rows, vectors = a.result(), b.result()
+    sources = {"exact": [], "fulltext": [], "vector": vectors, "graph": []}
+    for row in rows:
+        sources[row["source"]].append(row["item"])
+    seeds = [x["ref"] for x in fuse(sources, 10)]
+    if seeds:
+        rows = execute(
+            read_graph(values),
+            """MATCH (seed:SDAEntity {generation:$generation}) WHERE seed.ref IN $seeds
+        CALL {
+          WITH seed
+          MATCH (seed)-[:HAS_FIELD|PRODUCES|DEPENDS_ON]-(n:SDAEntity {generation:$generation})
+          RETURN n
+          UNION
+          WITH seed
+          MATCH (seed:SDATable)-[:HAS_DOCUMENT]->(:SDADocument {generation:$generation})-[:HAS_CHUNK]->(n:SDAChunk {generation:$generation})
+          RETURN n
+          UNION
+          WITH seed
+          MATCH (seed:SDAChunk)<-[:HAS_CHUNK]-(:SDADocument {generation:$generation})<-[:HAS_DOCUMENT]-(n:SDATable {generation:$generation})
+          RETURN n
+        }
+        WITH n
+        WHERE ((n:SDATable AND 'tables' IN $scopes) OR (n:SDAField AND 'fields' IN $scopes) OR (n:SDATask AND 'tasks' IN $scopes) OR (n:SDAChunk AND 'docs' IN $scopes)) AND ($category IS NULL OR n.category = $category)
+        RETURN DISTINCT properties(n) AS item LIMIT $limit""",
+            {**params, "seeds": seeds},
+        )
+        sources["graph"] = [row["item"] for row in rows]
+    return mark_ambiguity(fuse(sources, limit * 4), query)[:top_k]

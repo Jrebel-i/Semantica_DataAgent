@@ -5,6 +5,11 @@ def write(records, generation, storage):
     from .knowledge import reference
     from .stage_contract import StageResult
 
+    storage.execute(
+        "CREATE FULLTEXT INDEX sda_knowledge IF NOT EXISTS FOR (n:SDATable|SDAField|SDATask|SDAChunk) ON EACH [n.name, n.comment, n.description, n.content] OPTIONS {indexConfig: {`fulltext.analyzer`: 'cjk'}}",
+        {},
+    )
+    storage.execute("CALL db.awaitIndex('sda_knowledge', 120)", {})
     tables = [
         dict(r.data, ref=reference(r.kind, r.data))
         for r in records

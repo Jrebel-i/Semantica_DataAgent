@@ -51,12 +51,12 @@ def describe_tables(names: list[str]) -> list[dict]:
 
 def search_knowledge(
     query: str,
-    scope: Literal["tables", "fields", "docs", "tasks"],
+    scope: Literal["tables", "fields", "docs", "tasks", "all"],
     top_k: int = 5,
     category: str | None = None,
 ) -> list[dict]:
     if not query or not 1 <= top_k <= 100:
         raise ValueError("Invalid query or top_k")
-    if category is not None and scope != "docs":
+    if category is not None and scope not in ("docs", "all"):
         raise ValueError("category requires docs scope")
     return knowledge.search(query, scope, top_k, category)
