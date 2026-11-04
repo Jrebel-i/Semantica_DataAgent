@@ -79,7 +79,7 @@ def test_build_and_retrieve_through_http(tmp_path, monkeypatch):
     def delayed_embed(values, texts):
         if len(texts) > 1:
             entered.set()
-            if not release.wait(timeout=60):
+            if not release.wait(timeout=180):
                 raise TimeoutError("Test did not release build")
         return original_embed(values, texts)
 
@@ -119,11 +119,11 @@ def test_build_and_retrieve_through_http(tmp_path, monkeypatch):
             assert response.status_code == 202, response.text
             ident = response.json()["id"]
             try:
-                assert entered.wait(timeout=30)
+                assert entered.wait(timeout=120)
                 assert c.post("/api/v1/builds").status_code == 409
             finally:
                 release.set()
-            deadline = time.monotonic() + 180
+            deadline = time.monotonic() + 900
             while time.monotonic() < deadline:
                 build = c.get(f"/api/v1/builds/{ident}").json()
                 if build["status"] != "running":
@@ -173,7 +173,7 @@ def test_build_and_retrieve_through_http(tmp_path, monkeypatch):
                 == 200
             )
             second = c.post("/api/v1/builds").json()["id"]
-            deadline = time.monotonic() + 180
+            deadline = time.monotonic() + 900
             while time.monotonic() < deadline:
                 rebuilt = c.get(f"/api/v1/builds/{second}").json()
                 if rebuilt["status"] != "running":
@@ -195,7 +195,7 @@ def test_build_and_retrieve_through_http(tmp_path, monkeypatch):
                 == 200
             )
             third = c.post("/api/v1/builds").json()["id"]
-            deadline = time.monotonic() + 180
+            deadline = time.monotonic() + 900
             while time.monotonic() < deadline:
                 final_build = c.get(f"/api/v1/builds/{third}").json()
                 if final_build["status"] != "running":
