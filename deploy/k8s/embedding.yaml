@@ -97,7 +97,7 @@ spec:
         image: michaelf34/infinity:0.0.77-cpu
         command: ["/bin/sh", "-c"]
         args:
-        - python /integrity/model.py && exec infinity_emb v2 --model-id /model/bge-m3 --engine torch --port 7997 --host 0.0.0.0
+        - python /integrity/model.py && exec infinity_emb v2 --model-id /model/bge-m3 --engine torch --batch-size 2 --port 7997 --host 0.0.0.0
         env:
         - name: DO_NOT_TRACK
           value: "1"
@@ -115,9 +115,9 @@ spec:
         resources:
           requests:
             cpu: 500m
-            memory: 1Gi
+            memory: 2Gi
           limits:
-            memory: 3Gi
+            memory: 4Gi
         volumeMounts:
         - name: model
           mountPath: /model
