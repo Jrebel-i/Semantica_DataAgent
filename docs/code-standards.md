@@ -25,7 +25,7 @@
 
 ## 真实使用
 
-<!-- 外部系统清单；测试账号或凭据副本放在哪里；必须使用的隔离方式（临时 HOME、测试库）；绝对不能碰的生产资源。 -->
+真实集群连通性用 `scripts/check_infra.py dev` 和 `scripts/check_infra.py test`，配置与凭据获取见 [infrastructure.md](infrastructure.md)。只在 `semantica-dataagent` 和 `semantica-dataagent-test` 命名空间操作；不得改动其他命名空间或集群级资源（创建这两个命名空间除外）。测试应使用隔离的测试实例与临时集合。
 
 ## 已拍板的决定
 
