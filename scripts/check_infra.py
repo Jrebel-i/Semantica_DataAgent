@@ -35,7 +35,7 @@ print('Milvus: collection created and deleted')
 if args.skip_embedding:
     raise SystemExit(0)
 request = urllib.request.Request(
-    f'http://{args.host}:31603/embeddings',
+    f'http://{args.host}:{31603 if args.environment == "dev" else 31613}/embeddings',
     data=json.dumps({'model': 'model/bge-m3', 'input': ['这是一句中文。']}).encode(),
     headers={'Content-Type': 'application/json'}, method='POST')
 with urllib.request.urlopen(request, timeout=180) as response:

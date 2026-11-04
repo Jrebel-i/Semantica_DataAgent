@@ -10,6 +10,7 @@ import urllib.request
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--url', default='http://172.16.242.124:31603')
+parser.add_argument('--namespace', choices=['semantica-dataagent', 'semantica-dataagent-test'], default='semantica-dataagent')
 parser.add_argument('--ssh', default='baize@172.16.242.124')
 parser.add_argument('--clients', type=int, default=3)
 parser.add_argument('--batches', type=int, default=2)
@@ -22,7 +23,7 @@ if min(args.clients, args.batches, args.chars, args.timeout) < 1:
 def pod_status():
     try:
         result = subprocess.run(['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=5', args.ssh,
-            'kubectl -n semantica-dataagent get pods -l app=embedding -o json'],
+            f'kubectl -n {args.namespace} get pods -l app=embedding -o json'],
             capture_output=True, text=True, timeout=15, check=True)
         pods = json.loads(result.stdout)['items']
         return [(pod['metadata']['name'], status['restartCount'],
@@ -39,7 +40,7 @@ def monitor():
     while not stop.is_set():
         try:
             result = subprocess.run(['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=5', args.ssh,
-                'kubectl -n semantica-dataagent top pod -l app=embedding --no-headers'],
+                f'kubectl -n {args.namespace} top pod -l app=embedding --no-headers'],
                 capture_output=True, text=True, timeout=15, check=True)
             for line in result.stdout.splitlines():
                 memory = line.split()[-1]
