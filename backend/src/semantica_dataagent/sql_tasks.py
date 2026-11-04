@@ -9,6 +9,11 @@ from sqlglot.optimizer.scope import traverse_scope
 from .plugins import ParseResult
 
 
+def table_name(table):
+    """Return catalog/database/table without the SQL alias."""
+    return ".".join(part for part in (table.catalog, table.db, table.name) if part)
+
+
 class SQLTaskParser:
     id = "sql"
     version = "1.0.0"
@@ -44,16 +49,16 @@ class SQLTaskParser:
                 for scope in traverse_scope(query):
                     for source in scope.sources.values():
                         if isinstance(source, exp.Table):
-                            name = source.sql(dialect=dialect, identify=False)
+                            name = table_name(source)
                             sources.update(views.get(name, {name}))
                 if isinstance(statement, exp.Create) and statement.find(
                     exp.TemporaryProperty
                 ):
-                    views[target.sql(dialect=dialect)] = sources
+                    views[table_name(target)] = sources
                 else:
                     reads.update(sources)
                     if isinstance(target, exp.Table):
-                        destination = ".".join(part.name for part in target.parts)
+                        destination = table_name(target)
                         writes.add(destination)
                         edges.update((source, destination) for source in sources)
             return ParseResult(
