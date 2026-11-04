@@ -166,10 +166,16 @@ def run_build(build_id):
         counts = dict.fromkeys(KINDS.values(), 0)
         counts.update(Counter(r.kind for r in records))
         counts["filtered"] = filtered
+        from .stage_contract import StorageHandles
         from .stages import STAGES
 
         for stage in STAGES:
-            counts.update(stage(records, values["knowledge_generation"], values))
+            result = stage(
+                records, values["knowledge_generation"], StorageHandles(values)
+            )
+            counts.update(result.counts)
+            if result.errors:
+                raise ValueError("; ".join(result.errors))
         read_graph(values)
         read_vectors(values)
         status = "succeeded"

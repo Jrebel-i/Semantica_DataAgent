@@ -1,7 +1,10 @@
 """Write table and field knowledge for one generation."""
 
 
-def write(records, generation, values):
+def write(records, generation, storage):
+    from .stage_contract import StageResult
+
+    values = storage.settings
     from pymilvus import utility
 
     from .knowledge import collection_name, embed, execute, graph, milvus, reference
@@ -65,4 +68,4 @@ def write(records, generation, values):
         vectors_store.collection.load()
     finally:
         vectors_store.client.disconnect()
-    return {"table": len(tables), "field": len(fields)}
+    return StageResult(counts={"table": len(tables), "field": len(fields)})

@@ -441,6 +441,7 @@ def test_parser_without_matching_type_is_unsupported(client):
 def test_third_party_plugin_validation_and_next_build(client, tmp_path, monkeypatch):
     from semantica_dataagent import knowledge, stages
     from semantica_dataagent.db import Build, sessions
+    from semantica_dataagent.stage_contract import StageResult
 
     fixture = Path(__file__).parent / "fixtures" / "third_party"
     monkeypatch.syspath_prepend(str(fixture))
@@ -489,7 +490,7 @@ def test_third_party_plugin_validation_and_next_build(client, tmp_path, monkeypa
     monkeypatch.setattr(
         stages,
         "STAGES",
-        [lambda records, generation, values: seen.extend(records) or {}],
+        [lambda records, generation, values: seen.extend(records) or StageResult()],
     )
     with sessions().begin() as db:
         row = Build(status="running", started_at="now", counts="{}")
@@ -520,3 +521,36 @@ def test_third_party_plugin_validation_and_next_build(client, tmp_path, monkeypa
     seen.clear()
     knowledge.run_build(build_id)
     assert seen == []
+
+
+def test_task_parser_dispatch_uses_enabled_matching_parser(client, monkeypatch):
+    from semantica_dataagent import plugins
+    from semantica_dataagent.canonical import Record
+
+    class Parser:
+        id = "example"
+        task_types = ("sql",)
+
+        def parse(self, task, parameters):
+            return plugins.ParseResult(
+                [parameters["input"]], [task.data["name"]], "success"
+            )
+
+    parser = Parser()
+    monkeypatch.setattr(
+        plugins, "configured", lambda: [("parser", parser, True, {"input": "source"})]
+    )
+    result = plugins.parse_task(
+        Record("task", {"name": "target", "sql": "...", "type": "sql"})
+    )
+    assert (result.status, result.reads, result.writes) == (
+        "success",
+        ["source"],
+        ["target"],
+    )
+    assert (
+        plugins.parse_task(
+            Record("task", {"name": "target", "sql": "...", "type": "other"})
+        ).status
+        == "unsupported"
+    )
