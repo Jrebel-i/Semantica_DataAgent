@@ -92,6 +92,7 @@ def test_build_and_retrieve_through_http(tmp_path, monkeypatch):
     shutil.copytree(Path(__file__).resolve().parents[2] / "samples/demo", source)
 
     generation = "test_" + uuid.uuid4().hex
+    print(f"test generation: {generation}", flush=True)
     monkeypatch.setenv("DATAAGENT_DB_PATH", str(tmp_path / "app.db"))
     monkeypatch.setenv("DATAAGENT_ENCRYPTION_KEY", Fernet.generate_key().decode())
     token = initialize()

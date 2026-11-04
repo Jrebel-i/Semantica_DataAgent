@@ -38,6 +38,7 @@ def test_fusion_over_mcp(tmp_path, monkeypatch):
     from semantica_dataagent.cli import initialize
 
     generation = "test_" + uuid.uuid4().hex
+    print(f"test generation: {generation}", flush=True)
     monkeypatch.setenv("DATAAGENT_DB_PATH", str(tmp_path / "app.db"))
     monkeypatch.setenv("DATAAGENT_ENCRYPTION_KEY", Fernet.generate_key().decode())
     token = initialize()
@@ -83,6 +84,17 @@ def test_fusion_over_mcp(tmp_path, monkeypatch):
                     break
                 time.sleep(0.2)
             assert build["status"] == "succeeded", build.get("error")
+            response = client.get(
+                "/api/v1/search",
+                params={
+                    "query": "销售额",
+                    "scope": "docs",
+                    "category": "metrics",
+                    "top_k": 20,
+                },
+            )
+            assert response.status_code == 200, response.text
+            assert any(hit["ambiguous"] and hit["sources"] for hit in response.json())
 
         async def run():
             async with (

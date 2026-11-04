@@ -617,3 +617,46 @@ def test_dimension_limit_setting(client):
         c.get("/api/v1/settings", headers=headers).json()["dimension_value_limit"]
         == "2"
     )
+
+
+def test_search_route_requires_auth_and_returns_fusion_hits(client, monkeypatch):
+    from semantica_dataagent import knowledge
+
+    c, token = client
+    expected = [
+        {
+            "ref": "table:shop.orders",
+            "type": "table",
+            "score": 0.04,
+            "sources": ["exact", "vector"],
+            "confidence": "high",
+            "ambiguous": False,
+            "ambiguity_refs": [],
+        }
+    ]
+    monkeypatch.setattr(
+        knowledge,
+        "search",
+        lambda query, scope, top_k, category: (
+            expected
+            if (query, scope, top_k, category) == ("orders", "all", 5, "metrics")
+            else []
+        ),
+    )
+    assert (
+        c.get("/api/v1/search", params={"query": "orders", "scope": "all"}).status_code
+        == 401
+    )
+    response = c.get(
+        "/api/v1/search",
+        params={"query": "orders", "scope": "all", "category": "metrics"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200
+    assert response.json() == expected
+    invalid = c.get(
+        "/api/v1/search",
+        params={"query": "orders", "scope": "tables", "category": "metrics"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert invalid.status_code == 422
