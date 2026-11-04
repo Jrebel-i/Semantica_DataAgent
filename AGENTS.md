@@ -12,6 +12,20 @@
 
 <!-- 新增 docs/subsystems/、GLOSSARY.md 或 docs/adr/ 时，从 ~/.claude/dev-standards/templates/AGENTS.md.tmpl 补回对应的路由小节。 -->
 
+## Agent skills
+
+### Issue tracker
+
+Issue 和 spec 记在 GitHub Issues（`Jrebel-i/Semantica_DataAgent`），用 `gh` 操作。见 `docs/agents/issue-tracker.md`。
+
+### Triage labels
+
+使用五个默认标签：needs-triage、needs-info、ready-for-agent、ready-for-human、wontfix。见 `docs/agents/triage-labels.md`。
+
+### Domain docs
+
+单一上下文：根目录的 `GLOSSARY.md` 和 `docs/adr/`。见 `docs/agents/domain.md`。
+
 ## 项目特有知识
 
 本项目基于 Semantica 搭建 DataAgent。
