@@ -2,6 +2,15 @@ export type Language = "zh" | "en";
 
 const messages = {
   zh: {
+    plugins: "插件配置",
+    enabled: "启用",
+    save: "保存",
+    filters: "过滤规则",
+    database_include: "包含数据库",
+    database_exclude: "排除数据库",
+    task_include: "包含任务",
+    task_exclude: "排除任务",
+    patternsHint: "每行一个通配符规则",
     title: "系统状态",
     statusPage: "系统状态",
     knowledge: "知识浏览",
@@ -48,6 +57,15 @@ const messages = {
     navigation: "导航",
   },
   en: {
+    plugins: "Plugins",
+    enabled: "Enabled",
+    save: "Save",
+    filters: "Filter rules",
+    database_include: "Include databases",
+    database_exclude: "Exclude databases",
+    task_include: "Include tasks",
+    task_exclude: "Exclude tasks",
+    patternsHint: "One wildcard pattern per line",
     title: "System status",
     statusPage: "System status",
     knowledge: "Knowledge",

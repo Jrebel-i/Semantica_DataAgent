@@ -392,3 +392,131 @@ def test_startup_marks_interrupted_build_failed_and_allows_another(
         assert interrupted["finished_at"] and interrupted["counts"] == {"table": 2}
         assert finished["status"] == "succeeded" and finished["error"] is None
         assert c.post("/api/v1/builds", headers=headers).status_code == 202
+
+
+def test_plugin_configuration_and_filter_defaults(client):
+    c, token = client
+    headers = {"Authorization": f"Bearer {token}"}
+    plugins = c.get("/api/v1/plugins", headers=headers)
+    assert plugins.status_code == 200
+    canonical = next(p for p in plugins.json() if p["id"] == "canonical")
+    assert canonical["enabled"] is True
+    response = c.put(
+        "/api/v1/plugins/source/canonical",
+        headers=headers,
+        json={"enabled": False, "parameters": {"bad": 1}},
+    )
+    assert response.status_code == 422
+    assert response.json()["detail"][0]["path"] == []
+    assert (
+        c.put(
+            "/api/v1/plugins/source/canonical",
+            headers=headers,
+            json={"enabled": False, "parameters": {}},
+        ).status_code
+        == 200
+    )
+    assert not next(
+        p
+        for p in c.get("/api/v1/plugins", headers=headers).json()
+        if p["id"] == "canonical"
+    )["enabled"]
+    assert c.get("/api/v1/filters", headers=headers).json()["database_exclude"] == [
+        "tmp",
+        "test",
+    ]
+
+
+def test_parser_without_matching_type_is_unsupported(client):
+    from semantica_dataagent.canonical import Record
+    from semantica_dataagent.plugins import parse_task
+
+    result = parse_task(
+        Record("task", {"name": "job", "sql": "select 1", "type": "unknown"})
+    )
+    assert result.status == "unsupported"
+    assert result.reads == [] and result.writes == []
+
+
+def test_third_party_plugin_validation_and_next_build(client, tmp_path, monkeypatch):
+    from semantica_dataagent import knowledge, stages
+    from semantica_dataagent.db import Build, sessions
+
+    fixture = Path(__file__).parent / "fixtures" / "third_party"
+    monkeypatch.syspath_prepend(str(fixture))
+    info = tmp_path / "dataagent_test_plugin-1.0.0.dist-info"
+    info.mkdir()
+    (info / "METADATA").write_text("Name: dataagent-test-plugin\nVersion: 1.0.0\n")
+    (info / "entry_points.txt").write_text(
+        "[semantica_dataagent.source_adapters]\nthird_party = third_party:Adapter\n"
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    c, token = client
+    headers = {"Authorization": f"Bearer {token}"}
+    listing = c.get("/api/v1/plugins", headers=headers).json()
+    assert any(p["id"] == "third_party" and not p["enabled"] for p in listing)
+    invalid = c.put(
+        "/api/v1/plugins/source/third_party",
+        headers=headers,
+        json={"enabled": True, "parameters": {"prefix": "x"}},
+    )
+    assert invalid.status_code == 422
+    assert invalid.json()["detail"][0]["path"] == ["prefix"]
+    assert (
+        c.put(
+            "/api/v1/plugins/source/third_party",
+            headers=headers,
+            json={"enabled": True, "parameters": {"prefix": "abc"}},
+        ).status_code
+        == 200
+    )
+    assert (
+        c.put(
+            "/api/v1/plugins/source/canonical",
+            headers=headers,
+            json={"enabled": False, "parameters": {}},
+        ).status_code
+        == 200
+    )
+    seen = []
+    monkeypatch.setattr(
+        knowledge,
+        "settings",
+        lambda: {"source_directory": str(tmp_path), "knowledge_generation": "test"},
+    )
+    monkeypatch.setattr(knowledge, "read_graph", lambda values: None)
+    monkeypatch.setattr(knowledge, "read_vectors", lambda values: None)
+    monkeypatch.setattr(
+        stages,
+        "STAGES",
+        [lambda records, generation, values: seen.extend(records) or {}],
+    )
+    with sessions().begin() as db:
+        row = Build(status="running", started_at="now", counts="{}")
+        db.add(row)
+        db.flush()
+        build_id = row.id
+    knowledge.run_build(build_id)
+    assert [r.data["name"] for r in seen] == ["abc"]
+    assert (
+        c.put(
+            "/api/v1/plugins/source/third_party",
+            headers=headers,
+            json={"enabled": True, "parameters": {"prefix": "changed"}},
+        ).status_code
+        == 200
+    )
+    seen.clear()
+    knowledge.run_build(build_id)
+    assert [r.data["name"] for r in seen] == ["changed"]
+    assert (
+        c.put(
+            "/api/v1/plugins/source/third_party",
+            headers=headers,
+            json={"enabled": False, "parameters": {"prefix": "changed"}},
+        ).status_code
+        == 200
+    )
+    seen.clear()
+    knowledge.run_build(build_id)
+    assert seen == []

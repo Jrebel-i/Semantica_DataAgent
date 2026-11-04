@@ -114,8 +114,35 @@ def test_build_and_retrieve_through_http(tmp_path, monkeypatch):
                 time.sleep(0.2)
             assert build["status"] == "succeeded", build.get("error")
             assert build["counts"]["table"] == 20
+            assert build["counts"]["filtered"] == 1
+            assert c.get("/api/v1/tables", params={"database": "tmp"}).json() == []
+            assert (
+                c.put(
+                    "/api/v1/filters",
+                    json={
+                        "database_include": [],
+                        "database_exclude": [],
+                        "task_include": [],
+                        "task_exclude": [],
+                    },
+                ).status_code
+                == 200
+            )
+            second = c.post("/api/v1/builds").json()["id"]
+            deadline = time.monotonic() + 180
+            while time.monotonic() < deadline:
+                rebuilt = c.get(f"/api/v1/builds/{second}").json()
+                if rebuilt["status"] != "running":
+                    break
+                time.sleep(0.2)
+            assert rebuilt["status"] == "succeeded", rebuilt.get("error")
+            assert rebuilt["counts"]["filtered"] == 0
+            assert (
+                c.get("/api/v1/tables", params={"database": "tmp"}).json()[0]["name"]
+                == "scratch"
+            )
             assert build["finished_at"]
-            assert c.get("/api/v1/builds").json()[0]["id"] == ident
+            assert c.get("/api/v1/builds").json()[0]["id"] == second
             tables = c.get(
                 "/api/v1/tables", params={"database": "shop", "search": "orders"}
             ).json()

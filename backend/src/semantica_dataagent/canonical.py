@@ -39,6 +39,7 @@ class ReadResult:
 class CanonicalAdapter:
     id = "canonical"
     version = "1.0.0"
+    display_name = "Canonical"
     parameters_schema: ClassVar[dict] = {
         "type": "object",
         "additionalProperties": False,
