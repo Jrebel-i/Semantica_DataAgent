@@ -59,6 +59,10 @@ def test_build_and_retrieve_through_http(tmp_path, monkeypatch):
             "CREATE (n:SDAEntity:SDATest {generation:$generation, ref:$ref})",
             {"generation": generation, "ref": "test:extra"},
         )
+        storage.execute(
+            "CREATE (:SDAEntity:SDATable {generation:$generation, database:'shop', name:'isolated', comment:'Isolated test table', ref:'table:shop.isolated'})",
+            {"generation": generation},
+        )
         storage.add_vectors(
             ["test:extra"],
             ["independent stage"],
@@ -374,6 +378,42 @@ def test_build_and_retrieve_through_http(tmp_path, monkeypatch):
                     "get_lineage", {"table": "shop.orders", "depth": 4}
                 )
                 assert invalid.isError
+                for dialect in ("hive", "spark", "doris"):
+                    checked = await session.call_tool(
+                        "validate_sql",
+                        {"sql": "SELECT o.id FROM shop.orders o", "dialect": dialect},
+                    )
+                    assert checked.structuredContent["status"] == "pass", checked
+                checked = await session.call_tool(
+                    "validate_sql", {"sql": "SELECT FROM", "dialect": "hive"}
+                )
+                assert checked.structuredContent["syntax"]["status"] == "error"
+                checked = await session.call_tool(
+                    "validate_sql",
+                    {"sql": "SELECT missing FROM shop.orders", "dialect": "hive"},
+                )
+                assert checked.structuredContent["fields"][0]["status"] == "error"
+                checked = await session.call_tool(
+                    "validate_sql",
+                    {"sql": "SELECT id FROM shop.ordrs", "dialect": "hive"},
+                )
+                assert checked.structuredContent["tables"][0]["status"] == "error"
+                checked = await session.call_tool(
+                    "validate_sql",
+                    {
+                        "sql": "SELECT o.id FROM shop.orders o JOIN shop.customers c ON o.created_at = c.id",
+                        "dialect": "hive",
+                    },
+                )
+                assert checked.structuredContent["joins"][0]["status"] == "unsupported"
+                path = await session.call_tool(
+                    "find_join_path", {"tables": ["shop.orders", "shop.customers"]}
+                )
+                assert path.structuredContent["status"] == "found"
+                path = await session.call_tool(
+                    "find_join_path", {"tables": ["shop.orders", "shop.isolated"]}
+                )
+                assert path.structuredContent["status"] == "no_path"
                 calls.update(neo4j=0, milvus=0)
                 start = time.monotonic()
                 exact = await session.call_tool(
