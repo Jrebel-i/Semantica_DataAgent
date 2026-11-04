@@ -1,5 +1,7 @@
 import hashlib
 import os
+import uuid
+from datetime import UTC, datetime
 from threading import Lock
 
 from sqlalchemy import create_engine
@@ -15,6 +17,10 @@ class Token(Base):
     digest: Mapped[str] = mapped_column(primary_key=True)
     name: Mapped[str]
     role: Mapped[str]
+    id: Mapped[str] = mapped_column(unique=True, default=lambda: uuid.uuid4().hex)
+    created_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC))
+    last_used_at: Mapped[datetime | None]
+    revoked: Mapped[bool] = mapped_column(default=False)
 
 
 class Setting(Base):

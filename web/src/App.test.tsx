@@ -74,3 +74,66 @@ test("language selection persists", () => {
   expect(screen.getByText("System status")).toBeTruthy();
   expect(localStorage.getItem("language")).toBe("en");
 });
+
+test("admin issues and revokes a token", async () => {
+  let rows: object[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string, options?: RequestInit) => {
+      if (url === "/api/v1/me") return Response.json({ role: "admin" });
+      if (url === "/healthz") return Response.json({});
+      if (url === "/api/v1/tokens" && options?.method === "POST") {
+        rows = [
+          {
+            id: "1",
+            name: "Alice",
+            role: "user",
+            created_at: "2026-01-01T00:00:00Z",
+            last_used_at: null,
+            revoked: false,
+          },
+        ];
+        return Response.json(
+          { ...rows[0], token: "one-time-secret" },
+          { status: 201 },
+        );
+      }
+      if (url === "/api/v1/tokens/1" && options?.method === "DELETE") {
+        rows = [{ ...rows[0], revoked: true }];
+        return new Response(null, { status: 204 });
+      }
+      return Response.json(rows);
+    }),
+  );
+  localStorage.setItem("token", "admin");
+  render(<App />);
+  fireEvent.click(await screen.findByRole("link", { name: "令牌管理" }));
+  fireEvent.click(await screen.findByRole("button", { name: "发放令牌" }));
+  fireEvent.change(screen.getByLabelText("名称"), {
+    target: { value: "Alice" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "创建" }));
+  expect(await screen.findByText("one-time-secret")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "关闭" }));
+  expect(screen.queryByText("one-time-secret")).toBeNull();
+  fireEvent.click(await screen.findByRole("button", { name: "吊销" }));
+  fireEvent.click(screen.getByRole("button", { name: "确认吊销" }));
+  expect(await screen.findByText("已吊销")).toBeTruthy();
+});
+
+test("user cannot see token navigation or open its page", async () => {
+  history.replaceState(null, "", "/tokens");
+  localStorage.setItem("token", "user");
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) =>
+      url === "/api/v1/me"
+        ? Response.json({ role: "user" })
+        : Response.json({}),
+    ),
+  );
+  render(<App />);
+  expect(await screen.findByText("无权限访问")).toBeTruthy();
+  expect(screen.queryByRole("link", { name: "令牌管理" })).toBeNull();
+  history.replaceState(null, "", "/");
+});
