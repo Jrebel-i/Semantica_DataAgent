@@ -2,6 +2,7 @@ import asyncio
 import os
 import time
 from typing import Annotated, Literal
+from urllib.parse import urlsplit
 
 import httpx
 from cryptography.fernet import Fernet
@@ -79,6 +80,29 @@ def put_settings(
 ) -> dict[str, str | None]:
     if set(body.values) - KEYS:
         raise HTTPException(status_code=422, detail="Unknown setting")
+    for key in ("neo4j_uri", "milvus_uri", "embedding_url"):
+        value = body.values.get(key)
+        if value:
+            try:
+                address = urlsplit(value)
+                allowed = (
+                    {"bolt", "bolt+s", "bolt+ssc", "neo4j", "neo4j+s", "neo4j+ssc"}
+                    if key == "neo4j_uri"
+                    else {"http", "https"}
+                )
+                if (
+                    address.scheme not in allowed
+                    or not address.hostname
+                    or address.username is not None
+                    or address.password is not None
+                    or address.query
+                    or address.fragment
+                ):
+                    raise ValueError("Invalid address")
+            except ValueError:
+                raise HTTPException(
+                    status_code=422, detail="Invalid connection address"
+                ) from None
     cipher = Fernet(os.environ["DATAAGENT_ENCRYPTION_KEY"].encode())
     with sessions().begin() as db:
         for key, value in body.values.items():

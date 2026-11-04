@@ -132,3 +132,20 @@ def test_health_times_out_a_stalled_probe(client, monkeypatch):
     result = c.get("/healthz").json()
     assert result["neo4j"]["status"] == "down"
     assert time.monotonic() - start < 5
+
+
+def test_connection_addresses_reject_embedded_credentials(client):
+    c, token = client
+    headers = {"Authorization": f"Bearer {token}"}
+    credential = "user:" + "pass@"
+    for key, value in [
+        ("neo4j_uri", f"bolt://{credential}localhost:7687"),
+        ("milvus_uri", f"http://{credential}localhost:19530"),
+        ("embedding_url", f"http://{credential}localhost:8000"),
+    ]:
+        response = c.put(
+            "/api/v1/settings", headers=headers, json={"values": {key: value}}
+        )
+        assert response.status_code == 422
+        assert credential not in response.text
+        assert c.get("/api/v1/settings", headers=headers).json()[key] is None
