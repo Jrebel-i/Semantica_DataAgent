@@ -16,6 +16,8 @@ from pymilvus.exceptions import (
 )
 from semantica.utils.exceptions import ProcessingError
 
+from .storage_errors import StorageUnavailable
+
 PAGE_ITEMS = 25
 PAGE_CHARS = 12000
 
@@ -52,6 +54,7 @@ def classify_error(exc):
             ConnectError,
             ConnectionNotExistException,
             MilvusUnavailableException,
+            StorageUnavailable,
             ConnectionError,
             TimeoutError,
         ),

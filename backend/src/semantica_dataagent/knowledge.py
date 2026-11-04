@@ -5,7 +5,7 @@ import os
 import re
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import Lock
@@ -23,6 +23,7 @@ from .embedding_client import EmbeddingStats
 from .embedding_client import embed as embedding_embed
 from .filters import filter_records, get_filters
 from .plugins import configured
+from .storage_errors import StorageUnavailable
 
 
 def settings():
@@ -48,13 +49,28 @@ def graph(values):
         user=values["neo4j_user"],
         password=values["neo4j_password"],
     )
-    store.connect()
+    try:
+        store.connect()
+    except Exception as exc:
+        _close_quietly(store)
+        raise StorageUnavailable("Neo4j storage is unavailable") from exc
     return store
 
 
 _read_lock = Lock()
 _read_graphs = {}
 _read_vectors = {}
+
+
+def _close_quietly(resource):
+    if resource is None:
+        return
+    for name in ("close", "disconnect"):
+        close = getattr(resource, name, None)
+        if callable(close):
+            with suppress(Exception):
+                close()
+            return
 
 
 def _reader(cache, key, factory):
@@ -79,12 +95,13 @@ def read_vectors(values):
     key = (values["milvus_uri"], collection_name(values))
 
     def connect():
-        client = MilvusClient(uri=key[0])
+        client = None
         try:
+            client = MilvusClient(uri=key[0])
             client.load_collection(key[1])
-        except Exception:
-            client.close()
-            raise
+        except Exception as exc:
+            _close_quietly(client)
+            raise StorageUnavailable("Milvus storage is unavailable") from exc
         return client
 
     return _reader(_read_vectors, key, connect)
@@ -115,7 +132,10 @@ def _count_round_trip(kind):
 
 def execute(store, query, parameters):
     _count_round_trip("neo4j")
-    result = store.execute_query(query, parameters)
+    try:
+        result = store.execute_query(query, parameters)
+    except Exception as exc:
+        raise StorageUnavailable("Neo4j storage is unavailable") from exc
     if not result.get("success"):
         raise RuntimeError("Graph query failed")
     return result["records"]
@@ -135,7 +155,11 @@ def milvus(values):
     store = MilvusStore(
         host=uri.hostname, port=uri.port or (443 if uri.scheme == "https" else 19530)
     )
-    store.connect(secure=uri.scheme == "https")
+    try:
+        store.connect(secure=uri.scheme == "https")
+    except Exception as exc:
+        _close_quietly(getattr(store, "client", None))
+        raise StorageUnavailable("Milvus storage is unavailable") from exc
     return store
 
 
@@ -345,14 +369,17 @@ def search(query, scope, top_k, category=None):
             )
         client = read_vectors(values)
         _count_round_trip("milvus")
-        hits = client.search(
-            collection_name=collection_name(values),
-            data=[vector.tolist()],
-            limit=limit,
-            filter=predicate,
-            output_fields=["metadata"],
-            search_params={"metric_type": "COSINE"},
-        )
+        try:
+            hits = client.search(
+                collection_name=collection_name(values),
+                data=[vector.tolist()],
+                limit=limit,
+                filter=predicate,
+                output_fields=["metadata"],
+                search_params={"metric_type": "COSINE"},
+            )
+        except Exception as exc:
+            raise StorageUnavailable("Milvus storage is unavailable") from exc
         return [hit["entity"]["metadata"] for hit in hits[0]]
 
     with ThreadPoolExecutor(max_workers=2) as pool:
