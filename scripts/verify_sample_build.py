@@ -7,6 +7,7 @@ import argparse
 import json
 import logging
 import os
+import sqlite3
 import time
 import uuid
 import warnings
@@ -26,6 +27,7 @@ DEFAULT_SOURCE = Path("data/dtb-sample")
 DEFAULT_REPORT = Path("data/sample-build.json")
 DEFAULT_DB = Path("data/.sample-build/app.db")
 NEO4J_PASSWORD_KEY = next(iter(SECRET))
+DB_APPLICATION_ID = 0x53444131
 
 
 def _setting(key, value, cipher):
@@ -35,17 +37,51 @@ def _setting(key, value, cipher):
     return Setting(key=key, value=stored)
 
 
+def _is_own_database(path):
+    path = Path(path)
+    if not path.is_file():
+        return False
+    try:
+        with sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True) as db:
+            return (
+                db.execute("PRAGMA application_id").fetchone()[0] == DB_APPLICATION_ID
+            )
+    except (OSError, sqlite3.Error):
+        return False
+
+
+def _mark_database(path):
+    with sqlite3.connect(path) as db:
+        db.execute(f"PRAGMA application_id = {DB_APPLICATION_ID}")
+        db.commit()
+
+
+def _remove_own_database(path):
+    path = Path(path)
+    if not path.exists():
+        return "absent"
+    if not _is_own_database(path):
+        return "not_owned"
+    path.unlink()
+    for suffix in ("-wal", "-shm"):
+        Path(str(path) + suffix).unlink(missing_ok=True)
+    return "deleted"
+
+
 def prepare_database(
     source, generation, neo4j, milvus, embedding, neo4j_secret, db_path
 ):
     db_path = Path(db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
     if db_path.exists():
+        if not _is_own_database(db_path):
+            raise ValueError(f"refusing to delete database without marker: {db_path}")
         db_path.unlink()
     key = Fernet.generate_key().decode()
     os.environ["DATAAGENT_DB_PATH"] = str(db_path)
     os.environ["DATAAGENT_ENCRYPTION_KEY"] = key
     initialize()
+    _mark_database(db_path)
     cipher = Fernet(key.encode())
     values = {
         "neo4j_uri": neo4j["uri"],
@@ -221,8 +257,12 @@ def run(
     finally:
         knowledge.close_readers()
         knowledge.embed = original_embed
+        bind = getattr(sessions(), "kw", {}).get("bind")
+        if bind is not None:
+            bind.dispose()
         report = locals().get("report", {"generation": generation})
         report["cleanup"] = cleanup(neo4j, milvus, generation)
+        report["database_cleanup"] = _remove_own_database(db_path)
         report["elapsed_seconds"] = round(time.monotonic() - start, 1)
         Path(report_path).parent.mkdir(parents=True, exist_ok=True)
         Path(report_path).write_text(

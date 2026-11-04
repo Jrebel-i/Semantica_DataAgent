@@ -1,4 +1,5 @@
 import json
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -9,7 +10,13 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from dtb_sample import build_sample
-from verify_sample_build import expected_counts
+from verify_sample_build import (
+    DB_APPLICATION_ID,
+    _is_own_database,
+    _remove_own_database,
+    expected_counts,
+    prepare_database,
+)
 
 from semantica_dataagent.dtb_source import DtbAdapter
 from semantica_dataagent.markdown import MarkdownAdapter, chunks
@@ -217,13 +224,15 @@ def make_raw_root(tmp_path):
 
 def test_sample_writes_a_buildable_dtb_and_markdown_source(tmp_path):
     raw = make_raw_root(tmp_path)
-    output = tmp_path / "sample"
+    data_root = tmp_path / "data"
+    output = data_root / "sample"
     manifest = build_sample(
         raw,
         output,
         depth=2,
         dimension_row_limit=2,
         metric_char_limit=120,
+        data_root=data_root,
     )
     assert manifest["counts"] == {
         "tables": 4,
@@ -285,7 +294,95 @@ def test_sample_writes_a_buildable_dtb_and_markdown_source(tmp_path):
 
 def test_sample_rejects_a_budget_that_is_too_small(tmp_path):
     raw = make_raw_root(tmp_path)
-    output = tmp_path / "sample"
+    data_root = tmp_path / "data"
+    output = data_root / "sample"
     with pytest.raises(ValueError, match="above budget"):
-        build_sample(raw, output, max_vectors=1)
+        build_sample(raw, output, max_vectors=1, data_root=data_root)
     assert not output.exists()
+
+
+def test_sample_rejects_output_outside_data_root(tmp_path):
+    raw = make_raw_root(tmp_path)
+    outside = tmp_path / "outside"
+    with pytest.raises(ValueError, match="must be under"):
+        build_sample(raw, outside, data_root=tmp_path / "data")
+    assert not outside.exists()
+
+
+def test_sample_does_not_delete_an_unmarked_output(tmp_path):
+    raw = make_raw_root(tmp_path)
+    data_root = tmp_path / "data"
+    output = data_root / "occupied"
+    output.mkdir(parents=True)
+    marker = output / "keep.txt"
+    marker.write_text("keep", encoding="utf-8")
+    with pytest.raises(ValueError, match="missing generator marker"):
+        build_sample(raw, output, data_root=data_root)
+    assert marker.read_text(encoding="utf-8") == "keep"
+
+
+def test_sample_rebuilds_a_marked_output(tmp_path):
+    raw = make_raw_root(tmp_path)
+    data_root = tmp_path / "data"
+    output = data_root / "sample"
+    build_sample(raw, output, depth=2, dimension_row_limit=2, data_root=data_root)
+    assert (
+        json.loads((output / "dtb/manifest.json").read_text(encoding="utf-8"))[
+            "generator"
+        ]
+        == "scripts/dtb_sample.py"
+    )
+    (output / "stale.txt").write_text("stale", encoding="utf-8")
+    manifest = build_sample(
+        raw, output, depth=2, dimension_row_limit=2, data_root=data_root
+    )
+    assert manifest["generator"] == "scripts/dtb_sample.py"
+    assert not (output / "stale.txt").exists()
+
+
+def test_sample_keeps_metric_documents_complete_by_default(tmp_path):
+    raw = make_raw_root(tmp_path)
+    data_root = tmp_path / "data"
+    output = data_root / "sample"
+    manifest = build_sample(raw, output, depth=2, data_root=data_root)
+    original = (raw / "quick_base/air/指标/metric/variant.md").read_text(
+        encoding="utf-8"
+    )
+    copied = (output / "knowledge/指标/metric/variant.md").read_text(encoding="utf-8")
+    assert copied == original
+    assert manifest["selection"]["metric_char_limit"] is None
+    assert manifest["doc_policy"] == (
+        "all dictionary, metric, and business documents are copied in full"
+    )
+
+
+def test_database_cleanup_only_deletes_a_marked_database(tmp_path):
+    unmarked = tmp_path / "unmarked.db"
+    unmarked.write_text("not a database", encoding="utf-8")
+    assert not _is_own_database(unmarked)
+    assert _remove_own_database(unmarked) == "not_owned"
+    assert unmarked.read_text(encoding="utf-8") == "not a database"
+
+    marked = tmp_path / "marked.db"
+    with sqlite3.connect(marked) as db:
+        db.execute(f"PRAGMA application_id = {DB_APPLICATION_ID}")
+        db.commit()
+    assert _is_own_database(marked)
+    assert _remove_own_database(marked) == "deleted"
+    assert not marked.exists()
+
+
+def test_prepare_database_refuses_an_unmarked_file(tmp_path):
+    database = tmp_path / "app.db"
+    database.write_text("keep", encoding="utf-8")
+    with pytest.raises(ValueError, match="without marker"):
+        prepare_database(
+            tmp_path,
+            "generation",
+            {"uri": "bolt://unused", "user": "neo4j", "neo4j_secret": "secret"},
+            "http://unused",
+            "http://unused",
+            "secret",
+            database,
+        )
+    assert database.read_text(encoding="utf-8") == "keep"

@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import shutil
+import tempfile
 import warnings
 from collections import defaultdict
 from datetime import UTC, datetime
@@ -19,8 +20,11 @@ from semantica_dataagent.markdown import chunks
 RAW_ROOT = Path("/mnt/d/dataagent-backups/knowledge_base")
 SNAPSHOT_PATH = Path("warehouse/raw/dtb")
 FACTS = Path("warehouse/facts/_catalog")
-DEFAULT_OUTPUT = Path("data/dtb-sample")
-MAX_VECTORS = 5400
+REPO_ROOT = Path(__file__).resolve().parents[1]
+DATA_ROOT = REPO_ROOT / "data"
+DEFAULT_OUTPUT = DATA_ROOT / "dtb-sample"
+GENERATOR = "scripts/dtb_sample.py"
+MAX_VECTORS = 7500
 
 
 def seed_tables(dictionary_dir):
@@ -202,14 +206,31 @@ def estimate_vectors(counts, rate_min=2.0, rate_max=3.0):
     return {
         "vectors": vectors,
         "minutes_at_2_per_second": round(vectors / rate_min / 60, 1),
+        "minutes_at_2_5_per_second": round(vectors / 2.5 / 60, 1),
         "minutes_at_3_per_second": round(vectors / rate_max / 60, 1),
     }
 
 
-def _reset(path):
-    if path.exists():
-        shutil.rmtree(path)
-    path.mkdir(parents=True)
+def _resolve_output(output, data_root):
+    root = Path(data_root).resolve() if data_root is not None else DATA_ROOT
+    resolved = Path(output).resolve()
+    if resolved == root or root not in resolved.parents:
+        raise ValueError(f"sample output must be under {root}: {resolved}")
+    return resolved
+
+
+def _generator_marker(path):
+    manifest = Path(path) / "dtb/manifest.json"
+    try:
+        value = json.loads(manifest.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return value.get("generator") if isinstance(value, dict) else None
+
+
+def _prepare_output(path):
+    if path.exists() and (not path.is_dir() or _generator_marker(path) != GENERATOR):
+        raise ValueError(f"refusing to replace {path}: missing generator marker")
 
 
 def build_sample(
@@ -217,12 +238,15 @@ def build_sample(
     output,
     depth=2,
     dimension_row_limit=200,
-    metric_char_limit=300,
+    metric_char_limit=None,
     include_upstream_tasks=True,
     max_vectors=MAX_VECTORS,
+    data_root=None,
 ):
     raw_root = Path(raw_root)
-    output = Path(output)
+    output = _resolve_output(output, data_root)
+    _prepare_output(output)
+    output.parent.mkdir(parents=True, exist_ok=True)
     snapshot = raw_root / SNAPSHOT_PATH
     snapshots = sorted(
         path
@@ -240,74 +264,84 @@ def build_sample(
         facts_tasks, tables, include_upstream_tasks
     )
 
-    temporary = output.with_name(output.name + ".tmp")
-    _reset(temporary)
-    dtb_out = temporary / "dtb"
-    dtb_out.mkdir()
-    tasks, missing_tasks = copy_tasks(current, dtb_out, selected_tasks)
-    fields, tables_with_metadata = copy_tables(current, dtb_out, tables)
-    dimensions, dimension_rows = copy_dimensions(
-        raw_root, temporary, tables, dimension_row_limit
-    )
-    documents = chunks_count = 0
-    for source, destination, limit in (
-        (raw_root / "quick_base/air/字典", temporary / "knowledge/字典", None),
-        (
-            raw_root / "quick_base/air/指标",
-            temporary / "knowledge/指标",
-            metric_char_limit,
-        ),
-        (raw_root / "business_base", temporary / "knowledge/业务知识", None),
-    ):
-        found, found_chunks = copy_documents(source, destination, limit)
-        documents += found
-        chunks_count += found_chunks
-
-    counts = {
-        "tables": len(tables_with_metadata),
-        "fields": fields,
-        "tasks": tasks,
-        "dimension_tables": len(dimensions),
-        "dimension_rows": dimension_rows,
-        "documents": documents,
-        "chunks": chunks_count,
-    }
-    estimate = estimate_vectors(counts)
-    manifest = {
-        "schema_version": 1,
-        "version": "sample-" + datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ"),
-        "generated_at": datetime.now(UTC).isoformat(),
-        "source_snapshot": current.name,
-        "selection": {
-            "seed_tables": sorted(seeds),
-            "depth": depth,
-            "tables_in_closure": len(tables),
-            "tables_with_metadata": len(tables_with_metadata),
-            "producer_tasks": len(producers),
-            "include_upstream_tasks": include_upstream_tasks,
-            "tasks": tasks,
-            "missing_tasks": missing_tasks,
-            "dimension_row_limit": dimension_row_limit,
-            "metric_char_limit": metric_char_limit,
-            "documents": documents,
-            "levels": [len(level) for level in levels],
-        },
-        "counts": counts,
-        "embedding": estimate,
-        "doc_policy": (
-            "dictionary and business documents are complete; metric documents "
-            f"keep the first {metric_char_limit} characters at a line boundary"
-        ),
-    }
-    write_json(dtb_out / "manifest.json", manifest)
-    if estimate["vectors"] > max_vectors:
-        shutil.rmtree(temporary)
-        raise ValueError(
-            f"Sample needs {estimate['vectors']} vectors, above budget {max_vectors}"
+    temporary = Path(tempfile.mkdtemp(prefix=f".{output.name}.", dir=output.parent))
+    try:
+        dtb_out = temporary / "dtb"
+        dtb_out.mkdir()
+        tasks, missing_tasks = copy_tasks(current, dtb_out, selected_tasks)
+        fields, tables_with_metadata = copy_tables(current, dtb_out, tables)
+        dimensions, dimension_rows = copy_dimensions(
+            raw_root, temporary, tables, dimension_row_limit
         )
-    if output.exists():
-        shutil.rmtree(output)
-    temporary.rename(output)
+        documents = chunks_count = 0
+        for source, destination, limit in (
+            (raw_root / "quick_base/air/字典", temporary / "knowledge/字典", None),
+            (
+                raw_root / "quick_base/air/指标",
+                temporary / "knowledge/指标",
+                metric_char_limit,
+            ),
+            (raw_root / "business_base", temporary / "knowledge/业务知识", None),
+        ):
+            found, found_chunks = copy_documents(source, destination, limit)
+            documents += found
+            chunks_count += found_chunks
+
+        counts = {
+            "tables": len(tables_with_metadata),
+            "fields": fields,
+            "tasks": tasks,
+            "dimension_tables": len(dimensions),
+            "dimension_rows": dimension_rows,
+            "documents": documents,
+            "chunks": chunks_count,
+        }
+        estimate = estimate_vectors(counts)
+        if metric_char_limit is None:
+            doc_policy = (
+                "all dictionary, metric, and business documents are copied in full"
+            )
+        else:
+            doc_policy = (
+                "dictionary and business documents are complete; metric documents "
+                f"keep the first {metric_char_limit} characters at a line boundary"
+            )
+        manifest = {
+            "schema_version": 1,
+            "generator": GENERATOR,
+            "version": "sample-" + datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ"),
+            "generated_at": datetime.now(UTC).isoformat(),
+            "source_snapshot": current.name,
+            "selection": {
+                "seed_tables": sorted(seeds),
+                "depth": depth,
+                "tables_in_closure": len(tables),
+                "tables_with_metadata": len(tables_with_metadata),
+                "producer_tasks": len(producers),
+                "include_upstream_tasks": include_upstream_tasks,
+                "tasks": tasks,
+                "missing_tasks": missing_tasks,
+                "dimension_row_limit": dimension_row_limit,
+                "metric_char_limit": metric_char_limit,
+                "documents": documents,
+                "levels": [len(level) for level in levels],
+            },
+            "counts": counts,
+            "embedding": estimate,
+            "doc_policy": doc_policy,
+        }
+        write_json(dtb_out / "manifest.json", manifest)
+        if estimate["vectors"] > max_vectors:
+            raise ValueError(
+                f"Sample needs {estimate['vectors']} vectors, above budget {max_vectors}"
+            )
+        if output.exists():
+            _prepare_output(output)
+            shutil.rmtree(output)
+        temporary.rename(output)
+    except BaseException:
+        shutil.rmtree(temporary, ignore_errors=True)
+        raise
     return manifest
 
 
@@ -317,7 +351,7 @@ def main():
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--depth", type=int, default=2)
     parser.add_argument("--dimension-row-limit", type=int, default=200)
-    parser.add_argument("--metric-char-limit", type=int, default=300)
+    parser.add_argument("--metric-char-limit", type=int, default=None)
     parser.add_argument("--max-vectors", type=int, default=MAX_VECTORS)
     parser.add_argument("--producers-only", action="store_true")
     args = parser.parse_args()
