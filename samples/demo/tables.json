@@ -98,5 +98,10 @@
     "database": "shop",
     "name": "returns",
     "comment": "退货记录"
+  },
+  {
+    "database": "tmp",
+    "name": "scratch",
+    "comment": "临时表"
   }
 ]

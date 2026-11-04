@@ -6,6 +6,7 @@ import os
 import re
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import Lock
@@ -18,8 +19,10 @@ from pymilvus import MilvusClient, utility
 from semantica.graph_store import GraphStore
 from semantica.vector_store.milvus_store import MilvusStore
 
-from .canonical import KINDS, CanonicalAdapter
+from .canonical import KINDS
 from .db import Build, Setting, sessions
+from .filters import filter_records, get_filters
+from .plugins import configured
 
 
 def settings():
@@ -150,75 +153,56 @@ def reference(kind, data):
     return f"{kind}:{key}"
 
 
+@contextmanager
+def build_storage(values):
+    """Initialize the generation once, then share append-only stage handles."""
+    from .stage_contract import StorageHandles
+
+    generation = values["knowledge_generation"]
+    dimension = len(embed(values, ["knowledge"])[0])
+    graph_store = graph(values)
+    try:
+        vector_store = milvus(values)
+        try:
+            execute(
+                graph_store,
+                "MATCH (n:SDAEntity {generation:$generation}) DETACH DELETE n",
+                {"generation": generation},
+            )
+            name = collection_name(values)
+            if utility.has_collection(name):
+                utility.drop_collection(name)
+            vector_store.create_collection(name, dimension, metric_type="COSINE")
+            yield StorageHandles(generation, graph_store, vector_store, values)
+            vector_store.collection.load()
+        finally:
+            vector_store.client.disconnect()
+    finally:
+        graph_store.close()
+
+
 def run_build(build_id):
     status, counts, error = "failed", {}, None
     try:
         values = settings()
-        result = CanonicalAdapter().read(Path(values["source_directory"]), {})
+        records = []
+        for category, plugin, enabled, parameters in configured():
+            if category == "source" and enabled:
+                records.extend(
+                    plugin.read(Path(values["source_directory"]), parameters).records
+                )
+        records, filtered = filter_records(records, get_filters())
         counts = dict.fromkeys(KINDS.values(), 0)
-        counts.update(Counter(r.kind for r in result.records))
-        tables = [
-            dict(r.data, ref=reference(r.kind, r.data))
-            for r in result.records
-            if r.kind == "table"
-        ]
-        fields = [
-            dict(r.data, ref=reference(r.kind, r.data))
-            for r in result.records
-            if r.kind == "field"
-        ]
-        table_keys = {(table["database"], table["name"]) for table in tables}
-        refs = [item["ref"] for item in tables + fields]
-        if len(set(refs)) != len(refs):
-            raise ValueError("Duplicate table or field reference")
-        if any(
-            (field["database"], field["table"]) not in table_keys for field in fields
-        ):
-            raise ValueError("A field refers to a missing table")
-        if not tables:
-            raise ValueError("Source has no tables")
-        generation = values["knowledge_generation"]
-        store = graph(values)
-        try:
-            execute(
-                store,
-                "MATCH (n:SDAEntity {generation:$generation}) DETACH DELETE n",
-                {"generation": generation},
-            )
-            execute(
-                store,
-                "UNWIND $rows AS row CREATE (n:SDAEntity:SDATable) SET n = row, n.generation = $generation",
-                {"rows": tables, "generation": generation},
-            )
-            execute(
-                store,
-                "UNWIND $rows AS row MATCH (t:SDATable {generation:$generation, database:row.database, name:row.table}) CREATE (f:SDAEntity:SDAField) SET f = row, f.generation = $generation CREATE (t)-[:HAS_FIELD]->(f)",
-                {"rows": fields, "generation": generation},
-            )
-        finally:
-            store.close()
-        entities = [("table", x) for x in tables] + [("field", x) for x in fields]
-        texts = [f"{x['name']} {x['comment']}" for _, x in entities]
-        vectors = []
-        for offset in range(0, len(texts), 32):
-            vectors.extend(embed(values, texts[offset : offset + 32]))
-        vectors_store = milvus(values)
-        try:
-            name = collection_name(values)
-            if utility.has_collection(name):
-                utility.drop_collection(name)
-            vectors_store.create_collection(name, len(vectors[0]), metric_type="COSINE")
-            vectors_store.add_vectors(
-                vectors,
-                ids=[x["ref"] for _, x in entities],
-                metadata=[
-                    {"generation": generation, "scope": kind + "s", **x}
-                    for kind, x in entities
-                ],
-            )
-            vectors_store.collection.load()
-        finally:
-            vectors_store.client.disconnect()
+        counts.update(Counter(r.kind for r in records))
+        counts["filtered"] = filtered
+        from .stages import STAGES
+
+        with build_storage(values) as storage:
+            for stage in STAGES:
+                result = stage(records, values["knowledge_generation"], storage)
+                counts.update(result.counts)
+                if result.errors:
+                    raise ValueError("; ".join(result.errors))
         read_graph(values)
         read_vectors(values)
         status = "succeeded"

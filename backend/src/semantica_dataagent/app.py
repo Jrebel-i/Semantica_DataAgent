@@ -349,40 +349,10 @@ def build_detail(build_id: int, _: Annotated[str, Depends(current_user)]):
         return build_view(row)
 
 
-class FieldView(BaseModel):
-    name: str
-    type: str
-    comment: str
-    partition: bool
+from .table_api import describe_tables, search_knowledge
+from .table_api import router as table_router
 
-
-class TableView(BaseModel):
-    name: str
-    database: str
-    comment: str
-    ref: str
-    fields: list[FieldView]
-
-
-@app.get("/api/v1/tables", response_model=list[TableView])
-def tables(
-    _: Annotated[str, Depends(current_user)],
-    database: str | None = None,
-    search: str | None = None,
-):
-    return knowledge.describe(database=database, search=search)
-
-
-def describe_tables(names: list[str]) -> list[dict]:
-    return knowledge.describe(names=names)
-
-
-def search_knowledge(
-    query: str, scope: Literal["tables", "fields"], top_k: int = 5
-) -> list[dict]:
-    if not query or not 1 <= top_k <= 100:
-        raise ValueError("Invalid query or top_k")
-    return knowledge.search(query, scope, top_k)
+app.include_router(table_router)
 
 
 def create_mcp():
@@ -427,3 +397,109 @@ class MCPAuthentication:
 
 
 app.mount("/mcp", MCPAuthentication(app))
+
+
+class PluginView(BaseModel):
+    category: str
+    id: str
+    version: str
+    display_name: str
+    parameters_schema: dict
+    enabled: bool
+    parameters: dict
+
+
+class PluginUpdate(BaseModel):
+    enabled: bool
+    parameters: dict
+
+
+class FilterRules(BaseModel):
+    database_include: list[str] = []
+    database_exclude: list[str] = []
+    task_include: list[str] = []
+    task_exclude: list[str] = []
+
+
+@app.get("/api/v1/plugins", response_model=list[PluginView])
+def list_plugins(_: Annotated[str, Depends(admin)]):
+    from .plugins import configured
+
+    return [
+        PluginView(
+            category=category,
+            id=plugin.id,
+            version=plugin.version,
+            display_name=plugin.display_name,
+            parameters_schema=plugin.parameters_schema,
+            enabled=enabled,
+            parameters=parameters,
+        )
+        for category, plugin, enabled, parameters in configured()
+    ]
+
+
+@app.put("/api/v1/plugins/{category}/{plugin_id}", response_model=PluginView)
+def update_plugin(
+    category: str, plugin_id: str, body: PluginUpdate, _: Annotated[str, Depends(admin)]
+):
+    from jsonschema import Draft202012Validator
+
+    from .db import PluginConfig
+    from .plugins import discover
+
+    plugin = discover().get((category, plugin_id))
+    if plugin is None:
+        raise HTTPException(404, "Plugin not found")
+    errors = sorted(
+        Draft202012Validator(plugin.parameters_schema).iter_errors(body.parameters),
+        key=lambda e: list(map(str, e.absolute_path)),
+    )
+    if errors:
+        raise HTTPException(
+            422,
+            detail=[
+                {"path": list(error.absolute_path), "message": error.message}
+                for error in errors
+            ],
+        )
+    with sessions().begin() as db:
+        row = db.get(PluginConfig, (category, plugin_id))
+        if row is None:
+            row = PluginConfig(
+                category=category,
+                plugin_id=plugin_id,
+                enabled=body.enabled,
+                parameters=json.dumps(body.parameters),
+            )
+            db.add(row)
+        else:
+            row.enabled = body.enabled
+            row.parameters = json.dumps(body.parameters)
+    return PluginView(
+        category=category,
+        id=plugin.id,
+        version=plugin.version,
+        display_name=plugin.display_name,
+        parameters_schema=plugin.parameters_schema,
+        enabled=body.enabled,
+        parameters=body.parameters,
+    )
+
+
+@app.get("/api/v1/filters", response_model=FilterRules)
+def read_filters(_: Annotated[str, Depends(admin)]):
+    from .filters import get_filters
+
+    return get_filters()
+
+
+@app.put("/api/v1/filters", response_model=FilterRules)
+def write_filters(body: FilterRules, _: Annotated[str, Depends(admin)]):
+    with sessions().begin() as db:
+        row = db.get(Setting, "ingestion_filters")
+        if row is None:
+            db.add(Setting(key="ingestion_filters", value=body.model_dump_json()))
+        else:
+            row.value = body.model_dump_json()
+    return body

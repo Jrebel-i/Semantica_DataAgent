@@ -3,6 +3,7 @@ import { Alert, Space, Typography } from "antd";
 import { getMessages, type Language } from "./i18n";
 import { KnowledgePage } from "./KnowledgePage";
 import { LanguageSwitcher } from "./LanguageSwitcher";
+import { PluginsPage } from "./PluginsPage";
 import { Login } from "./Login";
 import { StatusPage, type Health } from "./StatusPage";
 import { TokensPage } from "./TokensPage";
@@ -91,7 +92,10 @@ export function App() {
               { path: "/", label: t.statusPage },
               { path: "/knowledge", label: t.knowledge },
               ...(role === "admin"
-                ? [{ path: "/tokens", label: t.tokens }]
+                ? [
+                    { path: "/tokens", label: t.tokens },
+                    { path: "/plugins", label: t.plugins },
+                  ]
                 : []),
             ].map((item) => (
               <a
@@ -108,7 +112,13 @@ export function App() {
               </a>
             ))}
           </nav>
-          {path === "/tokens" ? (
+          {path === "/plugins" ? (
+            role === "admin" ? (
+              <PluginsPage token={token} messages={t} />
+            ) : (
+              <Alert title={t.forbidden} type="warning" />
+            )
+          ) : path === "/tokens" ? (
             role === "admin" ? (
               <TokensPage token={token} messages={t} />
             ) : (

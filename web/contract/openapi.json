@@ -84,6 +84,44 @@
         "title": "FieldView",
         "type": "object"
       },
+      "FilterRules": {
+        "properties": {
+          "database_exclude": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Database Exclude",
+            "type": "array"
+          },
+          "database_include": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Database Include",
+            "type": "array"
+          },
+          "task_exclude": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Task Exclude",
+            "type": "array"
+          },
+          "task_include": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Task Include",
+            "type": "array"
+          }
+        },
+        "title": "FilterRules",
+        "type": "object"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -95,6 +133,70 @@
           }
         },
         "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "PluginUpdate": {
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "parameters": {
+            "additionalProperties": true,
+            "title": "Parameters",
+            "type": "object"
+          }
+        },
+        "required": [
+          "enabled",
+          "parameters"
+        ],
+        "title": "PluginUpdate",
+        "type": "object"
+      },
+      "PluginView": {
+        "properties": {
+          "category": {
+            "title": "Category",
+            "type": "string"
+          },
+          "display_name": {
+            "title": "Display Name",
+            "type": "string"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "parameters": {
+            "additionalProperties": true,
+            "title": "Parameters",
+            "type": "object"
+          },
+          "parameters_schema": {
+            "additionalProperties": true,
+            "title": "Parameters Schema",
+            "type": "object"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "category",
+          "id",
+          "version",
+          "display_name",
+          "parameters_schema",
+          "enabled",
+          "parameters"
+        ],
+        "title": "PluginView",
         "type": "object"
       },
       "SettingsUpdate": {
@@ -457,6 +559,70 @@
         "summary": "Build Detail"
       }
     },
+    "/api/v1/filters": {
+      "get": {
+        "operationId": "read_filters_api_v1_filters_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FilterRules"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Read Filters"
+      },
+      "put": {
+        "operationId": "write_filters_api_v1_filters_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FilterRules"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FilterRules"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Write Filters"
+      }
+    },
     "/api/v1/me": {
       "get": {
         "operationId": "me_api_v1_me_get",
@@ -482,6 +648,96 @@
           }
         ],
         "summary": "Me"
+      }
+    },
+    "/api/v1/plugins": {
+      "get": {
+        "operationId": "list_plugins_api_v1_plugins_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/PluginView"
+                  },
+                  "title": "Response List Plugins Api V1 Plugins Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Plugins"
+      }
+    },
+    "/api/v1/plugins/{category}/{plugin_id}": {
+      "put": {
+        "operationId": "update_plugin_api_v1_plugins__category___plugin_id__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "category",
+            "required": true,
+            "schema": {
+              "title": "Category",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "plugin_id",
+            "required": true,
+            "schema": {
+              "title": "Plugin Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PluginUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PluginView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Update Plugin"
       }
     },
     "/api/v1/settings": {

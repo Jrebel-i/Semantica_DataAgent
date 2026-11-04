@@ -10,6 +10,9 @@
     },
     "sql": {
       "type": "string"
+    },
+    "type": {
+      "type": "string"
     }
   },
   "required": [

@@ -99,7 +99,7 @@ def test_demo_covers_all_six_entities():
     result = CanonicalAdapter().read(root, {})
     counts = Counter(item.kind for item in result.records)
     assert counts == {
-        "table": 20,
+        "table": 21,
         "field": 60,
         "task": 20,
         "lineage": 20,

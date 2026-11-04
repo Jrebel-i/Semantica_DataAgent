@@ -56,3 +56,11 @@ class Build(Base):
     finished_at: Mapped[str | None]
     counts: Mapped[str]
     error: Mapped[str | None]
+
+
+class PluginConfig(Base):
+    __tablename__ = "plugin_config"
+    category: Mapped[str] = mapped_column(primary_key=True)
+    plugin_id: Mapped[str] = mapped_column(primary_key=True)
+    enabled: Mapped[bool]
+    parameters: Mapped[str]
