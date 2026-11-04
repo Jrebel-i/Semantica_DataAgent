@@ -296,6 +296,7 @@ def search(query, scope, top_k, category=None):
     unique = {item["ref"]: item for item in reversed(merged)}
     results = list(reversed(list(unique.values())))
     if scope == "tasks":
-        # Keep matching tasks with outputs ahead of output-less tasks.
-        results.sort(key=lambda item: not item.get("has_output", False))
+        from .task_stage import rank_task_hits
+
+        results = rank_task_hits(results)
     return results[:top_k]

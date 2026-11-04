@@ -144,6 +144,8 @@ test("browse tables and view field details", async () => {
     vi.fn(async (url: string) => {
       if (url === "/api/v1/me") return new Response("{}", { status: 200 });
       if (url === "/api/v1/categories") return Response.json([]);
+      if (url.startsWith("/api/v1/table-lineage"))
+        return Response.json({ upstream: [], downstream: [], tasks: [] });
       if (url.startsWith("/api/v1/tables"))
         return new Response(
           JSON.stringify([

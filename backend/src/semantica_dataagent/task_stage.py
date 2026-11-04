@@ -6,6 +6,11 @@ from .plugins import parse_task
 from .stage_contract import StageResult
 
 
+def rank_task_hits(hits):
+    """Demote output-less tasks while preserving relevance within each group."""
+    return sorted(hits, key=lambda item: not item.get("has_output", False))
+
+
 def resolve_task(task, declared, parsed):
     declared = set(declared)
     derived = (
