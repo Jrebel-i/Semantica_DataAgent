@@ -1,17 +1,24 @@
 """SQL validation against a batch snapshot of the current knowledge generation."""
 
+import os
 import re
-from collections import deque
+from collections import defaultdict
 from dataclasses import dataclass
 from difflib import get_close_matches
+from heapq import heappop, heappush
 from typing import Literal
 
 import sqlglot
+from sqlalchemy import func, select
 from sqlglot import exp
 from sqlglot.errors import ErrorLevel, ParseError
 from sqlglot.optimizer.scope import traverse_scope
 
 from . import knowledge
+from .db import Build, sessions
+
+# Keys present in more than this fraction of tables do not identify a relationship.
+MAX_KEY_FRACTION = 0.05
 
 
 @dataclass
@@ -19,19 +26,79 @@ class Snapshot:
     tables: list[dict]
     edges: list[dict]
     documents: list[dict]
+    document_loader: object = None
+
+    def __post_init__(self):
+        self.by_name = {full(t).lower(): t for t in self.tables}
+        self.by_short = defaultdict(list)
+        self.fields = {}
+        self.keys = defaultdict(set)
+        for name, table in self.by_name.items():
+            self.by_short[table["name"].lower()].append(table)
+            fields = field_names(table)
+            self.fields[name] = fields
+            for key in fields:
+                if key != "id" and key.endswith(("_id", "_key")):
+                    self.keys[key].add(name)
+        self.keys = {
+            k: v
+            for k, v in self.keys.items()
+            if len(v) <= len(self.tables) * MAX_KEY_FRACTION
+        }
+        self.neighbors = defaultdict(set)
+        self.edge_pairs = defaultdict(list)
+        for edge in self.edges:
+            a, b = edge["upstream"].lower(), edge["downstream"].lower()
+            if a in self.by_name and b in self.by_name and a != b:
+                self.neighbors[a].add(b)
+                self.neighbors[b].add(a)
+                self.edge_pairs[frozenset((a, b))].append(edge)
 
     def resolve(self, name):
         name = name.lower()
-        return [
-            t
-            for t in self.tables
-            if (f"{t['database']}.{t['name']}" if "." in name else t["name"]).lower()
-            == name
-        ]
+        if "." in name:
+            table = self.by_name.get(name)
+            return [table] if table else []
+        return self.by_short.get(name, [])
+
+    def documents_for(self, pairs):
+        if self.document_loader and pairs:
+            return self.document_loader(pairs)
+        return self.documents
+
+
+_snapshot_cache = None
+
+
+def _build_version():
+    with sessions()() as db:
+        latest = db.execute(
+            select(Build.id, Build.status).order_by(Build.id.desc()).limit(1)
+        ).first()
+        success = db.scalar(
+            select(func.max(Build.id)).where(Build.status == "succeeded")
+        )
+    return (success, tuple(latest) if latest else None)
 
 
 def load_snapshot():
+    global _snapshot_cache
     values = knowledge.settings()
+    version = _build_version()
+    key = (
+        os.environ["DATAAGENT_DB_PATH"],
+        values["neo4j_uri"],
+        values["neo4j_user"],
+        values["neo4j_password"],
+        values["knowledge_generation"],
+        version,
+    )
+    if (
+        _snapshot_cache
+        and _snapshot_cache[0] == key
+        and (not version[1] or version[1][1] != "running")
+    ):
+        return _snapshot_cache[1]
     store = knowledge.read_graph(values)
     params = {"generation": values["knowledge_generation"]}
     tables = knowledge.execute(
@@ -44,16 +111,23 @@ def load_snapshot():
         """MATCH (:SDALineageTable {generation:$generation})-[r:DEPENDS_ON]->(:SDALineageTable {generation:$generation}) RETURN properties(r) AS edge""",
         params,
     )
-    docs = knowledge.execute(
-        store,
-        """MATCH (c:SDAChunk {generation:$generation}) RETURN c.ref AS ref, c.content AS content""",
-        params,
-    )
-    return Snapshot(
+
+    def documents(pairs):
+        return knowledge.execute(
+            store,
+            """MATCH (c:SDAChunk {generation:$generation}) WHERE any(pair IN $pairs WHERE toLower(c.content) CONTAINS pair[0] AND toLower(c.content) CONTAINS pair[1]) RETURN c.ref AS ref, c.content AS content""",
+            {**params, "pairs": [list(p) for p in pairs]},
+        )
+
+    result = Snapshot(
         [{**r["table"], "fields": r["fields"]} for r in tables],
         [r["edge"] for r in edges],
-        docs,
+        [],
+        documents,
     )
+    if not version[1] or version[1][1] != "running":
+        _snapshot_cache = (key, result)
+    return result
 
 
 def full(t):
@@ -64,50 +138,52 @@ def field_names(t):
     return {f["name"].lower(): f for f in t["fields"]}
 
 
-def evidence(a, b, left_key=None, right_key=None, snapshot=None):
+def evidence(a, b, left_key=None, right_key=None, snapshot=None, documents=()):
+    aname, bname = full(a).lower(), full(b).lower()
     found = []
-    for e in snapshot.edges:
-        if {e["upstream"].lower(), e["downstream"].lower()} == {
-            full(a).lower(),
-            full(b).lower(),
-        }:
-            found.append(
-                {
-                    "type": "lineage",
-                    "ref": e.get("ref") or f"lineage:{e['upstream']}:{e['downstream']}",
-                    "parse_status": e.get("parse_status"),
-                    "evidence": e.get("evidence"),
-                }
-            )
-    common = set(field_names(a)) & set(field_names(b))
-    keys = {k for k in common if k == "id" or k.endswith(("_id", "_key"))}
+    for edge in snapshot.edge_pairs.get(frozenset((aname, bname)), []):
+        found.append(
+            {
+                "type": "lineage",
+                "strength": "strong",
+                "ref": edge.get("ref")
+                or f"lineage:{edge['upstream']}:{edge['downstream']}",
+                "parse_status": edge.get("parse_status"),
+                "evidence": edge.get("evidence"),
+            }
+        )
+    common = (
+        set(snapshot.fields[aname]) & set(snapshot.fields[bname]) & snapshot.keys.keys()
+    )
     if left_key is not None:
-        keys &= (
+        common &= (
             {left_key.lower()}
             if left_key.lower() == (right_key or "").lower()
             else set()
         )
-    for key in sorted(keys):
+    for key in sorted(common):
         found.append(
             {
                 "type": "common_key",
+                "strength": "weak",
                 "key": key,
                 "refs": [
-                    field_names(a)[key].get("ref", a["ref"]),
-                    field_names(b)[key].get("ref", b["ref"]),
+                    snapshot.fields[aname][key].get("ref", a["ref"]),
+                    snapshot.fields[bname][key].get("ref", b["ref"]),
                 ],
             }
         )
     if left_key and right_key:
-        for doc in snapshot.documents:
-            content = doc["content"].lower()
-            left = re.escape(f"{full(a)}.{left_key}".lower())
-            right = re.escape(f"{full(b)}.{right_key}".lower())
+        left = re.escape(f"{aname}.{left_key}".lower())
+        right = re.escape(f"{bname}.{right_key}".lower())
+        for doc in documents:
             if re.search(
                 rf"(?<![\w.])(?:{left}\s*=\s*{right}|{right}\s*=\s*{left})(?![\w.])",
-                content,
+                doc["content"].lower(),
             ):
-                found.append({"type": "document", "ref": doc["ref"]})
+                found.append(
+                    {"type": "document", "strength": "strong", "ref": doc["ref"]}
+                )
     return found
 
 
@@ -169,6 +245,7 @@ def check_sql(sql, dialect, snapshot):
                     )
                 )
             result["tables"].append(item)
+    pending_documents = []
     for scope in traverse_scope(tree):
         sources = {}
         for alias, source in scope.sources.items():
@@ -236,18 +313,43 @@ def check_sql(sql, dialect, snapshot):
                             and "database" in b
                         ):
                             supports.extend(evidence(a, b, l.name, r.name, snapshot))
+                            pending_documents.append(
+                                (len(result["joins"]), a, b, l.name, r.name)
+                            )
             result["joins"].append(
                 {
                     "condition": condition.sql(dialect=dialect)
                     if condition
                     else join.sql(dialect=dialect),
-                    "status": "supported" if supports else "unsupported",
+                    "status": "supported"
+                    if any(p["strength"] == "strong" for p in supports)
+                    else "weak"
+                    if supports
+                    else "unsupported",
                     "evidence": supports,
                     "suggestion": None
-                    if supports
-                    else "Use find_join_path to find evidence.",
+                    if any(p["strength"] == "strong" for p in supports)
+                    else "Weak or missing evidence; use find_join_path and verify the join.",
                 }
             )
+    candidates = [
+        (i, a, b, l, r)
+        for i, a, b, l, r in pending_documents
+        if result["joins"][i]["status"] != "supported"
+    ]
+    documents = snapshot.documents_for(
+        {(full(a).lower(), full(b).lower()) for _, a, b, _, _ in candidates}
+    )
+    for i, a, b, l, r in candidates:
+        proofs = [
+            p
+            for p in evidence(a, b, l, r, snapshot, documents)
+            if p["type"] == "document"
+        ]
+        if proofs:
+            result["joins"][i]["evidence"].extend(proofs)
+            result["joins"][i]["status"] = "supported"
+            result["joins"][i]["suggestion"] = None
     if all(x["status"] == "pass" for x in result["tables"] + result["fields"]) and all(
         x["status"] == "supported" for x in result["joins"]
     ):
@@ -261,52 +363,72 @@ def join_path(tables, snapshot):
     matches = [snapshot.resolve(name) for name in tables]
     if any(len(x) != 1 for x in matches):
         return {"status": "no_path", "reason": "Table missing or ambiguous"}
-    targets = [full(x[0]) for x in matches]
-    by_name = {full(t): t for t in snapshot.tables}
-    graph = {n: [] for n in by_name}
-    for i, a in enumerate(snapshot.tables):
-        for b in snapshot.tables[i + 1 :]:
-            proofs = evidence(a, b, snapshot=snapshot)
-            if proofs:
-                graph[full(a)].append((full(b), proofs))
-                graph[full(b)].append((full(a), proofs))
+    targets = [full(x[0]).lower() for x in matches]
     connected = {targets[0]}
     steps = []
     for target in targets[1:]:
-        queue = deque([(name, []) for name in connected])
-        seen = set(connected)
+        queue = [(0, 0, name, []) for name in sorted(connected)]
+        best = {}
         path = None
         while queue:
-            current, route = queue.popleft()
+            weak_count, distance, current, route = heappop(queue)
+            if current in best and best[current] <= (weak_count, distance):
+                continue
+            best[current] = (weak_count, distance)
             if current == target:
                 path = route
                 break
-            for neighbor, proofs in graph[current]:
-                if neighbor not in seen:
-                    seen.add(neighbor)
-                    queue.append(
-                        (
-                            neighbor,
-                            route
-                            + [
-                                {
-                                    "from": current,
-                                    "to": neighbor,
-                                    "keys": [
-                                        p["key"]
-                                        for p in proofs
-                                        if p["type"] == "common_key"
-                                    ],
-                                    "evidence": proofs,
-                                }
-                            ],
-                        )
-                    )
+            neighbors = set(snapshot.neighbors[current])
+            for key in snapshot.fields[current]:
+                neighbors.update(snapshot.keys.get(key, ()))
+            neighbors.discard(current)
+            for neighbor in sorted(neighbors):
+                strong = bool(snapshot.edge_pairs.get(frozenset((current, neighbor))))
+                cost = (weak_count + (not strong), distance + 1)
+                if neighbor not in best or cost < best[neighbor]:
+                    heappush(queue, (*cost, neighbor, route + [(current, neighbor)]))
         if path is None:
             return {"status": "no_path", "reason": f"No connection to {target}"}
         steps.extend(path)
-        connected.update(step["to"] for step in path)
-    return {"status": "found", "steps": steps}
+        connected.update(b for _, b in path)
+    # Documents can strengthen a selected path but do not introduce graph edges.
+    weak_steps = {
+        (a, b) for a, b in steps if not snapshot.edge_pairs.get(frozenset((a, b)))
+    }
+    documents = snapshot.documents_for(weak_steps)
+    result = []
+    for a, b in steps:
+        left, right = snapshot.by_name[a], snapshot.by_name[b]
+        proofs = evidence(left, right, snapshot=snapshot)
+        for key in (
+            (set(snapshot.fields[a]) & set(snapshot.fields[b]))
+            if (a, b) in weak_steps and documents
+            else ()
+        ):
+            proofs.extend(
+                p
+                for p in evidence(left, right, key, key, snapshot, documents)
+                if p["type"] == "document"
+            )
+        strength = (
+            "strong" if any(p["strength"] == "strong" for p in proofs) else "weak"
+        )
+        result.append(
+            {
+                "from": full(left),
+                "to": full(right),
+                "keys": [p["key"] for p in proofs if p["type"] == "common_key"],
+                "strength": strength,
+                "evidence": proofs,
+            }
+        )
+    return {
+        "status": "found",
+        "strength": "weak"
+        if any(s["strength"] == "weak" for s in result)
+        else "strong",
+        "steps": result,
+    }
 
 
 def validate_sql(sql: str, dialect: Literal["hive", "spark", "doris"] = "hive") -> dict:

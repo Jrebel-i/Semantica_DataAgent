@@ -58,7 +58,9 @@ def test_join_and_unknown():
     assert result["joins"][0]["status"] == "unsupported"
     result = check_sql("SELECT x.id FROM mystery x", "hive", snapshot())
     assert result["fields"][0]["status"] == "unknown"
-    assert join_path(["shop.orders", "shop.customers"], snapshot())["status"] == "found"
+    assert (
+        join_path(["shop.orders", "shop.customers"], snapshot())["status"] == "no_path"
+    )
 
 
 def test_derived_columns_and_failed_lineage():
@@ -72,6 +74,7 @@ def test_derived_columns_and_failed_lineage():
             "ref": "task:failed",
         }
     )
+    data = Snapshot(data.tables, data.edges, [])
     result = check_sql(
         "WITH x AS (SELECT id AS order_id FROM shop.orders) SELECT x.order_id FROM x",
         "hive",
@@ -107,3 +110,118 @@ def test_disjunctive_join_is_not_approved():
         snapshot(),
     )
     assert result["joins"][0]["status"] != "supported"
+
+
+def indexed_snapshot():
+    tables = [
+        {
+            "database": "warehouse",
+            "name": f"t{i}",
+            "ref": f"table:warehouse.t{i}",
+            "fields": [{"name": "id"}, {"name": "wide_id"}],
+        }
+        for i in range(50)
+    ]
+    tables[0]["fields"].append({"name": "special_id", "ref": "field:a.special_id"})
+    tables[1]["fields"].append({"name": "special_id", "ref": "field:b.special_id"})
+    return Snapshot(tables, [], [])
+
+
+def test_generic_keys_are_not_evidence_and_specific_keys_are_weak():
+    data = indexed_snapshot()
+    generic = check_sql(
+        "SELECT a.id FROM warehouse.t2 a JOIN warehouse.t3 b ON a.id = b.id",
+        "hive",
+        data,
+    )
+    assert generic["joins"][0]["status"] == "unsupported"
+    assert join_path(["warehouse.t2", "warehouse.t3"], data)["status"] == "no_path"
+    broad = check_sql(
+        "SELECT a.id FROM warehouse.t2 a JOIN warehouse.t3 b ON a.wide_id = b.wide_id",
+        "hive",
+        data,
+    )
+    assert broad["joins"][0]["status"] == "unsupported"
+    weak = check_sql(
+        "SELECT a.id FROM warehouse.t0 a JOIN warehouse.t1 b ON a.special_id = b.special_id",
+        "hive",
+        data,
+    )
+    assert weak["joins"][0]["status"] == "weak"
+    assert weak["status"] == "issues"
+    assert (
+        join_path(["warehouse.t0", "warehouse.t1"], data)["steps"][0]["strength"]
+        == "weak"
+    )
+
+
+def test_strong_path_preferred_to_weak_direct_path():
+    data = indexed_snapshot()
+    data = Snapshot(
+        data.tables,
+        [
+            {"upstream": "warehouse.t0", "downstream": "warehouse.t2", "ref": "task:a"},
+            {"upstream": "warehouse.t2", "downstream": "warehouse.t1", "ref": "task:b"},
+        ],
+        [],
+    )
+    path = join_path(["warehouse.t0", "warehouse.t1"], data)
+    assert len(path["steps"]) == 2
+    assert all(s["strength"] == "strong" for s in path["steps"])
+
+
+def test_realistic_snapshot_scale():
+    import time
+
+    tables = [
+        {
+            "database": "warehouse",
+            "name": f"t{i}",
+            "ref": f"table:warehouse.t{i}",
+            "fields": [{"name": f"f{j}"} for j in range(24)] + [{"name": "id"}],
+        }
+        for i in range(2000)
+    ]
+    edges = [
+        {
+            "upstream": f"warehouse.t{i % 1999}",
+            "downstream": f"warehouse.t{i % 1999 + 1}",
+            "ref": f"task:{i}",
+        }
+        for i in range(5000)
+    ]
+    start = time.monotonic()
+    data = Snapshot(tables, edges, [])
+    assert join_path(["warehouse.t0", "warehouse.t1999"], data)["status"] == "found"
+    assert time.monotonic() - start < 2
+    start = time.monotonic()
+    assert (
+        check_sql(
+            "SELECT a.id FROM warehouse.t0 a JOIN warehouse.t1 b ON a.id = b.id",
+            "hive",
+            data,
+        )["status"]
+        == "pass"
+    )
+    assert time.monotonic() - start < 2
+
+
+def test_document_makes_weak_join_strong():
+    data = indexed_snapshot()
+    data.documents.append(
+        {
+            "ref": "document:join",
+            "content": "warehouse.t0.special_id = warehouse.t1.special_id",
+        }
+    )
+    checked = check_sql(
+        "SELECT a.id FROM warehouse.t0 a JOIN warehouse.t1 b ON a.special_id = b.special_id",
+        "hive",
+        data,
+    )
+    assert checked["status"] == "pass"
+    assert any(
+        e["type"] == "document" and e["ref"] == "document:join"
+        for e in checked["joins"][0]["evidence"]
+    )
+    assert join_path(["warehouse.t0", "warehouse.t1"], data)["strength"] == "strong"
