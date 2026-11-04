@@ -18,13 +18,15 @@ password = os.environ['NEO4J_PASSWORD']
 neo_port, milvus_port = (31601, 31602) if args.environment == 'dev' else (31611, 31612)
 with GraphDatabase.driver(f'bolt://{args.host}:{neo_port}', auth=('neo4j', password)) as driver:
     records, _, _ = driver.execute_query('RETURN 1 AS value')
-    assert records[0]['value'] == 1
+    if records[0]['value'] != 1:
+        raise RuntimeError('Neo4j returned an unexpected value')
     print('Neo4j: Cypher returned 1')
 client = MilvusClient(uri=f'http://{args.host}:{milvus_port}')
 name = 'check_' + uuid.uuid4().hex
 try:
     client.create_collection(collection_name=name, dimension=8)
-    assert client.has_collection(name)
+    if not client.has_collection(name):
+        raise RuntimeError('Milvus collection was not created')
 finally:
     if client.has_collection(name):
         client.drop_collection(name)
@@ -34,9 +36,10 @@ if args.skip_embedding:
     raise SystemExit(0)
 request = urllib.request.Request(
     f'http://{args.host}:31603/embeddings',
-    data=json.dumps({'model': '/model/bge-m3', 'input': ['这是一句中文。']}).encode(),
+    data=json.dumps({'model': 'model/bge-m3', 'input': ['这是一句中文。']}).encode(),
     headers={'Content-Type': 'application/json'}, method='POST')
 with urllib.request.urlopen(request, timeout=180) as response:
     embedding = json.load(response)['data'][0]['embedding']
-assert len(embedding) == 1024, f'expected 1024 dimensions, got {len(embedding)}'
+if len(embedding) != 1024:
+    raise RuntimeError(f'expected 1024 dimensions, got {len(embedding)}')
 print('Embedding: Chinese input returned 1024 dimensions')

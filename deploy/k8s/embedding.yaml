@@ -97,8 +97,10 @@ spec:
         image: michaelf34/infinity:0.0.77-cpu
         command: ["/bin/sh", "-c"]
         args:
-        - python /integrity/model.py && exec infinity_emb v2 --model-id /model/bge-m3 --port 7997 --host 0.0.0.0
+        - python /integrity/model.py && exec infinity_emb v2 --model-id /model/bge-m3 --engine torch --port 7997 --host 0.0.0.0
         env:
+        - name: DO_NOT_TRACK
+          value: "1"
         - name: HF_HUB_OFFLINE
           value: "1"
         - name: TRANSFORMERS_OFFLINE
