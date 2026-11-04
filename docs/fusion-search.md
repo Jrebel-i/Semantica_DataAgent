@@ -1,7 +1,7 @@
-# Fusion search and MCP result contract
+# 融合检索与 MCP 结果约定
 
-Ranking version `1` uses reciprocal rank fusion with k=60 and weights 2, 1, 1 and 0.5 for exact, full text, vector and graph hits respectively. Tasks without an output are multiplied by 0.5. Confidence is high for an exact hit or hits from at least two sources, medium for a full-text-only hit, and low otherwise; it is a ranking signal, not a probability.
+排序参数版本 `1` 使用倒数排名融合，k 为 60；精确、全文、向量、图展开的权重分别为 2、1、1、0.5。无产出表的任务分数乘以 0.5。精确命中或两路及以上命中为高置信度，仅全文命中为中置信度，其他为低置信度；置信度是排序信号，不是概率。
 
-A matching query term in passages from at least two distinct documents is flagged as a *possible* ambiguity, with passage references. This conservative rule calls for inspection and does not prove that the definitions conflict. Detection is limited to retrieved passages and literal query matches.
+当至少两个不同文档的候选段落都包含查询词时，标记为**可能歧义**并列出段落引用。该保守规则提示调用方核对原文，并不证明口径确有冲突；它只检查已召回的段落和字面查询词。
 
-All MCP tools accept `cursor`. Results are capped at 25 items or 12,000 characters per page. Large individual values are returned as `result_fragment` pieces containing JSON text; concatenate the fragments and decode the JSON after the final page. Cursors must be used with the same tool and arguments. Since the tool executes again on each page, callers should restart pagination if the underlying knowledge changes.
+所有 MCP 工具接受 `cursor`。每页最多 25 条或 12,000 字符；单个值过大时通过 `result_fragment` 返回 JSON 文本片段，客户端应拼接全部片段后解码 JSON。续页必须使用相同工具和参数。每页重新执行工具，因此知识内容变化后应从头分页。
