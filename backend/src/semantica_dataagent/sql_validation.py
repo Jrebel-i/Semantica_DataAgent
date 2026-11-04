@@ -17,8 +17,9 @@ from sqlglot.optimizer.scope import traverse_scope
 from . import knowledge
 from .db import Build, sessions
 
-# Keys present in more than this fraction of tables do not identify a relationship.
+# Keys shared above both limits do not identify a relationship.
 MAX_KEY_FRACTION = 0.05
+MIN_COMMON_KEY_TABLES = 5
 
 
 @dataclass
@@ -43,7 +44,7 @@ class Snapshot:
         self.keys = {
             k: v
             for k, v in self.keys.items()
-            if len(v) <= len(self.tables) * MAX_KEY_FRACTION
+            if len(v) <= max(MIN_COMMON_KEY_TABLES, len(self.tables) * MAX_KEY_FRACTION)
         }
         self.neighbors = defaultdict(set)
         self.edge_pairs = defaultdict(list)

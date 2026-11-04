@@ -225,3 +225,48 @@ def test_document_makes_weak_join_strong():
         for e in checked["joins"][0]["evidence"]
     )
     assert join_path(["warehouse.t0", "warehouse.t1"], data)["strength"] == "strong"
+
+
+def test_key_frequency_threshold_in_small_and_large_generations():
+    def generation(count, owners, key):
+        return Snapshot(
+            [
+                {
+                    "database": "warehouse",
+                    "name": f"t{i}",
+                    "ref": f"table:warehouse.t{i}",
+                    "fields": [{"name": "id"}]
+                    + ([{"name": key}] if i < owners else []),
+                }
+                for i in range(count)
+            ],
+            [],
+            [],
+        )
+
+    small = generation(21, 2, "order_id")
+    sql = (
+        "SELECT a.id FROM warehouse.t0 a JOIN warehouse.t1 b ON a.order_id = b.order_id"
+    )
+    assert check_sql(sql, "hive", small)["joins"][0]["status"] == "weak"
+    assert join_path(["warehouse.t0", "warehouse.t1"], small)["strength"] == "weak"
+    for count, owners, expected in [
+        (21, 5, "weak"),
+        (21, 6, "unsupported"),
+        (2000, 100, "weak"),
+        (2000, 101, "unsupported"),
+        (2000, 300, "unsupported"),
+    ]:
+        data = generation(count, owners, "tenant_id")
+        checked = check_sql(
+            "SELECT a.id FROM warehouse.t0 a JOIN warehouse.t1 b ON a.tenant_id = b.tenant_id",
+            "hive",
+            data,
+        )
+        assert checked["joins"][0]["status"] == expected
+        generic = check_sql(
+            "SELECT a.id FROM warehouse.t0 a JOIN warehouse.t1 b ON a.id = b.id",
+            "hive",
+            data,
+        )
+        assert generic["joins"][0]["status"] == "unsupported"
