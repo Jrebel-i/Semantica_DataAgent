@@ -41,7 +41,7 @@ PYTHONPYCACHEPREFIX="$(mktemp -d)" uv run --directory backend pytest -p no:cache
 
 ## 运行应用
 
-设置 `DATAAGENT_DB_PATH`（SQLite 文件路径）、`DATAAGENT_ENCRYPTION_KEY`（Fernet 密钥，使用 `python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'` 生成）和可选的 `DATAAGENT_LISTEN`（默认 `127.0.0.1:8000`）。`uv run --directory backend semantica-dataagent init` 建库并仅输出一次管理员 token，妥善保存；再运行 `uv run --directory backend semantica-dataagent serve`。前端开发使用 `pnpm --dir web dev`。管理员通过 `/api/v1/settings` 的 PUT 写入 `values`；键为 `neo4j_uri`、`neo4j_user`、`neo4j_password`、`milvus_uri`、`embedding_url`、`embedding_model`、`source_directory`、`knowledge_generation`，空字符串或 null 删除。GET 不回显密码；连接地址不得包含用户信息、查询参数或片段，Neo4j 密码使用专用字段。配置修改对下一次健康检查生效。
+设置 `DATAAGENT_DB_PATH`（SQLite 文件路径）、`DATAAGENT_ENCRYPTION_KEY`（Fernet 密钥，使用 `python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'` 生成）和可选的 `DATAAGENT_LISTEN`（默认 `127.0.0.1:8000`）。`uv run --directory backend semantica-dataagent init` 建库并仅输出一次管理员 token，妥善保存；再运行 `uv run --directory backend semantica-dataagent serve`。前端开发使用 `pnpm --dir web dev`。管理员通过 `/api/v1/settings` 的 PUT 写入 `values`；键为 `neo4j_uri`、`neo4j_user`、`neo4j_password`、`milvus_uri`、`embedding_url`、`embedding_model`、`embedding_concurrency`、`embedding_timeout_seconds`、`embedding_timeout_per_input_seconds`、`embedding_retries`、`embedding_backoff_seconds`、`source_directory`、`knowledge_generation`，空字符串或 null 删除。GET 不回显密码；连接地址不得包含用户信息、查询参数或片段，Neo4j 密码使用专用字段。配置修改对下一次健康检查生效；embedding 并发、超时、重试与退避参数在下一次构建开始时读取，检索请求则每次读取当前值。
 
 ## 真实使用
 
@@ -72,4 +72,4 @@ PYTHONPYCACHEPREFIX="$(mktemp -d)" uv run --directory backend pytest -p no:cache
 
 ## 构建和知识浏览
 
-`source_directory` 指向包含规范数据模型文件的目录，例如仓库内 `samples/demo`。`embedding_url` 是 OpenAI 兼容 embedding 服务的 base URL，应用向其 `/embeddings` 发送请求；`embedding_model` 默认 `model/bge-m3`（infinity 部署的模型名）。`knowledge_generation` 默认 `default`，只允许英文字母开头、后接字母数字下划线；构建和检索只操作这一代。管理员调用 `POST /api/v1/builds`，用 `GET /api/v1/builds` 或 `/api/v1/builds/{id}` 查看结果；冲突构建返回 409。已认证用户可从 `/api/v1/tables` 查询知识浏览数据，MCP streamable HTTP 地址为 `/mcp/`。当前代原地覆盖，知识代切换及旧代保留由后续工单实现。
+`source_directory` 指向包含规范数据模型文件的目录，例如仓库内 `samples/demo`。`embedding_url` 是 OpenAI 兼容 embedding 服务的 base URL，应用向其 `/embeddings` 发送请求；`embedding_model` 默认 `model/bge-m3`（infinity 部署的模型名）。embedding 客户端（`embedding_client.py`）在进程内共享一个并发上限，构建写入向量和 MCP 检索都要先取得槽位；每次请求的超时为 `embedding_timeout_seconds + embedding_timeout_per_input_seconds × 批内文本数`。默认并发 2、基础超时 60 秒、每条文本 20 秒、重试 2 次、退避基数 1 秒。只重试连接断开、超时和 5xx；4xx 及响应格式错误直接失败。构建记录在 `counts` 里写入 `embedding_requests`、`embedding_successful_batches`、`embedding_retries`、`embedding_elapsed_ms`。`knowledge_generation` 默认 `default`，只允许英文字母开头、后接字母数字下划线；构建和检索只操作这一代。管理员调用 `POST /api/v1/builds`，用 `GET /api/v1/builds` 或 `/api/v1/builds/{id}` 查看结果；冲突构建返回 409。已认证用户可从 `/api/v1/tables` 查询知识浏览数据，MCP streamable HTTP 地址为 `/mcp/`。当前代原地覆盖，知识代切换及旧代保留由后续工单实现。

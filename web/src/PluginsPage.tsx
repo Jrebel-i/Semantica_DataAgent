@@ -27,6 +27,15 @@ type Rules = {
 };
 type Issue = { path: (string | number)[]; message: string };
 
+const EMBEDDING_DEFAULTS = {
+  embedding_concurrency: "2",
+  embedding_timeout_seconds: "60",
+  embedding_timeout_per_input_seconds: "20",
+  embedding_retries: "2",
+  embedding_backoff_seconds: "1",
+};
+type EmbeddingKey = keyof typeof EMBEDDING_DEFAULTS;
+
 export function PluginsPage({
   token,
   messages: t,
@@ -38,6 +47,7 @@ export function PluginsPage({
   const [rules, setRules] = useState<Rules | null>(null);
   const [errors, setErrors] = useState<Record<string, Issue[]>>({});
   const [dimLimit, setDimLimit] = useState("1000");
+  const [embedding, setEmbedding] = useState(EMBEDDING_DEFAULTS);
   const [failure, setFailure] = useState(false);
   const headers = {
     Authorization: `Bearer ${token}`,
@@ -56,6 +66,14 @@ export function PluginsPage({
         setRules((await f.json()) as Rules);
         const data = (await settings.json()) as Record<string, string | null>;
         setDimLimit(data.dimension_value_limit || "1000");
+        setEmbedding(
+          Object.fromEntries(
+            Object.entries(EMBEDDING_DEFAULTS).map(([key, fallback]) => [
+              key,
+              data[key] ?? fallback,
+            ]),
+          ) as Record<EmbeddingKey, string>,
+        );
       })
       .catch(() => setFailure(true));
   }, [token]);
@@ -144,6 +162,51 @@ export function PluginsPage({
               body: JSON.stringify({
                 values: { dimension_value_limit: dimLimit },
               }),
+            })
+              .then((response) => {
+                if (!response.ok) throw new Error();
+                setFailure(false);
+              })
+              .catch(() => setFailure(true));
+          }}
+        >
+          {t.save}
+        </button>
+      </fieldset>
+      <fieldset>
+        <legend>{t.embeddingSettings}</legend>
+        {(
+          [
+            ["embedding_concurrency", t.embeddingConcurrency, "1"],
+            ["embedding_timeout_seconds", t.embeddingTimeout, "0.001"],
+            [
+              "embedding_timeout_per_input_seconds",
+              t.embeddingTimeoutPerInput,
+              "0",
+            ],
+            ["embedding_retries", t.embeddingRetries, "0"],
+            ["embedding_backoff_seconds", t.embeddingBackoff, "0"],
+          ] as [EmbeddingKey, string, string][]
+        ).map(([key, label, min]) => (
+          <label key={key}>
+            {label}
+            <input
+              aria-label={label}
+              type="number"
+              min={min}
+              value={embedding[key]}
+              onChange={(e) =>
+                setEmbedding((old) => ({ ...old, [key]: e.target.value }))
+              }
+            />
+          </label>
+        ))}
+        <button
+          onClick={() => {
+            void fetch("/api/v1/settings", {
+              method: "PUT",
+              headers,
+              body: JSON.stringify({ values: embedding }),
             })
               .then((response) => {
                 if (!response.ok) throw new Error();

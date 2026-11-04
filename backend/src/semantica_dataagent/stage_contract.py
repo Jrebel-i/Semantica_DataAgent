@@ -9,6 +9,7 @@ class StorageHandles:
     _graph: object
     _vectors: object
     _settings: dict[str, str]
+    _embedding_stats: object | None = None
 
     def execute(self, query, parameters):
         from .knowledge import execute
@@ -25,7 +26,7 @@ class StorageHandles:
         for offset in range(0, len(texts), 32):
             batch = slice(offset, offset + 32)
             self._vectors.add_vectors(
-                embed(self._settings, texts[batch]),
+                embed(self._settings, texts[batch], self._embedding_stats),
                 ids=ids[batch],
                 metadata=[
                     {**item, "generation": self.generation} for item in metadata[batch]

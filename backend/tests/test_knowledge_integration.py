@@ -98,12 +98,12 @@ def test_build_and_retrieve_through_http(tmp_path, monkeypatch):
     entered, release = threading.Event(), threading.Event()
     original_embed = knowledge.embed
 
-    def delayed_embed(values, texts):
+    def delayed_embed(values, texts, stats=None):
         if len(texts) > 1:
             entered.set()
             if not release.wait(timeout=180):
                 raise TimeoutError("Test did not release build")
-        return original_embed(values, texts)
+        return original_embed(values, texts, stats)
 
     monkeypatch.setattr(knowledge, "embed", delayed_embed)
     sock = socket.socket()
@@ -145,13 +145,34 @@ def test_build_and_retrieve_through_http(tmp_path, monkeypatch):
                 assert c.post("/api/v1/builds").status_code == 409
             finally:
                 release.set()
-            deadline = time.monotonic() + 900
+            build_started = time.monotonic()
+            deadline = build_started + 900
             while time.monotonic() < deadline:
                 build = c.get(f"/api/v1/builds/{ident}").json()
                 if build["status"] != "running":
                     break
                 time.sleep(0.2)
+            print("build_elapsed_ms=", round((time.monotonic() - build_started) * 1000))
             assert build["status"] == "succeeded", build.get("error")
+            assert build["counts"]["embedding_requests"] > 0
+            assert (
+                build["counts"]["embedding_successful_batches"]
+                == build["counts"]["embedding_requests"]
+            )
+            assert build["counts"]["embedding_retries"] >= 0
+            assert build["counts"]["embedding_elapsed_ms"] > 0
+            print(
+                "embedding_stats=",
+                {
+                    key: build["counts"][key]
+                    for key in (
+                        "embedding_requests",
+                        "embedding_successful_batches",
+                        "embedding_retries",
+                        "embedding_elapsed_ms",
+                    )
+                },
+            )
             assert build["counts"]["test_stage"] == 1
             assert any(
                 f["task_id"] == "bad_sql" and f["reason"]
