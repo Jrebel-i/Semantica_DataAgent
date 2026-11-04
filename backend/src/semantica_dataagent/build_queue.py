@@ -42,7 +42,14 @@ class BuildQueue:
             with self._condition:
                 if self._stopping:
                     return
-            build_id = self._claim()
+            try:
+                build_id = self._claim()
+            except Exception:  # noqa: BLE001 - a transient claim failure must not stop the worker
+                with self._condition:
+                    if self._stopping:
+                        return
+                    self._condition.wait(timeout=1)
+                continue
             if build_id is None:
                 with self._condition:
                     while not self._stopping and not self._wake:
@@ -51,9 +58,9 @@ class BuildQueue:
                     if self._stopping:
                         return
                 continue
-            from .knowledge import run_build
-
             try:
+                from .knowledge import run_build
+
                 run_build(build_id)
             except Exception as exc:  # noqa: BLE001 - keep the worker alive
                 self._fail(build_id, str(exc))

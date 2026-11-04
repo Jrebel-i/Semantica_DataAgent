@@ -602,7 +602,6 @@ def run_build(build_id):
                     )
         changes = hash_difference(previous_hashes, hashes)
         counts = dict.fromkeys(KINDS.values(), 0)
-        counts.update(Counter(r.kind for r in records))
         counts.update(adapter_stats)
         physical_changes = source_file_difference(
             previous_hashes, hashes, previous_generated, generated
@@ -628,6 +627,7 @@ def run_build(build_id):
                 records, {"added": touched, "changed": set(), "deleted": set()}
             )
         )
+        counts.update(Counter(r.kind for r in selected))
         for path in touched:
             dirty_tables.update(
                 tuple(table) for table in prior_dimensions.get(path, [])

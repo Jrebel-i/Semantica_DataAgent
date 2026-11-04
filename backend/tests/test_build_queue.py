@@ -170,3 +170,47 @@ def test_build_records_stage_logs_stats_and_utc_times(tmp_path, monkeypatch):
         assert all(is_utc(entry["timestamp"]) for entry in build["logs"])
         assert is_utc(build["started_at"])
         assert is_utc(build["finished_at"])
+
+
+def test_queue_retries_after_a_transient_claim_failure(tmp_path, monkeypatch):
+    from semantica_dataagent import knowledge
+    from semantica_dataagent.build_queue import BuildQueue
+    from semantica_dataagent.db import Build, sessions
+
+    configure(tmp_path, monkeypatch)
+    executed = []
+    monkeypatch.setattr(knowledge, "run_build", executed.append)
+    queue = BuildQueue()
+    claim = queue._claim
+    attempts = []
+
+    def flaky_claim():
+        if not attempts:
+            attempts.append("failed")
+            raise RuntimeError("transient database lock")
+        attempts.append("retried")
+        return claim()
+
+    queue._claim = flaky_claim
+    with sessions().begin() as db:
+        row = Build(
+            status="queued", started_at="2026-01-01T00:00:00+00:00", counts="{}"
+        )
+        db.add(row)
+        db.flush()
+        build_id = row.id
+    queue.start()
+    try:
+        queue.enqueue()
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            with sessions()() as db:
+                if db.get(Build, build_id).status == "running":
+                    break
+            time.sleep(0.02)
+        else:
+            raise AssertionError("Queue worker stopped after a claim failure")
+    finally:
+        queue.stop()
+    assert executed == [build_id]
+    assert attempts[:2] == ["failed", "retried"]

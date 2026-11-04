@@ -206,10 +206,10 @@ export function BuildPage({
             dataSource={selected.logs.map((log, index) => ({ ...log, index }))}
             columns={[
               {
-                title: t.buildStartedAt,
+                title: t.buildLogTime,
                 render: (_, row) => displayTime(row.timestamp),
               },
-              { title: "Stage", dataIndex: "stage" },
+              { title: t.buildStage, dataIndex: "stage" },
               {
                 title: t.buildLogs,
                 render: (_, row) => (

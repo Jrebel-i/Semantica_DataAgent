@@ -59,19 +59,20 @@ test("shows queue state, logs, stats and triggers both build types", async () =>
     "fetch",
     vi.fn(async (url: string, options?: RequestInit) => {
       if (url === "/api/v1/builds" && options?.method === "POST") {
-        requests.push(
-          JSON.parse(String(options.body)) as Record<string, unknown>,
-        );
+        const body = JSON.parse(String(options.body)) as {
+          build_type: "full" | "incremental";
+        };
+        requests.push(body as unknown as Record<string, unknown>);
         const created = {
           ...builds[0],
-          id: 2,
-          build_type: "incremental",
+          id: builds.length + 1,
+          build_type: body.build_type,
           logs: [
             {
               timestamp: "2026-01-01T00:00:01+00:00",
               stage: "queue",
               level: "info",
-              message: "incremental build queued",
+              message: `${body.build_type} build queued`,
             },
           ],
         };
@@ -85,10 +86,19 @@ test("shows queue state, logs, stats and triggers both build types", async () =>
   expect((await screen.findAllByText("排队中")).length).toBeGreaterThan(0);
   expect(await screen.findByText("full build queued")).toBeTruthy();
   expect(await screen.findByText("新增文件")).toBeTruthy();
+  expect(await screen.findByText("阶段")).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "增量构建" }));
   await waitFor(() =>
     expect(requests).toEqual([{ build_type: "incremental" }]),
   );
   expect(await screen.findByText("incremental build queued")).toBeTruthy();
   expect(screen.getByText("构建已加入队列")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "全量构建" }));
+  await waitFor(() =>
+    expect(requests).toEqual([
+      { build_type: "incremental" },
+      { build_type: "full" },
+    ]),
+  );
+  expect(await screen.findByText("full build queued")).toBeTruthy();
 });

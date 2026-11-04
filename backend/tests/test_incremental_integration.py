@@ -349,6 +349,19 @@ def test_incremental_build_preserves_other_documents_and_removes_deleted(
                 == empty_build["counts"]["deleted"]
                 == 0
             )
+            assert all(
+                empty_build["counts"][kind] == 0
+                for kind in (
+                    "table",
+                    "field",
+                    "task",
+                    "lineage",
+                    "dimension_value",
+                    "document",
+                    "chunk",
+                    "category",
+                )
+            )
             assert document_state(a) == before_noop
             categories = client.get("/api/v1/categories").json()
             assert sorted(item["name"] for item in categories) == [
