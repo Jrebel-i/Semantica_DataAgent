@@ -1,82 +1,138 @@
 [
   {
     "name": "load_orders",
-    "sql": "SELECT * FROM staging_orders"
+    "sql": "CREATE TEMPORARY VIEW v AS SELECT * FROM staging.orders; INSERT OVERWRITE TABLE shop.orders PARTITION (dt='2025-01-01') WITH c AS (SELECT * FROM v) SELECT * FROM c",
+    "type": "hive",
+    "description": "Load shop.orders"
   },
   {
     "name": "load_order_items",
-    "sql": "SELECT * FROM staging_order_items"
+    "sql": "INSERT INTO shop.order_items SELECT * FROM staging.order_items",
+    "type": "spark",
+    "description": "Load shop.order_items"
   },
   {
     "name": "load_customers",
-    "sql": "SELECT * FROM staging_customers"
+    "sql": "INSERT INTO shop.customers SELECT * FROM staging.customers",
+    "type": "doris",
+    "description": "Load shop.customers"
   },
   {
     "name": "load_products",
-    "sql": "SELECT * FROM staging_products"
+    "sql": "INSERT INTO shop.products SELECT * FROM staging.products",
+    "type": "hive",
+    "description": "Load shop.products"
   },
   {
     "name": "load_payments",
-    "sql": "SELECT * FROM staging_payments"
+    "sql": "INSERT INTO shop.payments SELECT * FROM staging.payments",
+    "type": "spark",
+    "description": "Load shop.payments"
   },
   {
     "name": "load_refunds",
-    "sql": "SELECT * FROM staging_refunds"
+    "sql": "INSERT INTO shop.refunds SELECT * FROM staging.refunds",
+    "type": "doris",
+    "description": "Load shop.refunds"
   },
   {
     "name": "load_shipments",
-    "sql": "SELECT * FROM staging_shipments"
+    "sql": "INSERT INTO shop.shipments SELECT * FROM staging.shipments",
+    "type": "hive",
+    "description": "Load shop.shipments"
   },
   {
     "name": "load_carts",
-    "sql": "SELECT * FROM staging_carts"
+    "sql": "INSERT INTO shop.carts SELECT * FROM staging.carts",
+    "type": "spark",
+    "description": "Load shop.carts"
   },
   {
     "name": "load_visits",
-    "sql": "SELECT * FROM staging_visits"
+    "sql": "INSERT INTO shop.visits SELECT * FROM staging.visits",
+    "type": "doris",
+    "description": "Load shop.visits"
   },
   {
     "name": "load_coupons",
-    "sql": "SELECT * FROM staging_coupons"
+    "sql": "INSERT INTO shop.coupons SELECT * FROM staging.coupons",
+    "type": "hive",
+    "description": "Load shop.coupons"
   },
   {
     "name": "load_promotions",
-    "sql": "SELECT * FROM staging_promotions"
+    "sql": "INSERT INTO shop.promotions SELECT * FROM staging.promotions",
+    "type": "spark",
+    "description": "Load shop.promotions"
   },
   {
     "name": "load_inventory",
-    "sql": "SELECT * FROM staging_inventory"
+    "sql": "INSERT INTO shop.inventory SELECT * FROM staging.inventory",
+    "type": "doris",
+    "description": "Load shop.inventory"
   },
   {
     "name": "load_suppliers",
-    "sql": "SELECT * FROM staging_suppliers"
+    "sql": "INSERT INTO shop.suppliers SELECT * FROM staging.suppliers",
+    "type": "hive",
+    "description": "Load shop.suppliers"
   },
   {
     "name": "load_reviews",
-    "sql": "SELECT * FROM staging_reviews"
+    "sql": "INSERT INTO shop.reviews SELECT * FROM staging.reviews",
+    "type": "spark",
+    "description": "Load shop.reviews"
   },
   {
     "name": "load_categories",
-    "sql": "SELECT * FROM staging_categories"
+    "sql": "INSERT INTO shop.categories SELECT * FROM staging.categories",
+    "type": "doris",
+    "description": "Load shop.categories"
   },
   {
     "name": "load_regions",
-    "sql": "SELECT * FROM staging_regions"
+    "sql": "INSERT INTO shop.regions SELECT * FROM staging.regions",
+    "type": "hive",
+    "description": "Load shop.regions"
   },
   {
     "name": "load_channels",
-    "sql": "SELECT * FROM staging_channels"
+    "sql": "INSERT INTO shop.channels SELECT * FROM staging.channels",
+    "type": "spark",
+    "description": "Load shop.channels"
   },
   {
     "name": "load_daily_sales",
-    "sql": "SELECT * FROM staging_daily_sales"
+    "sql": "INSERT INTO shop.daily_sales SELECT * FROM shop.orders",
+    "type": "doris",
+    "description": "Load shop.daily_sales"
   },
   {
     "name": "load_customer_segments",
-    "sql": "SELECT * FROM staging_customer_segments"
+    "sql": "INSERT INTO shop.customer_segments SELECT * FROM staging.customer_segments",
+    "type": "hive",
+    "description": "Load shop.customer_segments"
   },
   {
     "name": "load_returns",
-    "sql": "SELECT * FROM staging_returns"
+    "sql": "INSERT INTO shop.returns SELECT * FROM staging.returns",
+    "type": "spark",
+    "description": "Load shop.returns"
+  },
+  {
+    "name": "bad_sql",
+    "type": "hive",
+    "sql": "INSERT INTO shop.orders SELECT FROM"
+  },
+  {
+    "name": "external_load",
+    "type": "external",
+    "sql": "external command"
+  },
+  {
+    "name": "audit_only",
+    "type": "spark",
+    "description": "Audit orders",
+    "sql": "SELECT * FROM shop.orders"
   }
 ]

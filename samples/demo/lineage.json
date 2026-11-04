@@ -3,119 +3,153 @@
     "upstream": "staging.orders",
     "downstream": "shop.orders",
     "evidence": "declared",
-    "parse_status": "unsupported"
+    "parse_status": "unsupported",
+    "task_id": "load_orders"
   },
   {
     "upstream": "staging.order_items",
     "downstream": "shop.order_items",
     "evidence": "declared",
-    "parse_status": "unsupported"
+    "parse_status": "unsupported",
+    "task_id": "load_order_items"
   },
   {
     "upstream": "staging.customers",
     "downstream": "shop.customers",
     "evidence": "declared",
-    "parse_status": "unsupported"
+    "parse_status": "unsupported",
+    "task_id": "load_customers"
   },
   {
     "upstream": "staging.products",
     "downstream": "shop.products",
     "evidence": "declared",
-    "parse_status": "unsupported"
+    "parse_status": "unsupported",
+    "task_id": "load_products"
   },
   {
     "upstream": "staging.payments",
     "downstream": "shop.payments",
     "evidence": "declared",
-    "parse_status": "unsupported"
+    "parse_status": "unsupported",
+    "task_id": "load_payments"
   },
   {
     "upstream": "staging.refunds",
     "downstream": "shop.refunds",
     "evidence": "declared",
-    "parse_status": "unsupported"
+    "parse_status": "unsupported",
+    "task_id": "load_refunds"
   },
   {
     "upstream": "staging.shipments",
     "downstream": "shop.shipments",
     "evidence": "declared",
-    "parse_status": "unsupported"
+    "parse_status": "unsupported",
+    "task_id": "load_shipments"
   },
   {
     "upstream": "staging.carts",
     "downstream": "shop.carts",
     "evidence": "declared",
-    "parse_status": "unsupported"
+    "parse_status": "unsupported",
+    "task_id": "load_carts"
   },
   {
     "upstream": "staging.visits",
     "downstream": "shop.visits",
     "evidence": "declared",
-    "parse_status": "unsupported"
+    "parse_status": "unsupported",
+    "task_id": "load_visits"
   },
   {
     "upstream": "staging.coupons",
     "downstream": "shop.coupons",
     "evidence": "declared",
-    "parse_status": "unsupported"
+    "parse_status": "unsupported",
+    "task_id": "load_coupons"
   },
   {
     "upstream": "staging.promotions",
     "downstream": "shop.promotions",
     "evidence": "declared",
-    "parse_status": "unsupported"
+    "parse_status": "unsupported",
+    "task_id": "load_promotions"
   },
   {
     "upstream": "staging.inventory",
     "downstream": "shop.inventory",
     "evidence": "declared",
-    "parse_status": "unsupported"
+    "parse_status": "unsupported",
+    "task_id": "load_inventory"
   },
   {
     "upstream": "staging.suppliers",
     "downstream": "shop.suppliers",
     "evidence": "declared",
-    "parse_status": "unsupported"
+    "parse_status": "unsupported",
+    "task_id": "load_suppliers"
   },
   {
     "upstream": "staging.reviews",
     "downstream": "shop.reviews",
     "evidence": "declared",
-    "parse_status": "unsupported"
+    "parse_status": "unsupported",
+    "task_id": "load_reviews"
   },
   {
     "upstream": "staging.categories",
     "downstream": "shop.categories",
     "evidence": "declared",
-    "parse_status": "unsupported"
+    "parse_status": "unsupported",
+    "task_id": "load_categories"
   },
   {
     "upstream": "staging.regions",
     "downstream": "shop.regions",
     "evidence": "declared",
-    "parse_status": "unsupported"
+    "parse_status": "unsupported",
+    "task_id": "load_regions"
   },
   {
     "upstream": "staging.channels",
     "downstream": "shop.channels",
     "evidence": "declared",
-    "parse_status": "unsupported"
+    "parse_status": "unsupported",
+    "task_id": "load_channels"
   },
   {
     "upstream": "staging.daily_sales",
     "downstream": "shop.daily_sales",
     "evidence": "declared",
-    "parse_status": "unsupported"
+    "parse_status": "unsupported",
+    "task_id": "load_daily_sales"
   },
   {
     "upstream": "staging.customer_segments",
     "downstream": "shop.customer_segments",
     "evidence": "declared",
-    "parse_status": "unsupported"
+    "parse_status": "unsupported",
+    "task_id": "load_customer_segments"
   },
   {
     "upstream": "staging.returns",
     "downstream": "shop.returns",
+    "evidence": "declared",
+    "parse_status": "unsupported",
+    "task_id": "load_returns"
+  },
+  {
+    "upstream": "staging.orders",
+    "downstream": "shop.orders",
+    "task_id": "bad_sql",
+    "evidence": "declared",
+    "parse_status": "unsupported"
+  },
+  {
+    "upstream": "staging.orders",
+    "downstream": "shop.orders",
+    "task_id": "external_load",
     "evidence": "declared",
     "parse_status": "unsupported"
   }

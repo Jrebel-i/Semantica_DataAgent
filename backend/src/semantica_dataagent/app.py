@@ -309,6 +309,7 @@ class BuildView(BaseModel):
     finished_at: str | None
     counts: dict[str, int]
     error: str | None
+    parse_failures: list[dict[str, str]]
 
 
 def build_view(row: Build) -> BuildView:
@@ -319,6 +320,7 @@ def build_view(row: Build) -> BuildView:
         finished_at=row.finished_at,
         counts=json.loads(row.counts),
         error=row.error,
+        parse_failures=json.loads(row.parse_failures or "[]"),
     )
 
 
@@ -358,8 +360,11 @@ def build_detail(build_id: int, _: Annotated[str, Depends(current_user)]):
 from .dimension_api import lookup_dim_values
 from .table_api import describe_tables, search_knowledge
 from .table_api import router as table_router
+from .task_api import get_lineage, read_task_sql
+from .task_api import router as task_router
 
 app.include_router(table_router)
+app.include_router(task_router)
 
 from .document_api import list_categories, read_category_index, read_document
 from .document_api import router as document_router
@@ -381,6 +386,8 @@ def create_mcp():
     server.tool()(list_categories)
     server.tool()(read_category_index)
     server.tool()(read_document)
+    server.tool()(get_lineage)
+    server.tool()(read_task_sql)
     for tool in server._tool_manager.list_tools():
         tool.parameters["additionalProperties"] = False
     server._mcp_server.call_tool(validate_input=True)(server.call_tool)

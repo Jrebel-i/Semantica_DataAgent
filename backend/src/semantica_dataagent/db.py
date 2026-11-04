@@ -56,6 +56,7 @@ class Build(Base):
     finished_at: Mapped[str | None]
     counts: Mapped[str]
     error: Mapped[str | None]
+    parse_failures: Mapped[str] = mapped_column(default="[]", server_default="[]")
 
 
 class PluginConfig(Base):

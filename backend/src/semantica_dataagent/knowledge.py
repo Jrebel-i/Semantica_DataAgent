@@ -183,6 +183,7 @@ def build_storage(values):
 
 def run_build(build_id):
     status, counts, error = "failed", {}, None
+    failures = []
     try:
         values = settings()
         records = []
@@ -201,6 +202,7 @@ def run_build(build_id):
             for stage in STAGES:
                 result = stage(records, values["knowledge_generation"], storage)
                 counts.update(result.counts)
+                failures.extend(result.failures)
                 if result.errors:
                     raise ValueError("; ".join(result.errors))
         read_graph(values)
@@ -214,6 +216,7 @@ def run_build(build_id):
             build.status = status
             build.counts = json.dumps(counts)
             build.error = error
+            build.parse_failures = json.dumps(failures, ensure_ascii=False)
             build.finished_at = datetime.now(UTC).isoformat()
 
 
@@ -250,12 +253,13 @@ def describe(names=None, database=None, search=None):
 def search(query, scope, top_k, category=None):
     values = settings()
     vector = np.array(embed(values, [query])[0], dtype=np.float32)
+    candidate_limit = 100 if scope == "tasks" else top_k
 
     def exact():
         if scope == "docs":
             return []
         store = read_graph(values)
-        label = "SDATable" if scope == "tables" else "SDAField"
+        label = {"tables": "SDATable", "fields": "SDAField", "tasks": "SDATask"}[scope]
         return [
             r["item"]
             for r in execute(
@@ -264,7 +268,7 @@ def search(query, scope, top_k, category=None):
                 {
                     "generation": values["knowledge_generation"],
                     "query": query,
-                    "limit": top_k,
+                    "limit": candidate_limit,
                 },
             )
         ]
@@ -274,7 +278,7 @@ def search(query, scope, top_k, category=None):
         hits = client.search(
             collection_name=collection_name(values),
             data=[vector.tolist()],
-            limit=top_k,
+            limit=candidate_limit,
             filter=f'metadata["scope"] == "{scope}" and metadata["generation"] == "{values["knowledge_generation"]}"'
             + (
                 f' and metadata["category"] == {json.dumps(category, ensure_ascii=False)}'
@@ -290,4 +294,8 @@ def search(query, scope, top_k, category=None):
         a, b = pool.submit(exact), pool.submit(semantic)
         merged = a.result() + b.result()
     unique = {item["ref"]: item for item in reversed(merged)}
-    return list(reversed(list(unique.values())))[:top_k]
+    results = list(reversed(list(unique.values())))
+    if scope == "tasks":
+        # Keep matching tasks with outputs ahead of output-less tasks.
+        results.sort(key=lambda item: not item.get("has_output", False))
+    return results[:top_k]

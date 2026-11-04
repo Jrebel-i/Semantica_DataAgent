@@ -13,6 +13,16 @@
     },
     "type": {
       "type": "string"
+    },
+    "description": {
+      "type": "string"
+    },
+    "dialect": {
+      "enum": [
+        "hive",
+        "spark",
+        "doris"
+      ]
     }
   },
   "required": [

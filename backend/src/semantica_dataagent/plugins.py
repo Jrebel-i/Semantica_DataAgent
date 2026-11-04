@@ -22,6 +22,7 @@ class ParseResult:
     writes: list[str]
     status: Literal["success", "failed", "unsupported"]
     reason: str | None = None
+    edges: list[tuple[str, str]] | None = None
 
 
 class TaskParser(Protocol):
@@ -56,7 +57,11 @@ def configured():
             plugin,
             *saved.get(
                 (category, plugin.id),
-                (category == "source" and plugin.id in {"canonical", "markdown"}, {}),
+                (
+                    (category == "source" and plugin.id in {"canonical", "markdown"})
+                    or (category == "parser" and plugin.id == "sql"),
+                    {},
+                ),
             ),
         )
         for (category, _), plugin in plugins.items()

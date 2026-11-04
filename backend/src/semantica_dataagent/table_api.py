@@ -51,7 +51,7 @@ def describe_tables(names: list[str]) -> list[dict]:
 
 def search_knowledge(
     query: str,
-    scope: Literal["tables", "fields", "docs"],
+    scope: Literal["tables", "fields", "docs", "tasks"],
     top_k: int = 5,
     category: str | None = None,
 ) -> list[dict]:

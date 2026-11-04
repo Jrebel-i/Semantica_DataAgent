@@ -177,6 +177,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/table-lineage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Table Lineage */
+        get: operations["table_lineage_api_v1_table_lineage_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/tables": {
         parameters: {
             query?: never;
@@ -262,6 +279,10 @@ export interface components {
             finished_at: string | null;
             /** Id */
             id: number;
+            /** Parse Failures */
+            parse_failures: {
+                [key: string]: string;
+            }[];
             /** Started At */
             started_at: string;
             /** Status */
@@ -310,6 +331,21 @@ export interface components {
             ref: string;
             /** Start Line */
             start_line: number;
+        };
+        /** EdgeView */
+        EdgeView: {
+            /** Downstream */
+            downstream: string;
+            /** Evidence */
+            evidence: string;
+            /** Parse Status */
+            parse_status: string;
+            /** Ref */
+            ref: string;
+            /** Task Id */
+            task_id: string;
+            /** Upstream */
+            upstream: string;
         };
         /** FieldView */
         FieldView: {
@@ -403,6 +439,15 @@ export interface components {
              */
             status: "up" | "down" | "not_configured";
         };
+        /** TableLineageView */
+        TableLineageView: {
+            /** Downstream */
+            downstream: components["schemas"]["EdgeView"][];
+            /** Tasks */
+            tasks: components["schemas"]["TaskView"][];
+            /** Upstream */
+            upstream: components["schemas"]["EdgeView"][];
+        };
         /** TableView */
         TableView: {
             /** Comment */
@@ -413,6 +458,13 @@ export interface components {
             documents: components["schemas"]["DocumentLink"][];
             /** Fields */
             fields: components["schemas"]["FieldView"][];
+            /** Name */
+            name: string;
+            /** Ref */
+            ref: string;
+        };
+        /** TaskView */
+        TaskView: {
             /** Name */
             name: string;
             /** Ref */
@@ -823,6 +875,37 @@ export interface operations {
                     "application/json": {
                         [key: string]: string | null;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    table_lineage_api_v1_table_lineage_get: {
+        parameters: {
+            query: {
+                table: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TableLineageView"];
                 };
             };
             /** @description Validation Error */
