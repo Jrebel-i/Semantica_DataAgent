@@ -4,6 +4,41 @@
  */
 
 export interface paths {
+    "/api/v1/builds": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Builds */
+        get: operations["builds_api_v1_builds_get"];
+        put?: never;
+        /** Start Build */
+        post: operations["start_build_api_v1_builds_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/builds/{build_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Build Detail */
+        get: operations["build_detail_api_v1_builds__build_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/me": {
         parameters: {
             query?: never;
@@ -32,6 +67,23 @@ export interface paths {
         get: operations["get_settings_api_v1_settings_get"];
         /** Put Settings */
         put: operations["put_settings_api_v1_settings_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/tables": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Tables */
+        get: operations["tables_api_v1_tables_get"];
+        put?: never;
         post?: never;
         delete?: never;
         options?: never;
@@ -95,6 +147,34 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** BuildView */
+        BuildView: {
+            /** Counts */
+            counts: {
+                [key: string]: number;
+            };
+            /** Error */
+            error: string | null;
+            /** Finished At */
+            finished_at: string | null;
+            /** Id */
+            id: number;
+            /** Started At */
+            started_at: string;
+            /** Status */
+            status: string;
+        };
+        /** FieldView */
+        FieldView: {
+            /** Comment */
+            comment: string;
+            /** Name */
+            name: string;
+            /** Partition */
+            partition: boolean;
+            /** Type */
+            type: string;
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
@@ -116,6 +196,19 @@ export interface components {
              * @enum {string}
              */
             status: "up" | "down" | "not_configured";
+        };
+        /** TableView */
+        TableView: {
+            /** Comment */
+            comment: string;
+            /** Database */
+            database: string;
+            /** Fields */
+            fields: components["schemas"]["FieldView"][];
+            /** Name */
+            name: string;
+            /** Ref */
+            ref: string;
         };
         /** TokenCreate */
         TokenCreate: {
@@ -193,6 +286,77 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    builds_api_v1_builds_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BuildView"][];
+                };
+            };
+        };
+    };
+    start_build_api_v1_builds_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BuildView"];
+                };
+            };
+        };
+    };
+    build_detail_api_v1_builds__build_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                build_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BuildView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     me_api_v1_me_get: {
         parameters: {
             query?: never;
@@ -259,6 +423,38 @@ export interface operations {
                     "application/json": {
                         [key: string]: string | null;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    tables_api_v1_tables_get: {
+        parameters: {
+            query?: {
+                database?: string | null;
+                search?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TableView"][];
                 };
             };
             /** @description Validation Error */

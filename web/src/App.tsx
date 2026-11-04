@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Alert, Space, Typography } from "antd";
 import { getMessages, type Language } from "./i18n";
+import { KnowledgePage } from "./KnowledgePage";
 import { LanguageSwitcher } from "./LanguageSwitcher";
 import { Login } from "./Login";
 import { StatusPage, type Health } from "./StatusPage";
@@ -88,6 +89,7 @@ export function App() {
           <nav aria-label={t.navigation}>
             {[
               { path: "/", label: t.statusPage },
+              { path: "/knowledge", label: t.knowledge },
               ...(role === "admin"
                 ? [{ path: "/tokens", label: t.tokens }]
                 : []),
@@ -112,6 +114,8 @@ export function App() {
             ) : (
               <Alert title={t.forbidden} type="warning" />
             )
+          ) : path === "/knowledge" ? (
+            <KnowledgePage token={token} messages={t} />
           ) : (
             <StatusPage
               messages={t}

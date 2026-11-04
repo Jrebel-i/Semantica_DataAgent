@@ -13,6 +13,8 @@ dependencies = [
     "httpx>=0.28",
     "jsonschema>=4",
     "openpyxl>=3",
+    "semantica[graph-neo4j,vectorstore-milvus]==0.7.0",
+    "mcp>=1,<2",
 ]
 [project.scripts]
 semantica-dataagent = "semantica_dataagent.cli:main"

@@ -46,3 +46,13 @@ def sessions():
 
 def digest(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
+
+
+class Build(Base):
+    __tablename__ = "builds"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    status: Mapped[str]
+    started_at: Mapped[str]
+    finished_at: Mapped[str | None]
+    counts: Mapped[str]
+    error: Mapped[str | None]

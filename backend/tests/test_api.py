@@ -26,6 +26,14 @@ def test_authentication(client):
         assert c.get(path, headers={"Authorization": "Bearer wrong"}).status_code == 401
     assert c.put("/api/v1/settings", json={"values": {}}).status_code == 401
     assert (
+        c.put(
+            "/api/v1/settings",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"values": {"knowledge_generation": "bad-name"}},
+        ).status_code
+        == 422
+    )
+    assert (
         c.get("/api/v1/me", headers={"Authorization": "Bearer wrong"}).status_code
         == 401
     )
@@ -158,6 +166,7 @@ def test_user_cannot_read_or_write_settings(client):
     headers = {"Authorization": "Bearer user-token"}
     assert c.get("/api/v1/me", headers=headers).json()["role"] == "user"
     assert c.get("/api/v1/settings", headers=headers).status_code == 403
+    assert c.post("/api/v1/builds", headers=headers).status_code == 403
     assert (
         c.put("/api/v1/settings", headers=headers, json={"values": {}}).status_code
         == 403
@@ -286,3 +295,29 @@ def test_sessions_reuse_engine_and_follow_database_path(tmp_path, monkeypatch):
     with sessions()() as db:
         assert db.get(Token, "first") is not None
     assert sessions().kw["bind"] is first_factory.kw["bind"]
+
+
+def test_build_requires_admin_and_reports_failure_when_unconfigured(client):
+    import time
+
+    c, token = client
+    assert c.post("/api/v1/builds").status_code == 401
+    for path in ("/mcp", "/mcp/"):
+        for authorization in (None, "Basic bad", "Bearer bad"):
+            headers = {"Authorization": authorization} if authorization else {}
+            assert (
+                c.post(path, headers=headers, follow_redirects=False).status_code == 401
+            )
+    headers = {"Authorization": f"Bearer {token}"}
+    response = c.post("/api/v1/builds", headers=headers)
+    assert response.status_code == 202
+    build_id = response.json()["id"]
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        build = c.get(f"/api/v1/builds/{build_id}", headers=headers).json()
+        if build["status"] != "running":
+            break
+        time.sleep(0.02)
+    assert build["status"] == "failed"
+    assert build["error"]
+    assert c.get("/api/v1/builds", headers=headers).json()[0]["id"] == build_id

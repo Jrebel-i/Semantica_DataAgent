@@ -103,7 +103,7 @@ def test_demo_covers_all_six_entities():
         "field": 60,
         "task": 20,
         "lineage": 20,
-        "dimension_value": 2,
+        "dimension_value": 4,
         "document": 10,
     }
     assert len(result.hashes) == 6
