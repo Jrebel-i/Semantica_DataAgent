@@ -1,0 +1,83 @@
+"""Index dimension values; row_id associates code and name cells in the same row."""
+
+from collections import defaultdict
+from urllib.parse import quote
+
+from .stage_contract import StageResult
+
+
+def prepare(records, limit):
+    groups = defaultdict(list)
+    rows = defaultdict(dict)
+    for record in records:
+        if record.kind != "dimension_value":
+            continue
+        item = record.data
+        key = (item["database"], item["table"], item["field"])
+        groups[key].append(item["value"])
+        if item.get("row_id") is not None:
+            rows[(item["database"], item["table"], item["row_id"])][item["field"]] = (
+                item["value"]
+            )
+    aliases = defaultdict(set)
+    for (database, table, _), cells in rows.items():
+        for field, value in cells.items():
+            # Only explicit same-row *_type / *_code / *_id and *_name pairs.
+            for suffix in ("_type", "_code", "_id"):
+                if field.endswith(suffix):
+                    name = cells.get(field[: -len(suffix)] + "_name")
+                    if name:
+                        aliases[(database, table, field, value)].add(name.strip())
+    values, statuses = [], []
+    for (database, table, field), raw in groups.items():
+        distinct = sorted(set(raw))
+        normalized = {value.strip() for value in distinct}
+        too_many = len(normalized) > limit
+        statuses.append(
+            {
+                "database": database,
+                "table": table,
+                "field": field,
+                "count": len(normalized),
+                "too_many": too_many,
+                "samples": distinct[:5],
+            }
+        )
+        if not too_many:
+            for value in distinct:
+                ref = "dimension_value:" + ".".join(
+                    quote(x, safe="").replace(".", "%2E")
+                    for x in (database, table, field, value)
+                )
+                values.append(
+                    {
+                        "database": database,
+                        "table": table,
+                        "field": field,
+                        "value": value,
+                        "normalized": value.strip(),
+                        "aliases": sorted(aliases[(database, table, field, value)]),
+                        "ref": ref,
+                    }
+                )
+    return values, statuses
+
+
+def write(records, generation, storage):
+    values, statuses = prepare(
+        records, int(storage._settings.get("dimension_value_limit", "1000"))
+    )
+    storage.execute(
+        "CREATE FULLTEXT INDEX sda_dimension_values IF NOT EXISTS FOR (n:SDADimensionValue) ON EACH [n.normalized, n.aliases] OPTIONS {indexConfig: {`fulltext.analyzer`: 'cjk'}}",
+        {},
+    )
+    storage.execute("CALL db.awaitIndex('sda_dimension_values', 120)", {})
+    storage.execute(
+        "UNWIND $rows AS row MATCH (f:SDAField {generation:$generation, database:row.database, table:row.table, name:row.field}) SET f.dimension_count = row.count, f.dimension_too_many = row.too_many, f.dimension_samples = row.samples",
+        {"rows": statuses, "generation": generation},
+    )
+    storage.execute(
+        "UNWIND $rows AS row MATCH (f:SDAField {generation:$generation, database:row.database, table:row.table, name:row.field}) CREATE (v:SDAEntity:SDADimensionValue) SET v = row, v.generation = $generation CREATE (f)-[:HAS_VALUE]->(v)",
+        {"rows": values, "generation": generation},
+    )
+    return StageResult(counts={"dimension_value": len(values)})

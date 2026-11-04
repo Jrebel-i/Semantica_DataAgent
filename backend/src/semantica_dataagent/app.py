@@ -63,6 +63,7 @@ KEYS = {
     "embedding_model",
     "source_directory",
     "knowledge_generation",
+    "dimension_value_limit",
 }
 SECRET = {"neo4j_password"}
 
@@ -190,6 +191,11 @@ def put_settings(
 ) -> dict[str, str | None]:
     if set(body.values) - KEYS:
         raise HTTPException(status_code=422, detail="Unknown setting")
+    limit = body.values.get("dimension_value_limit")
+    if limit and (
+        not limit.isascii() or not limit.isdigit() or not 1 <= int(limit) <= 1000000
+    ):
+        raise HTTPException(status_code=422, detail="Invalid dimension value limit")
     generation = body.values.get("knowledge_generation")
     if generation and not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,63}", generation):
         raise HTTPException(status_code=422, detail="Invalid generation")
@@ -349,6 +355,7 @@ def build_detail(build_id: int, _: Annotated[str, Depends(current_user)]):
         return build_view(row)
 
 
+from .dimension_api import lookup_dim_values
 from .table_api import describe_tables, search_knowledge
 from .table_api import router as table_router
 
@@ -365,6 +372,7 @@ def create_mcp():
     )
     server.tool()(describe_tables)
     server.tool()(search_knowledge)
+    server.tool()(lookup_dim_values)
     for tool in server._tool_manager.list_tools():
         tool.parameters["additionalProperties"] = False
     server._mcp_server.call_tool(validate_input=True)(server.call_tool)

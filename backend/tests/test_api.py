@@ -557,3 +557,29 @@ def test_task_parser_dispatch_uses_enabled_matching_parser(client, monkeypatch):
         ).status
         == "unsupported"
     )
+
+
+def test_dimension_limit_setting(client):
+    c, token = client
+    headers = {"Authorization": f"Bearer {token}"}
+    for value in ("0", "-1", "1.5", "1000001"):
+        assert (
+            c.put(
+                "/api/v1/settings",
+                headers=headers,
+                json={"values": {"dimension_value_limit": value}},
+            ).status_code
+            == 422
+        )
+    assert (
+        c.put(
+            "/api/v1/settings",
+            headers=headers,
+            json={"values": {"dimension_value_limit": "2"}},
+        ).json()["dimension_value_limit"]
+        == "2"
+    )
+    assert (
+        c.get("/api/v1/settings", headers=headers).json()["dimension_value_limit"]
+        == "2"
+    )
