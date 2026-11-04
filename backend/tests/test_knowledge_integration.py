@@ -383,21 +383,31 @@ def test_build_and_retrieve_through_http(tmp_path, monkeypatch):
                         "validate_sql",
                         {"sql": "SELECT o.id FROM shop.orders o", "dialect": dialect},
                     )
-                    assert checked.structuredContent["status"] == "pass", checked
+                    assert json.loads(checked.content[0].text)["status"] == "pass", (
+                        checked
+                    )
                 checked = await session.call_tool(
                     "validate_sql", {"sql": "SELECT FROM", "dialect": "hive"}
                 )
-                assert checked.structuredContent["syntax"]["status"] == "error"
+                assert (
+                    json.loads(checked.content[0].text)["syntax"]["status"] == "error"
+                )
                 checked = await session.call_tool(
                     "validate_sql",
                     {"sql": "SELECT missing FROM shop.orders", "dialect": "hive"},
                 )
-                assert checked.structuredContent["fields"][0]["status"] == "error"
+                assert (
+                    json.loads(checked.content[0].text)["fields"][0]["status"]
+                    == "error"
+                )
                 checked = await session.call_tool(
                     "validate_sql",
                     {"sql": "SELECT id FROM shop.ordrs", "dialect": "hive"},
                 )
-                assert checked.structuredContent["tables"][0]["status"] == "error"
+                assert (
+                    json.loads(checked.content[0].text)["tables"][0]["status"]
+                    == "error"
+                )
                 checked = await session.call_tool(
                     "validate_sql",
                     {
@@ -405,15 +415,18 @@ def test_build_and_retrieve_through_http(tmp_path, monkeypatch):
                         "dialect": "hive",
                     },
                 )
-                assert checked.structuredContent["joins"][0]["status"] == "unsupported"
+                assert (
+                    json.loads(checked.content[0].text)["joins"][0]["status"]
+                    == "unsupported"
+                )
                 path = await session.call_tool(
                     "find_join_path", {"tables": ["shop.orders", "shop.customers"]}
                 )
-                assert path.structuredContent["status"] == "found"
+                assert json.loads(path.content[0].text)["status"] == "found"
                 path = await session.call_tool(
                     "find_join_path", {"tables": ["shop.orders", "shop.isolated"]}
                 )
-                assert path.structuredContent["status"] == "no_path"
+                assert json.loads(path.content[0].text)["status"] == "no_path"
                 calls.update(neo4j=0, milvus=0)
                 start = time.monotonic()
                 exact = await session.call_tool(
