@@ -24,7 +24,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 DATA_ROOT = REPO_ROOT / "data"
 DEFAULT_OUTPUT = DATA_ROOT / "dtb-sample"
 GENERATOR = "scripts/dtb_sample.py"
-MAX_VECTORS = 7500
+MAX_VECTORS = 8500
 
 
 def seed_tables(dictionary_dir):

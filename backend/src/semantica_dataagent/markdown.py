@@ -118,7 +118,59 @@ def chunks(content, limit=900):
             pending.append(line)
         i += 1
     flush(len(lines))
+    return _split_oversized(result, limit)
+
+
+def _split_oversized(parts, limit):
+    """Split chunks that still exceed the limit, keeping table headers."""
+    result = []
+    for part in parts:
+        content = part["content"]
+        if len(content) <= limit:
+            result.append(part)
+            continue
+        lines = content.splitlines()
+        prefix, body = [], lines
+        if (
+            len(lines) >= 3
+            and "|" in lines[0]
+            and re.match(r"^\s*\|?\s*:?-{3,}", lines[1])
+        ):
+            prefix, body = lines[:2], lines[2:]
+        prefix_text = "\n".join(prefix)
+        available = limit - len(prefix_text) - (1 if prefix else 0)
+        if available <= 0:
+            prefix, body = [], lines
+            prefix_text = ""
+            available = limit
+        pieces, current = [], []
+
+        for line in body:
+            if len(line) > available:
+                _flush_piece(pieces, current, prefix)
+                current = []
+                pieces.extend(
+                    "\n".join(prefix + [line[start : start + available]])
+                    if prefix
+                    else line[start : start + available]
+                    for start in range(0, len(line), available)
+                )
+                continue
+            candidate = current + [line]
+            text = "\n".join(prefix + candidate) if prefix else "\n".join(candidate)
+            if current and len(text) > limit:
+                _flush_piece(pieces, current, prefix)
+                current = [line]
+            else:
+                current = candidate
+        _flush_piece(pieces, current, prefix)
+        result.extend({**part, "content": text} for text in pieces)
     return result
+
+
+def _flush_piece(pieces, current, prefix):
+    if current:
+        pieces.append("\n".join(prefix + current) if prefix else "\n".join(current))
 
 
 def section_range(lines, section):
