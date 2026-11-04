@@ -1,6 +1,7 @@
 """Main seam against isolated test services; set all TEST_* values to enable."""
 
 import asyncio
+import json
 import os
 import socket
 import threading
@@ -302,6 +303,50 @@ def test_build_and_retrieve_through_http(tmp_path, monkeypatch):
                     {"table": "channels", "keyword": "安卓", "extra": 1},
                 )
                 assert bad_dim.isError
+                categories = await session.call_tool("list_categories", {})
+                assert {c["name"] for c in categories.structuredContent["result"]} == {
+                    "metrics",
+                    "operations",
+                    "unindexed",
+                }
+                index = await session.call_tool(
+                    "read_category_index", {"category": "unindexed"}
+                )
+                assert not index.isError, index.content
+                assert json.loads(index.content[0].text)["generated"]
+                document = await session.call_tool(
+                    "read_document",
+                    {
+                        "doc_id": "document:metrics/definitions/sales.md",
+                        "section": "退款处理",
+                    },
+                )
+                assert "部分退款" in json.loads(document.content[0].text)["content"]
+                assert json.loads(document.content[0].text)["start_line"] > 1
+                docs = await session.call_tool(
+                    "search_knowledge",
+                    {
+                        "query": "支付成功后退款金额如何计算",
+                        "scope": "docs",
+                        "category": "metrics",
+                        "top_k": 10,
+                    },
+                )
+                results = docs.structuredContent["result"]
+                assert any("退款" in d["content"] for d in results)
+                assert all(
+                    d["category"] == "metrics"
+                    and d["path"] != "index.md"
+                    and d["ref"].startswith("document:")
+                    for d in results
+                )
+                assert any(
+                    d["path"] == "dictionaries/shop.orders.md"
+                    for d in table["documents"]
+                )
+                assert (
+                    await session.call_tool("list_categories", {"extra": 1})
+                ).isError
                 calls.update(neo4j=0, milvus=0)
                 start = time.monotonic()
                 exact = await session.call_tool(

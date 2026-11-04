@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Alert, Button, Input, Space, Table, Typography } from "antd";
+import { DocumentsPage } from "./DocumentsPage";
 import type { paths } from "./api";
 import type { Messages } from "./i18n";
 import { DimensionStatus } from "./DimensionStatus";
@@ -43,6 +44,7 @@ export function KnowledgePage({
   }, [token, database, search]);
   return (
     <>
+      <DocumentsPage token={token} messages={messages} />
       {error && <Alert type="error" title={messages.error} />}
       <Space>
         <Input

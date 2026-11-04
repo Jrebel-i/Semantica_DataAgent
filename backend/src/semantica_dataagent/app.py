@@ -361,6 +361,11 @@ from .table_api import router as table_router
 
 app.include_router(table_router)
 
+from .document_api import list_categories, read_category_index, read_document
+from .document_api import router as document_router
+
+app.include_router(document_router)
+
 
 def create_mcp():
     server = FastMCP(
@@ -373,6 +378,9 @@ def create_mcp():
     server.tool()(describe_tables)
     server.tool()(search_knowledge)
     server.tool()(lookup_dim_values)
+    server.tool()(list_categories)
+    server.tool()(read_category_index)
+    server.tool()(read_document)
     for tool in server._tool_manager.list_tools():
         tool.parameters["additionalProperties"] = False
     server._mcp_server.call_tool(validate_input=True)(server.call_tool)

@@ -15,6 +15,9 @@
     },
     "content": {
       "type": "string"
+    },
+    "generated": {
+      "type": "boolean"
     }
   },
   "required": [

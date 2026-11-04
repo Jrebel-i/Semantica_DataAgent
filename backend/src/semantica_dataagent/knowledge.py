@@ -227,7 +227,9 @@ def describe(names=None, database=None, search=None):
               AND ($database IS NULL OR t.database = $database)
               AND ($search IS NULL OR toLower(t.name) CONTAINS toLower($search))
             OPTIONAL MATCH (t)-[:HAS_FIELD]->(f:SDAField {generation:$generation})
-            RETURN properties(t) AS table, collect(properties(f)) AS fields ORDER BY table.database,table.name""",
+            WITH t, collect(properties(f)) AS fields
+            OPTIONAL MATCH (t)-[:HAS_DOCUMENT]->(d:SDADocument {generation:$generation})
+            RETURN properties(t) AS table, fields, collect({ref:d.ref, path:d.path, category:d.category}) AS documents ORDER BY table.database,table.name""",
         {
             "generation": values["knowledge_generation"],
             "names": names,
@@ -235,14 +237,23 @@ def describe(names=None, database=None, search=None):
             "search": search,
         },
     )
-    return [{**r["table"], "fields": r["fields"]} for r in rows]
+    return [
+        {
+            **r["table"],
+            "fields": r["fields"],
+            "documents": [d for d in r["documents"] if d["ref"]],
+        }
+        for r in rows
+    ]
 
 
-def search(query, scope, top_k):
+def search(query, scope, top_k, category=None):
     values = settings()
     vector = np.array(embed(values, [query])[0], dtype=np.float32)
 
     def exact():
+        if scope == "docs":
+            return []
         store = read_graph(values)
         label = "SDATable" if scope == "tables" else "SDAField"
         return [
@@ -264,7 +275,12 @@ def search(query, scope, top_k):
             collection_name=collection_name(values),
             data=[vector.tolist()],
             limit=top_k,
-            filter=f'metadata["scope"] == "{scope}" and metadata["generation"] == "{values["knowledge_generation"]}"',
+            filter=f'metadata["scope"] == "{scope}" and metadata["generation"] == "{values["knowledge_generation"]}"'
+            + (
+                f' and metadata["category"] == {json.dumps(category, ensure_ascii=False)}'
+                if category is not None
+                else ""
+            ),
             output_fields=["metadata"],
             search_params={"metric_type": "COSINE"},
         )

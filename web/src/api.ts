@@ -39,6 +39,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/categories": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Categories Route */
+        get: operations["categories_route_api_v1_categories_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/category-index": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Index Route */
+        get: operations["index_route_api_v1_category_index_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/document": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Document Route */
+        get: operations["document_route_api_v1_document_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/filters": {
         parameters: {
             query?: never;
@@ -216,6 +267,50 @@ export interface components {
             /** Status */
             status: string;
         };
+        /** CategoryView */
+        CategoryView: {
+            /** Description */
+            description: string;
+            /** Documents */
+            documents: components["schemas"]["DocumentSummary"][];
+            /** Name */
+            name: string;
+            /** Ref */
+            ref: string;
+        };
+        /** DocumentLink */
+        DocumentLink: {
+            /** Category */
+            category: string;
+            /** Path */
+            path: string;
+            /** Ref */
+            ref: string;
+        };
+        /** DocumentSummary */
+        DocumentSummary: {
+            /** Path */
+            path: string;
+            /** Ref */
+            ref: string;
+        };
+        /** DocumentView */
+        DocumentView: {
+            /** Category */
+            category: string;
+            /** Content */
+            content: string;
+            /** End Line */
+            end_line: number;
+            /** Generated */
+            generated: boolean;
+            /** Path */
+            path: string;
+            /** Ref */
+            ref: string;
+            /** Start Line */
+            start_line: number;
+        };
         /** FieldView */
         FieldView: {
             /** Comment */
@@ -314,6 +409,8 @@ export interface components {
             comment: string;
             /** Database */
             database: string;
+            /** Documents */
+            documents: components["schemas"]["DocumentLink"][];
             /** Fields */
             fields: components["schemas"]["FieldView"][];
             /** Name */
@@ -455,6 +552,89 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BuildView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    categories_route_api_v1_categories_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CategoryView"][];
+                };
+            };
+        };
+    };
+    index_route_api_v1_category_index_get: {
+        parameters: {
+            query: {
+                category: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DocumentView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    document_route_api_v1_document_get: {
+        parameters: {
+            query: {
+                doc_id: string;
+                section?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DocumentView"];
                 };
             };
             /** @description Validation Error */

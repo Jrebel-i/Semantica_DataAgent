@@ -18,6 +18,7 @@ dependencies = [
 ]
 [project.entry-points."semantica_dataagent.source_adapters"]
 canonical = "semantica_dataagent.canonical:CanonicalAdapter"
+markdown = "semantica_dataagent.markdown:MarkdownAdapter"
 
 [project.scripts]
 semantica-dataagent = "semantica_dataagent.cli:main"

@@ -56,6 +56,121 @@
         "title": "BuildView",
         "type": "object"
       },
+      "CategoryView": {
+        "properties": {
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "documents": {
+            "items": {
+              "$ref": "#/components/schemas/DocumentSummary"
+            },
+            "title": "Documents",
+            "type": "array"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "ref": {
+            "title": "Ref",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ref",
+          "name",
+          "description",
+          "documents"
+        ],
+        "title": "CategoryView",
+        "type": "object"
+      },
+      "DocumentLink": {
+        "properties": {
+          "category": {
+            "title": "Category",
+            "type": "string"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          },
+          "ref": {
+            "title": "Ref",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ref",
+          "path",
+          "category"
+        ],
+        "title": "DocumentLink",
+        "type": "object"
+      },
+      "DocumentSummary": {
+        "properties": {
+          "path": {
+            "title": "Path",
+            "type": "string"
+          },
+          "ref": {
+            "title": "Ref",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ref",
+          "path"
+        ],
+        "title": "DocumentSummary",
+        "type": "object"
+      },
+      "DocumentView": {
+        "properties": {
+          "category": {
+            "title": "Category",
+            "type": "string"
+          },
+          "content": {
+            "title": "Content",
+            "type": "string"
+          },
+          "end_line": {
+            "title": "End Line",
+            "type": "integer"
+          },
+          "generated": {
+            "title": "Generated",
+            "type": "boolean"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          },
+          "ref": {
+            "title": "Ref",
+            "type": "string"
+          },
+          "start_line": {
+            "title": "Start Line",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "ref",
+          "category",
+          "path",
+          "content",
+          "start_line",
+          "end_line",
+          "generated"
+        ],
+        "title": "DocumentView",
+        "type": "object"
+      },
       "FieldView": {
         "properties": {
           "comment": {
@@ -291,6 +406,13 @@
             "title": "Database",
             "type": "string"
           },
+          "documents": {
+            "items": {
+              "$ref": "#/components/schemas/DocumentLink"
+            },
+            "title": "Documents",
+            "type": "array"
+          },
           "fields": {
             "items": {
               "$ref": "#/components/schemas/FieldView"
@@ -312,7 +434,8 @@
           "database",
           "comment",
           "ref",
-          "fields"
+          "fields",
+          "documents"
         ],
         "title": "TableView",
         "type": "object"
@@ -593,6 +716,137 @@
           }
         ],
         "summary": "Build Detail"
+      }
+    },
+    "/api/v1/categories": {
+      "get": {
+        "operationId": "categories_route_api_v1_categories_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/CategoryView"
+                  },
+                  "title": "Response Categories Route Api V1 Categories Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Categories Route"
+      }
+    },
+    "/api/v1/category-index": {
+      "get": {
+        "operationId": "index_route_api_v1_category_index_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "category",
+            "required": true,
+            "schema": {
+              "title": "Category",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Index Route"
+      }
+    },
+    "/api/v1/document": {
+      "get": {
+        "operationId": "document_route_api_v1_document_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "doc_id",
+            "required": true,
+            "schema": {
+              "title": "Doc Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "section",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Section"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Document Route"
       }
     },
     "/api/v1/filters": {
