@@ -119,7 +119,9 @@ def test_build_and_retrieve_through_http(tmp_path, monkeypatch):
             assert response.status_code == 202, response.text
             ident = response.json()["id"]
             try:
-                assert entered.wait(timeout=120)
+                assert entered.wait(timeout=120), c.get(
+                    f"/api/v1/builds/{ident}"
+                ).json()
                 assert c.post("/api/v1/builds").status_code == 409
             finally:
                 release.set()
@@ -131,6 +133,18 @@ def test_build_and_retrieve_through_http(tmp_path, monkeypatch):
                 time.sleep(0.2)
             assert build["status"] == "succeeded", build.get("error")
             assert build["counts"]["test_stage"] == 1
+            assert any(
+                f["task_id"] == "bad_sql" and f["reason"]
+                for f in build["parse_failures"]
+            )
+            lineage = c.get(
+                "/api/v1/table-lineage", params={"table": "shop.orders"}
+            ).json()
+            assert any(
+                e["upstream"] == "staging.orders" and e["evidence"] == "both"
+                for e in lineage["upstream"]
+            )
+            assert any(t["name"] == "load_orders" for t in lineage["tasks"])
             with GraphDatabase.driver(
                 os.environ["TEST_NEO4J_URI"],
                 auth=(os.environ["TEST_NEO4J_USER"], os.environ["TEST_NEO4J_PASSWORD"]),
@@ -347,6 +361,19 @@ def test_build_and_retrieve_through_http(tmp_path, monkeypatch):
                 assert (
                     await session.call_tool("list_categories", {"extra": 1})
                 ).isError
+                upstream = await session.call_tool(
+                    "get_lineage",
+                    {"table": "shop.orders", "direction": "up", "depth": 1},
+                )
+                assert "staging.orders" in str(upstream) and "both" in str(upstream)
+                sql = await session.call_tool(
+                    "read_task_sql", {"task_id": "load_orders"}
+                )
+                assert "INSERT OVERWRITE" in str(sql)
+                invalid = await session.call_tool(
+                    "get_lineage", {"table": "shop.orders", "depth": 4}
+                )
+                assert invalid.isError
                 calls.update(neo4j=0, milvus=0)
                 start = time.monotonic()
                 exact = await session.call_tool(

@@ -37,3 +37,4 @@ class StorageHandles:
 class StageResult:
     counts: dict[str, int] = field(default_factory=dict)
     errors: list[str] = field(default_factory=list)
+    failures: list[dict] = field(default_factory=list)

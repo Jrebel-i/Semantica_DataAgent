@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Alert, Button, Input, Space, Table, Typography } from "antd";
 import { DocumentsPage } from "./DocumentsPage";
 import type { paths } from "./api";
+import { TaskLineage } from "./TaskLineage";
 import type { Messages } from "./i18n";
 import { DimensionStatus } from "./DimensionStatus";
 
@@ -81,6 +82,11 @@ export function KnowledgePage({
           <Typography.Title level={3}>
             {selected.database}.{selected.name}
           </Typography.Title>
+          <TaskLineage
+            table={`${selected.database}.${selected.name}`}
+            token={token}
+            messages={messages}
+          />
           <Table
             rowKey="name"
             pagination={false}

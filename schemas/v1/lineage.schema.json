@@ -25,6 +25,10 @@
         "failed",
         "unsupported"
       ]
+    },
+    "task_id": {
+      "type": "string",
+      "minLength": 1
     }
   },
   "required": [

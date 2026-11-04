@@ -1,0 +1,61 @@
+import { useEffect, useState } from "react";
+import { Alert, List, Typography } from "antd";
+import type { components } from "./api";
+import type { Messages } from "./i18n";
+
+export function BuildsPage({
+  token,
+  messages,
+}: {
+  token: string;
+  messages: Messages;
+}) {
+  const [builds, setBuilds] = useState<components["schemas"]["BuildView"][]>(
+    [],
+  );
+  const [error, setError] = useState(false);
+  useEffect(() => {
+    const controller = new AbortController();
+    fetch("/api/v1/builds", {
+      headers: { Authorization: `Bearer ${token}` },
+      signal: controller.signal,
+    })
+      .then((r) => {
+        if (!r.ok) throw new Error();
+        return r.json() as Promise<components["schemas"]["BuildView"][]>;
+      })
+      .then(setBuilds)
+      .catch(() => {
+        if (!controller.signal.aborted) setError(true);
+      });
+    return () => controller.abort();
+  }, [token]);
+  return (
+    <>
+      {error && <Alert type="error" title={messages.error} />}
+      <List
+        dataSource={builds}
+        renderItem={(build) => (
+          <List.Item>
+            <div>
+              <Typography.Title level={4}>
+                #{build.id} {build.status}
+              </Typography.Title>
+              <div>
+                {build.started_at} {build.error}
+              </div>
+              <div>{messages.parseFailures}</div>
+              <ul>
+                {build.parse_failures.map((failure, index) => (
+                  <li key={index}>
+                    {failure.task_id}: {failure.reason}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </List.Item>
+        )}
+      />
+    </>
+  );
+}

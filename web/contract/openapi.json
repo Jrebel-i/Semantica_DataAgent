@@ -36,6 +36,16 @@
             "title": "Id",
             "type": "integer"
           },
+          "parse_failures": {
+            "items": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "title": "Parse Failures",
+            "type": "array"
+          },
           "started_at": {
             "title": "Started At",
             "type": "string"
@@ -51,7 +61,8 @@
           "started_at",
           "finished_at",
           "counts",
-          "error"
+          "error",
+          "parse_failures"
         ],
         "title": "BuildView",
         "type": "object"
@@ -169,6 +180,44 @@
           "generated"
         ],
         "title": "DocumentView",
+        "type": "object"
+      },
+      "EdgeView": {
+        "properties": {
+          "downstream": {
+            "title": "Downstream",
+            "type": "string"
+          },
+          "evidence": {
+            "title": "Evidence",
+            "type": "string"
+          },
+          "parse_status": {
+            "title": "Parse Status",
+            "type": "string"
+          },
+          "ref": {
+            "title": "Ref",
+            "type": "string"
+          },
+          "task_id": {
+            "title": "Task Id",
+            "type": "string"
+          },
+          "upstream": {
+            "title": "Upstream",
+            "type": "string"
+          }
+        },
+        "required": [
+          "upstream",
+          "downstream",
+          "evidence",
+          "parse_status",
+          "task_id",
+          "ref"
+        ],
+        "title": "EdgeView",
         "type": "object"
       },
       "FieldView": {
@@ -396,6 +445,38 @@
         "title": "Status",
         "type": "object"
       },
+      "TableLineageView": {
+        "properties": {
+          "downstream": {
+            "items": {
+              "$ref": "#/components/schemas/EdgeView"
+            },
+            "title": "Downstream",
+            "type": "array"
+          },
+          "tasks": {
+            "items": {
+              "$ref": "#/components/schemas/TaskView"
+            },
+            "title": "Tasks",
+            "type": "array"
+          },
+          "upstream": {
+            "items": {
+              "$ref": "#/components/schemas/EdgeView"
+            },
+            "title": "Upstream",
+            "type": "array"
+          }
+        },
+        "required": [
+          "upstream",
+          "downstream",
+          "tasks"
+        ],
+        "title": "TableLineageView",
+        "type": "object"
+      },
       "TableView": {
         "properties": {
           "comment": {
@@ -438,6 +519,24 @@
           "documents"
         ],
         "title": "TableView",
+        "type": "object"
+      },
+      "TaskView": {
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "ref": {
+            "title": "Ref",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "ref"
+        ],
+        "title": "TaskView",
         "type": "object"
       },
       "TokenCreate": {
@@ -1114,6 +1213,50 @@
           }
         ],
         "summary": "Put Settings"
+      }
+    },
+    "/api/v1/table-lineage": {
+      "get": {
+        "operationId": "table_lineage_api_v1_table_lineage_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "table",
+            "required": true,
+            "schema": {
+              "title": "Table",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TableLineageView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Table Lineage"
       }
     },
     "/api/v1/tables": {

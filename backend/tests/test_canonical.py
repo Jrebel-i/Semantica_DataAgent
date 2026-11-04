@@ -104,8 +104,8 @@ def test_demo_covers_all_six_entities():
     assert counts == {
         "table": 21,
         "field": 62,
-        "task": 20,
-        "lineage": 20,
+        "task": 23,
+        "lineage": 22,
         "dimension_value": 10,
         "document": 15,
     }
