@@ -13,6 +13,7 @@ from pathlib import Path
 import httpx
 import pytest
 import uvicorn
+from conftest import cleanup_test_generations
 from cryptography.fernet import Fernet
 from neo4j import GraphDatabase
 from pymilvus import MilvusClient
@@ -173,6 +174,9 @@ def test_build_and_retrieve_through_http(tmp_path, monkeypatch):
             queued_build = wait_build(queued_id)
             assert queued_build["status"] == "succeeded", queued_build.get("error")
             assert queued_build["id"] > build["id"]
+            from semantica_dataagent.knowledge import settings
+
+            generation = settings()["knowledge_generation"]
             assert build["counts"]["test_stage"] == 1
             assert any(
                 f["task_id"] == "bad_sql" and f["reason"]
@@ -231,6 +235,7 @@ def test_build_and_retrieve_through_http(tmp_path, monkeypatch):
             rebuilt = wait_build(second)
             assert rebuilt["status"] == "succeeded", rebuilt.get("error")
             assert rebuilt["counts"]["filtered"] == 0
+            rebuilt_generation = settings()["knowledge_generation"]
             channel = next(
                 t for t in c.get("/api/v1/tables").json() if t["name"] == "channels"
             )
@@ -289,6 +294,7 @@ def test_build_and_retrieve_through_http(tmp_path, monkeypatch):
             third = c.post("/api/v1/builds").json()["id"]
             final_build = wait_build(third)
             assert final_build["status"] == "succeeded", final_build.get("error")
+            generation = settings()["knowledge_generation"]
             calls.update(neo4j=0, milvus=0)
             assert asyncio.run(check_cache_field())["fields"][0]["status"] == "pass"
             assert calls["neo4j"] <= 3
@@ -315,20 +321,12 @@ def test_build_and_retrieve_through_http(tmp_path, monkeypatch):
                 for x in tables
             )
             assert (
-                c.put(
-                    "/api/v1/settings",
-                    json={"values": {"knowledge_generation": generation + "_other"}},
-                ).status_code
+                c.post(f"/api/v1/generations/{rebuilt_generation}/switch").status_code
                 == 200
             )
-            assert c.get("/api/v1/tables").json() == []
-            assert (
-                c.put(
-                    "/api/v1/settings",
-                    json={"values": {"knowledge_generation": generation}},
-                ).status_code
-                == 200
-            )
+            assert asyncio.run(check_cache_field())["fields"][0]["status"] == "error"
+            assert c.post(f"/api/v1/generations/{generation}/switch").status_code == 200
+            assert asyncio.run(check_cache_field())["fields"][0]["status"] == "pass"
             assert (
                 httpx.post(base + "/mcp/", timeout=5, trust_env=False).status_code
                 == 401
@@ -561,12 +559,9 @@ def test_build_and_retrieve_through_http(tmp_path, monkeypatch):
             os.environ["TEST_NEO4J_URI"],
             auth=(os.environ["TEST_NEO4J_USER"], os.environ["TEST_NEO4J_PASSWORD"]),
         ) as driver:
-            driver.execute_query(
-                "MATCH (n:SDAEntity {generation:$generation}) DETACH DELETE n",
-                generation=generation,
-            )
-        client = MilvusClient(uri=os.environ["TEST_MILVUS_URI"])
-        if client.has_collection("sda_" + generation):
-            client.drop_collection("sda_" + generation)
-        client.close()
+            client = MilvusClient(uri=os.environ["TEST_MILVUS_URI"])
+            try:
+                cleanup_test_generations(driver, client, generation)
+            finally:
+                client.close()
         assert not thread.is_alive()
