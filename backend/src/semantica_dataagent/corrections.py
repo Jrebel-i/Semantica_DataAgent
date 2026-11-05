@@ -1,7 +1,10 @@
 """Correction proposals submitted by authenticated MCP callers."""
 
 import difflib
+import os
+import tempfile
 import uuid
+from pathlib import Path
 from typing import Annotated
 
 from pydantic import Field
@@ -12,6 +15,30 @@ from .db import CorrectionProposal, sessions
 from .mcp_context import current_conversation_id, current_requester
 
 Text = Annotated[str, Field(min_length=1, max_length=20000, pattern=r"\S")]
+
+
+def _atomic_write(path: Path, content: str) -> None:
+    mode = path.stat().st_mode & 0o777
+    name = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=path.parent, delete=False
+        ) as stream:
+            name = stream.name
+            os.fchmod(stream.fileno(), mode)
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(name, path)
+        name = None
+        descriptor = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+    finally:
+        if name is not None:
+            Path(name).unlink(missing_ok=True)
 
 
 def propose_correction(target: Text, patch: Text, reason: Text) -> dict:
@@ -188,7 +215,7 @@ def approve(
                     ):
                         raise ValueError("Invalid git author")
                     try:
-                        path.write_text(patch, encoding="utf-8")
+                        _atomic_write(path, patch)
                         git(root, "add", "--", str(path.relative_to(root)))
                         git(
                             root,
@@ -199,7 +226,7 @@ def approve(
                             author=token.name,
                         )
                     except Exception:
-                        path.write_text(original, encoding="utf-8")
+                        _atomic_write(path, original)
                         git(
                             root,
                             "reset",

@@ -273,3 +273,21 @@ def test_metadata_override_survives_reimport_of_same_source(client, tmp_path):
         corrected = apply_overrides(imported)
         assert corrected[0].data["comment"] == "人工修正注释"
         assert imported[0].data["comment"] == "导出注释"
+
+
+def test_failed_atomic_replace_preserves_original_document(tmp_path, monkeypatch):
+    from semantica_dataagent import corrections
+
+    path = tmp_path / "document.md"
+    path.write_text("original\n")
+
+    def fail_replace(*_args):
+        raise OSError("simulated rename failure")
+
+    monkeypatch.setattr(corrections.os, "replace", fail_replace)
+    import pytest
+
+    with pytest.raises(OSError, match="simulated rename failure"):
+        corrections._atomic_write(path, "changed\n")
+    assert path.read_text() == "original\n"
+    assert list(tmp_path.iterdir()) == [path]
