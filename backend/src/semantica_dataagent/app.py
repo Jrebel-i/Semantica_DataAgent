@@ -236,6 +236,10 @@ def put_settings(
                 ) from None
     cipher = Fernet(os.environ["DATAAGENT_ENCRYPTION_KEY"].encode())
     with sessions().begin() as db:
+        if "knowledge_generation" in body.values and db.get(GenerationPointer, 1):
+            raise HTTPException(
+                status_code=409, detail="Use the generation switch endpoint"
+            )
         for key, value in body.values.items():
             row = db.get(Setting, key)
             if value is None or value == "":

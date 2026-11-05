@@ -697,3 +697,10 @@ def test_generation_listing_and_switch(client):
     )
     assert c.post("/api/v1/generations/old/switch", headers=headers).status_code == 200
     assert settings()["knowledge_generation"] == "old"
+    rejected = c.put(
+        "/api/v1/settings",
+        headers=headers,
+        json={"values": {"knowledge_generation": "other"}},
+    )
+    assert rejected.status_code == 409
+    assert settings()["knowledge_generation"] == "old"
