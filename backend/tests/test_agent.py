@@ -581,3 +581,86 @@ def test_another_user_cannot_read_a_conversation(client, monkeypatch):
         == 404
     )
     assert c.get("/api/v1/conversations", headers=other_headers).json() == []
+
+
+def test_expired_conversation_retains_history_but_cannot_resume(
+    client, monkeypatch, tmp_path
+):
+    from datetime import UTC, datetime, timedelta
+    from semantica_dataagent import agent_runner
+    from semantica_dataagent.db import Conversation, Turn, sessions
+    from semantica_dataagent import conversation_api
+
+    c, token = client
+    monkeypatch.setenv("DATAAGENT_AGENT_ROOT", str(tmp_path))
+    monkeypatch.setitem(agent_runner.RUNNERS, "pi", FakeRunner())
+    headers = {"Authorization": f"Bearer {token}"}
+    provider = c.post(
+        "/api/v1/providers",
+        headers=headers,
+        json={
+            "name": "Local",
+            "base_url": "http://127.0.0.1:3425",
+            "models": ["model"],
+        },
+    ).json()
+    response = c.post(
+        "/api/v1/conversations/ask",
+        headers=headers,
+        json={"question": "hello", "provider_id": provider["id"], "model": "model"},
+    )
+    conversation_id = _sse(response.text)[0][1]["conversation_id"]
+    session = tmp_path / conversation_id / "sessions" / "pi" / "saved"
+    session.parent.mkdir(parents=True)
+    session.write_text("history")
+    with sessions().begin() as db:
+        db.get(Conversation, conversation_id).updated_at = datetime.now(
+            UTC
+        ) - timedelta(days=2)
+    assert (
+        c.put(
+            "/api/v1/settings",
+            headers=headers,
+            json={"values": {"session_retention_days": "3"}},
+        ).status_code
+        == 200
+    )
+    assert hasattr(conversation_api, "cleanup_expired_sessions"), (
+        "session cleanup is missing"
+    )
+    conversation_api.cleanup_expired_sessions()
+    assert session.exists()
+    assert (
+        c.put(
+            "/api/v1/settings",
+            headers=headers,
+            json={"values": {"session_retention_days": "1"}},
+        ).status_code
+        == 200
+    )
+    with sessions().begin() as db:
+        db.query(Turn).filter_by(
+            conversation_id=conversation_id
+        ).first().status = "running"
+    conversation_api.cleanup_expired_sessions()
+    assert session.exists(), "active conversation must not be cleaned"
+    with sessions().begin() as db:
+        db.query(Turn).filter_by(
+            conversation_id=conversation_id
+        ).first().status = "completed"
+    assert hasattr(conversation_api, "cleanup_expired_sessions"), (
+        "session cleanup is missing"
+    )
+    conversation_api.cleanup_expired_sessions()
+    assert not session.exists()
+    detail = c.get(f"/api/v1/conversations/{conversation_id}", headers=headers).json()
+    assert detail["resumable"] is False
+    assert detail["turns"][0]["question"] == "hello"
+    assert (
+        c.post(
+            "/api/v1/conversations/ask",
+            headers=headers,
+            json={"question": "again", "conversation_id": conversation_id},
+        ).status_code
+        == 409
+    )
