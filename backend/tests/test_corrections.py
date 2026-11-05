@@ -155,3 +155,58 @@ def test_rejected_document_proposal_does_not_change_source(
         c.get(f"/api/v1/corrections/{proposal_id}", headers=headers).json()["status"]
         == "rejected"
     )
+
+
+def test_approval_commits_document_and_enqueues_incremental_build(
+    client, monkeypatch, tmp_path
+):
+    import subprocess
+
+    from semantica_dataagent import knowledge
+    from semantica_dataagent.app import create_mcp
+    from test_source_api import upload
+
+    c, token = client
+    headers = {"Authorization": f"Bearer {token}"}
+    root = tmp_path / "source"
+    assert (
+        c.put(
+            "/api/v1/settings",
+            headers=headers,
+            json={"values": {"source_directory": str(root)}},
+        ).status_code
+        == 200
+    )
+    assert (
+        upload(c, headers, "knowledge/metrics", {"sales.md": "旧定义\n"}).status_code
+        == 200
+    )
+    before = subprocess.check_output(
+        ["git", "-C", str(root), "rev-parse", "HEAD"], text=True
+    ).strip()
+    monkeypatch.setattr(knowledge, "existing_refs", lambda refs: set(refs))
+    result = call(
+        create_mcp(),
+        "propose_correction",
+        {
+            "target": "document:metrics/sales.md",
+            "patch": "新定义\n",
+            "reason": "口径已更新",
+        },
+        _requester(token="approval-proposer"),
+    )
+    assert not result.isError, result.structuredContent
+    proposal_id = result.structuredContent["proposal_id"]
+    response = c.post(f"/api/v1/corrections/{proposal_id}/approve", headers=headers)
+    assert response.status_code == 200, response.text
+    after = subprocess.check_output(
+        ["git", "-C", str(root), "rev-parse", "HEAD"], text=True
+    ).strip()
+    assert before != after
+    assert (root / "knowledge/metrics/sales.md").read_text() == "新定义\n"
+    message = subprocess.check_output(
+        ["git", "-C", str(root), "log", "-1", "--format=%B"], text=True
+    )
+    assert proposal_id in message
+    builds = c.get("/api/v1/builds", headers=headers).json()
+    assert any(build["build_type"] == "incremental" for build in builds)
