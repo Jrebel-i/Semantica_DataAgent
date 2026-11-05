@@ -401,9 +401,22 @@ def create_mcp():
     server.tool()(read_task_sql)
     server.tool()(validate_sql)
     server.tool()(find_join_path)
-    for tool in server._tool_manager.list_tools():
-        tool.parameters["additionalProperties"] = False
-    server._mcp_server.call_tool(validate_input=True)(server.call_tool)
+
+    def get_capabilities() -> dict:
+        from importlib.metadata import version
+
+        return {
+            "application_version": version("semantica-dataagent"),
+            "schema_version": "v1",
+            "ranking_version": knowledge.RANKING_VERSION,
+            "tools": sorted(t.name for t in server._tool_manager.list_tools()),
+            "current_generation": knowledge.settings()["knowledge_generation"],
+        }
+
+    server.tool()(get_capabilities)
+    from .mcp_contract import install_contract
+
+    install_contract(server)
     return server
 
 

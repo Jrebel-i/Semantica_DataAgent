@@ -159,6 +159,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Search Route */
+        get: operations["search_route_api_v1_search_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/settings": {
         parameters: {
             query?: never;
@@ -421,6 +438,38 @@ export interface components {
             };
             /** Version */
             version: string;
+        };
+        /** SearchHit */
+        SearchHit: {
+            /** Ambiguity Refs */
+            ambiguity_refs: string[];
+            /** Ambiguous */
+            ambiguous: boolean;
+            /** Comment */
+            comment?: string | null;
+            /**
+             * Confidence
+             * @enum {string}
+             */
+            confidence: "high" | "medium" | "low";
+            /** Content */
+            content?: string | null;
+            /** Description */
+            description?: string | null;
+            /** Name */
+            name?: string | null;
+            /** Path */
+            path?: string | null;
+            /** Ref */
+            ref: string;
+            /** Score */
+            score: number;
+            /** Sources */
+            sources: ("exact" | "fulltext" | "vector" | "graph")[];
+            /** Type */
+            type: string;
+        } & {
+            [key: string]: unknown;
         };
         /** SettingsUpdate */
         SettingsUpdate: {
@@ -818,6 +867,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PluginView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    search_route_api_v1_search_get: {
+        parameters: {
+            query: {
+                query: string;
+                scope?: "tables" | "fields" | "docs" | "tasks" | "all";
+                top_k?: number;
+                category?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SearchHit"][];
                 };
             };
             /** @description Validation Error */

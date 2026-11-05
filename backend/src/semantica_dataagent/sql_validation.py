@@ -358,9 +358,11 @@ def check_sql(sql, dialect, snapshot):
     return result
 
 
-def join_path(tables, snapshot):
+def join_path(tables, snapshot=None):
     if not 2 <= len(tables) <= 4:
         raise ValueError("Provide two to four tables")
+    if snapshot is None:
+        snapshot = load_snapshot()
     matches = [snapshot.resolve(name) for name in tables]
     if any(len(x) != 1 for x in matches):
         return {"status": "no_path", "reason": "Table missing or ambiguous"}
@@ -437,4 +439,4 @@ def validate_sql(sql: str, dialect: Literal["hive", "spark", "doris"] = "hive") 
 
 
 def find_join_path(tables: list[str]) -> dict:
-    return join_path(tables, load_snapshot())
+    return join_path(tables)

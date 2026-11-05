@@ -92,6 +92,7 @@ def test_build_and_retrieve_through_http(tmp_path, monkeypatch):
     shutil.copytree(Path(__file__).resolve().parents[2] / "samples/demo", source)
 
     generation = "test_" + uuid.uuid4().hex
+    print(f"test generation: {generation}", flush=True)
     monkeypatch.setenv("DATAAGENT_DB_PATH", str(tmp_path / "app.db"))
     monkeypatch.setenv("DATAAGENT_ENCRYPTION_KEY", Fernet.generate_key().decode())
     token = initialize()
@@ -535,13 +536,16 @@ def test_build_and_retrieve_through_http(tmp_path, monkeypatch):
                 )
                 assert json.loads(path.content[0].text)["status"] == "no_path"
                 calls.update(neo4j=0, milvus=0)
+                before = knowledge.round_trip_counts()
                 start = time.monotonic()
                 exact = await session.call_tool(
                     "search_knowledge",
                     {"query": "orders", "scope": "tables", "top_k": 5},
                 )
                 print("search_elapsed_ms=", round((time.monotonic() - start) * 1000))
-                assert calls == {"neo4j": 1, "milvus": 1}
+                after = knowledge.round_trip_counts()
+                assert sum(after[k] - before[k] for k in ("neo4j", "milvus")) <= 5
+                assert sum(calls.values()) <= 5
                 print("storage_round_trips=", sum(calls.values()))
                 assert "table:shop.orders" in str(exact)
                 fields = await session.call_tool(

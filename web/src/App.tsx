@@ -3,6 +3,7 @@ import { Alert, Space, Typography } from "antd";
 import { getMessages, type Language } from "./i18n";
 import { BuildsPage } from "./BuildsPage";
 import { KnowledgePage } from "./KnowledgePage";
+import { SearchPage } from "./SearchPage";
 import { LanguageSwitcher } from "./LanguageSwitcher";
 import { PluginsPage } from "./PluginsPage";
 import { Login } from "./Login";
@@ -92,6 +93,7 @@ export function App() {
             {[
               { path: "/", label: t.statusPage },
               { path: "/knowledge", label: t.knowledge },
+              { path: "/search", label: t.searchDebug },
               { path: "/builds", label: t.builds },
               ...(role === "admin"
                 ? [
@@ -128,6 +130,8 @@ export function App() {
             )
           ) : path === "/builds" ? (
             <BuildsPage token={token} messages={t} />
+          ) : path === "/search" ? (
+            <SearchPage token={token} messages={t} />
           ) : path === "/knowledge" ? (
             <KnowledgePage token={token} messages={t} />
           ) : (

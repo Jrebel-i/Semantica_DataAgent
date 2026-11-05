@@ -175,3 +175,20 @@ test("browse tables and view field details", async () => {
   expect(await screen.findByText("日期分区")).toBeTruthy();
   expect(screen.getByText("string")).toBeTruthy();
 });
+
+test("search debug is accessible from navigation", async () => {
+  history.replaceState(null, "", "/");
+  localStorage.setItem("token", "user");
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) => {
+      if (url === "/api/v1/me") return Response.json({ role: "user" });
+      if (url === "/api/v1/categories") return Response.json([]);
+      return Response.json({});
+    }),
+  );
+  render(<App />);
+  fireEvent.click(await screen.findByRole("link", { name: "检索调试" }));
+  expect(screen.getByRole("heading", { name: "检索调试" })).toBeTruthy();
+  expect(screen.getByLabelText("查询内容")).toBeTruthy();
+});
