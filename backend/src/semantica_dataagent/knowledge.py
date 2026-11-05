@@ -956,7 +956,7 @@ def describe(names=None, database=None, search=None):
 
 
 # Ranking constants are versioned so clients can interpret scores consistently.
-RANKING_VERSION = "1"
+RANKING_VERSION = "2"
 RRF_K = 60
 SOURCE_WEIGHTS = {"exact": 2.0, "fulltext": 1.0, "vector": 1.0, "graph": 0.5}
 
