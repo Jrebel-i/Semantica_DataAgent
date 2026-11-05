@@ -119,3 +119,31 @@ def test_direct_table_matches_outrank_frequently_mentioned_table(
     assert hits[0]["ref"] == inventory["ref"], (
         f"直接命中的库存表被文档提及的表压过：{hits}"
     )
+
+
+def test_many_associated_tables_do_not_displace_direct_matches(monkeypatch):
+    direct = [{"ref": f"table:shop.direct_{i:03d}"} for i in range(50)]
+    vectors = [{"ref": f"table:shop.vector_{i:03d}"} for i in range(50)]
+    associated = [{"ref": f"table:shop.graph_{i:03d}"} for i in range(150)]
+
+    class Vectors:
+        def search(self, **kwargs):
+            return [[{"entity": {"metadata": item}} for item in vectors]]
+
+    def execute(_graph, cypher, params):
+        if "db.index.fulltext.queryNodes" in cypher:
+            return [{"source": "fulltext", "item": item} for item in direct]
+        if "seeds" in params:
+            return [
+                {"seed_ref": vectors[0]["ref"], "item": item} for item in associated
+            ]
+        return []
+
+    monkeypatch.setattr(knowledge, "settings", lambda: {"knowledge_generation": "test"})
+    monkeypatch.setattr(knowledge, "embed", lambda *_: [[1.0, 0.0]])
+    monkeypatch.setattr(knowledge, "read_graph", lambda _: object())
+    monkeypatch.setattr(knowledge, "read_vectors", lambda _: Vectors())
+    monkeypatch.setattr(knowledge, "execute", execute)
+
+    hits = knowledge.search("库存", "tables", 50)
+    assert {hit["ref"] for hit in hits} == {item["ref"] for item in direct}
