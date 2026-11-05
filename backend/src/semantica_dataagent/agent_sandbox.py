@@ -4,12 +4,14 @@ import json
 import os
 import shutil
 import subprocess
+import threading
 import uuid
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
 IMAGE = "semantica-dataagent-agent-runner:1.2.0"
 LABEL = "com.semantica-dataagent.agent=1"
+OWNER = "com.semantica-dataagent.owner"
 RELAY = r"""const net = require('net');
 const http = require('http');
 const targets = JSON.parse(process.env.TARGETS);
@@ -43,6 +45,9 @@ class SessionSandbox:
         self.network = self.name
         self.proxy = self.name + "-relay"
         self.container_id = self.name
+        self.owner = str(os.getpid())
+        self.lock = threading.RLock()
+        self.closed = False
         self.targets = []
         self.aliases = {"sda-relay"}
         self.model_url = self._route(model_url, 18080)
@@ -79,10 +84,25 @@ class SessionSandbox:
         )
 
     def start(self):
+        with self.lock:
+            if self.closed:
+                raise RuntimeError("session already ended")
+            self._start()
+
+    def _start(self):
         (self.workspace / "work").mkdir(parents=True, exist_ok=True)
         (self.workspace / "sessions").mkdir(parents=True, exist_ok=True)
         try:
-            self._run("network", "create", "--internal", "--label", LABEL, self.network)
+            self._run(
+                "network",
+                "create",
+                "--internal",
+                "--label",
+                LABEL,
+                "--label",
+                f"{OWNER}={self.owner}",
+                self.network,
+            )
             aliases = [
                 arg for alias in self.aliases for arg in ("--network-alias", alias)
             ]
@@ -92,6 +112,8 @@ class SessionSandbox:
                 self.proxy,
                 "--label",
                 LABEL,
+                "--label",
+                f"{OWNER}={self.owner}",
                 "--network",
                 self.network,
                 *aliases,
@@ -117,6 +139,8 @@ class SessionSandbox:
                 self.name,
                 "--label",
                 LABEL,
+                "--label",
+                f"{OWNER}={self.owner}",
                 "--network",
                 self.network,
                 "--read-only",
@@ -126,8 +150,6 @@ class SessionSandbox:
                 "ALL",
                 "--security-opt",
                 "no-new-privileges",
-                "--pids-limit",
-                "512",
                 "--cpus",
                 os.environ.get("DATAAGENT_AGENT_CPUS", "2"),
                 "--memory",
@@ -162,16 +184,33 @@ class SessionSandbox:
         ).stdout
 
     def close(self):
-        self._run("rm", "-f", self.name, self.proxy, check=False)
-        self._run("network", "rm", self.network, check=False)
+        with self.lock:
+            self.closed = True
+            self._run("rm", "-f", self.name, self.proxy, check=False)
+            self._run("network", "rm", self.network, check=False)
 
 
 # Active sessions are removed immediately after a turn, so there is no idle container.
 ACTIVE: dict[str, SessionSandbox] = {}
+ACTIVE_LOCK = threading.Lock()
+
+
+def register_session(conversation_id: str, sandbox: SessionSandbox) -> None:
+    with ACTIVE_LOCK:
+        if conversation_id in ACTIVE:
+            raise RuntimeError("conversation already has an active turn")
+        ACTIVE[conversation_id] = sandbox
+
+
+def unregister_session(conversation_id: str, sandbox: SessionSandbox) -> None:
+    with ACTIVE_LOCK:
+        if ACTIVE.get(conversation_id) is sandbox:
+            del ACTIVE[conversation_id]
 
 
 def end_session(conversation_id: str) -> None:
-    sandbox = ACTIVE.pop(conversation_id, None)
+    with ACTIVE_LOCK:
+        sandbox = ACTIVE.pop(conversation_id, None)
     if sandbox is not None:
         sandbox.close()
 
@@ -191,8 +230,29 @@ def cleanup_orphans() -> None:
         )
         if result.returncode:
             raise RuntimeError(f"Cannot list agent {kind}s for cleanup")
-        ids = result.stdout.split()
-        if ids:
+        for item in result.stdout.split():
+            inspect = subprocess.run(
+                ["docker", "inspect", "--type", kind, item],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            info = json.loads(inspect.stdout)[0]
+            labels = (
+                info.get("Labels")
+                if kind == "network"
+                else info.get("Config", {}).get("Labels")
+            )
+            owner = (labels or {}).get(OWNER)
+            if owner:
+                try:
+                    os.kill(int(owner), 0)
+                except ProcessLookupError:
+                    pass
+                except (ValueError, PermissionError):
+                    continue
+                else:
+                    continue
             subprocess.run(
-                ["docker", *remove_args, *ids], check=True, capture_output=True
+                ["docker", *remove_args, item], check=True, capture_output=True
             )

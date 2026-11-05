@@ -21,7 +21,7 @@ from .agent_runner import (
     AgentEvent,
     AgentTurnRequest,
 )
-from .agent_sandbox import ACTIVE, SessionSandbox
+from .agent_sandbox import SessionSandbox, register_session, unregister_session
 from .skill import read_skill
 
 PROVIDER_KEY = "dataagent"
@@ -402,31 +402,36 @@ class PiRunner:
             sandbox = SessionSandbox(
                 request.workspace, request.provider.base_url, request.mcp_url
             )
-            await asyncio.to_thread(sandbox.start)
-            ACTIVE[request.conversation_id] = sandbox
-            # Configuration contains only environment references for secrets.
-            models = json.loads((config / "models.json").read_text())
-            models["providers"][PROVIDER_KEY]["baseUrl"] = sandbox.model_url
-            _write_json(config / "models.json", models)
-            mcp = json.loads((config / "mcp.json").read_text())
-            mcp["mcpServers"][MCP_SERVER]["url"] = sandbox.mcp_url
-            _write_json(config / "mcp.json", mcp)
-            command[command.index(str(sessions))] = "/sessions"
-            env["PI_CODING_AGENT_DIR"] = "/workspace/config"
-            env["PI_CODING_AGENT_SESSION_DIR"] = "/sessions"
-            env["HOME"] = "/tmp"
-            docker = ["docker", "exec", "-i"]
-            for key in (
-                "PI_CODING_AGENT_DIR",
-                "PI_CODING_AGENT_SESSION_DIR",
-                "PI_OFFLINE",
-                TOKEN_ENV,
-                KEY_ENV,
-                "HOME",
-            ):
-                if key in env:
-                    docker.extend(["--env", key])
-            command = docker + [sandbox.name, *command]
+            register_session(request.conversation_id, sandbox)
+            try:
+                await asyncio.to_thread(sandbox.start)
+                # Configuration contains only environment references for secrets.
+                models = json.loads((config / "models.json").read_text())
+                models["providers"][PROVIDER_KEY]["baseUrl"] = sandbox.model_url
+                _write_json(config / "models.json", models)
+                mcp = json.loads((config / "mcp.json").read_text())
+                mcp["mcpServers"][MCP_SERVER]["url"] = sandbox.mcp_url
+                _write_json(config / "mcp.json", mcp)
+                command[command.index(str(sessions))] = "/sessions"
+                env["PI_CODING_AGENT_DIR"] = "/workspace/config"
+                env["PI_CODING_AGENT_SESSION_DIR"] = "/sessions"
+                env["HOME"] = "/tmp"
+                docker = ["docker", "exec", "-i"]
+                for key in (
+                    "PI_CODING_AGENT_DIR",
+                    "PI_CODING_AGENT_SESSION_DIR",
+                    "PI_OFFLINE",
+                    TOKEN_ENV,
+                    KEY_ENV,
+                    "HOME",
+                ):
+                    if key in env:
+                        docker.extend(["--env", key])
+                command = docker + [sandbox.name, *command]
+            except BaseException:
+                unregister_session(request.conversation_id, sandbox)
+                await asyncio.to_thread(sandbox.close)
+                raise
         try:
             process = await asyncio.create_subprocess_exec(
                 *command,
@@ -440,7 +445,7 @@ class PiRunner:
             )
         except BaseException:
             if sandbox is not None:
-                ACTIVE.pop(request.conversation_id, None)
+                unregister_session(request.conversation_id, sandbox)
                 await asyncio.to_thread(sandbox.close)
             raise
         stderr: deque[str] = deque(maxlen=80)
@@ -492,8 +497,7 @@ class PiRunner:
             yield _redact_event(parser.finish(), secrets)
         finally:
             if sandbox is not None:
-                if ACTIVE.get(request.conversation_id) is sandbox:
-                    ACTIVE.pop(request.conversation_id, None)
+                unregister_session(request.conversation_id, sandbox)
                 await asyncio.to_thread(sandbox.close)
             if not finished:
                 await _stop(process)

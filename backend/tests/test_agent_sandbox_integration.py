@@ -108,6 +108,8 @@ def test_end_and_restart_remove_containers_but_keep_session_files(tmp_path):
         saved.write_text("saved conversation", encoding="utf-8")
         sandbox = SessionSandbox(workspace, "http://127.0.0.1:1", "http://127.0.0.1:2")
         try:
+            if use_restart:
+                sandbox.owner = "99999999"
             sandbox.start()
             ACTIVE["test"] = sandbox
             if use_restart:
@@ -125,3 +127,21 @@ def test_end_and_restart_remove_containers_but_keep_session_files(tmp_path):
         finally:
             ACTIVE.pop("test", None)
             sandbox.close()
+
+
+@pytest.mark.skipif(not _docker_available(), reason="Docker daemon is required")
+def test_restart_cleanup_preserves_live_owner(tmp_path):
+    from semantica_dataagent.agent_sandbox import SessionSandbox, cleanup_orphans
+
+    sandbox = SessionSandbox(tmp_path, "http://127.0.0.1:1", "http://127.0.0.1:2")
+    try:
+        sandbox.start()
+        cleanup_orphans()
+        result = subprocess.run(
+            ["docker", "inspect", sandbox.container_id],
+            capture_output=True,
+            check=False,
+        )
+        assert result.returncode == 0, "cleanup removed a live backend's container"
+    finally:
+        sandbox.close()

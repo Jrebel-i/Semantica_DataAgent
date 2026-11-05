@@ -32,7 +32,8 @@ from .embedding_client import validate_settings
 async def lifespan(application):
     from .agent_sandbox import cleanup_orphans
 
-    await asyncio.to_thread(cleanup_orphans)
+    if os.environ.get("DATAAGENT_AGENT_MODE", "sandbox") != "local":
+        await asyncio.to_thread(cleanup_orphans)
     with sessions().begin() as db:
         db.execute(
             update(Build)
