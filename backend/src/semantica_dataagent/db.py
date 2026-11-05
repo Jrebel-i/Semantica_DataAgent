@@ -75,3 +75,51 @@ class PluginConfig(Base):
     plugin_id: Mapped[str] = mapped_column(primary_key=True)
     enabled: Mapped[bool]
     parameters: Mapped[str]
+
+
+class Provider(Base):
+    __tablename__ = "providers"
+    id: Mapped[str] = mapped_column(primary_key=True, default=lambda: uuid.uuid4().hex)
+    name: Mapped[str]
+    type: Mapped[str]
+    base_url: Mapped[str]
+    api_key: Mapped[str | None]
+    models: Mapped[str]
+    created_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC))
+    updated_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC))
+
+
+class Conversation(Base):
+    __tablename__ = "conversations"
+    id: Mapped[str] = mapped_column(primary_key=True, default=lambda: uuid.uuid4().hex)
+    owner_id: Mapped[str]
+    title: Mapped[str]
+    agent: Mapped[str]
+    provider_id: Mapped[str]
+    model: Mapped[str]
+    created_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC))
+    updated_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC))
+
+
+class Turn(Base):
+    __tablename__ = "turns"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    conversation_id: Mapped[str]
+    sequence: Mapped[int]
+    question: Mapped[str]
+    status: Mapped[str]
+    answer: Mapped[str]
+    sql: Mapped[str]
+    citations: Mapped[str]
+    error: Mapped[str | None]
+    started_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC))
+    finished_at: Mapped[datetime | None]
+
+
+class TurnEvent(Base):
+    __tablename__ = "turn_events"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    turn_id: Mapped[int]
+    seq: Mapped[int]
+    type: Mapped[str]
+    data: Mapped[str]

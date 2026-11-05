@@ -6,6 +6,7 @@ import re
 import secrets
 import time
 from contextlib import asynccontextmanager, contextmanager
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Literal
 from urllib.parse import urlsplit
@@ -29,6 +30,10 @@ from .embedding_client import validate_settings
 
 @asynccontextmanager
 async def lifespan(application):
+    from .agent_sandbox import cleanup_orphans
+
+    if os.environ.get("DATAAGENT_AGENT_MODE", "sandbox") != "local":
+        await asyncio.to_thread(cleanup_orphans)
     with sessions().begin() as db:
         db.execute(
             update(Build)
@@ -86,9 +91,16 @@ KEYS = {
 SECRET = {"neo4j_password"}
 
 
-def current_user(
+@dataclass(frozen=True)
+class Requester:
+    id: str
+    role: str
+    token: str
+
+
+def _authenticated(
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)],
-) -> str:
+) -> Requester:
     if credentials is None or credentials.scheme.lower() != "bearer":
         raise HTTPException(
             status_code=401,
@@ -108,7 +120,19 @@ def current_user(
             minutes=1
         ):
             token.last_used_at = now
-        return token.role
+        return Requester(id=token.id, role=token.role, token=credentials.credentials)
+
+
+def current_user(
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)],
+) -> str:
+    return _authenticated(credentials).role
+
+
+def current_requester(
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)],
+) -> Requester:
+    return _authenticated(credentials)
 
 
 def admin(role: Annotated[str, Depends(current_user)]) -> str:
@@ -454,6 +478,14 @@ app.include_router(document_router)
 from .skill_api import router as skill_router
 
 app.include_router(skill_router)
+
+from .provider_api import router as provider_router
+
+app.include_router(provider_router)
+
+from .conversation_api import router as conversation_router
+
+app.include_router(conversation_router)
 
 
 def create_mcp():

@@ -4,6 +4,23 @@
  */
 
 export interface paths {
+    "/api/v1/agents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Agents */
+        get: operations["agents_api_v1_agents_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/builds": {
         parameters: {
             query?: never;
@@ -67,6 +84,74 @@ export interface paths {
         get: operations["index_route_api_v1_category_index_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/conversations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Conversations */
+        get: operations["conversations_api_v1_conversations_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/conversations/ask": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Ask */
+        post: operations["ask_api_v1_conversations_ask_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/conversations/{conversation_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Conversation Detail */
+        get: operations["conversation_detail_api_v1_conversations__conversation_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/conversations/{conversation_id}/end": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** End Conversation */
+        post: operations["end_conversation_api_v1_conversations__conversation_id__end_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -154,6 +239,42 @@ export interface paths {
         put: operations["update_plugin_api_v1_plugins__category___plugin_id__put"];
         post?: never;
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/providers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Providers */
+        get: operations["providers_api_v1_providers_get"];
+        put?: never;
+        /** Create Provider */
+        post: operations["create_provider_api_v1_providers_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/providers/{provider_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Update Provider */
+        put: operations["update_provider_api_v1_providers__provider_id__put"];
+        post?: never;
+        /** Delete Provider */
+        delete: operations["delete_provider_api_v1_providers__provider_id__delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -386,6 +507,28 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** AgentView */
+        AgentView: {
+            /** Available */
+            available: boolean;
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+        };
+        /** AskRequest */
+        AskRequest: {
+            /** Agent */
+            agent?: string | null;
+            /** Conversation Id */
+            conversation_id?: string | null;
+            /** Model */
+            model?: string | null;
+            /** Provider Id */
+            provider_id?: string | null;
+            /** Question */
+            question: string;
+        };
         /** BuildLog */
         BuildLog: {
             /**
@@ -461,6 +604,58 @@ export interface components {
             /** Ref */
             ref: string;
         };
+        /** ConversationDetail */
+        ConversationDetail: {
+            /** Agent */
+            agent: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Id */
+            id: string;
+            /** Model */
+            model: string;
+            /** Provider Id */
+            provider_id: string;
+            /** Title */
+            title: string;
+            /** Turn Count */
+            turn_count: number;
+            /** Turns */
+            turns: components["schemas"]["TurnView"][];
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /** ConversationView */
+        ConversationView: {
+            /** Agent */
+            agent: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Id */
+            id: string;
+            /** Model */
+            model: string;
+            /** Provider Id */
+            provider_id: string;
+            /** Title */
+            title: string;
+            /** Turn Count */
+            turn_count: number;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
         /** DocumentLink */
         DocumentLink: {
             /** Category */
@@ -508,6 +703,17 @@ export interface components {
             task_id: string;
             /** Upstream */
             upstream: string;
+        };
+        /** EventView */
+        EventView: {
+            /** Data */
+            data: {
+                [key: string]: unknown;
+            };
+            /** Seq */
+            seq: number;
+            /** Type */
+            type: string;
         };
         /** FieldView */
         FieldView: {
@@ -583,6 +789,60 @@ export interface components {
             };
             /** Version */
             version: string;
+        };
+        /** ProviderCreate */
+        ProviderCreate: {
+            /** Api Key */
+            api_key?: string | null;
+            /** Base Url */
+            base_url: string;
+            /** Models */
+            models: string[];
+            /** Name */
+            name: string;
+            /**
+             * Type
+             * @default anthropic-messages
+             */
+            type: string;
+        };
+        /** ProviderUpdate */
+        ProviderUpdate: {
+            /** Api Key */
+            api_key?: string | null;
+            /** Base Url */
+            base_url?: string | null;
+            /** Models */
+            models?: string[] | null;
+            /** Name */
+            name?: string | null;
+            /** Type */
+            type?: string | null;
+        };
+        /** ProviderView */
+        ProviderView: {
+            /** Base Url */
+            base_url: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Has Api Key */
+            has_api_key: boolean;
+            /** Id */
+            id: string;
+            /** Models */
+            models: string[];
+            /** Name */
+            name: string;
+            /** Type */
+            type: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
         };
         /** SearchHit */
         SearchHit: {
@@ -778,6 +1038,41 @@ export interface components {
             /** Token */
             token: string;
         };
+        /** TurnView */
+        TurnView: {
+            /** Answer */
+            answer: string;
+            /** Citations */
+            citations: {
+                [key: string]: unknown;
+            }[];
+            /** Error */
+            error: string | null;
+            /**
+             * Events
+             * @default []
+             */
+            events: components["schemas"]["EventView"][];
+            /** Finished At */
+            finished_at: string | null;
+            /** Id */
+            id: number;
+            /** Question */
+            question: string;
+            /** Sequence */
+            sequence: number;
+            /** Sql */
+            sql: {
+                [key: string]: unknown;
+            }[];
+            /**
+             * Started At
+             * Format: date-time
+             */
+            started_at: string;
+            /** Status */
+            status: string;
+        };
         /** ValidationError */
         ValidationError: {
             /** Context */
@@ -800,6 +1095,26 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    agents_api_v1_agents_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentView"][];
+                };
+            };
+        };
+    };
     builds_api_v1_builds_get: {
         parameters: {
             query?: never;
@@ -923,6 +1238,119 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["DocumentView"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    conversations_api_v1_conversations_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConversationView"][];
+                };
+            };
+        };
+    };
+    ask_api_v1_conversations_ask_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AskRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    conversation_detail_api_v1_conversations__conversation_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                conversation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConversationDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    end_conversation_api_v1_conversations__conversation_id__end_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                conversation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {
@@ -1086,6 +1514,123 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["PluginView"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    providers_api_v1_providers_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProviderView"][];
+                };
+            };
+        };
+    };
+    create_provider_api_v1_providers_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProviderCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProviderView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_provider_api_v1_providers__provider_id__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                provider_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProviderUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProviderView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_provider_api_v1_providers__provider_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                provider_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {

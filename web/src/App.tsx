@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Alert, Space, Typography } from "antd";
 import { BuildPage } from "./BuildPage";
 import { getMessages, type Language } from "./i18n";
-import { BuildsPage } from "./BuildsPage";
+import { ChatPage } from "./ChatPage";
 import { KnowledgePage } from "./KnowledgePage";
 import { SearchPage } from "./SearchPage";
 import { LanguageSwitcher } from "./LanguageSwitcher";
@@ -95,13 +95,13 @@ export function App() {
           <nav aria-label={t.navigation}>
             {[
               { path: "/", label: t.statusPage },
+              { path: "/chat", label: t.chat },
               { path: "/knowledge", label: t.knowledge },
               { path: "/search", label: t.searchDebug },
               { path: "/mcp-access", label: t.mcpAccess },
               { path: "/builds", label: t.builds },
               ...(role === "admin"
                 ? [
-                    { path: "/builds", label: t.builds },
                     { path: "/source", label: t.source },
                     { path: "/tokens", label: t.tokens },
                     { path: "/plugins", label: t.plugins },
@@ -122,7 +122,9 @@ export function App() {
               </a>
             ))}
           </nav>
-          {path === "/builds" ? (
+          {path === "/chat" ? (
+            <ChatPage token={token} role={role} messages={t} />
+          ) : path === "/builds" ? (
             role === "admin" ? (
               <BuildPage token={token} messages={t} />
             ) : (
@@ -146,8 +148,6 @@ export function App() {
             ) : (
               <Alert title={t.forbidden} type="warning" />
             )
-          ) : path === "/builds" ? (
-            <BuildsPage token={token} messages={t} />
           ) : path === "/search" ? (
             <SearchPage token={token} messages={t} />
           ) : path === "/mcp-access" ? (
