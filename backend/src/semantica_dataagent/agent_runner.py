@@ -35,9 +35,10 @@ __all__ = [
 
 def _make_runners() -> dict[str, AgentRunner]:
     from .claude_runner import ClaudeRunner
+    from .codex_runner import CodexRunner
     from .pi_runner import PiRunner
 
-    return {"pi": PiRunner(), "claude": ClaudeRunner()}
+    return {"pi": PiRunner(), "claude": ClaudeRunner(), "codex": CodexRunner()}
 
 
 RUNNERS: dict[str, AgentRunner] = _make_runners()
