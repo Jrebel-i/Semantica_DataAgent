@@ -69,6 +69,20 @@ def test_startup_cleans_interrupted_full_build(tmp_path, monkeypatch):
             db.add(build)
             db.flush()
             build_id = build.id
+        from semantica_dataagent import knowledge
+
+        original_delete = knowledge.delete_generation_data
+
+        def unavailable(_values):
+            raise ConnectionError("injected storage outage")
+
+        monkeypatch.setattr(knowledge, "delete_generation_data", unavailable)
+        with TestClient(app, headers={"Authorization": "Bearer " + token}) as client:
+            assert client.get(f"/api/v1/builds/{build_id}").json()["status"] == "failed"
+            assert vectors.has_collection("sda_" + orphan), (
+                "failed cleanup should retry"
+            )
+        monkeypatch.setattr(knowledge, "delete_generation_data", original_delete)
         with TestClient(app, headers={"Authorization": "Bearer " + token}) as client:
             record = client.get(f"/api/v1/builds/{build_id}").json()
             assert (

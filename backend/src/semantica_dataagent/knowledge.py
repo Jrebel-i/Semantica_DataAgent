@@ -868,7 +868,7 @@ def cleanup_interrupted_generations():
                 row = db.get(Build, build_id)
                 if row and row.error == interrupted:
                     row.error = interrupted + "; unpublished storage cleaned"
-        except Exception:  # noqa: BLE001 - retry on next startup
+        except Exception:  # retry on next startup
             logging.getLogger(__name__).exception(
                 "Could not clean interrupted generation %s", generation
             )
