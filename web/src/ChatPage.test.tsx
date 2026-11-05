@@ -310,3 +310,55 @@ test("admins configure providers without sending a blank API key", async () => {
   expect(await screen.findByText("provider 已保存")).toBeTruthy();
   expect(screen.queryByText("personal-token")).toBeNull();
 });
+
+test.each(["claude", "codex"])(
+  "selects %s and sends the configured model",
+  async (agent) => {
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/v1/agents")
+        return json(
+          ["pi", "claude", "codex"].map((id) => ({
+            id,
+            name: id,
+            available: true,
+          })),
+        );
+      if (url === "/api/v1/providers") return json([provider]);
+      if (url === "/api/v1/conversations") return json([]);
+      if (url === "/api/v1/conversations/ask")
+        return new Response(sse, { status: 200 });
+      return new Response("", { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetcher);
+    render(
+      <ChatPage
+        token="personal-token"
+        role="user"
+        messages={getMessages("zh")}
+      />,
+    );
+    await screen.findByRole("option", { name: agent });
+    fireEvent.change(screen.getByLabelText("Agent"), {
+      target: { value: agent },
+    });
+    fireEvent.change(screen.getByLabelText("问题"), {
+      target: { value: "测试" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /提\s*问/ }));
+    await waitFor(() =>
+      expect(fetcher).toHaveBeenCalledWith(
+        "/api/v1/conversations/ask",
+        expect.objectContaining({
+          body: expect.stringContaining(`"agent":"${agent}"`),
+        }),
+      ),
+    );
+    expect(fetcher).toHaveBeenCalledWith(
+      "/api/v1/conversations/ask",
+      expect.objectContaining({
+        body: expect.stringContaining(`"model":"${provider.models[0]}"`),
+      }),
+    );
+  },
+);
