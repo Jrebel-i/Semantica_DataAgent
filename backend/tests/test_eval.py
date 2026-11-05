@@ -1,5 +1,4 @@
 import json
-from pathlib import Path
 
 import pytest
 
@@ -92,16 +91,28 @@ def test_table_recall_at_five_counts_tables_not_documents_or_duplicates(question
 
 def test_caliber_hit_checks_tables_fields_and_key_filters(questions):
     question = questions[2]
-    assert caliber_hit(
-        question,
-        ["SELECT id FROM shop.channels WHERE os_type = 'android'"],
-    ) is True
+    assert (
+        caliber_hit(
+            question,
+            ["SELECT id FROM shop.channels WHERE os_type = 'android'"],
+        )
+        is True
+    )
     assert caliber_hit(question, ["SELECT id FROM shop.channels"]) is False
-    assert caliber_hit(question, ["SELECT id FROM shop.orders WHERE os_type = 'android'"]) is False
-    assert caliber_hit(
-        question, ["SELECT id FROM shop.channels WHERE os_type = 'ios'"]
-    ) is False
-    assert caliber_hit(question, ["SELECT os_name FROM shop.channels WHERE os_type = 'android'"]) is False
+    assert (
+        caliber_hit(question, ["SELECT id FROM shop.orders WHERE os_type = 'android'"])
+        is False
+    )
+    assert (
+        caliber_hit(question, ["SELECT id FROM shop.channels WHERE os_type = 'ios'"])
+        is False
+    )
+    assert (
+        caliber_hit(
+            question, ["SELECT os_name FROM shop.channels WHERE os_type = 'android'"]
+        )
+        is False
+    )
 
 
 def test_score_question_reports_every_failure_reason(questions):
@@ -174,7 +185,8 @@ def test_agent_evaluation_scores_answer_sql_caliber_and_validation(questions):
     }
 
     def validate(sql, dialect):
-        return {"status": "issues" if "ios" in sql or "payments" not in sql and "shop.orders WHERE id" in sql else "pass"}
+        missing_payment = "shop.payments" not in sql and "COUNT" not in sql
+        return {"status": "issues" if "ios" in sql or missing_payment else "pass"}
 
     report = run_evaluation(
         questions,
