@@ -20,9 +20,11 @@ dependencies = [
 [project.entry-points."semantica_dataagent.source_adapters"]
 canonical = "semantica_dataagent.canonical:CanonicalAdapter"
 markdown = "semantica_dataagent.markdown:MarkdownAdapter"
+dtb = "semantica_dataagent.dtb_source:DtbAdapter"
 
 [project.entry-points."semantica_dataagent.task_parsers"]
 sql = "semantica_dataagent.sql_tasks:SQLTaskParser"
+dtb = "semantica_dataagent.dtb_tasks:DtbTaskParser"
 
 [project.scripts]
 semantica-dataagent = "semantica_dataagent.cli:main"

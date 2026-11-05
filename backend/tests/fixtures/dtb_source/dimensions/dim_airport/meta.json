@@ -1,0 +1,18 @@
+{
+  "database": "dimensions",
+  "table": "dim_airport",
+  "qualified_table": "dimensions.dim_airport",
+  "record_count": 3,
+  "truncated": false,
+  "columns": [
+    {
+      "name": "airport_code"
+    },
+    {
+      "name": "airport_name"
+    },
+    {
+      "name": "region"
+    }
+  ]
+}

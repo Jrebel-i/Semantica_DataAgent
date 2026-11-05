@@ -70,3 +70,22 @@ def test_unmatched_task_type_uses_declared_edges(monkeypatch):
     result, edges = resolve_task(task, [("raw.a", "shop.b")], plugins.parse_task(task))
     assert result.status == "unsupported"
     assert edges == [("raw.a", "shop.b", "declared")]
+
+
+def test_source_table_names_exclude_join_aliases():
+    parser = SQLTaskParser()
+    task = Record(
+        "task",
+        {
+            "name": "aliased",
+            "type": "hive",
+            "sql": "INSERT INTO shop.orders SELECT * FROM raw.orders AS o JOIN raw.customers c ON 1=1",
+        },
+    )
+    result = parser.parse(task, {})
+    assert result.status == "success"
+    assert set(result.reads) == {"raw.orders", "raw.customers"}
+    assert set(result.edges) == {
+        ("raw.orders", "shop.orders"),
+        ("raw.customers", "shop.orders"),
+    }

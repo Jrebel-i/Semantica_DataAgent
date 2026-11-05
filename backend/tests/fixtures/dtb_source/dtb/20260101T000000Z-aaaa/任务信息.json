@@ -1,0 +1,78 @@
+{
+  "columns": [
+    {
+      "name": "version_id",
+      "type": "string"
+    },
+    {
+      "name": "version_code",
+      "type": "string"
+    },
+    {
+      "name": "message",
+      "type": "string"
+    },
+    {
+      "name": "committer",
+      "type": "string"
+    },
+    {
+      "name": "task_id",
+      "type": "string"
+    },
+    {
+      "name": "task_name",
+      "type": "string"
+    },
+    {
+      "name": "task_type",
+      "type": "string"
+    },
+    {
+      "name": "task_conf",
+      "type": "string"
+    },
+    {
+      "name": "task_src",
+      "type": "string"
+    },
+    {
+      "name": "project_name",
+      "type": "string"
+    },
+    {
+      "name": "upstream_tasks",
+      "type": "string"
+    },
+    {
+      "name": "output_table_name",
+      "type": "string"
+    },
+    {
+      "name": "create_time",
+      "type": "string"
+    },
+    {
+      "name": "modify_time",
+      "type": "string"
+    }
+  ],
+  "data": [
+    [
+      "1",
+      "1",
+      "",
+      "fixture.user",
+      "1",
+      "old_task",
+      "spark sql",
+      "{\"owner\": \"fixture.user\", \"scheduleInterval\": \"10 2 * * *\", \"params\": {\"day_num\": \"{{ ds }}\"}}",
+      "INSERT INTO dwd.old_table_d SELECT * FROM ods.old_table_raw",
+      "航空",
+      "",
+      "dwd.old_table_d",
+      "",
+      ""
+    ]
+  ]
+}

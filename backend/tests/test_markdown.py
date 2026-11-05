@@ -37,6 +37,18 @@ def test_chunks_preserve_lines_headings_tables_and_fences():
     assert next(p for p in parts if "| 字段0 |" in p["content"])["start_line"] == 5
 
 
+def test_chunks_split_single_lines_larger_than_the_limit():
+    row = "| " + "x" * 2000 + " |"
+    parts = chunks(f"| 字段 | 描述 |\n| --- | --- |\n{row}\n", limit=300)
+    assert all(len(p["content"]) <= 300 for p in parts)
+    assert all(p["start_line"] <= p["end_line"] for p in parts)
+    assert "".join(p["content"] for p in parts).count("x") == 2000
+
+    plain = chunks("y" * 2000, limit=300)
+    assert all(len(p["content"]) <= 300 for p in plain)
+    assert "".join(p["content"] for p in plain) == "y" * 2000
+
+
 def test_dictionary_filename_matches_qualified_table():
     assert table_name("nested/shop.orders.md") == ("shop", "orders")
     assert table_name("nested/orders.md") is None
