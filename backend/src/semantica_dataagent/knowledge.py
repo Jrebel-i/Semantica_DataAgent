@@ -448,9 +448,12 @@ def dimension_sources(records):
     for record in records:
         if record.kind == "dimension_value":
             table = [record.data["database"], record.data["table"]]
-            tables = result.setdefault(record.source_file, [])
-            if table not in tables:
-                tables.append(table)
+            for path in dict.fromkeys((record.source_file, *record.source_files)):
+                if path is None:
+                    continue
+                tables = result.setdefault(path, [])
+                if table not in tables:
+                    tables.append(table)
     return result
 
 

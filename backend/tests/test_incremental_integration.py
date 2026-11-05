@@ -533,3 +533,217 @@ def test_incremental_build_rebuilds_only_changed_task_and_edges(tmp_path, monkey
         if vectors.has_collection(collection):
             vectors.drop_collection(collection)
         vectors.close()
+
+
+def test_incremental_build_refreshes_fulltext_and_vector_search(tmp_path, monkeypatch):
+    from semantica_dataagent.app import app
+    from semantica_dataagent.cli import initialize
+    from semantica_dataagent.table_api import search_knowledge
+
+    monkeypatch.setenv("DATAAGENT_DB_PATH", str(tmp_path / "app.db"))
+    monkeypatch.setenv("DATAAGENT_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    generation = "test_" + uuid.uuid4().hex
+    source = tmp_path / "source"
+    docs = source / "knowledge/metrics"
+    docs.mkdir(parents=True)
+    warehouse = source / "warehouse"
+    warehouse.mkdir()
+    (warehouse / "tables.json").write_text(
+        json.dumps([{"database": "shop", "name": "orders", "comment": ""}])
+    )
+    old_token, new_token = "zinnamon", "quokkadyne"
+    (docs / "sales.md").write_text(
+        f"# Sales\n\nThe {old_token} metric counts orders.\n"
+    )
+    token = initialize()
+    headers = {"Authorization": "Bearer " + token}
+    driver = GraphDatabase.driver(
+        os.environ["TEST_NEO4J_URI"],
+        auth=(os.environ["TEST_NEO4J_USER"], os.environ["TEST_NEO4J_PASSWORD"]),
+    )
+    vectors = MilvusClient(uri=os.environ["TEST_MILVUS_URI"])
+    collection = "sda_" + generation
+    try:
+        with TestClient(app, headers=headers) as client:
+            values = {
+                "neo4j_uri": os.environ["TEST_NEO4J_URI"],
+                "neo4j_user": os.environ["TEST_NEO4J_USER"],
+                "neo4j_password": os.environ["TEST_NEO4J_PASSWORD"],
+                "milvus_uri": os.environ["TEST_MILVUS_URI"],
+                "embedding_url": os.environ["TEST_EMBEDDING_URL"],
+                "source_directory": str(source),
+                "knowledge_generation": generation,
+            }
+            assert (
+                client.put("/api/v1/settings", json={"values": values}).status_code
+                == 200
+            )
+
+            def build(kind):
+                result = client.post("/api/v1/builds", json={"build_type": kind})
+                assert result.status_code == 202, result.text
+                deadline = time.monotonic() + 900
+                while time.monotonic() < deadline:
+                    record = client.get(
+                        "/api/v1/builds/" + str(result.json()["id"])
+                    ).json()
+                    if record["status"] in {"succeeded", "failed", "cancelled"}:
+                        break
+                    time.sleep(0.1)
+                assert record["status"] == "succeeded", record.get("error")
+                return record
+
+            build("full")
+            before = search_knowledge(old_token, "docs", 10)
+            assert any(old_token in (hit.get("content") or "") for hit in before)
+
+            content = f"# Sales\n\nThe {new_token} metric counts returns.\n"
+            uploaded = client.post(
+                "/api/v1/source/upload",
+                json={
+                    "target": "knowledge/metrics",
+                    "files": [
+                        {
+                            "path": "sales.md",
+                            "content_base64": base64.b64encode(
+                                content.encode()
+                            ).decode(),
+                        }
+                    ],
+                },
+            )
+            assert uploaded.status_code == 200, uploaded.text
+            second = build("incremental")
+            assert second["counts"]["changed"] == 1
+
+            after = search_knowledge(new_token, "docs", 10)
+            hit = next(hit for hit in after if new_token in (hit.get("content") or ""))
+            assert "fulltext" in hit["sources"]
+            assert "vector" in hit["sources"]
+            stale = search_knowledge(old_token, "docs", 10)
+            assert not any(old_token in (hit.get("content") or "") for hit in stale)
+    finally:
+        driver.execute_query(
+            "MATCH (n:SDAEntity {generation:$generation}) DETACH DELETE n",
+            generation=generation,
+        )
+        driver.close()
+        if vectors.has_collection(collection):
+            vectors.drop_collection(collection)
+        vectors.close()
+
+
+def test_dtb_incremental_rebuilds_tasks_from_the_task_file_only(tmp_path, monkeypatch):
+    import shutil
+
+    from semantica_dataagent.app import app
+    from semantica_dataagent.cli import initialize
+
+    monkeypatch.setenv("DATAAGENT_DB_PATH", str(tmp_path / "app.db"))
+    monkeypatch.setenv("DATAAGENT_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    generation = "test_" + uuid.uuid4().hex
+    source = tmp_path / "source"
+    shutil.copytree(Path(__file__).parent / "fixtures/dtb_source", source)
+    task_file = source / "dtb/20260202T000000Z-bbbb/任务信息.json"
+    payload = json.loads(task_file.read_text())
+    names = [column["name"] for column in payload["columns"]]
+    row = next(
+        item
+        for item in payload["data"]
+        if dict(zip(names, item, strict=False))["task_name"] == "air_orders_spark"
+    )
+    row[names.index("task_src")] = (
+        "INSERT OVERWRITE TABLE dwd.air_orders_d SELECT * FROM ods.air_orders_raw_v2"
+    )
+    token = initialize()
+    headers = {"Authorization": "Bearer " + token}
+    driver = GraphDatabase.driver(
+        os.environ["TEST_NEO4J_URI"],
+        auth=(os.environ["TEST_NEO4J_USER"], os.environ["TEST_NEO4J_PASSWORD"]),
+    )
+    vectors = MilvusClient(uri=os.environ["TEST_MILVUS_URI"])
+    collection = "sda_" + generation
+    try:
+        with TestClient(app, headers=headers) as client:
+            values = {
+                "neo4j_uri": os.environ["TEST_NEO4J_URI"],
+                "neo4j_user": os.environ["TEST_NEO4J_USER"],
+                "neo4j_password": os.environ["TEST_NEO4J_PASSWORD"],
+                "milvus_uri": os.environ["TEST_MILVUS_URI"],
+                "embedding_url": os.environ["TEST_EMBEDDING_URL"],
+                "source_directory": str(source),
+                "knowledge_generation": generation,
+            }
+            assert (
+                client.put("/api/v1/settings", json={"values": values}).status_code
+                == 200
+            )
+            assert (
+                client.put(
+                    "/api/v1/plugins/source/canonical",
+                    json={"enabled": False, "parameters": {}},
+                ).status_code
+                == 200
+            )
+            assert (
+                client.put(
+                    "/api/v1/plugins/source/dtb",
+                    json={"enabled": True, "parameters": {}},
+                ).status_code
+                == 200
+            )
+            assert (
+                client.put(
+                    "/api/v1/plugins/parser/dtb",
+                    json={"enabled": True, "parameters": {}},
+                ).status_code
+                == 200
+            )
+
+            def build(kind):
+                result = client.post("/api/v1/builds", json={"build_type": kind})
+                assert result.status_code == 202, result.text
+                deadline = time.monotonic() + 900
+                while time.monotonic() < deadline:
+                    record = client.get(
+                        "/api/v1/builds/" + str(result.json()["id"])
+                    ).json()
+                    if record["status"] in {"succeeded", "failed", "cancelled"}:
+                        break
+                    time.sleep(0.2)
+                assert record["status"] == "succeeded", record.get("error")
+                return record
+
+            def nodes(label, key):
+                rows, _, _ = driver.execute_query(
+                    f"MATCH (n:{label} {{generation:$generation}}) RETURN n.{key} AS name, n.build_id AS build_id",
+                    generation=generation,
+                )
+                return {row["name"]: row["build_id"] for row in rows}
+
+            first = build("full")
+            tables_before = nodes("SDATable", "name")
+            assert "air_orders_d" in tables_before
+            assert tables_before["air_orders_d"] == first["id"]
+
+            task_file.write_text(json.dumps(payload, ensure_ascii=False))
+            second = build("incremental")
+            assert second["counts"]["changed"] == 1
+            assert second["counts"]["table"] == 0
+            tasks = nodes("SDATask", "name")
+            assert tasks["air_orders_spark"] == second["id"]
+            assert nodes("SDATable", "name") == tables_before
+            rows, _, _ = driver.execute_query(
+                "MATCH (t:SDATask {generation:$generation, name:'air_orders_spark'}) RETURN t.sql AS sql",
+                generation=generation,
+            )
+            assert "air_orders_raw_v2" in rows[0]["sql"]
+    finally:
+        driver.execute_query(
+            "MATCH (n:SDAEntity {generation:$generation}) DETACH DELETE n",
+            generation=generation,
+        )
+        driver.close()
+        if vectors.has_collection(collection):
+            vectors.drop_collection(collection)
+        vectors.close()
