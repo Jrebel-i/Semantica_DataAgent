@@ -4,6 +4,7 @@ import asyncio
 import json
 from contextlib import contextmanager
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from cryptography.fernet import Fernet
@@ -88,6 +89,65 @@ def _requester(role: str = "admin", token: str = "admin-token") -> Requester:
         db.add(row)
         db.flush()
         return Requester(id=row.id, role=role, token=token)
+
+
+def test_mcp_middleware_binds_the_caller_and_conversation_header(client):
+    from semantica_dataagent.app import MCPAuthentication
+    from semantica_dataagent.mcp_context import (
+        current_conversation_id,
+        current_requester,
+    )
+
+    requester = _requester(token="middleware-token")
+    with sessions().begin() as db:
+        db.add(
+            Conversation(
+                id="conversation-middleware",
+                owner_id=requester.id,
+                title="销售额",
+                agent="pi",
+                provider_id="provider",
+                model="model",
+            )
+        )
+    seen = {}
+
+    async def mcp_app(scope, receive, send):
+        seen["requester"] = current_requester()
+        seen["conversation_id"] = current_conversation_id()
+        await send({"type": "http.response.start", "status": 204, "headers": []})
+        await send({"type": "http.response.body", "body": b""})
+
+    inner = SimpleNamespace(state=SimpleNamespace(mcp_app=mcp_app))
+    scope = {
+        "type": "http",
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": "http",
+        "server": ("testserver", 80),
+        "client": ("testclient", 50000),
+        "root_path": "",
+        "path": "/mcp/",
+        "raw_path": b"/mcp/",
+        "query_string": b"",
+        "headers": [
+            (b"authorization", f"Bearer {requester.token}".encode()),
+            (b"x-dataagent-conversation-id", b"conversation-middleware"),
+        ],
+    }
+    sent = []
+
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(message):
+        sent.append(message)
+
+    asyncio.run(MCPAuthentication(inner)(scope, receive, send))
+
+    assert sent[0]["status"] == 204
+    assert seen["requester"] == requester
+    assert seen["conversation_id"] == "conversation-middleware"
 
 
 def test_request_clarification_records_caller_and_returns_structured_questions(
