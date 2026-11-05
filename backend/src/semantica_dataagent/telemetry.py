@@ -93,6 +93,9 @@ def _filtered(value, secrets=()):
             if secret:
                 value = value.replace(secret, "[REDACTED]")
         value = re.sub(
+            r"(?im)\b(authorization|cookie)\s*:\s*[^\r\n]*", r"\1: [REDACTED]", value
+        )
+        value = re.sub(
             r"(?i)(bearer\s+|(?:password|api[_-]?key|token|authorization)\s*[:=]\s*)[^\s,;]+",
             r"\1[REDACTED]",
             value,

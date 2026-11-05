@@ -77,3 +77,11 @@ def test_application_secrets_and_common_credentials_are_redacted():
     assert result == {
         "text": "Bearer [REDACTED] [REDACTED] password=[REDACTED] api_key=[REDACTED] token=[REDACTED] [REDACTED] ordinary"
     }
+
+
+def test_header_values_embedded_in_text_are_redacted():
+    module = telemetry()
+    result = module._filtered(
+        {"text": "Authorization: Bearer header-secret\nCookie: session=private\nnormal"}
+    )
+    assert result["text"] == "Authorization: [REDACTED]\nCookie: [REDACTED]\nnormal"
