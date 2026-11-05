@@ -19,6 +19,7 @@ from .agent_types import (
     TOOL_START,
     AgentEvent,
 )
+from .k8s_sandbox import KubernetesSessionSandbox
 from .mcp_context import CONVERSATION_HEADER, TURN_HEADER
 from .pi_runner import (
     STREAM_LIMIT,
@@ -131,7 +132,11 @@ class CodexRunner:
 
     def available(self):
         return bool(
-            shutil.which("docker")
+            shutil.which(
+                "kubectl"
+                if os.environ.get("DATAAGENT_AGENT_MODE") == "k8s"
+                else "docker"
+            )
             if self._sandboxed()
             else self.binary or shutil.which("codex")
         )
@@ -178,9 +183,15 @@ class CodexRunner:
         work = request.workspace / "work"
         work.mkdir(parents=True, exist_ok=True)
         sandbox = None
+        exec_header = None
         model_url, mcp_url = request.provider.base_url, request.mcp_url
         if sandboxed:
-            sandbox = SessionSandbox(request.workspace, model_url, mcp_url)
+            sandbox_class = (
+                KubernetesSessionSandbox
+                if os.environ.get("DATAAGENT_AGENT_MODE") == "k8s"
+                else SessionSandbox
+            )
+            sandbox = sandbox_class(request.workspace, model_url, mcp_url)
             model_url, mcp_url = sandbox.model_url, sandbox.mcp_url
         config = self.write_config(request, model_url, mcp_url)
         marker = config / "thread-id.json"
@@ -223,7 +234,14 @@ class CodexRunner:
             ):
                 if key in env:
                     docker.extend(["--env", key])
-            command = docker + [sandbox.name, *command]
+            if isinstance(sandbox, KubernetesSessionSandbox):
+                command, exec_header = sandbox.wrap_command(
+                    command,
+                    env,
+                    ("HOME", "CODEX_HOME", "DATAAGENT_TOKEN", "DATAAGENT_PROVIDER_KEY"),
+                )
+            else:
+                command = docker + [sandbox.name, *command]
         process = None
         drain = None
         registered = False
@@ -235,12 +253,19 @@ class CodexRunner:
             process = await asyncio.create_subprocess_exec(
                 *command,
                 cwd=str(work),
-                stdin=asyncio.subprocess.DEVNULL,
+                stdin=asyncio.subprocess.PIPE
+                if exec_header is not None
+                else asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 env=env,
                 limit=STREAM_LIMIT,
             )
+            if exec_header is not None:
+                assert process.stdin is not None
+                process.stdin.write(exec_header)
+                await process.stdin.drain()
+                process.stdin.close()
             stderr = deque(maxlen=80)
             drain = asyncio.create_task(_drain(process.stderr, stderr))
             parser = CodexEventParser()

@@ -91,3 +91,115 @@ def test_network_policy_selects_sessions_and_restricts_egress():
     for rule in policy["spec"].get("egress", []):
         assert rule.get("to"), "unrestricted egress destination"
         assert rule.get("ports"), "unrestricted egress ports"
+
+
+def test_exec_wrapper_passes_environment_and_stream_without_command_line_secrets():
+    import json
+    import shutil
+    import subprocess
+
+    from semantica_dataagent import k8s_sandbox
+
+    wrapper = getattr(k8s_sandbox, "EXEC_WRAPPER", None)
+    assert wrapper, "exec must receive credentials over stdin"
+    node = shutil.which("node")
+    assert node, "Node is required for the runner protocol test"
+    secret = "example-secret-for-test"
+    command = [
+        node,
+        "-e",
+        wrapper,
+        node,
+        "-e",
+        "process.stdin.on('data', x => console.log(process.env.TOKEN + ':' + x))",
+    ]
+    assert all(secret not in arg for arg in command)
+    result = subprocess.run(
+        command,
+        input=json.dumps({"TOKEN": secret}) + "\nhello",
+        text=True,
+        capture_output=True,
+        timeout=10,
+        check=True,
+    )
+    assert result.stdout.strip() == "example-secret-for-test:hello"
+
+
+def test_firewall_commands_allow_only_resolved_endpoints_and_dns(tmp_path):
+    import os
+    import subprocess
+
+    log = tmp_path / "rules"
+    helpers = {
+        "node": """#!/bin/sh
+case "$3:$4" in
+  4:gateway.example) echo 203.0.113.10 ;;
+  6:gateway.example) echo 2001:db8::10 ;;
+  4:dataagent.semantica-dataagent.svc) echo 10.96.0.25 ;;
+  6:dataagent.semantica-dataagent.svc) echo 2001:db8::25 ;;
+esac
+""",
+        "awk": "#!/bin/sh\necho 10.96.0.10\n",
+        "iptables": '#!/bin/sh\nprintf \'iptables %s\\n\' "$*" >> "$FIREWALL_LOG"\n',
+        "ip6tables": '#!/bin/sh\nprintf \'ip6tables %s\\n\' "$*" >> "$FIREWALL_LOG"\n',
+    }
+    for name, content in helpers.items():
+        helper = tmp_path / name
+        helper.write_text(content)
+        helper.chmod(0o755)
+    env = {"PATH": str(tmp_path), "FIREWALL_LOG": str(log)}
+    script = pod_spec()["spec"]["initContainers"][0]["args"][0]
+    subprocess.run(["/bin/sh", "-ec", script], env=env, check=True, timeout=10)
+    rules = log.read_text().splitlines()
+    assert "iptables -P OUTPUT DROP" in rules
+    assert "ip6tables -P OUTPUT DROP" in rules
+    destinations = [line for line in rules if "--ctorigdst" in line]
+    assert set(destinations) == {
+        "iptables -A OUTPUT -p tcp -m conntrack --ctorigdst 203.0.113.10 --dport 443 -j ACCEPT",
+        "iptables -A OUTPUT -p tcp -m conntrack --ctorigdst 10.96.0.25 --dport 8000 -j ACCEPT",
+        "ip6tables -A OUTPUT -p tcp -m conntrack --ctorigdst 2001:db8::10 --dport 443 -j ACCEPT",
+        "ip6tables -A OUTPUT -p tcp -m conntrack --ctorigdst 2001:db8::25 --dport 8000 -j ACCEPT",
+        "iptables -A OUTPUT -p udp -m conntrack --ctorigdst 10.96.0.10 --dport 53 -j ACCEPT",
+        "iptables -A OUTPUT -p tcp -m conntrack --ctorigdst 10.96.0.10 --dport 53 -j ACCEPT",
+    }
+    assert not any(
+        "-A OUTPUT" in line
+        and "ACCEPT" in line
+        and "--ctorigdst" not in line
+        and "ESTABLISHED,RELATED" not in line
+        for line in rules
+    )
+    assert os.path.isfile(log)
+
+
+def test_orphan_cleanup_selects_only_labeled_session_pods(tmp_path, monkeypatch):
+    from semantica_dataagent.k8s_sandbox import cleanup_orphans
+
+    log = tmp_path / "kubectl.log"
+    binary = tmp_path / "kubectl"
+    binary.write_text('#!/bin/sh\nprintf "%s\\n" "$@" > "$CLEANUP_LOG"\n')
+    binary.chmod(0o755)
+    monkeypatch.setenv("PATH", str(tmp_path))
+    monkeypatch.setenv("CLEANUP_LOG", str(log))
+    cleanup_orphans()
+    args = log.read_text().splitlines()
+    assert args[:5] == ["-n", "semantica-dataagent", "delete", "pods", "-l"]
+    assert args[5] == "app.kubernetes.io/component=agent-session"
+
+
+def test_pod_rejects_workspace_traversal_and_credentialed_urls():
+    import pytest
+
+    from semantica_dataagent.k8s_sandbox import build_pod_spec
+
+    base = {
+        "name": "sda-agent-example",
+        "workspace_subpath": "conversations/example",
+        "model_url": "https://gateway.example/v1",
+        "mcp_url": "http://dataagent.semantica-dataagent.svc:8000/mcp/",
+    }
+    for path in ("/conversations/example", "conversations/../other", "other/example"):
+        with pytest.raises(ValueError):
+            build_pod_spec(**(base | {"workspace_subpath": path}))
+    with pytest.raises(ValueError):
+        build_pod_spec(**(base | {"model_url": "https://user:secret@gateway.example/"}))
