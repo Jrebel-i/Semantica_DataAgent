@@ -15,6 +15,16 @@ def test_interval_changes_use_controlled_clock_and_resume(tmp_path, monkeypatch)
     monkeypatch.setenv("DATAAGENT_DB_PATH", str(tmp_path / "app.db"))
     monkeypatch.setenv("DATAAGENT_ENCRYPTION_KEY", Fernet.generate_key().decode())
     token = initialize()
+    from semantica_dataagent.scheduler import scheduler
+
+    starts = []
+    original_start = scheduler.start
+
+    def observe_start(interval):
+        starts.append(interval)
+        original_start(interval)
+
+    monkeypatch.setattr(scheduler, "start", observe_start)
     now = [100.0]
     schedule = Schedule(lambda: now[0])
     schedule.configure(10)
@@ -37,6 +47,7 @@ def test_interval_changes_use_controlled_clock_and_resume(tmp_path, monkeypatch)
         assert (
             client.get("/api/v1/settings").json()["schedule_interval_seconds"] == "42"
         )
+    assert starts == [0, 42], "saved schedule was not restored at restart"
     schedule.configure(0)
     now[0] += 1000
     assert not schedule.due()

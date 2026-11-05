@@ -142,6 +142,12 @@ def test_full_rebuild_keeps_searching_previous_generation(tmp_path, monkeypatch)
             monkeypatch.setattr(stages, "STAGES", (original, *stages.STAGES[1:]))
             third = wait(submit())
             assert third["status"] == "succeeded", third
+            deadline = time.monotonic() + 60
+            while (
+                vectors.has_collection("sda_" + old_generation)
+                and time.monotonic() < deadline
+            ):
+                time.sleep(0.1)
             assert not vectors.has_collection("sda_" + old_generation)
             rows, _, _ = driver.execute_query(
                 "MATCH (n:SDAEntity {generation:$generation}) RETURN count(n) AS n",
