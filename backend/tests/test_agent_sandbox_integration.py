@@ -54,27 +54,22 @@ def test_session_sandbox_files_network_and_cleanup(tmp_path):
     )
     try:
         sandbox.start()
-        script = """const fs = require('fs');
-const test = async (url) => {
-  try { return (await fetch(url, {signal: AbortSignal.timeout(3000)})).ok; }
-  catch { return false; }
-};
-(async () => console.log(JSON.stringify({
+        script = f"""const fs = require('fs');
+const test = async (url) => {{
+  try {{ return (await fetch(url, {{signal: AbortSignal.timeout(3000)}})).ok; }}
+  catch {{ return false; }}
+}};
+(async () => console.log(JSON.stringify({{
   host_home: fs.existsSync('/home/ub'),
-  host_secret: fs.existsSync(%s),
-  source: fs.existsSync(%s),
-  application: fs.existsSync(%s),
+  host_secret: fs.existsSync({json.dumps(str(marker))}),
+  source: fs.existsSync({json.dumps(str(Path.cwd()))}),
+  application: fs.existsSync({json.dumps(str(Path(pi_runner.__file__)))}),
   external: await test('https://example.com'),
-  host_port: await test('http://host.docker.internal:%s'),
+  host_port: await test('http://host.docker.internal:{servers[2].server_port}'),
   model: await test(process.env.DATAAGENT_MODEL_URL),
   mcp: await test(process.env.DATAAGENT_MCP_URL),
-})))();
-""" % (
-            json.dumps(str(marker)),
-            json.dumps(str(Path.cwd())),
-            json.dumps(str(Path(pi_runner.__file__))),
-            servers[2].server_port,
-        )  # noqa: UP031
+}})))();
+"""
         result = json.loads(sandbox.exec(["node", "-e", script]))
         assert not any(
             result[key] for key in ("host_home", "host_secret", "source", "application")
@@ -95,3 +90,38 @@ const test = async (url) => {
         ).returncode
         != 0
     )
+
+
+@pytest.mark.skipif(not _docker_available(), reason="Docker daemon is required")
+def test_end_and_restart_remove_containers_but_keep_session_files(tmp_path):
+    from semantica_dataagent.agent_sandbox import (
+        ACTIVE,
+        SessionSandbox,
+        cleanup_orphans,
+        end_session,
+    )
+
+    for use_restart in (False, True):
+        workspace = tmp_path / str(use_restart)
+        (workspace / "sessions").mkdir(parents=True)
+        saved = workspace / "sessions" / "conversation.jsonl"
+        saved.write_text("saved conversation", encoding="utf-8")
+        sandbox = SessionSandbox(workspace, "http://127.0.0.1:1", "http://127.0.0.1:2")
+        try:
+            sandbox.start()
+            ACTIVE["test"] = sandbox
+            if use_restart:
+                cleanup_orphans()
+                ACTIVE.pop("test")
+            else:
+                end_session("test")
+            result = subprocess.run(
+                ["docker", "inspect", sandbox.container_id],
+                capture_output=True,
+                check=False,
+            )
+            assert result.returncode != 0, "ended session container still exists"
+            assert saved.read_text(encoding="utf-8") == "saved conversation"
+        finally:
+            ACTIVE.pop("test", None)
+            sandbox.close()

@@ -21,7 +21,7 @@ from .agent_runner import (
     AgentEvent,
     AgentTurnRequest,
 )
-from .agent_sandbox import SessionSandbox
+from .agent_sandbox import ACTIVE, SessionSandbox
 from .skill import read_skill
 
 PROVIDER_KEY = "dataagent"
@@ -403,6 +403,7 @@ class PiRunner:
                 request.workspace, request.provider.base_url, request.mcp_url
             )
             await asyncio.to_thread(sandbox.start)
+            ACTIVE[request.conversation_id] = sandbox
             # Configuration contains only environment references for secrets.
             models = json.loads((config / "models.json").read_text())
             models["providers"][PROVIDER_KEY]["baseUrl"] = sandbox.model_url
@@ -426,16 +427,22 @@ class PiRunner:
                 if key in env:
                     docker.extend(["--env", key])
             command = docker + [sandbox.name, *command]
-        process = await asyncio.create_subprocess_exec(
-            *command,
-            cwd=work,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=env,
-            start_new_session=True,
-            limit=STREAM_LIMIT,
-        )
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *command,
+                cwd=work,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=env,
+                start_new_session=True,
+                limit=STREAM_LIMIT,
+            )
+        except BaseException:
+            if sandbox is not None:
+                ACTIVE.pop(request.conversation_id, None)
+                await asyncio.to_thread(sandbox.close)
+            raise
         stderr: deque[str] = deque(maxlen=80)
         drain = asyncio.create_task(_drain(process.stderr, stderr))
         parser = PiEventParser()
@@ -485,6 +492,8 @@ class PiRunner:
             yield _redact_event(parser.finish(), secrets)
         finally:
             if sandbox is not None:
+                if ACTIVE.get(request.conversation_id) is sandbox:
+                    ACTIVE.pop(request.conversation_id, None)
                 await asyncio.to_thread(sandbox.close)
             if not finished:
                 await _stop(process)

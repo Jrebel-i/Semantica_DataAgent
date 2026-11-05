@@ -2,6 +2,7 @@
 
 import json
 import os
+import shutil
 import subprocess
 import uuid
 from pathlib import Path
@@ -163,3 +164,35 @@ class SessionSandbox:
     def close(self):
         self._run("rm", "-f", self.name, self.proxy, check=False)
         self._run("network", "rm", self.network, check=False)
+
+
+# Active sessions are removed immediately after a turn, so there is no idle container.
+ACTIVE: dict[str, SessionSandbox] = {}
+
+
+def end_session(conversation_id: str) -> None:
+    sandbox = ACTIVE.pop(conversation_id, None)
+    if sandbox is not None:
+        sandbox.close()
+
+
+def cleanup_orphans() -> None:
+    if not shutil.which("docker"):
+        return
+    for kind, list_args, remove_args in (
+        ("container", ["ps", "-aq"], ["rm", "-f"]),
+        ("network", ["network", "ls", "-q"], ["network", "rm"]),
+    ):
+        result = subprocess.run(
+            ["docker", *list_args, "--filter", f"label={LABEL}"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode:
+            raise RuntimeError(f"Cannot list agent {kind}s for cleanup")
+        ids = result.stdout.split()
+        if ids:
+            subprocess.run(
+                ["docker", *remove_args, *ids], check=True, capture_output=True
+            )

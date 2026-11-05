@@ -1,5 +1,6 @@
 """Conversation REST + SSE endpoints for the online agent."""
 
+import asyncio
 import json
 import logging
 import os
@@ -221,6 +222,19 @@ def conversation_detail(
             **_view(row, len(turns)).model_dump(),
             turns=[_turn(turn, by_turn[turn.id]) for turn in turns],
         )
+
+
+@router.post("/api/v1/conversations/{conversation_id}/end", status_code=204)
+async def end_conversation(
+    conversation_id: str, requester: Annotated[Requester, Depends(current_requester)]
+):
+    from .agent_sandbox import end_session
+
+    with sessions()() as db:
+        row = db.get(Conversation, conversation_id)
+        if row is None or row.owner_id != requester.id:
+            raise HTTPException(404, "Conversation not found")
+    await asyncio.to_thread(end_session, conversation_id)
 
 
 @router.post("/api/v1/conversations/ask")
