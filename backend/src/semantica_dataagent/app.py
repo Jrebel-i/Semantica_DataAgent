@@ -937,3 +937,33 @@ def source_diff(path: str, before: str, after: str, _: Annotated[str, Depends(ad
 
     with source_repository() as root:
         return SourceDiff(diff=source.diff(root, path, before, after))
+
+
+def mount_frontend(application: FastAPI, directory):
+    """Serve the built UI after all API and MCP routes have been registered."""
+    from starlette.exceptions import HTTPException as StarletteHTTPException
+    from starlette.staticfiles import StaticFiles
+
+    class FrontendFiles(StaticFiles):
+        async def get_response(self, path, scope):
+            try:
+                return await super().get_response(path, scope)
+            except StarletteHTTPException as exc:
+                headers = dict(scope.get("headers", []))
+                accepts_html = b"text/html" in headers.get(b"accept", b"")
+                if (
+                    exc.status_code != 404
+                    or not accepts_html
+                    or path.startswith(("api/", "mcp/"))
+                    or "." in path.rsplit("/", 1)[-1]
+                ):
+                    raise
+                return await super().get_response("index.html", scope)
+
+    application.mount(
+        "/", FrontendFiles(directory=directory, html=True), name="frontend"
+    )
+
+
+if static_dir := os.environ.get("DATAAGENT_STATIC_DIR"):
+    mount_frontend(app, static_dir)
