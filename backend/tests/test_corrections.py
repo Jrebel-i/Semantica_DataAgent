@@ -296,7 +296,7 @@ def test_failed_atomic_replace_preserves_original_document(tmp_path, monkeypatch
 import pytest
 
 
-@pytest.mark.parametrize("crash_at", ["write", "add", "commit", "finalize"])
+@pytest.mark.parametrize("crash_at", ["precheck", "write", "add", "commit", "finalize"])
 def test_interrupted_approval_recovers_without_duplicate_commits(
     client, monkeypatch, tmp_path, crash_at
 ):
@@ -348,8 +348,21 @@ def test_interrupted_approval_recovers_without_duplicate_commits(
             )
         )
     proposal = "recovery-" + crash_at
+    if crash_at == "precheck":
+        path = root / "knowledge/metrics/sales.md"
+        path.write_text("someone else's staged content\n")
+        subprocess.run(
+            ["git", "-C", str(root), "add", "knowledge/metrics/sales.md"], check=True
+        )
+        path.write_text("before\n")
     pid = os.fork()
     if pid == 0:
+        if crash_at == "precheck":
+
+            def die_before_lock(_directory):
+                os.kill(os.getpid(), signal.SIGKILL)
+
+            corrections.repository = die_before_lock
         real_write = corrections._atomic_write
         real_git = corrections.git
         real_finalize = corrections._finalize
@@ -397,6 +410,11 @@ def test_interrupted_approval_recovers_without_duplicate_commits(
     assert commits.count("Approve correction " + proposal) == (
         1 if expected == "approved" else 0
     )
+    if crash_at == "precheck":
+        staged = subprocess.check_output(
+            ["git", "-C", str(root), "show", ":knowledge/metrics/sales.md"], text=True
+        )
+        assert staged == "someone else's staged content\n"
     assert (root / "knowledge/metrics/sales.md").read_text() == (
         "after\n" if expected == "approved" else "before\n"
     )

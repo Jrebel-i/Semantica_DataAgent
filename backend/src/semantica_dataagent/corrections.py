@@ -249,7 +249,7 @@ def recover_applying(only_id: str | None = None):
                 git(root, "diff", "--cached", "--name-only", "-z").decode().split("\0")
             )
             staged = [item for item in staged if item]
-            if current == old and source_path not in staged:
+            if current == old:
                 staged = []
             elif any(item != source_path for item in staged):
                 raise ValueError("Unrelated staged changes prevent correction recovery")
@@ -289,6 +289,8 @@ def approve(
         db.execute(text("BEGIN IMMEDIATE"))
         row = _pending(db, proposal_id)
         patch = body.patch if body and body.patch is not None else row.patch
+        if patch == row.original:
+            raise HTTPException(422, "Correction does not change the target")
         reviewer_name = db.query(Token).filter_by(id=requester.id).one().name
         if (
             any(c in reviewer_name for c in "<>\n\r\x00")
