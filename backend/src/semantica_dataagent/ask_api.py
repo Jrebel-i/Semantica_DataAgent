@@ -149,6 +149,7 @@ async def _run_turn(context: dict, question: str, timeout: float) -> dict:
         model=context["model"],
         mcp_url=public_base_url() + "/mcp/",
         mcp_token=current_requester().token,
+        turn_id=context["turn_id"],
     )
     seq = 0
     terminal = False

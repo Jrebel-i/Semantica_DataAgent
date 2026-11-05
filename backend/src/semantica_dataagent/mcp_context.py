@@ -11,6 +11,7 @@ from contextvars import ContextVar
 from .auth import Requester
 
 CONVERSATION_HEADER = "x-dataagent-conversation-id"
+TURN_HEADER = "x-dataagent-turn-id"
 
 _requester: ContextVar[Requester | None] = ContextVar("mcp_requester", default=None)
 _conversation_id: ContextVar[str | None] = ContextVar(
@@ -18,13 +19,20 @@ _conversation_id: ContextVar[str | None] = ContextVar(
 )
 
 
+_turn_id: ContextVar[str | None] = ContextVar("mcp_turn_id", default=None)
+
+
 @contextmanager
-def bind_mcp_context(requester: Requester, conversation_id: str | None = None):
+def bind_mcp_context(
+    requester: Requester, conversation_id: str | None = None, turn_id: str | None = None
+):
     requester_token = _requester.set(requester)
     conversation_token = _conversation_id.set(conversation_id or None)
+    turn_token = _turn_id.set(turn_id)
     try:
         yield
     finally:
+        _turn_id.reset(turn_token)
         _conversation_id.reset(conversation_token)
         _requester.reset(requester_token)
 
@@ -38,3 +46,7 @@ def current_requester() -> Requester:
 
 def current_conversation_id() -> str | None:
     return _conversation_id.get()
+
+
+def current_turn_id() -> str | None:
+    return _turn_id.get()

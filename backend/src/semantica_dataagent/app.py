@@ -672,9 +672,13 @@ class MCPAuthentication:
                     headers=exc.headers,
                 )(scope, receive, send)
                 return
-            from .mcp_context import CONVERSATION_HEADER, bind_mcp_context
+            from .mcp_context import CONVERSATION_HEADER, TURN_HEADER, bind_mcp_context
 
-            with bind_mcp_context(requester, request.headers.get(CONVERSATION_HEADER)):
+            with bind_mcp_context(
+                requester,
+                request.headers.get(CONVERSATION_HEADER),
+                request.headers.get(TURN_HEADER),
+            ):
                 await self.inner.state.mcp_app(scope, receive, send)
             return
         await self.inner.state.mcp_app(scope, receive, send)

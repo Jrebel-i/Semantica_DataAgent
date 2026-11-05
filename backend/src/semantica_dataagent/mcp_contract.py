@@ -228,7 +228,11 @@ def install_contract(server):
 
         from .crypto import decrypt
         from .db import Conversation, Provider, Token, Turn, sessions
-        from .mcp_context import current_conversation_id, current_requester
+        from .mcp_context import (
+            current_conversation_id,
+            current_requester,
+            current_turn_id,
+        )
         from .telemetry import submit, trace_id
 
         started = datetime.now(UTC)
@@ -237,13 +241,19 @@ def install_contract(server):
         try:
             requester = current_requester()
             conversation_id = current_conversation_id()
+            supplied_turn = current_turn_id()
             active_turn = None
             token_name = ""
             provider_secret = ""
             with sessions()() as db:
                 owner = db.query(Token).filter_by(id=requester.id).first()
                 token_name = owner.name if owner else ""
-                if conversation_id:
+                if (
+                    conversation_id
+                    and supplied_turn
+                    and supplied_turn.isascii()
+                    and supplied_turn.isdecimal()
+                ):
                     conversation = db.get(Conversation, conversation_id)
                     if conversation and conversation.owner_id == requester.id:
                         provider = db.get(Provider, conversation.provider_id)
@@ -252,9 +262,10 @@ def install_contract(server):
                         active_turn = (
                             db.query(Turn)
                             .filter_by(
-                                conversation_id=conversation_id, status="running"
+                                id=int(supplied_turn),
+                                conversation_id=conversation_id,
+                                status="running",
                             )
-                            .order_by(Turn.id.desc())
                             .first()
                         )
                         if active_turn:

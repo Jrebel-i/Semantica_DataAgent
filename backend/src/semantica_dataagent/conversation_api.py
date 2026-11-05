@@ -354,6 +354,7 @@ async def ask(
         model=model,
         mcp_url=public_base_url() + "/mcp/",
         mcp_token=requester.token,
+        turn_id=turn_id,
     )
     return StreamingResponse(
         _stream(run_request, runner, turn_id, conversation_id, request),

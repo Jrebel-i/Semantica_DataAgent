@@ -19,7 +19,7 @@ from .agent_types import (
     TOOL_START,
     AgentEvent,
 )
-from .mcp_context import CONVERSATION_HEADER
+from .mcp_context import CONVERSATION_HEADER, TURN_HEADER
 from .pi_runner import (
     STREAM_LIMIT,
     _clarification_questions,
@@ -163,6 +163,10 @@ class CodexRunner:
             + json.dumps(CONVERSATION_HEADER)
             + " = "
             + json.dumps(request.conversation_id)
+            + ", "
+            + json.dumps(TURN_HEADER)
+            + " = "
+            + json.dumps(str(request.turn_id or ""))
             + " }\n"
         )
         (config / "config.toml").write_text(cfg, encoding="utf-8")
