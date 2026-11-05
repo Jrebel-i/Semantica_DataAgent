@@ -193,6 +193,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/generations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Generations */
+        get: operations["list_generations_api_v1_generations_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/generations/{name}/switch": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Switch Generation */
+        post: operations["switch_generation_api_v1_generations__name__switch_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/me": {
         parameters: {
             query?: never;
@@ -754,6 +788,30 @@ export interface components {
              * @default []
              */
             task_include: string[];
+        };
+        /** GenerationView */
+        GenerationView: {
+            /** Counts */
+            counts: {
+                [key: string]: number;
+            };
+            /** Created At */
+            created_at: string | null;
+            /** Current */
+            current: boolean;
+            /** Name */
+            name: string;
+            /** Source Commit */
+            source_commit: string | null;
+        };
+        /** GenerationsView */
+        GenerationsView: {
+            /** Behind */
+            behind: boolean;
+            /** Generations */
+            generations: components["schemas"]["GenerationView"][];
+            /** Source Head */
+            source_head: string | null;
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -1435,6 +1493,57 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["FilterRules"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_generations_api_v1_generations_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GenerationsView"];
+                };
+            };
+        };
+    };
+    switch_generation_api_v1_generations__name__switch_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GenerationView"];
                 };
             };
             /** @description Validation Error */

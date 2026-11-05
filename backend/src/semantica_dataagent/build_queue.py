@@ -1,5 +1,6 @@
 """Run persisted builds one at a time in submission order."""
 
+import json
 import threading
 from datetime import UTC, datetime
 
@@ -92,3 +93,31 @@ class BuildQueue:
 
 
 build_queue = BuildQueue()
+
+
+def enqueue_build(build_type, triggered_by, queue=None, *, notify=True):
+    now = datetime.now(UTC).isoformat()
+    with sessions().begin() as db:
+        row = Build(
+            status="queued",
+            started_at=now,
+            counts="{}",
+            build_type=build_type,
+            triggered_by=triggered_by,
+            logs=json.dumps(
+                [
+                    {
+                        "timestamp": now,
+                        "stage": "queue",
+                        "level": "info",
+                        "message": f"{build_type} build queued",
+                    }
+                ]
+            ),
+        )
+        db.add(row)
+        db.flush()
+        build_id = row.id
+    if notify:
+        (queue or build_queue).enqueue()
+    return build_id

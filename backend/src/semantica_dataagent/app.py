@@ -23,9 +23,19 @@ from sqlalchemy import text, update
 
 from . import knowledge
 from .auth import admin, bearer, current_user
-from .build_queue import build_queue
-from .db import Build, PluginConfig, Setting, Token, digest, sessions
+from .build_queue import build_queue, enqueue_build
+from .db import (
+    Build,
+    GenerationPointer,
+    KnowledgeGeneration,
+    PluginConfig,
+    Setting,
+    Token,
+    digest,
+    sessions,
+)
 from .embedding_client import validate_settings
+from .scheduler import scheduler
 
 
 @asynccontextmanager
@@ -54,12 +64,16 @@ async def lifespan(application):
             )
         )
     build_queue.start()
+    with sessions()() as db:
+        interval = db.get(Setting, "schedule_interval_seconds")
+        scheduler.start(int(interval.value) if interval else 0)
     server = create_mcp()
     application.state.mcp_app = server.streamable_http_app()
     async with server.session_manager.run():
         try:
             yield
         finally:
+            scheduler.stop()
             build_queue.stop()
             knowledge.close_readers()
 
@@ -80,6 +94,8 @@ KEYS = {
     "embedding_model",
     "source_directory",
     "knowledge_generation",
+    "generation_retention",
+    "schedule_interval_seconds",
     "dimension_value_limit",
     "embedding_concurrency",
     "embedding_timeout_seconds",
@@ -191,6 +207,20 @@ def put_settings(
         not limit.isascii() or not limit.isdigit() or not 1 <= int(limit) <= 1000000
     ):
         raise HTTPException(status_code=422, detail="Invalid dimension value limit")
+    interval = body.values.get("schedule_interval_seconds")
+    if interval and (
+        not interval.isascii()
+        or not interval.isdigit()
+        or not 0 <= int(interval) <= 604800
+    ):
+        raise HTTPException(status_code=422, detail="Invalid schedule interval")
+    retention = body.values.get("generation_retention")
+    if retention and (
+        not retention.isascii()
+        or not retention.isdigit()
+        or not 1 <= int(retention) <= 100
+    ):
+        raise HTTPException(status_code=422, detail="Invalid generation retention")
     generation = body.values.get("knowledge_generation")
     if generation and not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,63}", generation):
         raise HTTPException(status_code=422, detail="Invalid generation")
@@ -219,6 +249,10 @@ def put_settings(
                 ) from None
     cipher = Fernet(os.environ["DATAAGENT_ENCRYPTION_KEY"].encode())
     with sessions().begin() as db:
+        if "knowledge_generation" in body.values and db.get(GenerationPointer, 1):
+            raise HTTPException(
+                status_code=409, detail="Use the generation switch endpoint"
+            )
         for key, value in body.values.items():
             row = db.get(Setting, key)
             if value is None or value == "":
@@ -232,6 +266,8 @@ def put_settings(
                     row.value = stored
                 else:
                     db.add(Setting(key=key, value=stored))
+    if "schedule_interval_seconds" in body.values:
+        scheduler.configure(int(interval) if interval else 0)
     return get_settings("admin")
 
 
@@ -358,36 +394,103 @@ def build_view(row: Build) -> BuildView:
     )
 
 
+class GenerationView(BaseModel):
+    name: str
+    current: bool
+    created_at: str | None
+    source_commit: str | None
+    counts: dict[str, int]
+
+
+class GenerationsView(BaseModel):
+    generations: list[GenerationView]
+    source_head: str | None
+    behind: bool
+
+
+@app.get("/api/v1/generations", response_model=GenerationsView)
+def list_generations(_: Annotated[str, Depends(current_user)]):
+    from pathlib import Path
+
+    from .source_directory import git
+
+    values = knowledge.settings()
+    head = None
+    try:
+        head = (
+            git(Path(values["source_directory"]), "rev-parse", "--verify", "HEAD")
+            .decode()
+            .strip()
+        )
+    except (KeyError, OSError, ValueError, RuntimeError):
+        pass
+    with sessions()() as db:
+        pointer = db.get(GenerationPointer, 1)
+        rows = (
+            db.query(KnowledgeGeneration)
+            .order_by(KnowledgeGeneration.created_at.desc())
+            .all()
+        )
+        result = []
+        for row in rows:
+            build = db.get(Build, row.build_id) if row.build_id else None
+            result.append(
+                GenerationView(
+                    name=row.name,
+                    current=bool(pointer and row.name == pointer.generation),
+                    created_at=row.created_at,
+                    source_commit=build.source_commit if build else None,
+                    counts=json.loads(build.counts) if build else {},
+                )
+            )
+        current = next((row for row in result if row.current), None)
+        return GenerationsView(
+            generations=result,
+            source_head=head,
+            behind=bool(
+                head
+                and current
+                and current.source_commit
+                and head != current.source_commit
+            ),
+        )
+
+
+@app.post("/api/v1/generations/{name}/switch", response_model=GenerationView)
+def switch_generation(name: str, _: Annotated[str, Depends(admin)]):
+    with sessions().begin() as db:
+        row = db.get(KnowledgeGeneration, name)
+        if row is None:
+            raise HTTPException(status_code=404, detail="Generation not found")
+        if row.deleting:
+            raise HTTPException(status_code=409, detail="Generation is being deleted")
+        pointer = db.get(GenerationPointer, 1)
+        if pointer is None:
+            db.add(GenerationPointer(id=1, generation=name))
+        else:
+            pointer.generation = name
+        build = db.get(Build, row.build_id) if row.build_id else None
+        return GenerationView(
+            name=name,
+            current=True,
+            created_at=row.created_at,
+            source_commit=build.source_commit if build else None,
+            counts=json.loads(build.counts) if build else {},
+        )
+
+
 @app.post("/api/v1/builds", status_code=202, response_model=BuildView)
 def start_build(
     _: Annotated[str, Depends(admin)],
     credentials: Annotated[HTTPAuthorizationCredentials, Depends(bearer)],
     body: BuildRequest | None = None,
 ):
-    now = datetime.now(UTC)
     build_type = body.build_type if body else "full"
-    with sessions().begin() as db:
-        token = db.get(Token, digest(credentials.credentials))
-        row = Build(
-            status="queued",
-            started_at=now.isoformat(),
-            counts="{}",
-            build_type=build_type,
-            triggered_by=token.name,
-            logs=json.dumps(
-                [
-                    {
-                        "timestamp": now.isoformat(),
-                        "stage": "queue",
-                        "level": "info",
-                        "message": f"{build_type} build queued",
-                    }
-                ]
-            ),
-        )
-        db.add(row)
-        db.flush()
-        result = build_view(row)
+    with sessions()() as db:
+        token_name = db.get(Token, digest(credentials.credentials)).name
+    build_id = enqueue_build(build_type, token_name, notify=False)
+    with sessions()() as db:
+        result = build_view(db.get(Build, build_id))
     build_queue.enqueue()
     return result
 

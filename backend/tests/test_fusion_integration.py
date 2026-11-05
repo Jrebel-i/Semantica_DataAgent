@@ -12,6 +12,7 @@ from pathlib import Path
 import httpx
 import pytest
 import uvicorn
+from conftest import cleanup_test_generations
 from cryptography.fernet import Fernet
 from neo4j import GraphDatabase
 from pymilvus import MilvusClient
@@ -86,6 +87,9 @@ def test_fusion_over_mcp(tmp_path, monkeypatch):
                     break
                 time.sleep(0.2)
             assert build["status"] == "succeeded", build.get("error")
+            from semantica_dataagent.knowledge import settings
+
+            generation = settings()["knowledge_generation"]
             response = client.get(
                 "/api/v1/search",
                 params={
@@ -195,12 +199,9 @@ def test_fusion_over_mcp(tmp_path, monkeypatch):
             os.environ["TEST_NEO4J_URI"],
             auth=(os.environ["TEST_NEO4J_USER"], os.environ["TEST_NEO4J_PASSWORD"]),
         ) as driver:
-            driver.execute_query(
-                "MATCH (n:SDAEntity {generation:$generation}) DETACH DELETE n",
-                generation=generation,
-            )
-        client = MilvusClient(uri=os.environ["TEST_MILVUS_URI"])
-        if client.has_collection("sda_" + generation):
-            client.drop_collection("sda_" + generation)
-        client.close()
+            client = MilvusClient(uri=os.environ["TEST_MILVUS_URI"])
+            try:
+                cleanup_test_generations(driver, client, generation)
+            finally:
+                client.close()
         assert not thread.is_alive()

@@ -8,6 +8,7 @@ import uuid
 from pathlib import Path
 
 import pytest
+from conftest import cleanup_test_generations
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 from neo4j import GraphDatabase
@@ -122,10 +123,16 @@ def test_incremental_build_preserves_other_documents_and_removes_deleted(
                 raise AssertionError(f"Build {build_id} did not finish: {build}")
 
             def build(kind):
+                nonlocal generation, collection
                 result = client.post("/api/v1/builds", json={"build_type": kind})
                 assert result.status_code == 202, result.text
                 build = wait_build(result.json()["id"])
                 assert build["status"] == "succeeded", build.get("error")
+                if kind == "full":
+                    from semantica_dataagent.knowledge import settings
+
+                    generation = settings()["knowledge_generation"]
+                    collection = "sda_" + generation
                 return build
 
             first = build("full")
@@ -388,14 +395,11 @@ def test_incremental_build_preserves_other_documents_and_removes_deleted(
             )
 
     finally:
-        driver.execute_query(
-            "MATCH (n:SDAEntity {generation:$generation}) DETACH DELETE n",
-            generation=generation,
-        )
-        driver.close()
-        if vectors.has_collection(collection):
-            vectors.drop_collection(collection)
-        vectors.close()
+        try:
+            cleanup_test_generations(driver, vectors, generation)
+        finally:
+            driver.close()
+            vectors.close()
 
 
 def test_incremental_build_rebuilds_only_changed_task_and_edges(tmp_path, monkeypatch):
@@ -468,6 +472,7 @@ def test_incremental_build_rebuilds_only_changed_task_and_edges(tmp_path, monkey
             )
 
             def build(kind):
+                nonlocal generation, collection
                 result = client.post("/api/v1/builds", json={"build_type": kind})
                 assert result.status_code == 202, result.text
                 deadline = time.monotonic() + 900
@@ -479,6 +484,11 @@ def test_incremental_build_rebuilds_only_changed_task_and_edges(tmp_path, monkey
                         break
                     time.sleep(0.2)
                 assert record["status"] == "succeeded", record.get("error")
+                if kind == "full":
+                    from semantica_dataagent.knowledge import settings
+
+                    generation = settings()["knowledge_generation"]
+                    collection = "sda_" + generation
                 return record
 
             def tasks():
@@ -525,14 +535,11 @@ def test_incremental_build_rebuilds_only_changed_task_and_edges(tmp_path, monkey
                 ("raw.b", "shop.b"): first["id"],
             }
     finally:
-        driver.execute_query(
-            "MATCH (n:SDAEntity {generation:$generation}) DETACH DELETE n",
-            generation=generation,
-        )
-        driver.close()
-        if vectors.has_collection(collection):
-            vectors.drop_collection(collection)
-        vectors.close()
+        try:
+            cleanup_test_generations(driver, vectors, generation)
+        finally:
+            driver.close()
+            vectors.close()
 
 
 def test_incremental_build_refreshes_fulltext_and_vector_search(tmp_path, monkeypatch):
@@ -580,6 +587,7 @@ def test_incremental_build_refreshes_fulltext_and_vector_search(tmp_path, monkey
             )
 
             def build(kind):
+                nonlocal generation, collection
                 result = client.post("/api/v1/builds", json={"build_type": kind})
                 assert result.status_code == 202, result.text
                 deadline = time.monotonic() + 900
@@ -591,6 +599,11 @@ def test_incremental_build_refreshes_fulltext_and_vector_search(tmp_path, monkey
                         break
                     time.sleep(0.1)
                 assert record["status"] == "succeeded", record.get("error")
+                if kind == "full":
+                    from semantica_dataagent.knowledge import settings
+
+                    generation = settings()["knowledge_generation"]
+                    collection = "sda_" + generation
                 return record
 
             build("full")
@@ -623,14 +636,11 @@ def test_incremental_build_refreshes_fulltext_and_vector_search(tmp_path, monkey
             stale = search_knowledge(old_token, "docs", 10)
             assert not any(old_token in (hit.get("content") or "") for hit in stale)
     finally:
-        driver.execute_query(
-            "MATCH (n:SDAEntity {generation:$generation}) DETACH DELETE n",
-            generation=generation,
-        )
-        driver.close()
-        if vectors.has_collection(collection):
-            vectors.drop_collection(collection)
-        vectors.close()
+        try:
+            cleanup_test_generations(driver, vectors, generation)
+        finally:
+            driver.close()
+            vectors.close()
 
 
 def test_dtb_incremental_rebuilds_tasks_from_the_task_file_only(tmp_path, monkeypatch):
@@ -701,6 +711,7 @@ def test_dtb_incremental_rebuilds_tasks_from_the_task_file_only(tmp_path, monkey
             )
 
             def build(kind):
+                nonlocal generation, collection
                 result = client.post("/api/v1/builds", json={"build_type": kind})
                 assert result.status_code == 202, result.text
                 deadline = time.monotonic() + 900
@@ -712,6 +723,11 @@ def test_dtb_incremental_rebuilds_tasks_from_the_task_file_only(tmp_path, monkey
                         break
                     time.sleep(0.2)
                 assert record["status"] == "succeeded", record.get("error")
+                if kind == "full":
+                    from semantica_dataagent.knowledge import settings
+
+                    generation = settings()["knowledge_generation"]
+                    collection = "sda_" + generation
                 return record
 
             def nodes(label, key):
@@ -739,11 +755,8 @@ def test_dtb_incremental_rebuilds_tasks_from_the_task_file_only(tmp_path, monkey
             )
             assert "air_orders_raw_v2" in rows[0]["sql"]
     finally:
-        driver.execute_query(
-            "MATCH (n:SDAEntity {generation:$generation}) DETACH DELETE n",
-            generation=generation,
-        )
-        driver.close()
-        if vectors.has_collection(collection):
-            vectors.drop_collection(collection)
-        vectors.close()
+        try:
+            cleanup_test_generations(driver, vectors, generation)
+        finally:
+            driver.close()
+            vectors.close()

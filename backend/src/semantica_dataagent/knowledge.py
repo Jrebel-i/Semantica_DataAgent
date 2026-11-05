@@ -6,6 +6,7 @@ import json
 import os
 import re
 import time
+import uuid
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager, suppress
@@ -30,7 +31,7 @@ from semantica.graph_store import GraphStore
 from semantica.vector_store.milvus_store import MilvusStore
 
 from .canonical import KINDS
-from .db import Build, Setting, sessions
+from .db import Build, GenerationPointer, KnowledgeGeneration, Setting, sessions
 from .embedding_client import EmbeddingStats
 from .embedding_client import embed as embedding_embed
 from .filters import filter_records, get_filters
@@ -84,6 +85,9 @@ def validate_records(records):
 def settings():
     with sessions()() as db:
         values = {row.key: row.value for row in db.query(Setting).all()}
+        pointer = db.get(GenerationPointer, 1)
+        if pointer:
+            values["knowledge_generation"] = pointer.generation
     if values.get("neo4j_password"):
         values["neo4j_password"] = (
             Fernet(os.environ["DATAAGENT_ENCRYPTION_KEY"].encode())
@@ -336,7 +340,6 @@ def build_storage(values, embedding_stats=None):
     try:
         vector_store = milvus(values)
         try:
-            close_readers()
             if values.get("_build_id"):
                 with sessions().begin() as db:
                     db.get(Build, values["_build_id"]).affected_files = json.dumps(
@@ -488,6 +491,8 @@ def _stage_name(stage):
 def run_build(build_id):
     status, counts, error = "failed", {}, None
     failures = []
+    new_values = None
+    published = False
     stats = EmbeddingStats()
     logs = []
     try:
@@ -500,6 +505,15 @@ def run_build(build_id):
         _record_log(build_id, logs, "build", f"{build_type} build started")
         values = settings()
         generation = values["knowledge_generation"]
+        with sessions().begin() as db:
+            if db.get(GenerationPointer, 1) is None:
+                if db.get(KnowledgeGeneration, generation) is None:
+                    db.add(KnowledgeGeneration(name=generation))
+                db.add(GenerationPointer(id=1, generation=generation))
+        if build_type == "full":
+            generation = generation[:30] + "_" + uuid.uuid4().hex
+            values["knowledge_generation"] = generation
+            new_values = values.copy()
         plugins = configured()
         filters = get_filters()
         config = {
@@ -732,22 +746,117 @@ def run_build(build_id):
             _record_log(build_id, logs, "relationships", "Reconciled relationships")
         read_graph(values)
         read_vectors(values)
-        status = "succeeded"
         _record_log(build_id, logs, "build", "Build succeeded")
+        if build_type == "full":
+            with sessions().begin() as db:
+                db.add(
+                    KnowledgeGeneration(
+                        name=generation,
+                        build_id=build_id,
+                        created_at=datetime.now(UTC).isoformat(),
+                    )
+                )
+                db.get(GenerationPointer, 1).generation = generation
+                build = db.get(Build, build_id)
+                build.status = "succeeded"
+                build.counts = json.dumps({**counts, **stats.counts()})
+                build.error = None
+                build.parse_failures = json.dumps(failures, ensure_ascii=False)
+                build.finished_at = datetime.now(UTC).isoformat()
+            published = True
+            new_values = None
+        if build_type == "full":
+            try:
+                prune_generations(values)
+            except Exception as exc:  # noqa: BLE001 - retain metadata for retry
+                _record_log(
+                    build_id, logs, "retention", f"Cleanup failed: {exc}", "error"
+                )
+        status = "succeeded"
     except Exception as exc:  # noqa: BLE001 - record failure of background work
         error = str(exc)
+        if published:
+            status = "succeeded"
+        if new_values is not None:
+            try:
+                delete_generation_data(new_values)
+            except Exception as cleanup_error:  # noqa: BLE001
+                error += f"; cleanup failed: {cleanup_error}"
         with suppress(Exception):
             _record_log(build_id, logs, "build", f"Build failed: {error}", "error")
     finally:
         counts.update(stats.counts())
         with sessions().begin() as db:
             build = db.get(Build, build_id)
-            if build is not None:
+            if build is not None and not published:
                 build.status = status
                 build.counts = json.dumps(counts)
                 build.error = error
                 build.parse_failures = json.dumps(failures, ensure_ascii=False)
                 build.finished_at = datetime.now(UTC).isoformat()
+                if status == "succeeded" and build.build_type == "incremental":
+                    generation_row = db.get(KnowledgeGeneration, build.generation)
+                    if generation_row is not None:
+                        generation_row.build_id = build_id
+
+
+def prune_generations(values):
+    retention = int(values.get("generation_retention", "2"))
+    with sessions()() as db:
+        pointer = db.get(GenerationPointer, 1)
+        rows = (
+            db.query(KnowledgeGeneration)
+            .order_by(KnowledgeGeneration.created_at.desc())
+            .all()
+        )
+        keep = {pointer.generation}
+        for row in rows:
+            if len(keep) >= retention:
+                break
+            keep.add(row.name)
+        expired = [row.name for row in rows if row.name not in keep]
+    for name in expired:
+        from sqlalchemy import select, update
+
+        with sessions().begin() as db:
+            claimed = db.execute(
+                update(KnowledgeGeneration)
+                .where(KnowledgeGeneration.name == name)
+                .where(
+                    KnowledgeGeneration.name
+                    != select(GenerationPointer.generation)
+                    .where(GenerationPointer.id == 1)
+                    .scalar_subquery()
+                )
+                .values(deleting=True)
+            ).rowcount
+        if not claimed:
+            continue
+        delete_generation_data({**values, "knowledge_generation": name})
+        with sessions().begin() as db:
+            row = db.get(KnowledgeGeneration, name)
+            pointer = db.get(GenerationPointer, 1)
+            if row and pointer.generation != name:
+                db.delete(row)
+
+
+def delete_generation_data(values):
+    store = graph(values)
+    try:
+        execute(
+            store,
+            "MATCH (n:SDAEntity {generation:$generation}) DETACH DELETE n",
+            {"generation": values["knowledge_generation"]},
+        )
+    finally:
+        store.close()
+    client = MilvusClient(uri=values["milvus_uri"])
+    try:
+        name = collection_name(values)
+        if client.has_collection(name):
+            client.drop_collection(name)
+    finally:
+        client.close()
 
 
 def describe(names=None, database=None, search=None):
