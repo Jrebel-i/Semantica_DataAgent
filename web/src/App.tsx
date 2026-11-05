@@ -99,9 +99,9 @@ export function App() {
               { path: "/knowledge", label: t.knowledge },
               { path: "/search", label: t.searchDebug },
               { path: "/mcp-access", label: t.mcpAccess },
+              { path: "/builds", label: t.builds },
               ...(role === "admin"
                 ? [
-                    { path: "/builds", label: t.builds },
                     { path: "/source", label: t.source },
                     { path: "/tokens", label: t.tokens },
                     { path: "/plugins", label: t.plugins },
