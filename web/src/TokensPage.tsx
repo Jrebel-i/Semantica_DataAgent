@@ -191,8 +191,8 @@ export function TokensPage({
                 value={role}
                 onChange={setRole}
                 options={[
-                  { value: "user", label: "user" },
-                  { value: "admin", label: "admin" },
+                  { value: "user", label: t.roleUser },
+                  { value: "admin", label: t.roleAdmin },
                 ]}
               />
               <Space>
