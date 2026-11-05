@@ -72,3 +72,41 @@ def test_document_relations_include_quoted_sql_table_names():
     assert [(row["database"], row["name"]) for row in storage.links] == [
         ("warehouse", "order_metrics")
     ]
+
+
+def test_direct_table_matches_outrank_frequently_mentioned_table(monkeypatch):
+    inventory = {"ref": "table:shop.inventory", "name": "inventory", "comment": "库存"}
+    hub = {"ref": "table:shop.orders", "name": "orders", "comment": "订单"}
+    documents = [
+        {"ref": f"document:metrics/{i}#chunk-1", "doc_id": f"document:metrics/{i}"}
+        for i in range(10)
+    ]
+
+    class Vectors:
+        def search(self, **kwargs):
+            return [
+                [
+                    {"entity": {"metadata": item}}
+                    for item in [*documents, hub, inventory]
+                ]
+            ]
+
+    def execute(_graph, cypher, params):
+        if "db.index.fulltext.queryNodes" in cypher:
+            return [{"source": "fulltext", "item": inventory}]
+        if "seeds" in params:
+            return [
+                {"seed_ref": document["ref"], "item": hub} for document in documents
+            ]
+        return []
+
+    monkeypatch.setattr(knowledge, "settings", lambda: {"knowledge_generation": "test"})
+    monkeypatch.setattr(knowledge, "embed", lambda *_: [[1.0, 0.0]])
+    monkeypatch.setattr(knowledge, "read_graph", lambda _: object())
+    monkeypatch.setattr(knowledge, "read_vectors", lambda _: Vectors())
+    monkeypatch.setattr(knowledge, "execute", execute)
+
+    hits = knowledge.search("库存周转", "tables", 5)
+    assert hits[0]["ref"] == inventory["ref"], (
+        f"直接命中的库存表被文档提及的表压过：{hits}"
+    )
