@@ -125,7 +125,7 @@ def test_incremental_build_preserves_other_documents_and_removes_deleted(
                 result = client.post("/api/v1/builds", json={"build_type": kind})
                 assert result.status_code == 202, result.text
                 build = wait_build(result.json()["id"])
-                assert build["status"] == "succeeded", build
+                assert build["status"] == "succeeded", build.get("error")
                 return build
 
             first = build("full")
@@ -221,7 +221,7 @@ def test_incremental_build_preserves_other_documents_and_removes_deleted(
 
             def relations():
                 rows, _, _ = driver.execute_query(
-                    "MATCH (t:SDATable {generation:$generation, database:'shop', name:'orders'}) OPTIONAL MATCH (t)-[:HAS_FIELD]->(f:SDAField) OPTIONAL MATCH (t)-[:HAS_DOCUMENT]->(d:SDADocument) OPTIONAL MATCH (t)-[:DEPENDS_ON]->(u:SDATable) RETURN count(DISTINCT f) AS fields, count(DISTINCT d) AS docs, count(DISTINCT u) AS upstream",
+                    "MATCH (t:SDATable {generation:$generation, database:'shop', name:'orders'}) OPTIONAL MATCH (t)-[:HAS_FIELD]->(f:SDAField) OPTIONAL MATCH (t)-[:HAS_DOCUMENT]->(d:SDADocument) OPTIONAL MATCH (t)<-[:DEPENDS_ON]-(u:SDATable) RETURN count(DISTINCT f) AS fields, count(DISTINCT d) AS docs, count(DISTINCT u) AS upstream",
                     generation=generation,
                 )
                 return dict(rows[0]) if rows else None
@@ -387,6 +387,143 @@ def test_incremental_build_preserves_other_documents_and_removes_deleted(
                 and "configuration changed" in rejected["error"]
             )
 
+    finally:
+        driver.execute_query(
+            "MATCH (n:SDAEntity {generation:$generation}) DETACH DELETE n",
+            generation=generation,
+        )
+        driver.close()
+        if vectors.has_collection(collection):
+            vectors.drop_collection(collection)
+        vectors.close()
+
+
+def test_incremental_build_rebuilds_only_changed_task_and_edges(tmp_path, monkeypatch):
+    from semantica_dataagent.app import app
+    from semantica_dataagent.cli import initialize
+
+    monkeypatch.setenv("DATAAGENT_DB_PATH", str(tmp_path / "app.db"))
+    monkeypatch.setenv("DATAAGENT_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    generation = "test_" + uuid.uuid4().hex
+    source = tmp_path / "source"
+    tables = [
+        {"database": database, "name": name, "comment": ""}
+        for database, name in (
+            ("raw", "a"),
+            ("raw", "b"),
+            ("raw", "c"),
+            ("shop", "a"),
+            ("shop", "b"),
+        )
+    ]
+    task_a = source / "warehouse" / "task_a"
+    task_b = source / "warehouse" / "task_b"
+    task_a.mkdir(parents=True)
+    task_b.mkdir(parents=True)
+    (source / "warehouse" / "tables.json").write_text(json.dumps(tables))
+    (task_a / "tasks.json").write_text(
+        json.dumps(
+            [
+                {
+                    "name": "load_a",
+                    "type": "hive",
+                    "sql": "INSERT INTO shop.a SELECT * FROM raw.a",
+                }
+            ]
+        )
+    )
+    (task_b / "tasks.json").write_text(
+        json.dumps(
+            [
+                {
+                    "name": "load_b",
+                    "type": "hive",
+                    "sql": "INSERT INTO shop.b SELECT * FROM raw.b",
+                }
+            ]
+        )
+    )
+    token = initialize()
+    headers = {"Authorization": "Bearer " + token}
+    driver = GraphDatabase.driver(
+        os.environ["TEST_NEO4J_URI"],
+        auth=(os.environ["TEST_NEO4J_USER"], os.environ["TEST_NEO4J_PASSWORD"]),
+    )
+    vectors = MilvusClient(uri=os.environ["TEST_MILVUS_URI"])
+    collection = "sda_" + generation
+    try:
+        with TestClient(app, headers=headers) as client:
+            values = {
+                "neo4j_uri": os.environ["TEST_NEO4J_URI"],
+                "neo4j_user": os.environ["TEST_NEO4J_USER"],
+                "neo4j_password": os.environ["TEST_NEO4J_PASSWORD"],
+                "milvus_uri": os.environ["TEST_MILVUS_URI"],
+                "embedding_url": os.environ["TEST_EMBEDDING_URL"],
+                "source_directory": str(source),
+                "knowledge_generation": generation,
+            }
+            assert (
+                client.put("/api/v1/settings", json={"values": values}).status_code
+                == 200
+            )
+
+            def build(kind):
+                result = client.post("/api/v1/builds", json={"build_type": kind})
+                assert result.status_code == 202, result.text
+                deadline = time.monotonic() + 900
+                while time.monotonic() < deadline:
+                    record = client.get(
+                        "/api/v1/builds/" + str(result.json()["id"])
+                    ).json()
+                    if record["status"] in {"succeeded", "failed", "cancelled"}:
+                        break
+                    time.sleep(0.2)
+                assert record["status"] == "succeeded", record.get("error")
+                return record
+
+            def tasks():
+                rows, _, _ = driver.execute_query(
+                    "MATCH (t:SDATask {generation:$generation}) RETURN t.name AS name, t.build_id AS build_id",
+                    generation=generation,
+                )
+                return {row["name"]: row["build_id"] for row in rows}
+
+            def edges():
+                rows, _, _ = driver.execute_query(
+                    "MATCH (u:SDALineageTable {generation:$generation})-[r:DEPENDS_ON]->(d:SDALineageTable {generation:$generation}) RETURN u.name AS upstream, d.name AS downstream, r.build_id AS build_id",
+                    generation=generation,
+                )
+                return {
+                    (row["upstream"], row["downstream"]): row["build_id"]
+                    for row in rows
+                }
+
+            first = build("full")
+            assert tasks() == {"load_a": first["id"], "load_b": first["id"]}
+            assert edges() == {
+                ("raw.a", "shop.a"): first["id"],
+                ("raw.b", "shop.b"): first["id"],
+            }
+            (task_a / "tasks.json").write_text(
+                json.dumps(
+                    [
+                        {
+                            "name": "load_a",
+                            "type": "hive",
+                            "sql": "INSERT INTO shop.a SELECT * FROM raw.c",
+                        }
+                    ]
+                )
+            )
+            second = build("incremental")
+            assert second["counts"]["changed"] == 1
+            assert second["counts"]["task"] == 1
+            assert second["counts"]["lineage"] == 1
+            assert tasks() == {"load_a": second["id"], "load_b": first["id"]}
+            assert edges() == {
+                ("raw.c", "shop.a"): second["id"],
+                ("raw.b", "shop.b"): first["id"],
+            }
     finally:
         driver.execute_query(
             "MATCH (n:SDAEntity {generation:$generation}) DETACH DELETE n",

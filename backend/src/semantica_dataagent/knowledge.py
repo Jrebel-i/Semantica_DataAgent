@@ -567,7 +567,7 @@ def run_build(build_id):
             prior_dimensions = (
                 json.loads(previous.dimension_tables or "{}") if previous else {}
             )
-            failures = (
+            failed_builds = (
                 db.query(Build)
                 .filter(
                     Build.generation == generation,
@@ -584,7 +584,7 @@ def run_build(build_id):
                     and row.config_hash
                     and row.config_hash != config_hash
                 )
-                for row in failures
+                for row in failed_builds
             ):
                 raise ValueError(
                     "A full build failed; run a full build to repair the generation"
@@ -592,7 +592,7 @@ def run_build(build_id):
             dirty = set()
             old_ids = set()
             dirty_tables = set()
-            for failed in failures:
+            for failed in failed_builds:
                 if failed.affected_files:
                     saved = json.loads(failed.affected_files)
                     dirty.update(saved.get("files", []))

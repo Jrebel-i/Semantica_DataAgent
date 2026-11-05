@@ -135,20 +135,26 @@ def write(records, generation, storage):
             failures.append(
                 {"task_id": name, "reason": result.reason or "Parse failed"}
             )
-    # Legacy lineage records can be independent of a task.
+    # Legacy lineage records can be independent of a task, or refer to a task
+    # that is not present in this source snapshot.
     if rebuild_all:
+        known = {record.data["name"] for record in all_tasks}
         edges.extend(
             {
                 "upstream": record.data["upstream"],
                 "downstream": record.data["downstream"],
                 "evidence": record.data["evidence"],
                 "parse_status": record.data["parse_status"],
-                "task_id": "",
-                "ref": "",
+                "task_id": record.data.get("task_id", ""),
+                "ref": (
+                    "task:" + quote(record.data["task_id"], safe="")
+                    if record.data.get("task_id")
+                    else ""
+                ),
                 **_provenance(record, storage.build_id),
             }
             for record in all_declarations
-            if not record.data.get("task_id")
+            if record.data.get("task_id") not in known
         )
     storage.execute(
         "UNWIND $rows AS row CREATE (t:SDAEntity:SDATask) SET t = row, t.generation = $generation",
@@ -167,6 +173,30 @@ def write(records, generation, storage):
     storage.execute(
         """UNWIND $rows AS row MERGE (a:SDAEntity:SDALineageTable {generation:$generation, name:row.upstream}) MERGE (b:SDAEntity:SDALineageTable {generation:$generation, name:row.downstream}) CREATE (a)-[r:DEPENDS_ON]->(b) SET r = row""",
         {"rows": edges, "generation": generation},
+    )
+    lineage_nodes = {}
+    for edge in edges:
+        for name in (edge["upstream"], edge["downstream"]):
+            node = lineage_nodes.setdefault(
+                name,
+                {
+                    "name": name,
+                    "source_file": edge["source_file"],
+                    "source_key": edge["source_key"],
+                    "source_files": set(),
+                },
+            )
+            node["source_files"].update(edge["source_files"])
+    storage.execute(
+        """UNWIND $rows AS row MERGE (n:SDAEntity:SDALineageTable {generation:$generation, name:row.name}) SET n.source_file = row.source_file, n.source_key = row.source_key, n.source_files = row.source_files, n.build_id = $build_id""",
+        {
+            "rows": [
+                {**row, "source_files": sorted(row["source_files"])}
+                for row in lineage_nodes.values()
+            ],
+            "generation": generation,
+            "build_id": storage.build_id,
+        },
     )
     storage.execute(
         """UNWIND $rows AS row MATCH (task:SDATask {generation:$generation, ref:row.ref})

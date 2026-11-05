@@ -146,7 +146,9 @@ def test_build_records_stage_logs_stats_and_utc_times(tmp_path, monkeypatch):
     monkeypatch.setattr(
         knowledge,
         "build_storage",
-        lambda values: nullcontext(StorageHandles("test", None, None, values)),
+        lambda values, stats=None: nullcontext(
+            StorageHandles("test", None, None, values)
+        ),
     )
     monkeypatch.setattr(knowledge, "read_graph", lambda values: None)
     monkeypatch.setattr(knowledge, "read_vectors", lambda values: None)

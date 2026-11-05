@@ -55,10 +55,25 @@ def reconcile(storage, records, generation):
         "UNWIND $rows AS row MATCH (d:SDADocument {generation:$generation, ref:row.ref}), (t:SDATable {generation:$generation, database:row.database, name:row.name}) MERGE (t)-[:HAS_DOCUMENT]->(d)",
         {"generation": generation, "rows": links},
     )
+
     lineage = [
-        dict(r.data, source_file=r.source_file) for r in records if r.kind == "lineage"
+        {
+            **record.data,
+            "source_file": record.source_file,
+            "source_key": record.source_key or record.source_file,
+            "source_files": list(record.source_files),
+        }
+        for record in records
+        if record.kind == "lineage"
     ]
     storage.execute(
-        "UNWIND $rows AS row MATCH (up:SDATable {generation:$generation}), (down:SDATable {generation:$generation}) WHERE up.database + '.' + up.name = row.upstream AND down.database + '.' + down.name = row.downstream MERGE (down)-[r:DEPENDS_ON {source_file:row.source_file}]->(up) SET r.evidence = row.evidence, r.parse_status = row.parse_status",
-        {"generation": generation, "rows": lineage},
+        """UNWIND $rows AS row MATCH (up:SDATable {generation:$generation}), (down:SDATable {generation:$generation})
+        WHERE up.database + '.' + up.name = row.upstream AND down.database + '.' + down.name = row.downstream
+        MERGE (up)-[r:DEPENDS_ON {task_id: coalesce(row.task_id, ''), upstream: row.upstream, downstream: row.downstream}]->(down)
+        ON CREATE SET r.evidence = row.evidence, r.parse_status = row.parse_status, r.source_file = row.source_file, r.source_key = row.source_key, r.source_files = row.source_files, r.build_id = $build_id""",
+        {
+            "generation": generation,
+            "rows": lineage,
+            "build_id": storage.build_id,
+        },
     )

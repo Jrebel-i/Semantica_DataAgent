@@ -35,7 +35,11 @@ class StorageHandles:
                     {
                         **item,
                         "generation": self.generation,
-                        **({"build_id": self.build_id} if self.build_id is not None else {}),
+                        **(
+                            {"build_id": self.build_id}
+                            if self.build_id is not None
+                            else {}
+                        ),
                     }
                     for item in metadata[batch]
                 ],
