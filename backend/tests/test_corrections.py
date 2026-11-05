@@ -1,6 +1,8 @@
 """Acceptance checks for correction proposals and knowledge gaps."""
 
-from test_clarification import _requester, call, client  # noqa: F401
+from test_clarification import _requester, call
+
+pytest_plugins = ["test_clarification"]
 
 
 def test_knowledge_gap_is_recorded_for_the_requester(client):
@@ -175,9 +177,10 @@ def test_approval_commits_document_and_enqueues_incremental_build(
 ):
     import subprocess
 
+    from test_source_api import upload
+
     from semantica_dataagent import knowledge
     from semantica_dataagent.app import create_mcp
-    from test_source_api import upload
 
     c, token = client
     headers = {"Authorization": f"Bearer {token}"}

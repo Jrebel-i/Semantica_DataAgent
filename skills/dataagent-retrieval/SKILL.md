@@ -98,3 +98,7 @@ Keep the answer focused:
 4. Summarize `validate_sql` results. Mention any weak/unsupported join and ambiguity.
 5. Cite each conclusion with the returned reference ids. If the knowledge base does not
    support the question, say so and name the missing knowledge.
+
+## Corrections and knowledge gaps
+
+When reliable evidence shows a knowledge document or metadata comment is wrong, call `propose_correction` with its existing reference, the replacement content or comment, and the reason. A proposal awaits admin approval; do not treat it as already applied. When missing knowledge prevents an answer, call `report_knowledge_gap` with the question and what is missing; explain the limitation to the user.
