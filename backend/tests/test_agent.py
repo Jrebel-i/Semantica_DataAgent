@@ -17,6 +17,7 @@ from semantica_dataagent.agent_runner import (
     AgentEvent,
     AgentTurnRequest,
     ProviderConfig,
+    list_agents,
 )
 from semantica_dataagent.pi_runner import PiEventParser, PiRunner
 from semantica_dataagent.skill import read_skill
@@ -367,15 +368,13 @@ def test_provider_key_is_encrypted_and_never_echoed(client):
     assert cleared.json()["has_api_key"] is False
 
 
-def test_agents_endpoint_lists_pi(client):
+def test_agents_endpoint_lists_the_registered_runners(client):
     c, admin_token = client
     response = c.get(
         "/api/v1/agents", headers={"Authorization": f"Bearer {admin_token}"}
     )
     assert response.status_code == 200
-    assert response.json() == [
-        {"id": "pi", "name": "pi", "available": PiRunner().available()}
-    ]
+    assert response.json() == list_agents()
 
 
 def test_ask_rejects_unknown_or_unavailable_agent_without_creating_history(
