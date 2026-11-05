@@ -794,6 +794,10 @@ def run_build(build_id):
                 build.error = error
                 build.parse_failures = json.dumps(failures, ensure_ascii=False)
                 build.finished_at = datetime.now(UTC).isoformat()
+                if status == "succeeded" and build.build_type == "incremental":
+                    generation_row = db.get(KnowledgeGeneration, build.generation)
+                    if generation_row is not None:
+                        generation_row.build_id = build_id
 
 
 def prune_generations(values):
