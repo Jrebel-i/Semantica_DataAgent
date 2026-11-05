@@ -68,6 +68,7 @@ def test_fusion_over_mcp(tmp_path, monkeypatch):
                 "neo4j_password": os.environ["TEST_NEO4J_PASSWORD"],
                 "milvus_uri": os.environ["TEST_MILVUS_URI"],
                 "embedding_url": os.environ["TEST_EMBEDDING_URL"],
+                "embedding_model": os.environ["TEST_EMBEDDING_MODEL"],
                 "source_directory": str(
                     Path(__file__).resolve().parents[2] / "samples/demo"
                 ),

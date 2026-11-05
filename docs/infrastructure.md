@@ -1,11 +1,12 @@
 # Infrastructure
 
-The development and integration-test resources are confined to `semantica-dataagent` and `semantica-dataagent-test`. Each has its own Neo4j and Milvus StatefulSet and local-path PVC; development uses a CPU embedding service and tests use a local Docker instance. Milvus v2.5.27 uses embedded etcd and local storage. Embedding uses infinity 0.0.77 and BAAI/bge-m3 revision `5617a9f61b028005a4858fdac845db406aefb181`; its init container downloads the exact files and verifies SHA-256, and the service verifies again before every start. The expected hashes are from the supplied model manifest. No inference starts on a mismatch. Model files are mounted read-only for inference.
+The development and integration-test resources are confined to `semantica-dataagent` and `semantica-dataagent-test`. Each has its own Neo4j and Milvus StatefulSet and local-path PVC; development uses a CPU embedding service, and tests use two local Docker instances. Milvus v2.5.27 uses embedded etcd and local storage. Daily integration tests use BAAI/bge-small-zh-v1.5; BAAI/bge-m3 is reserved for real-sample builds and acceptance evaluation. Both models use infinity 0.0.77 and the same `deploy/k8s/model.py`: each pinned revision is downloaded with its exact file list, every file's SHA-256 is verified, and the service verifies again before every start. No inference starts on a mismatch. Model files are mounted read-only for inference. The bge-m3 revision is `5617a9f61b028005a4858fdac845db406aefb181`; the small-model revision is `7999e1d3359715c523056ef9478215996d62a620`.
 
 | Environment | Neo4j Bolt | Milvus | Embedding |
 | --- | --- | --- | --- |
 | dev | 31601 | 31602 | 31603 |
-| test | 31611 | 31612 | 127.0.0.1:17997 (local Docker) |
+| test (daily) | 31611 | 31612 | 127.0.0.1:17998 (bge-small-zh-v1.5, local Docker) |
+| test (real samples / acceptance) | 31611 | 31612 | 127.0.0.1:17997 (bge-m3, local Docker) |
 
 Use a cluster node address such as `172.16.242.124`. The PVCs use node-local storage and survive Pod restarts, but cannot automatically move their data to another node.
 
@@ -30,16 +31,17 @@ For a coordinated load test of the shared service, run `python3 scripts/stress_e
 
 ## Local test embedding
 
-From the repository root, start and inspect the local service:
+From the repository root, start and inspect only the daily small-model service:
 
 ```sh
-docker compose -f deploy/embedding-compose.yaml up -d
+docker compose -f deploy/embedding-compose.yaml up -d embedding-small
 docker compose -f deploy/embedding-compose.yaml ps
-docker compose -f deploy/embedding-compose.yaml logs -f
-docker compose -f deploy/embedding-compose.yaml down
+docker compose -f deploy/embedding-compose.yaml logs -f embedding-small
 ```
 
-The first start downloads the pinned model and verifies every file. The service verifies it again on each start; a mismatch prevents inference. The default model directory is `~/.cache/semantica-dataagent/bge-m3`, outside the repository; set `EMBEDDING_MODEL_DIR` to an absolute path to override it. The model is mounted read-only for inference, the service has a 4 GiB memory limit, and port 17997 binds only to localhost. `down` retains the model directory.
+`embedding-small` uses port 17998, batch size 8, a 2 GiB memory limit, and the fixed bge-small-zh-v1.5 revision above. Its default model directory is `~/.cache/semantica-dataagent/bge-small-zh-v1.5`, outside the repository; set `EMBEDDING_SMALL_MODEL_DIR` to an absolute path to override it. The first start downloads and verifies the pinned files; each later start verifies them again before inference. The model and the shared integrity script are mounted read-only. On 2026-11-05, 24 concurrent requests of 8 approximately 900-character Chinese inputs sampled a peak of about 1.0 GiB with no restart; 2 GiB leaves headroom while staying well below bge-m3's 4 GiB limit.
+
+The existing `embedding` service on 17997 is the bge-m3 instance used by `scripts/verify_sample_build.py` and acceptance checks. Do not stop, recreate, or otherwise modify that container during routine test work. To stop the daily service without touching bge-m3, use `docker compose -f deploy/embedding-compose.yaml stop embedding-small`; do not use `down`.
 
 ## Connectivity
 
@@ -50,4 +52,4 @@ NEO4J_PASSWORD='your-password' python scripts/check_infra.py dev
 NEO4J_PASSWORD='your-test-password' python scripts/check_infra.py test
 ```
 
-The script performs Cypher, creates and deletes a uniquely named Milvus collection, and checks a Chinese embedding for 1024 dimensions. `--skip-embedding` permits independent database diagnosis. The test embedding runs locally and has its own model directory. Use isolated test instances for integration tests; the script creates temporary collections and deletes them even if a check fails.
+The script performs Cypher, creates and deletes a uniquely named Milvus collection, and checks a Chinese embedding returned by the selected model (512 dimensions for the daily small model, 1024 for dev bge-m3). `--skip-embedding` permits independent database diagnosis. The test embedding runs locally and has its own model directory. Use isolated test instances for integration tests; the script creates temporary collections and deletes them even if a check fails.

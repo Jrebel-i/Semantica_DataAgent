@@ -22,6 +22,7 @@ class FakeEmbedding:
     def __init__(self, actions=None, default=None):
         self.actions = list(actions or [])
         self.default = default or {"status": 200}
+        self.dimension = 3
         self.lock = threading.Lock()
         self.requests = 0
         self.active = 0
@@ -65,10 +66,15 @@ class FakeEmbedding:
                     status = action.get("status", 200)
                     if status == 200:
                         inputs = json.loads(body)["input"]
+                        embedding = (
+                            [0.1, 0.2, 0.3]
+                            if state.dimension == 3
+                            else [0.1] * state.dimension
+                        )
                         payload = json.dumps(
                             {
                                 "data": [
-                                    {"index": index, "embedding": [0.1, 0.2, 0.3]}
+                                    {"index": index, "embedding": embedding}
                                     for index in range(len(inputs))
                                 ]
                             }
@@ -351,3 +357,92 @@ def test_build_record_includes_embedding_statistics(tmp_path, monkeypatch, serve
         assert counts["embedding_retries"] == 1
         assert counts["embedding_elapsed_ms"] >= 0
     assert vectors.rows[0][1] == ["table:one"]
+
+
+@pytest.mark.parametrize("dimension", [512, 1024])
+def test_build_storage_uses_the_embedding_dimension(server, monkeypatch, dimension):
+    from semantica_dataagent import knowledge
+
+    server.dimension = dimension
+    created = {}
+
+    class Graph:
+        def execute_query(self, query, parameters):
+            return {"success": True, "records": []}
+
+        def close(self):
+            pass
+
+    class Collection:
+        def __init__(self):
+            self.loaded = False
+
+        def load(self):
+            self.loaded = True
+
+    class Client:
+        def disconnect(self):
+            pass
+
+    class Vectors:
+        def __init__(self):
+            self.client = Client()
+            self.collection = Collection()
+            self.rows = []
+
+        def create_collection(self, name, vector_dimension, metric_type):
+            created.update(name=name, dimension=vector_dimension, metric=metric_type)
+
+        def add_vectors(self, vectors, ids, metadata):
+            assert len(vectors) == len(ids) == len(metadata)
+            assert all(len(vector) == created["dimension"] for vector in vectors)
+            self.rows.extend(vectors)
+
+    vectors = Vectors()
+    monkeypatch.setattr(knowledge, "graph", lambda _: Graph())
+    monkeypatch.setattr(knowledge, "milvus", lambda _: vectors)
+    monkeypatch.setattr(knowledge.utility, "has_collection", lambda _: False)
+    with knowledge.build_storage(
+        values(server.url, knowledge_generation="dimension_test")
+    ) as storage:
+        storage.add_vectors(["table:one"], ["one table"], [{"scope": "tables"}])
+
+    assert created == {
+        "name": "sda_dimension_test",
+        "dimension": dimension,
+        "metric": "COSINE",
+    }
+    assert vectors.collection.loaded
+    assert len(vectors.rows) == 1
+    assert len(vectors.rows[0]) == dimension
+
+
+@pytest.mark.parametrize("dimension", [512, 1024])
+def test_search_embeds_the_query_at_the_configured_dimension(
+    server, monkeypatch, dimension
+):
+    from semantica_dataagent import knowledge
+
+    server.dimension = dimension
+
+    class Vectors:
+        def __init__(self):
+            self.queries = []
+
+        def search(self, **kwargs):
+            self.queries.append(kwargs["data"][0])
+            return [[]]
+
+    vectors = Vectors()
+    monkeypatch.setattr(
+        knowledge,
+        "settings",
+        lambda: values(server.url, knowledge_generation="dimension_test"),
+    )
+    monkeypatch.setattr(knowledge, "read_graph", lambda _: object())
+    monkeypatch.setattr(knowledge, "execute", lambda *args: [])
+    monkeypatch.setattr(knowledge, "read_vectors", lambda _: vectors)
+
+    assert knowledge.search("query", "tables", 5) == []
+    assert len(vectors.queries) == 1
+    assert len(vectors.queries[0]) == dimension

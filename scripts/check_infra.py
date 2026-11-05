@@ -13,6 +13,9 @@ parser = argparse.ArgumentParser()
 parser.add_argument('environment', choices=['dev', 'test'])
 parser.add_argument('--host', default='172.16.242.124')
 parser.add_argument('--skip-embedding', action='store_true', help='Check databases while embedding is unavailable')
+parser.add_argument('--embedding-url')
+parser.add_argument('--embedding-model')
+parser.add_argument('--embedding-dimension', type=int)
 args = parser.parse_args()
 password = os.environ['NEO4J_PASSWORD']
 neo_port, milvus_port = (31601, 31602) if args.environment == 'dev' else (31611, 31612)
@@ -35,12 +38,21 @@ print('Milvus: collection created and deleted')
 if args.skip_embedding:
     raise SystemExit(0)
 request = urllib.request.Request(
-    (f'http://{args.host}:31603/embeddings' if args.environment == 'dev'
-     else 'http://127.0.0.1:17997/embeddings'),
-    data=json.dumps({'model': 'model/bge-m3', 'input': ['这是一句中文。']}).encode(),
+    (args.embedding_url or (
+        f'http://{args.host}:31603' if args.environment == 'dev'
+        else 'http://127.0.0.1:17998'
+    )).rstrip('/') + '/embeddings',
+    data=json.dumps({
+        'model': args.embedding_model or (
+            'model/bge-m3' if args.environment == 'dev'
+            else 'model/bge-small-zh-v1.5'
+        ),
+        'input': ['这是一句中文。'],
+    }).encode(),
     headers={'Content-Type': 'application/json'}, method='POST')
 with urllib.request.urlopen(request, timeout=180) as response:
     embedding = json.load(response)['data'][0]['embedding']
-if len(embedding) != 1024:
-    raise RuntimeError(f'expected 1024 dimensions, got {len(embedding)}')
-print('Embedding: Chinese input returned 1024 dimensions')
+dimension = args.embedding_dimension or (1024 if args.environment == 'dev' else 512)
+if len(embedding) != dimension:
+    raise RuntimeError(f'expected {dimension} dimensions, got {len(embedding)}')
+print(f'Embedding: Chinese input returned {dimension} dimensions')

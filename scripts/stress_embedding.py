@@ -15,8 +15,10 @@ parser.add_argument('--clients', type=int, default=3)
 parser.add_argument('--batches', type=int, default=2)
 parser.add_argument('--chars', type=int, default=1888)
 parser.add_argument('--timeout', type=int, default=900)
+parser.add_argument('--model', default='model/bge-m3')
+parser.add_argument('--dimension', type=int, default=1024)
 args = parser.parse_args()
-if min(args.clients, args.batches, args.chars, args.timeout) < 1:
+if min(args.clients, args.batches, args.chars, args.timeout, args.dimension) < 1:
     parser.error('numeric arguments must be positive')
 
 def pod_status():
@@ -57,12 +59,12 @@ def client(client_id):
     for batch in range(args.batches):
         phrase = '数仓业务指标订单用户数据统计分析口径时间维度字段表关联查询模型。'
         text = (phrase * (args.chars // len(phrase) + 1))[:args.chars]
-        payload = json.dumps({'model': 'model/bge-m3', 'input': [f'{client_id}-{batch}-{i} {text}' for i in range(32)]}, ensure_ascii=False).encode()
+        payload = json.dumps({'model': args.model, 'input': [f'{client_id}-{batch}-{i} {text}' for i in range(32)]}, ensure_ascii=False).encode()
         request = urllib.request.Request(args.url + '/embeddings', data=payload, headers={'Content-Type': 'application/json'})
         try:
             with urllib.request.urlopen(request, timeout=args.timeout) as response:
                 data = json.load(response)['data']
-                if len(data) != 32 or any(len(item['embedding']) != 1024 for item in data):
+                if len(data) != 32 or any(len(item['embedding']) != args.dimension for item in data):
                     raise ValueError('unexpected embedding shape')
             results.append(True)
             print(f'client {client_id} batch {batch}: success', flush=True)
