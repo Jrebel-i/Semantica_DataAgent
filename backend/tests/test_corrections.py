@@ -78,3 +78,36 @@ def test_user_cannot_reject_correction(client):
         headers={"Authorization": f"Bearer {requester.token}"},
     )
     assert response.status_code == 403
+
+
+def test_proposal_rejects_another_users_conversation(client, monkeypatch):
+    from semantica_dataagent import knowledge
+    from semantica_dataagent.app import create_mcp
+    from semantica_dataagent.db import Conversation, sessions
+
+    monkeypatch.setattr(knowledge, "existing_refs", lambda refs: set(refs))
+    with sessions().begin() as db:
+        db.add(
+            Conversation(
+                id="private-conversation",
+                owner_id="someone-else",
+                title="销售额",
+                agent="pi",
+                provider_id="provider",
+                model="model",
+            )
+        )
+    result = call(
+        create_mcp(),
+        "propose_correction",
+        {
+            "target": "document:metrics/sales.md",
+            "patch": "修正后的定义\n",
+            "reason": "定义有误",
+        },
+        _requester(token="different-owner"),
+        "private-conversation",
+    )
+    assert result.isError
+    assert result.structuredContent["code"] == "invalid_input"
+    assert result.structuredContent["message"] != "Unknown tool"
