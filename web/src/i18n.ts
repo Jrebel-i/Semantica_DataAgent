@@ -2,6 +2,14 @@ export type Language = "zh" | "en";
 
 const messages = {
   zh: {
+    correctionTitle: "纠错审批",
+    gapTitle: "知识缺口",
+    correctionLoadError: "加载失败",
+    correctionReviewError: "审批失败",
+    correctionPatch: "修改内容",
+    correctionApprove: "批准",
+    correctionApproveEdited: "修改后批准",
+    correctionReject: "驳回",
     searchDebug: "检索调试",
     queryText: "查询内容",
     searchScope: "检索范围",
@@ -239,6 +247,14 @@ const messages = {
     downloadError: "下载失败，请重试",
   },
   en: {
+    correctionTitle: "Correction review",
+    gapTitle: "Knowledge gaps",
+    correctionLoadError: "Loading failed",
+    correctionReviewError: "Review failed",
+    correctionPatch: "Edited content",
+    correctionApprove: "Approve",
+    correctionApproveEdited: "Approve with edits",
+    correctionReject: "Reject",
     searchDebug: "Search debug",
     queryText: "Query",
     searchScope: "Scope",

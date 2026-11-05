@@ -862,6 +862,17 @@
       },
       "ProposalView": {
         "properties": {
+          "commit_sha": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Commit Sha"
+          },
           "conversation_id": {
             "anyOf": [
               {
@@ -889,6 +900,17 @@
           "original": {
             "title": "Original",
             "type": "string"
+          },
+          "original_patch": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Original Patch"
           },
           "owner_id": {
             "title": "Owner Id",
@@ -941,6 +963,8 @@
           "target",
           "patch",
           "original",
+          "original_patch",
+          "commit_sha",
           "diff",
           "reason",
           "status",

@@ -960,6 +960,8 @@ export interface components {
         };
         /** ProposalView */
         ProposalView: {
+            /** Commit Sha */
+            commit_sha: string | null;
             /** Conversation Id */
             conversation_id: string | null;
             /**
@@ -973,6 +975,8 @@ export interface components {
             id: string;
             /** Original */
             original: string;
+            /** Original Patch */
+            original_patch: string | null;
             /** Owner Id */
             owner_id: string;
             /** Patch */

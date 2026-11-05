@@ -210,3 +210,20 @@ test("MCP access page is reachable from navigation", async () => {
   expect(screen.getByLabelText("MCP 连接地址")).toBeTruthy();
   history.replaceState(null, "", "/");
 });
+
+test("user cannot access correction review", async () => {
+  localStorage.setItem("token", "reader");
+  history.replaceState(null, "", "/corrections");
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) =>
+      url === "/api/v1/me"
+        ? Response.json({ role: "user" })
+        : Response.json({}),
+    ),
+  );
+  render(<App />);
+  expect(await screen.findByText("无权限访问")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "批准" })).toBeNull();
+  expect(screen.queryByText("纠错审批")).toBeNull();
+});

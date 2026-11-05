@@ -100,12 +100,12 @@ export function App() {
               { path: "/knowledge", label: t.knowledge },
               { path: "/search", label: t.searchDebug },
               { path: "/mcp-access", label: t.mcpAccess },
-              { path: "/knowledge-gaps", label: "知识缺口" },
+              { path: "/knowledge-gaps", label: t.gapTitle },
               { path: "/builds", label: t.builds },
               ...(role === "admin"
                 ? [
                     { path: "/source", label: t.source },
-                    { path: "/corrections", label: "纠错审批" },
+                    { path: "/corrections", label: t.correctionTitle },
                     { path: "/tokens", label: t.tokens },
                     { path: "/plugins", label: t.plugins },
                   ]
@@ -126,10 +126,10 @@ export function App() {
             ))}
           </nav>
           {path === "/knowledge-gaps" ? (
-            <CorrectionsPage token={token} gaps />
+            <CorrectionsPage token={token} gaps messages={t} />
           ) : path === "/corrections" ? (
             role === "admin" ? (
-              <CorrectionsPage token={token} />
+              <CorrectionsPage token={token} messages={t} />
             ) : (
               <Alert title={t.forbidden} type="warning" />
             )

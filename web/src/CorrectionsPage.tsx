@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import type { Messages } from "./i18n";
 
 type Proposal = {
   id: string;
@@ -13,9 +14,11 @@ type Gap = { id: string; question: string; missing: string };
 export function CorrectionsPage({
   token,
   gaps = false,
+  messages: t,
 }: {
   token: string;
   gaps?: boolean;
+  messages: Messages;
 }) {
   const [rows, setRows] = useState<Proposal[]>([]);
   const [missing, setMissing] = useState<Gap[]>([]);
@@ -33,13 +36,13 @@ export function CorrectionsPage({
       else setRows((await response.json()) as Proposal[]);
       setError("");
     } catch {
-      setError("加载失败");
+      setError(t.correctionLoadError);
     }
-  }, [gaps, token]);
+  }, [gaps, token, t.correctionLoadError]);
   useEffect(() => {
     void refresh();
   }, [refresh]);
-  async function review(action: "approve" | "reject") {
+  async function review(action: "approve" | "reject", edited = false) {
     if (!selected) return;
     try {
       const response = await fetch(
@@ -50,19 +53,22 @@ export function CorrectionsPage({
             Authorization: `Bearer ${token}`,
             "Content-Type": "application/json",
           },
-          body: action === "approve" ? JSON.stringify({ patch }) : undefined,
+          body:
+            action === "approve" && edited
+              ? JSON.stringify({ patch })
+              : undefined,
         },
       );
       if (!response.ok) throw new Error();
       setSelected(null);
       await refresh();
     } catch {
-      setError("审批失败");
+      setError(t.correctionReviewError);
     }
   }
   return (
     <section>
-      <h2>{gaps ? "知识缺口" : "纠错审批"}</h2>
+      <h2>{gaps ? t.gapTitle : t.correctionTitle}</h2>
       {error && <p role="alert">{error}</p>}
       {gaps ? (
         missing.map((g) => (
@@ -95,14 +101,21 @@ export function CorrectionsPage({
               {selected.status === "pending" && (
                 <>
                   <label>
-                    修改内容
+                    {t.correctionPatch}
                     <textarea
                       value={patch}
                       onChange={(e) => setPatch(e.target.value)}
                     />
                   </label>
-                  <button onClick={() => void review("approve")}>批准</button>
-                  <button onClick={() => void review("reject")}>驳回</button>
+                  <button onClick={() => void review("approve")}>
+                    {t.correctionApprove}
+                  </button>
+                  <button onClick={() => void review("approve", true)}>
+                    {t.correctionApproveEdited}
+                  </button>
+                  <button onClick={() => void review("reject")}>
+                    {t.correctionReject}
+                  </button>
                 </>
               )}
             </article>
