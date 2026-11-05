@@ -33,7 +33,7 @@ def test_full_rebuild_keeps_searching_previous_generation(tmp_path, monkeypatch)
 
     monkeypatch.setenv("DATAAGENT_DB_PATH", str(tmp_path / "app.db"))
     monkeypatch.setenv("DATAAGENT_ENCRYPTION_KEY", Fernet.generate_key().decode())
-    prefix = "test_" + uuid.uuid4().hex
+    prefix = "test_" + uuid.uuid4().hex[:12]
     source = tmp_path / "source"
     docs = source / "knowledge" / "metrics"
     docs.mkdir(parents=True)
@@ -111,6 +111,24 @@ def test_full_rebuild_keeps_searching_previous_generation(tmp_path, monkeypatch)
                 release.set()
                 result = wait(build_id)
             assert result["status"] == "succeeded", result
+            from semantica_dataagent.knowledge import settings
+
+            current = settings()["knowledge_generation"]
+            before = set(vectors.list_collections())
+
+            def failed_stage(*args, **kwargs):
+                raise ValueError("injected stage failure")
+
+            monkeypatch.setattr(stages, "STAGES", (failed_stage, *stages.STAGES[1:]))
+            failed = wait(submit())
+            assert failed["status"] == "failed", failed
+            assert "injected stage failure" in failed["error"]
+            assert settings()["knowledge_generation"] == current
+            assert set(vectors.list_collections()) == before
+            assert any(
+                "quokkawindow" in (hit.get("content") or "")
+                for hit in search_knowledge("quokkawindow", "docs", 10)
+            )
     finally:
         release.set()
         rows, _, _ = driver.execute_query(

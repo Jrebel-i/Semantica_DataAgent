@@ -123,3 +123,16 @@ class TurnEvent(Base):
     seq: Mapped[int]
     type: Mapped[str]
     data: Mapped[str]
+
+
+class KnowledgeGeneration(Base):
+    __tablename__ = "knowledge_generations"
+    name: Mapped[str] = mapped_column(primary_key=True)
+    build_id: Mapped[int | None]
+    created_at: Mapped[str | None]
+
+
+class GenerationPointer(Base):
+    __tablename__ = "generation_pointer"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    generation: Mapped[str]

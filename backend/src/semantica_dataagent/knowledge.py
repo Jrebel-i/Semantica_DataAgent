@@ -6,6 +6,7 @@ import json
 import os
 import re
 import time
+import uuid
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager, suppress
@@ -30,7 +31,7 @@ from semantica.graph_store import GraphStore
 from semantica.vector_store.milvus_store import MilvusStore
 
 from .canonical import KINDS
-from .db import Build, Setting, sessions
+from .db import Build, GenerationPointer, KnowledgeGeneration, Setting, sessions
 from .embedding_client import EmbeddingStats
 from .embedding_client import embed as embedding_embed
 from .filters import filter_records, get_filters
@@ -84,6 +85,9 @@ def validate_records(records):
 def settings():
     with sessions()() as db:
         values = {row.key: row.value for row in db.query(Setting).all()}
+        pointer = db.get(GenerationPointer, 1)
+        if pointer:
+            values["knowledge_generation"] = pointer.generation
     if values.get("neo4j_password"):
         values["neo4j_password"] = (
             Fernet(os.environ["DATAAGENT_ENCRYPTION_KEY"].encode())
@@ -336,7 +340,6 @@ def build_storage(values, embedding_stats=None):
     try:
         vector_store = milvus(values)
         try:
-            close_readers()
             if values.get("_build_id"):
                 with sessions().begin() as db:
                     db.get(Build, values["_build_id"]).affected_files = json.dumps(
@@ -488,6 +491,7 @@ def _stage_name(stage):
 def run_build(build_id):
     status, counts, error = "failed", {}, None
     failures = []
+    new_values = None
     stats = EmbeddingStats()
     logs = []
     try:
@@ -500,6 +504,15 @@ def run_build(build_id):
         _record_log(build_id, logs, "build", f"{build_type} build started")
         values = settings()
         generation = values["knowledge_generation"]
+        with sessions().begin() as db:
+            if db.get(GenerationPointer, 1) is None:
+                if db.get(KnowledgeGeneration, generation) is None:
+                    db.add(KnowledgeGeneration(name=generation))
+                db.add(GenerationPointer(id=1, generation=generation))
+        if build_type == "full":
+            generation = generation[:30] + "_" + uuid.uuid4().hex
+            values["knowledge_generation"] = generation
+            new_values = values.copy()
         plugins = configured()
         filters = get_filters()
         config = {
@@ -732,10 +745,25 @@ def run_build(build_id):
             _record_log(build_id, logs, "relationships", "Reconciled relationships")
         read_graph(values)
         read_vectors(values)
-        status = "succeeded"
         _record_log(build_id, logs, "build", "Build succeeded")
+        if build_type == "full":
+            with sessions().begin() as db:
+                db.add(
+                    KnowledgeGeneration(
+                        name=generation,
+                        build_id=build_id,
+                        created_at=datetime.now(UTC).isoformat(),
+                    )
+                )
+                db.get(GenerationPointer, 1).generation = generation
+        status = "succeeded"
     except Exception as exc:  # noqa: BLE001 - record failure of background work
         error = str(exc)
+        if new_values is not None:
+            try:
+                delete_generation_data(new_values)
+            except Exception as cleanup_error:
+                error += f"; cleanup failed: {cleanup_error}"
         with suppress(Exception):
             _record_log(build_id, logs, "build", f"Build failed: {error}", "error")
     finally:
@@ -748,6 +776,25 @@ def run_build(build_id):
                 build.error = error
                 build.parse_failures = json.dumps(failures, ensure_ascii=False)
                 build.finished_at = datetime.now(UTC).isoformat()
+
+
+def delete_generation_data(values):
+    store = graph(values)
+    try:
+        execute(
+            store,
+            "MATCH (n:SDAEntity {generation:$generation}) DETACH DELETE n",
+            {"generation": values["knowledge_generation"]},
+        )
+    finally:
+        store.close()
+    client = MilvusClient(uri=values["milvus_uri"])
+    try:
+        name = collection_name(values)
+        if client.has_collection(name):
+            client.drop_collection(name)
+    finally:
+        client.close()
 
 
 def describe(names=None, database=None, search=None):
