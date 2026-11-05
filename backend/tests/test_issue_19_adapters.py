@@ -22,3 +22,20 @@ def test_cli_sample_is_translated_to_unified_events(agent):
     )
     assert events[-1].type == "done"
     assert events[-1].data["text"] == "hello"
+
+
+def test_claude_stream_emits_text_once():
+    from semantica_dataagent.claude_runner import ClaudeEventParser
+
+    parser = ClaudeEventParser()
+    path = Path(__file__).parent / "fixtures" / "issue_19" / "claude-stream.jsonl"
+    events = [
+        event
+        for line in path.read_text().splitlines()
+        for event in parser.feed(json.loads(line))
+    ]
+    assert (
+        "".join(event.data["text"] for event in events if event.type == "text_delta")
+        == "hello"
+    )
+    assert parser.finish().data["text"] == "hello"

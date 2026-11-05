@@ -9,14 +9,24 @@ from collections import deque
 from dataclasses import dataclass, field
 
 from .agent_sandbox import SessionSandbox, register_session, unregister_session
-from .agent_types import DONE, ERROR, TEXT_DELTA, TOOL_END, TOOL_START, AgentEvent
+from .agent_types import (
+    CLARIFICATION,
+    DONE,
+    ERROR,
+    TEXT_DELTA,
+    TOOL_END,
+    TOOL_START,
+    AgentEvent,
+)
 from .pi_runner import (
     STREAM_LIMIT,
+    _clarification_questions,
     _drain,
     _redact_event,
     _result_summary,
     _stop,
     _tool_args_summary,
+    _write_json,
     extract_refs,
     extract_sql,
 )
@@ -63,7 +73,7 @@ class CodexEventParser:
                     )
                 ]
             if kind == "item.completed":
-                return [
+                events = [
                     AgentEvent(
                         TOOL_END,
                         {
@@ -79,6 +89,13 @@ class CodexEventParser:
                         },
                     )
                 ]
+                if name.split("__")[-1] == "request_clarification":
+                    questions = _clarification_questions(item.get("result"))
+                    if questions:
+                        events.append(
+                            AgentEvent(CLARIFICATION, {"questions": questions})
+                        )
+                return events
         return []
 
     def finish(self):
@@ -127,14 +144,7 @@ class CodexRunner:
         model_url, mcp_url = request.provider.base_url, request.mcp_url
         if sandboxed:
             sandbox = SessionSandbox(request.workspace, model_url, mcp_url)
-            register_session(request.conversation_id, sandbox)
-            try:
-                await asyncio.to_thread(sandbox.start)
-                model_url, mcp_url = sandbox.model_url, sandbox.mcp_url
-            except BaseException:
-                unregister_session(request.conversation_id, sandbox)
-                await asyncio.to_thread(sandbox.close)
-                raise
+            model_url, mcp_url = sandbox.model_url, sandbox.mcp_url
         auth = (
             'env_key = "DATAAGENT_PROVIDER_KEY"\n'
             if request.provider.api_key
@@ -158,8 +168,10 @@ class CodexRunner:
         )
         (config / "config.toml").write_text(cfg, encoding="utf-8")
         os.chmod(config / "config.toml", 0o600)
-        marker = config / "thread-id"
-        thread = marker.read_text().strip() if marker.exists() else None
+        marker = config / "thread-id.json"
+        thread = (
+            json.loads(marker.read_text())["thread_id"] if marker.exists() else None
+        )
         env = {
             k: os.environ[k]
             for k in ("PATH", "LANG", "LC_ALL", "SYSTEMROOT")
@@ -199,7 +211,12 @@ class CodexRunner:
             command = docker + [sandbox.name, *command]
         process = None
         drain = None
+        registered = False
         try:
+            if sandbox is not None:
+                register_session(request.conversation_id, sandbox)
+                registered = True
+                await asyncio.to_thread(sandbox.start)
             process = await asyncio.create_subprocess_exec(
                 *command,
                 cwd=str(work),
@@ -221,7 +238,7 @@ class CodexRunner:
                 for event in parser.feed(record):
                     yield _redact_event(event, secrets)
                 if parser.thread_id and not thread:
-                    marker.write_text(parser.thread_id, encoding="utf-8")
+                    _write_json(marker, {"thread_id": parser.thread_id})
                     thread = parser.thread_id
             code = await process.wait()
             await drain
@@ -237,6 +254,6 @@ class CodexRunner:
                 drain.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await drain
-            if sandbox is not None:
+            if registered:
                 unregister_session(request.conversation_id, sandbox)
                 await asyncio.to_thread(sandbox.close)

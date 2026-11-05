@@ -10,9 +10,18 @@ from collections import deque
 from dataclasses import dataclass, field
 
 from .agent_sandbox import SessionSandbox, register_session, unregister_session
-from .agent_types import DONE, ERROR, TEXT_DELTA, TOOL_END, TOOL_START, AgentEvent
+from .agent_types import (
+    CLARIFICATION,
+    DONE,
+    ERROR,
+    TEXT_DELTA,
+    TOOL_END,
+    TOOL_START,
+    AgentEvent,
+)
 from .pi_runner import (
     STREAM_LIMIT,
+    _clarification_questions,
     _drain,
     _redact_event,
     _result_summary,
@@ -28,6 +37,7 @@ from .skill import read_skill
 @dataclass
 class ClaudeEventParser:
     text_parts: list[str] = field(default_factory=list)
+    streamed: bool = False
     final_text: str = ""
     error: str | None = None
     tools: dict = field(default_factory=dict)
@@ -35,12 +45,26 @@ class ClaudeEventParser:
     def feed(self, record):
         events = []
         kind = record.get("type")
+        if kind == "stream_event":
+            event = record.get("event") or {}
+            if event.get("type") == "message_start":
+                self.streamed = False
+            delta = event.get("delta") or {}
+            if (
+                event.get("type") == "content_block_delta"
+                and delta.get("type") == "text_delta"
+            ):
+                text = delta.get("text", "")
+                self.streamed = True
+                self.text_parts.append(text)
+                return [AgentEvent(TEXT_DELTA, {"text": text})]
         if kind == "assistant":
             for block in record.get("message", {}).get("content", []):
                 if block.get("type") == "text":
                     text = block.get("text", "")
-                    self.text_parts.append(text)
-                    events.append(AgentEvent(TEXT_DELTA, {"text": text}))
+                    if not self.streamed:
+                        self.text_parts.append(text)
+                        events.append(AgentEvent(TEXT_DELTA, {"text": text}))
                 elif block.get("type") == "tool_use":
                     ident, name = block.get("id"), block.get("name", "tool")
                     args = block.get("input")
@@ -60,6 +84,9 @@ class ClaudeEventParser:
             for block in record.get("message", {}).get("content", []):
                 if isinstance(block, dict) and block.get("type") == "tool_result":
                     ident = block.get("tool_use_id")
+                    result = block.get("content")
+                    if isinstance(result, list):
+                        result = {"content": result}
                     events.append(
                         AgentEvent(
                             TOOL_END,
@@ -67,10 +94,19 @@ class ClaudeEventParser:
                                 "id": ident,
                                 "name": self.tools.get(ident, "tool"),
                                 "is_error": bool(block.get("is_error")),
-                                "summary": _result_summary(block.get("content")),
+                                "summary": _result_summary(result),
                             },
                         )
                     )
+                    if (
+                        self.tools.get(ident, "").split("__")[-1]
+                        == "request_clarification"
+                    ):
+                        questions = _clarification_questions(result)
+                        if questions:
+                            events.append(
+                                AgentEvent(CLARIFICATION, {"questions": questions})
+                            )
         elif kind == "result":
             if record.get("is_error"):
                 self.error = record.get("result") or "Claude failed"
@@ -124,14 +160,7 @@ class ClaudeRunner:
         model_url, mcp_url = request.provider.base_url, request.mcp_url
         if sandboxed:
             sandbox = SessionSandbox(request.workspace, model_url, mcp_url)
-            register_session(request.conversation_id, sandbox)
-            try:
-                await asyncio.to_thread(sandbox.start)
-                model_url, mcp_url = sandbox.model_url, sandbox.mcp_url
-            except BaseException:
-                unregister_session(request.conversation_id, sandbox)
-                await asyncio.to_thread(sandbox.close)
-                raise
+            model_url, mcp_url = sandbox.model_url, sandbox.mcp_url
         mcp = config / "mcp.json"
         _write_json(
             mcp,
@@ -166,6 +195,7 @@ class ClaudeRunner:
             "-p",
             "--bare",
             "--verbose",
+            "--include-partial-messages",
             "--output-format",
             "stream-json",
             "--model",
@@ -194,7 +224,12 @@ class ClaudeRunner:
             command = docker + [sandbox.name, *command]
         process = None
         drain = None
+        registered = False
         try:
+            if sandbox is not None:
+                register_session(request.conversation_id, sandbox)
+                registered = True
+                await asyncio.to_thread(sandbox.start)
             process = await asyncio.create_subprocess_exec(
                 *command,
                 cwd=str(work),
@@ -229,6 +264,6 @@ class ClaudeRunner:
                 drain.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await drain
-            if sandbox is not None:
+            if registered:
                 unregister_session(request.conversation_id, sandbox)
                 await asyncio.to_thread(sandbox.close)
