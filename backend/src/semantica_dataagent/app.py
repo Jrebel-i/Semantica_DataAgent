@@ -140,8 +140,12 @@ KEYS = {
     "assistant_provider_id",
     "assistant_model",
     "assistant_timeout_seconds",
+    "langfuse_enabled",
+    "langfuse_url",
+    "langfuse_public_key",
+    "langfuse_secret_key",
 }
-SECRET = {"neo4j_password"}
+SECRET = {"langfuse_secret_key", "neo4j_password"}
 
 
 class SettingsUpdate(BaseModel):
@@ -277,7 +281,9 @@ def put_settings(
             seconds = 0
         if not 0.1 <= seconds <= 3600:
             raise HTTPException(status_code=422, detail="Invalid assistant timeout")
-    for key in ("neo4j_uri", "milvus_uri", "embedding_url"):
+    if body.values.get("langfuse_enabled") not in (None, "", "true", "false"):
+        raise HTTPException(status_code=422, detail="Invalid Langfuse switch")
+    for key in ("neo4j_uri", "milvus_uri", "embedding_url", "langfuse_url"):
         value = body.values.get(key)
         if value:
             try:
@@ -666,9 +672,13 @@ class MCPAuthentication:
                     headers=exc.headers,
                 )(scope, receive, send)
                 return
-            from .mcp_context import CONVERSATION_HEADER, bind_mcp_context
+            from .mcp_context import CONVERSATION_HEADER, TURN_HEADER, bind_mcp_context
 
-            with bind_mcp_context(requester, request.headers.get(CONVERSATION_HEADER)):
+            with bind_mcp_context(
+                requester,
+                request.headers.get(CONVERSATION_HEADER),
+                request.headers.get(TURN_HEADER),
+            ):
                 await self.inner.state.mcp_app(scope, receive, send)
             return
         await self.inner.state.mcp_app(scope, receive, send)

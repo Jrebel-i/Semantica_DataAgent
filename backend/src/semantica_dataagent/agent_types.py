@@ -47,6 +47,7 @@ class AgentTurnRequest:
     model: str
     mcp_url: str
     mcp_token: str
+    turn_id: int | None = None
 
 
 class AgentRunner(Protocol):

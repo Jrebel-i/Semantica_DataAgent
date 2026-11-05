@@ -85,7 +85,7 @@ test("renders schema, reports validation errors and saves enabled state", async 
   fireEvent.change(screen.getByLabelText("Concurrency limit"), {
     target: { value: "1" },
   });
-  fireEvent.click(screen.getAllByText("Save")[1]);
+  fireEvent.click(screen.getAllByText("Save")[2]);
   await waitFor(() =>
     expect(requests).toContainEqual({
       values: {
@@ -110,7 +110,7 @@ test("renders schema, reports validation errors and saves enabled state", async 
   expect(screen.getByLabelText("active")).toBeTruthy();
   expect(screen.getByLabelText("mode")).toBeTruthy();
   expect(screen.getByLabelText("tags")).toBeTruthy();
-  fireEvent.click(screen.getAllByText("Save")[2]);
+  fireEvent.click(screen.getAllByText("Save")[3]);
   expect(await screen.findByText("Name is required")).toBeTruthy();
   fireEvent.change(screen.getByLabelText("name"), {
     target: { value: "valid" },

@@ -20,7 +20,7 @@ from .agent_types import (
     TOOL_START,
     AgentEvent,
 )
-from .mcp_context import CONVERSATION_HEADER
+from .mcp_context import CONVERSATION_HEADER, TURN_HEADER
 from .pi_runner import (
     STREAM_LIMIT,
     _clarification_questions,
@@ -165,6 +165,7 @@ class ClaudeRunner:
                         "headers": {
                             "Authorization": "Bearer ${DATAAGENT_TOKEN}",
                             CONVERSATION_HEADER: request.conversation_id,
+                            TURN_HEADER: str(request.turn_id or ""),
                         },
                     }
                 }

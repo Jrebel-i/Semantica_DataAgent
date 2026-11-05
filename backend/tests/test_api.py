@@ -727,3 +727,34 @@ def test_scheduler_interval_setting_is_validated_and_persisted(client):
         ).status_code
         == 422
     )
+
+
+def test_langfuse_settings_encrypt_secret_and_preserve_omitted_key(client):
+    c, token = client
+    headers = {"Authorization": f"Bearer {token}"}
+    secret = "private-langfuse-test-value"
+    values = {
+        "langfuse_enabled": "true",
+        "langfuse_url": "http://localhost:31631",
+        "langfuse_public_key": "public-test",
+        "langfuse_secret_key": secret,
+    }
+    response = c.put("/api/v1/settings", headers=headers, json={"values": values})
+    assert response.status_code == 200
+    assert secret not in response.text
+    assert response.json()["langfuse_secret_key"] == "configured"
+    assert secret.encode() not in Path(os.environ["DATAAGENT_DB_PATH"]).read_bytes()
+    response = c.put(
+        "/api/v1/settings",
+        headers=headers,
+        json={"values": {"langfuse_enabled": "false"}},
+    )
+    assert response.json()["langfuse_secret_key"] == "configured"
+    assert (
+        c.put(
+            "/api/v1/settings",
+            headers=headers,
+            json={"values": {"langfuse_url": "http://user:password@host/"}},
+        ).status_code
+        == 422
+    )

@@ -354,6 +354,7 @@ async def ask(
         model=model,
         mcp_url=public_base_url() + "/mcp/",
         mcp_token=requester.token,
+        turn_id=turn_id,
     )
     return StreamingResponse(
         _stream(run_request, runner, turn_id, conversation_id, request),
@@ -377,6 +378,22 @@ async def _stream(
         "conversation",
         {"conversation_id": conversation_id, "turn_id": turn_id},
     )
+    from .telemetry import submit, trace_id
+
+    observation_id = trace_id(conversation_id, turn_id)
+    secrets = (run_request.mcp_token, run_request.provider.api_key or "")
+    trace = {
+        "id": observation_id,
+        "name": "online-conversation",
+        "input": run_request.prompt,
+        "metadata": {
+            "agent": runner.agent_id,
+            "provider": run_request.provider.name,
+            "model": run_request.model,
+            "source": "online",
+        },
+    }
+    submit("trace-create", trace, secrets)
     seq = 0
     terminal = False
     try:
@@ -389,6 +406,11 @@ async def _stream(
             payload.update(event.data)
             yield _sse(event.type, payload)
             if event.type == DONE:
+                submit(
+                    "trace-create",
+                    {**trace, "output": event.data.get("text", "")},
+                    secrets,
+                )
                 _finish_turn(turn_id, "completed", event)
                 terminal = True
             elif event.type == ERROR:

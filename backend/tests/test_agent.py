@@ -664,3 +664,192 @@ def test_expired_conversation_retains_history_but_cannot_resume(
         ).status_code
         == 409
     )
+
+
+def test_unavailable_langfuse_does_not_interrupt_an_online_answer(client, monkeypatch):
+    from semantica_dataagent import agent_runner, telemetry
+
+    monkeypatch.setitem(agent_runner.RUNNERS, "pi", FakeRunner())
+    monkeypatch.setattr(
+        telemetry, "configuration", lambda: ("http://invalid", "public", "private")
+    )
+
+    def fail(*args, **kwargs):
+        raise TimeoutError("unavailable")
+
+    monkeypatch.setattr(telemetry.httpx, "post", fail)
+    c, token = client
+    headers = {"Authorization": f"Bearer {token}"}
+    provider = c.post(
+        "/api/v1/providers",
+        headers=headers,
+        json={
+            "name": "Local",
+            "base_url": "http://127.0.0.1:3425",
+            "models": ["model"],
+        },
+    ).json()
+    response = c.post(
+        "/api/v1/conversations/ask",
+        headers=headers,
+        json={
+            "question": "销售额",
+            "agent": "pi",
+            "provider_id": provider["id"],
+            "model": "model",
+        },
+    )
+    assert response.status_code == 200
+    assert _sse(response.text)[-1][0] == "done"
+    telemetry._queue.join()
+
+
+def test_online_turn_reports_one_trace_with_final_answer(client, monkeypatch):
+    from semantica_dataagent import agent_runner, telemetry
+
+    monkeypatch.setitem(agent_runner.RUNNERS, "pi", FakeRunner())
+    events = []
+    monkeypatch.setattr(
+        telemetry,
+        "submit",
+        lambda kind, event, secrets=(): events.append((kind, event)),
+    )
+    c, token = client
+    headers = {"Authorization": f"Bearer {token}"}
+    provider = c.post(
+        "/api/v1/providers",
+        headers=headers,
+        json={
+            "name": "Local",
+            "base_url": "http://127.0.0.1:3425",
+            "models": ["model"],
+        },
+    ).json()
+    response = c.post(
+        "/api/v1/conversations/ask",
+        headers=headers,
+        json={
+            "question": "销售额",
+            "agent": "pi",
+            "provider_id": provider["id"],
+            "model": "model",
+        },
+    )
+    assert _sse(response.text)[-1][0] == "done"
+    assert [event[0] for event in events] == ["trace-create", "trace-create"]
+    assert events[0][1]["id"] == events[1][1]["id"]
+    assert "shop.orders" in events[1][1]["output"]
+    assert events[0][1]["metadata"]["agent"] == "pi"
+
+
+def test_local_mcp_tool_reports_name_without_token(client, monkeypatch):
+    from semantica_dataagent import telemetry
+
+    c, admin = client
+    headers = {"Authorization": f"Bearer {admin}"}
+    issued = c.post(
+        "/api/v1/tokens",
+        headers=headers,
+        json={"name": "analytics client", "role": "user"},
+    ).json()
+    events = []
+    monkeypatch.setattr(
+        telemetry,
+        "submit",
+        lambda kind, event, secrets=(): events.append((kind, event)),
+    )
+    response = c.post(
+        "/mcp/",
+        headers={
+            "Authorization": f"Bearer {issued['token']}",
+            "Accept": "application/json, text/event-stream",
+            "Host": "localhost:8000",
+        },
+        json={
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {"name": "get_capabilities", "arguments": {}},
+        },
+    )
+    assert response.status_code == 200
+    assert [event[0] for event in events] == ["trace-create", "span-create"]
+    assert events[0][1]["metadata"]["token_name"] == "analytics client"
+    assert events[0][1]["id"] == events[1][1]["traceId"]
+    assert issued["token"] not in str(events)
+
+
+def test_mcp_turn_header_selects_owned_turn_and_rejects_forgery(client, monkeypatch):
+    from datetime import UTC, datetime
+
+    from semantica_dataagent import telemetry
+    from semantica_dataagent.db import Conversation, Token, Turn, digest, sessions
+
+    c, admin = client
+    auth = {"Authorization": f"Bearer {admin}"}
+    other = c.post(
+        "/api/v1/tokens", headers=auth, json={"name": "other", "role": "user"}
+    ).json()["token"]
+    with sessions().begin() as db:
+        owner = db.get(Token, digest(admin))
+        now = datetime.now(UTC)
+        db.add(
+            Conversation(
+                id="trace-test",
+                owner_id=owner.id,
+                title="test",
+                agent="pi",
+                provider_id="missing",
+                model="model",
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        db.flush()
+        turns = [
+            Turn(
+                conversation_id="trace-test",
+                sequence=i,
+                question="q",
+                status="running",
+                answer="",
+                sql="[]",
+                citations="[]",
+                started_at=now,
+            )
+            for i in (1, 2)
+        ]
+        db.add_all(turns)
+        db.flush()
+        ids = [turn.id for turn in turns]
+    events = []
+    monkeypatch.setattr(
+        telemetry,
+        "submit",
+        lambda kind, event, secrets=(): events.append((kind, event)),
+    )
+    for token, turn in [(admin, ids[0]), (admin, ids[1]), (other, ids[0])]:
+        response = c.post(
+            "/mcp/",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Accept": "application/json, text/event-stream",
+                "Host": "localhost:8000",
+                "x-dataagent-conversation-id": "trace-test",
+                "x-dataagent-turn-id": str(turn),
+            },
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {"name": "get_capabilities", "arguments": {}},
+            },
+        )
+        assert response.status_code == 200
+    spans = [body for kind, body in events if kind == "span-create"]
+    assert [span["traceId"] for span in spans[:2]] == [
+        telemetry.trace_id("trace-test", turn) for turn in ids
+    ]
+    assert spans[2]["traceId"] not in {
+        telemetry.trace_id("trace-test", turn) for turn in ids
+    }

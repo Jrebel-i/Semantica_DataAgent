@@ -22,7 +22,7 @@ from .agent_types import (
     AgentEvent,
     AgentTurnRequest,
 )
-from .mcp_context import CONVERSATION_HEADER
+from .mcp_context import CONVERSATION_HEADER, TURN_HEADER
 from .skill import read_skill
 
 PROVIDER_KEY = "dataagent"
@@ -351,6 +351,7 @@ class PiRunner:
                     "headers": {
                         "Authorization": f"Bearer ${{{TOKEN_ENV}}}",
                         CONVERSATION_HEADER: request.conversation_id,
+                        TURN_HEADER: str(request.turn_id or ""),
                     },
                     "exposure": "direct",
                     "description": (
