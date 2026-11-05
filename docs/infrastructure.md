@@ -7,15 +7,18 @@ The development and integration-test resources are confined to `semantica-dataag
 | dev | 31601 | 31602 | 31603 |
 | test (daily) | 31611 | 31612 | 127.0.0.1:17998 (bge-small-zh-v1.5, local Docker) |
 | test (real samples / acceptance) | 31611 | 31612 | 127.0.0.1:17997 (bge-m3, local Docker) |
+| test2（第二套测试存储，`semantica-dataagent-test2`） | 31621 | 31622 | 同上两个本机 embedding |
+
+两套测试存储互相独立，供并行的测试各用一套，避免多张票同时写同一套存储时互相干扰（见 #44）。协调者在测试任务书里指定使用哪一套；只用一套时默认 test。`deploy/k8s/test2.yaml` 与 `test.yaml` 只有命名空间和端口不同，Neo4j Secret 同样在 `semantica-dataagent-test2` 里单独创建。
 
 Use a cluster node address such as `172.16.242.124`. The PVCs use node-local storage and survive Pod restarts, but cannot automatically move their data to another node.
 
 ## Deploy
 
-Apply `deploy/k8s/dev.yaml` and `deploy/k8s/test.yaml`, then create a separate Neo4j Secret in each namespace before starting Neo4j. Generate passwords locally and store them securely; do not commit them. For example, with kubectl configured for the intended cluster:
+Apply `deploy/k8s/dev.yaml`, `deploy/k8s/test.yaml` and `deploy/k8s/test2.yaml`, then create a separate Neo4j Secret in each namespace before starting Neo4j. Generate passwords locally and store them securely; do not commit them. For example, with kubectl configured for the intended cluster:
 
 ```sh
-for ns in semantica-dataagent semantica-dataagent-test; do
+for ns in semantica-dataagent semantica-dataagent-test semantica-dataagent-test2; do
   password=$(openssl rand -hex 24)
   kubectl -n "$ns" create secret generic neo4j-auth --from-literal="auth=neo4j/$password"
   unset password
