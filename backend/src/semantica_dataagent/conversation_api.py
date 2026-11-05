@@ -384,6 +384,7 @@ async def _stream(
     trace = {
         "id": observation_id,
         "name": "online-conversation",
+        "input": run_request.prompt,
         "metadata": {
             "agent": runner.agent_id,
             "provider": run_request.provider.name,

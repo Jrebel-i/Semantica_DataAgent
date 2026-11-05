@@ -183,3 +183,7 @@ MCP 工具的参数 schema 必须自包含，不含任何层级的 `$ref` 或 `$
 构建镜像：`docker build -t semantica-dataagent-agent-runner:1.2.0 deploy/agent-runner`。默认使用 Docker 沙箱；仅在可信的开发环境排障时设置 `DATAAGENT_AGENT_MODE=local`，此模式没有文件和网络隔离。容器的 CPU 和内存默认分别为 2 核和 2g，可用 `DATAAGENT_AGENT_CPUS`、`DATAAGENT_AGENT_MEMORY` 配置。
 
 Docker Desktop / WSL 下，agent 只连接 internal 网络；同一网络中的专用中继仅转发到当前 provider 和 MCP 的两个目标地址。中继还连接 Docker bridge，并把配置中的宿主机 loopback 地址转换为 `host.docker.internal`；所以 WSL mirrored 网络中的 `127.0.0.1:3425` 和后端监听端口可由中继访问。两端 URL 的路径保留，HTTPS 保留原主机名以验证证书。不要把容器连接到普通 bridge 或挂载其他宿主机路径。
+
+## 观测数据边界
+
+启用 Langfuse 时，用户问题、agent 回答及 SQL 是观测内容，可能包含用户自行输入的信息；界面必须告知用户问题和回答会上报。应用持有的 MCP token、provider API key、Langfuse 密钥、Neo4j 密码、认证与 Cookie 头和会话文件内容不得上报。上报字段采用集中允许列表，并遮盖已知秘密及 Bearer、sk-、password=、api_key=、token= 等凭据形式；不得把会话文件或请求头作为遥测载荷。

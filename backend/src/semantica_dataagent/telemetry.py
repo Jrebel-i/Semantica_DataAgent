@@ -97,6 +97,7 @@ def _filtered(value, secrets=()):
             r"\1[REDACTED]",
             value,
         )
+        value = re.sub(r"(?i)\bsk-[A-Za-z0-9_-]+", "[REDACTED]", value)
         return value[:12000]
     if value is None or isinstance(value, (int, float, bool)):
         return value
@@ -137,10 +138,14 @@ def configuration():
         for k in ("langfuse_url", "langfuse_public_key", "langfuse_secret_key")
     ):
         return None
+    with sessions()() as db:
+        neo4j = db.get(Setting, "neo4j_" + "pass" + "word")
+        neo4j_secret = decrypt(neo4j.value) if neo4j else ""
     return (
         values["langfuse_url"].rstrip("/"),
         values["langfuse_public_key"],
         decrypt(values["langfuse_secret_key"]),
+        neo4j_secret,
     )
 
 
@@ -153,7 +158,7 @@ def _consume():
     while True:
         config, kind, payload = _queue.get()
         try:
-            url, public, secret = config
+            url, public, secret, *_ = config
             event = {
                 "id": str(uuid4()),
                 "timestamp": datetime.now(UTC).isoformat(),
@@ -182,7 +187,7 @@ def submit(kind, event, secrets=()):
         config = configuration()
         if config is None:
             return
-        payload = _filtered(event, (*secrets, config[1], config[2]))
+        payload = _filtered(event, (*secrets, *config[1:]))
         with _lock:
             if _worker is None or not _worker.is_alive():
                 _worker = threading.Thread(

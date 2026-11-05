@@ -60,3 +60,20 @@ def test_filter_removes_nested_fields_and_known_secrets():
         ("private-credential",),
     )
     assert filtered == {"input": {"query": "lookup [REDACTED]"}, "output": "[REDACTED]"}
+
+
+def test_application_secrets_and_common_credentials_are_redacted():
+    module = telemetry()
+    text = "Bearer opaque sk-abc123 password=hunter2 api_key=private token=hidden neo4j-secret ordinary"
+    result = module._filtered(
+        {
+            "text": text,
+            "Authorization": "header-secret",
+            "Cookie": "cookie-secret",
+            "session_file": "contents",
+        },
+        ("neo4j-secret",),
+    )
+    assert result == {
+        "text": "Bearer [REDACTED] [REDACTED] password=[REDACTED] api_key=[REDACTED] token=[REDACTED] [REDACTED] ordinary"
+    }

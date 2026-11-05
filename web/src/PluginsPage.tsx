@@ -184,6 +184,7 @@ export function PluginsPage({
       </fieldset>
       <fieldset>
         <legend>{t.langfuseSettings}</legend>
+        <p>{t.langfuseDisclosure}</p>
         <label>
           {t.langfuseEnabled}
           <input
