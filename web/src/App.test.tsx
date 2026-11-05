@@ -192,3 +192,21 @@ test("search debug is accessible from navigation", async () => {
   expect(screen.getByRole("heading", { name: "检索调试" })).toBeTruthy();
   expect(screen.getByLabelText("查询内容")).toBeTruthy();
 });
+
+test("MCP access page is reachable from navigation", async () => {
+  history.replaceState(null, "", "/");
+  localStorage.setItem("token", "user");
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) =>
+      url === "/api/v1/me"
+        ? Response.json({ role: "user" })
+        : Response.json({}),
+    ),
+  );
+  render(<App />);
+  fireEvent.click(await screen.findByRole("link", { name: "MCP 接入" }));
+  expect(screen.getByRole("heading", { name: "MCP 接入" })).toBeTruthy();
+  expect(screen.getByLabelText("MCP 连接地址")).toBeTruthy();
+  history.replaceState(null, "", "/");
+});

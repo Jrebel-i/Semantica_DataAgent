@@ -36,6 +36,7 @@ def test_fusion_over_mcp(tmp_path, monkeypatch):
     from semantica_dataagent import knowledge
     from semantica_dataagent.app import app
     from semantica_dataagent.cli import initialize
+    from semantica_dataagent.skill import SKILL_NAME, read_skill
 
     generation = "test_" + uuid.uuid4().hex
     print(f"test generation: {generation}", flush=True)
@@ -114,6 +115,11 @@ def test_fusion_over_mcp(tmp_path, monkeypatch):
                     capabilities.structuredContent["current_generation"] == generation
                 )
                 assert "search_knowledge" in capabilities.structuredContent["tools"]
+                assert capabilities.structuredContent["prompts"] == [SKILL_NAME]
+                prompts = await session.list_prompts()
+                assert [prompt.name for prompt in prompts.prompts] == [SKILL_NAME]
+                skill = await session.get_prompt(SKILL_NAME)
+                assert skill.messages[0].content.text == read_skill()
                 bad = await session.call_tool(
                     "describe_tables", {"names": [], "extra": 1}
                 )
