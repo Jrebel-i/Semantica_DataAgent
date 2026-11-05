@@ -840,6 +840,40 @@ def prune_generations(values):
                 db.delete(row)
 
 
+def cleanup_interrupted_generations():
+    """Retry cleanup until both stores have removed each unpublished generation."""
+    import logging
+
+    interrupted = "Build interrupted by application shutdown"
+    with sessions()() as db:
+        candidates = [
+            (row.id, row.generation)
+            for row in db.query(Build).filter(
+                Build.status == "failed",
+                Build.error == interrupted,
+                Build.build_type == "full",
+                Build.generation.is_not(None),
+            )
+            if db.get(KnowledgeGeneration, row.generation) is None
+            and not (
+                db.get(GenerationPointer, 1)
+                and db.get(GenerationPointer, 1).generation == row.generation
+            )
+        ]
+    for build_id, generation in candidates:
+        try:
+            values = settings()
+            delete_generation_data({**values, "knowledge_generation": generation})
+            with sessions().begin() as db:
+                row = db.get(Build, build_id)
+                if row and row.error == interrupted:
+                    row.error = interrupted + "; unpublished storage cleaned"
+        except Exception:  # retry on next startup
+            logging.getLogger(__name__).exception(
+                "Could not clean interrupted generation %s", generation
+            )
+
+
 def delete_generation_data(values):
     store = graph(values)
     try:
