@@ -58,6 +58,11 @@ spec:
                 secretKeyRef:
                   name: dataagent-encryption
                   key: key
+            - name: DATAAGENT_NEO4J_AUTH
+              valueFrom:
+                secretKeyRef:
+                  name: neo4j-auth
+                  key: auth
             - name: DATAAGENT_DB_PATH
               value: /data/dataagent.db
             - name: DATAAGENT_AGENT_ROOT
