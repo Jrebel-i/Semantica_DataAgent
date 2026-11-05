@@ -166,6 +166,8 @@ grep -E '^E2E_(RESULT|DONE) ' "$LOG"
 
 ## 本地 MCP 委托问答
 
+MCP 工具的参数 schema 必须自包含，不含任何层级的 `$ref` 或 `$defs`；部分客户端重建根 schema 时会丢掉定义，网关会拒绝悬空引用（见 #20）。
+
 `ask_dataagent` 让本地 MCP 用户把完整问题交给在线 agent，并在完成后返回回答、SQL 和引用。默认 agent 是 `pi`，provider 和 model 默认取第一个已配置 provider 及其第一个模型；管理员可用 `assistant_agent`、`assistant_provider_id`、`assistant_model` 设置覆盖，也可用 `DATAAGENT_ASK_AGENT`、`DATAAGENT_ASK_PROVIDER_ID`、`DATAAGENT_ASK_MODEL` 提供部署默认值。`assistant_timeout_seconds`（默认 300，范围 0.1–3600）控制等待时间；超时返回 `unavailable` 和 `conversation_id`，调用者可用该 id 继续同一对话。对话记在调用者 token 名下。
 
 ## 在线 agent 容器
