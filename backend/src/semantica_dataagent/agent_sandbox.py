@@ -216,6 +216,11 @@ def end_session(conversation_id: str) -> None:
 
 
 def cleanup_orphans() -> None:
+    if os.environ.get("DATAAGENT_AGENT_MODE") == "k8s":
+        from .k8s_sandbox import cleanup_orphans as cleanup_k8s_orphans
+
+        cleanup_k8s_orphans()
+        return
     if not shutil.which("docker"):
         return
     for kind, list_args, remove_args in (

@@ -1,0 +1,48 @@
+# Apply separately on a new PVC; delete the Pod before starting the Deployment.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: dataagent-data
+  namespace: semantica-dataagent
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 20Gi
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: dataagent-bootstrap
+  namespace: semantica-dataagent
+spec:
+  automountServiceAccountToken: false
+  restartPolicy: Never
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+  containers:
+    - name: bootstrap
+      image: 172.16.242.124:31640/dataagent-app:issue-26
+      command: ["sleep", "1800"]
+      env:
+        - name: DATAAGENT_DB_PATH
+          value: /data/dataagent.db
+        - name: DATAAGENT_ENCRYPTION_KEY
+          valueFrom:
+            secretKeyRef:
+              name: dataagent-encryption
+              key: key
+      volumeMounts:
+        - name: data
+          mountPath: /data
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop: [ALL]
+  volumes:
+    - name: data
+      persistentVolumeClaim:
+        claimName: dataagent-data

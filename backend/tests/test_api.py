@@ -758,3 +758,34 @@ def test_langfuse_settings_encrypt_secret_and_preserve_omitted_key(client):
         ).status_code
         == 422
     )
+
+
+def test_neo4j_runtime_secret_is_private_and_explicit_setting_takes_precedence(
+    client, monkeypatch
+):
+    from semantica_dataagent import knowledge
+
+    c, token = client
+    monkeypatch.setenv("DATAAGENT_NEO4J_AUTH", "neo4j/runtime-test-secret")
+    headers = {"Authorization": f"Bearer {token}"}
+    response = c.put(
+        "/api/v1/settings",
+        headers=headers,
+        json={"values": {"neo4j_uri": "bolt://neo4j:7687", "neo4j_user": "neo4j"}},
+    )
+    assert response.status_code == 200
+    assert response.json()["neo4j_password"] == "configured"
+    assert knowledge.settings().get("neo4j_password") == "runtime-test-secret"
+    assert "runtime-test-secret" not in response.text
+    assert (
+        b"runtime-test-secret" not in Path(os.environ["DATAAGENT_DB_PATH"]).read_bytes()
+    )
+    response = c.put(
+        "/api/v1/settings",
+        headers=headers,
+        json={"values": {"neo4j_password": "explicit-test-secret"}},
+    )
+    assert response.status_code == 200
+    assert knowledge.settings()["neo4j_password"] == "explicit-test-secret"
+    assert "runtime-test-secret" not in response.text
+    assert "explicit-test-secret" not in response.text

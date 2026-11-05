@@ -22,6 +22,7 @@ from .agent_types import (
     AgentEvent,
     AgentTurnRequest,
 )
+from .k8s_sandbox import KubernetesSessionSandbox
 from .mcp_context import CONVERSATION_HEADER, TURN_HEADER
 from .skill import read_skill
 
@@ -312,7 +313,11 @@ class PiRunner:
 
     def available(self) -> bool:
         return bool(
-            shutil.which("docker")
+            shutil.which(
+                "kubectl"
+                if os.environ.get("DATAAGENT_AGENT_MODE") == "k8s"
+                else "docker"
+            )
             if self._sandboxed()
             else self.binary or shutil.which("pi")
         )
@@ -386,6 +391,7 @@ class PiRunner:
         skill = read_skill()
         sandboxed = self._sandboxed()
         sandbox = None
+        exec_header = None
         command = [
             "pi" if sandboxed else self._binary(),
             "--mode",
@@ -404,7 +410,12 @@ class PiRunner:
             "Follow this retrieval skill exactly for warehouse questions.\n\n" + skill,
         ]
         if sandboxed:
-            sandbox = SessionSandbox(
+            sandbox_class = (
+                KubernetesSessionSandbox
+                if os.environ.get("DATAAGENT_AGENT_MODE") == "k8s"
+                else SessionSandbox
+            )
+            sandbox = sandbox_class(
                 request.workspace, request.provider.base_url, request.mcp_url
             )
             register_session(request.conversation_id, sandbox)
@@ -432,7 +443,21 @@ class PiRunner:
                 ):
                     if key in env:
                         docker.extend(["--env", key])
-                command = docker + [sandbox.name, *command]
+                if isinstance(sandbox, KubernetesSessionSandbox):
+                    command, exec_header = sandbox.wrap_command(
+                        command,
+                        env,
+                        (
+                            "PI_CODING_AGENT_DIR",
+                            "PI_CODING_AGENT_SESSION_DIR",
+                            "PI_OFFLINE",
+                            TOKEN_ENV,
+                            KEY_ENV,
+                            "HOME",
+                        ),
+                    )
+                else:
+                    command = docker + [sandbox.name, *command]
             except BaseException:
                 unregister_session(request.conversation_id, sandbox)
                 await asyncio.to_thread(sandbox.close)
@@ -462,6 +487,8 @@ class PiRunner:
         finished = False
         try:
             assert process.stdin is not None
+            if exec_header is not None:
+                process.stdin.write(exec_header)
             process.stdin.write(
                 (
                     json.dumps(

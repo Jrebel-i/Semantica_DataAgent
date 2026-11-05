@@ -226,6 +226,8 @@ def me(role: Annotated[str, Depends(current_user)]) -> dict[str, str]:
 def get_settings(_: Annotated[str, Depends(admin)]) -> dict[str, str | None]:
     with sessions()() as db:
         values = {row.key: row.value for row in db.query(Setting).all()}
+    if not values.get("neo4j_password") and knowledge.neo4j_password(values):
+        values["neo4j_password"] = "configured"
     return {
         key: ("configured" if key in values else None)
         if key in SECRET
@@ -331,11 +333,7 @@ def put_settings(
 
 
 async def check_neo4j(values: dict[str, str]):
-    password = (
-        Fernet(os.environ["DATAAGENT_ENCRYPTION_KEY"].encode())
-        .decrypt(values["neo4j_password"].encode())
-        .decode()
-    )
+    password = knowledge.neo4j_password(values)
     async with (
         AsyncGraphDatabase.driver(
             values["neo4j_uri"],
@@ -358,11 +356,15 @@ def check_milvus(uri: str):
 
 async def probe(name: str, values: dict[str, str]) -> Status:
     required = {
-        "neo4j": ("neo4j_uri", "neo4j_user", "neo4j_password"),
+        "neo4j": ("neo4j_uri", "neo4j_user"),
         "milvus": ("milvus_uri",),
         "embedding": ("embedding_url",),
     }[name]
-    if not all(values.get(key) for key in required):
+    if not all(values.get(key) for key in required) or (
+        name == "neo4j"
+        and not values.get("neo4j_password")
+        and not knowledge.neo4j_password(values)
+    ):
         return Status(status="not_configured", elapsed_ms=0)
     start = time.monotonic()
     try:
@@ -937,3 +939,33 @@ def source_diff(path: str, before: str, after: str, _: Annotated[str, Depends(ad
 
     with source_repository() as root:
         return SourceDiff(diff=source.diff(root, path, before, after))
+
+
+def mount_frontend(application: FastAPI, directory):
+    """Serve the built UI after all API and MCP routes have been registered."""
+    from starlette.exceptions import HTTPException as StarletteHTTPException
+    from starlette.staticfiles import StaticFiles
+
+    class FrontendFiles(StaticFiles):
+        async def get_response(self, path, scope):
+            try:
+                return await super().get_response(path, scope)
+            except StarletteHTTPException as exc:
+                headers = dict(scope.get("headers", []))
+                accepts_html = b"text/html" in headers.get(b"accept", b"")
+                if (
+                    exc.status_code != 404
+                    or not accepts_html
+                    or path.startswith(("api/", "mcp/"))
+                    or "." in path.rsplit("/", 1)[-1]
+                ):
+                    raise
+                return await super().get_response("index.html", scope)
+
+    application.mount(
+        "/", FrontendFiles(directory=directory, html=True), name="frontend"
+    )
+
+
+if static_dir := os.environ.get("DATAAGENT_STATIC_DIR"):
+    mount_frontend(app, static_dir)

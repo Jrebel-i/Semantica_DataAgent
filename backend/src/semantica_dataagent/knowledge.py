@@ -82,18 +82,31 @@ def validate_records(records):
             seen.add(key)
 
 
+def neo4j_password(values):
+    encrypted = values.get("neo4j_password")
+    if encrypted:
+        return (
+            Fernet(os.environ["DATAAGENT_ENCRYPTION_KEY"].encode())
+            .decrypt(encrypted.encode())
+            .decode()
+        )
+    user, separator, password = os.environ.get("DATAAGENT_NEO4J_AUTH", "").partition(
+        "/"
+    )
+    if separator and password and user == values.get("neo4j_user"):
+        return password
+    return None
+
+
 def settings():
     with sessions()() as db:
         values = {row.key: row.value for row in db.query(Setting).all()}
         pointer = db.get(GenerationPointer, 1)
         if pointer:
             values["knowledge_generation"] = pointer.generation
-    if values.get("neo4j_password"):
-        values["neo4j_password"] = (
-            Fernet(os.environ["DATAAGENT_ENCRYPTION_KEY"].encode())
-            .decrypt(values["neo4j_password"].encode())
-            .decode()
-        )
+    password = neo4j_password(values)
+    if password:
+        values["neo4j_password"] = password
     values.setdefault("embedding_model", "model/bge-m3")
     values.setdefault("knowledge_generation", "default")
     if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,63}", values["knowledge_generation"]):

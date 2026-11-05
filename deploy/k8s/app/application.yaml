@@ -1,0 +1,93 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: dataagent-data
+  namespace: semantica-dataagent
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 20Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dataagent
+  namespace: semantica-dataagent
+spec:
+  type: NodePort
+  selector:
+    app: dataagent
+  ports:
+    - port: 8000
+      targetPort: 8000
+      nodePort: 31630
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dataagent
+  namespace: semantica-dataagent
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: dataagent
+  template:
+    metadata:
+      labels:
+        app: dataagent
+    spec:
+      serviceAccountName: dataagent
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      containers:
+        - name: dataagent
+          image: 172.16.242.124:31640/dataagent-app:issue-26
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8000
+          env:
+            - name: DATAAGENT_ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: dataagent-encryption
+                  key: key
+            - name: DATAAGENT_NEO4J_AUTH
+              valueFrom:
+                secretKeyRef:
+                  name: neo4j-auth
+                  key: auth
+            - name: DATAAGENT_DB_PATH
+              value: /data/dataagent.db
+            - name: DATAAGENT_AGENT_ROOT
+              value: /data/conversations
+            - name: DATAAGENT_AGENT_MODE
+              value: k8s
+            - name: DATAAGENT_PUBLIC_URL
+              value: http://dataagent.semantica-dataagent.svc:8000
+            - name: DATAAGENT_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          readinessProbe:
+            tcpSocket:
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: dataagent-data
