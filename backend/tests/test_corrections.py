@@ -33,3 +33,23 @@ def test_user_cannot_approve_correction(client):
         headers={"Authorization": f"Bearer {requester.token}"},
     )
     assert response.status_code == 403
+
+
+def test_proposal_rejects_target_absent_from_current_generation(client, monkeypatch):
+    from semantica_dataagent import knowledge
+    from semantica_dataagent.app import create_mcp
+
+    monkeypatch.setattr(knowledge, "existing_refs", lambda refs: set())
+    result = call(
+        create_mcp(),
+        "propose_correction",
+        {
+            "target": "document:metrics/missing.md",
+            "patch": "修正后的定义\n",
+            "reason": "定义有误",
+        },
+        _requester(token="missing-target"),
+    )
+    assert result.isError
+    assert result.structuredContent["code"] == "invalid_input"
+    assert result.structuredContent["message"] != "Unknown tool"
