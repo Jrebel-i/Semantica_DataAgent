@@ -1,8 +1,11 @@
 """Build and query the current generation of warehouse metadata."""
 
+import fcntl
+import hashlib
 import json
 import os
 import re
+import time
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager, suppress
@@ -33,6 +36,49 @@ from .embedding_client import embed as embedding_embed
 from .filters import filter_records, get_filters
 from .plugins import configured
 from .storage_errors import StorageUnavailable
+
+
+def hash_difference(previous, current):
+    old, new = set(previous), set(current)
+    return {
+        "added": new - old,
+        "changed": {path for path in old & new if previous[path] != current[path]},
+        "deleted": old - new,
+    }
+
+
+def incremental_plan(records, changes):
+    selected = changes["added"] | changes["changed"] | changes.get("deleted", set())
+    return [
+        record
+        for record in records
+        if (record.source_key or record.source_file) in selected
+        or record.source_file in selected
+        or selected.intersection(record.source_files)
+    ]
+
+
+def source_file_difference(previous, current, previous_generated, current_generated):
+    return hash_difference(
+        {k: v for k, v in previous.items() if k not in previous_generated},
+        {k: v for k, v in current.items() if k not in current_generated},
+    )
+
+
+def validate_records(records):
+    fields = {
+        "table": ("database", "name"),
+        "field": ("database", "table", "name"),
+        "task": ("name",),
+        "document": ("category", "path"),
+    }
+    seen = set()
+    for record in records:
+        if record.kind in fields:
+            key = (record.kind, *(record.data[field] for field in fields[record.kind]))
+            if key in seen:
+                raise ValueError("Duplicate " + record.kind + " reference")
+            seen.add(key)
 
 
 def settings():
@@ -290,6 +336,12 @@ def build_storage(values, embedding_stats=None):
     try:
         vector_store = milvus(values)
         try:
+            close_readers()
+            if values.get("_build_id"):
+                with sessions().begin() as db:
+                    db.get(Build, values["_build_id"]).affected_files = json.dumps(
+                        {"full_started": True}
+                    )
             execute(
                 graph_store,
                 "MATCH (n:SDAEntity {generation:$generation}) DETACH DELETE n",
@@ -309,49 +361,393 @@ def build_storage(values, embedding_stats=None):
         graph_store.close()
 
 
+@contextmanager
+def incremental_storage(values, embedding_stats=None):
+    from .stage_contract import StorageHandles
+
+    stats = embedding_stats if embedding_stats is not None else EmbeddingStats()
+    graph_store = graph(values)
+    try:
+        vector_store = milvus(values)
+        try:
+            vector_store.get_collection(collection_name(values))
+            yield StorageHandles(
+                values["knowledge_generation"],
+                graph_store,
+                vector_store,
+                values,
+                _embedding_stats=stats,
+            )
+            vector_store.collection.load()
+        finally:
+            vector_store.client.disconnect()
+    finally:
+        graph_store.close()
+
+
+def read_sources(values, plugins):
+    directory = Path(values["source_directory"]).resolve()
+    lock = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        fcntl.flock(lock, fcntl.LOCK_SH)
+        records, hashes, adapter_stats = [], {}, {}
+        for category, plugin, enabled, parameters in plugins:
+            if category != "source" or not enabled:
+                continue
+            result = plugin.read(directory, parameters)
+            adapter_stats.update(
+                {f"{plugin.id}_{key}": value for key, value in result.stats.items()}
+            )
+            from .source_directory import relative, safe
+
+            for path, digest in result.hashes.items():
+                if safe(directory, relative(path)).is_file() is False and not any(
+                    record.source_key == path for record in result.records
+                ):
+                    raise ValueError("Source hash does not identify a file")
+                if (
+                    relative(path).as_posix() != path
+                    or not isinstance(digest, str)
+                    or not digest
+                ):
+                    raise ValueError("Invalid source file hash")
+                if path in hashes and hashes[path] != digest:
+                    raise ValueError("Source adapters disagree on a file hash")
+                hashes[path] = digest
+            for record in result.records:
+                if (
+                    not record.source_file
+                    or record.source_file not in result.hashes
+                    or any(path not in result.hashes for path in record.source_files)
+                    or (record.source_key or record.source_file) not in result.hashes
+                ):
+                    raise ValueError(
+                        f"Source adapter {plugin.id} did not report record provenance"
+                    )
+            records.extend(result.records)
+        commit = None
+        if (directory / ".git").is_dir():
+            from .source_directory import git
+
+            try:
+                head = git(directory, "rev-parse", "--verify", "HEAD").decode().strip()
+            except ValueError:
+                head = None
+            if head is not None and not git(
+                directory, "status", "--porcelain", "--untracked-files=all"
+            ):
+                commit = head
+        return records, hashes, commit, adapter_stats
+    finally:
+        fcntl.flock(lock, fcntl.LOCK_UN)
+        os.close(lock)
+
+
+def dimension_sources(records):
+    result = {}
+    for record in records:
+        if record.kind == "dimension_value":
+            table = [record.data["database"], record.data["table"]]
+            for path in dict.fromkeys((record.source_file, *record.source_files)):
+                if path is None:
+                    continue
+                tables = result.setdefault(path, [])
+                if table not in tables:
+                    tables.append(table)
+    return result
+
+
+def _load_logs(value):
+    try:
+        logs = json.loads(value or "[]")
+    except (TypeError, json.JSONDecodeError):
+        return []
+    return logs if isinstance(logs, list) else []
+
+
+def _record_log(build_id, logs, stage, message, level="info"):
+    logs.append(
+        {
+            "timestamp": datetime.now(UTC).isoformat(),
+            "stage": stage,
+            "level": level,
+            "message": message,
+        }
+    )
+    with sessions().begin() as db:
+        row = db.get(Build, build_id)
+        if row is not None:
+            row.logs = json.dumps(logs, ensure_ascii=False)
+
+
+def _stage_name(stage):
+    module = stage.__module__.rsplit(".", 1)[-1]
+    return module.removesuffix("_stage")
+
+
 def run_build(build_id):
     status, counts, error = "failed", {}, None
     failures = []
     stats = EmbeddingStats()
+    logs = []
     try:
+        with sessions().begin() as db:
+            build = db.get(Build, build_id)
+            if build is None:
+                raise ValueError("Build record not found")
+            logs = _load_logs(build.logs)
+            build_type = build.build_type or "full"
+        _record_log(build_id, logs, "build", f"{build_type} build started")
         values = settings()
-        records = []
-        adapter_stats = {}
-        for category, plugin, enabled, parameters in configured():
-            if category == "source" and enabled:
-                result = plugin.read(Path(values["source_directory"]), parameters)
-                records.extend(result.records)
-                adapter_stats.update(
-                    {f"{plugin.id}_{key}": value for key, value in result.stats.items()}
+        generation = values["knowledge_generation"]
+        plugins = configured()
+        filters = get_filters()
+        config = {
+            "source_directory": str(Path(values["source_directory"]).resolve()),
+            "neo4j_uri": values["neo4j_uri"],
+            "neo4j_user": values["neo4j_user"],
+            "milvus_uri": values["milvus_uri"],
+            "plugins": [
+                (category, plugin.id, plugin.version, parameters)
+                for category, plugin, enabled, parameters in plugins
+                if enabled
+            ],
+            "filters": filters,
+            "dimension_value_limit": values.get("dimension_value_limit", "1000"),
+            "embedding_model": values["embedding_model"],
+            "embedding_url": values["embedding_url"],
+        }
+        config_hash = hashlib.sha256(
+            json.dumps(config, sort_keys=True).encode()
+        ).hexdigest()
+        with sessions().begin() as db:
+            build = db.get(Build, build_id)
+            build.generation = generation
+            build.config_hash = config_hash
+        records, hashes, commit, adapter_stats = read_sources(values, plugins)
+        records, filtered = filter_records(records, filters)
+        validate_records(records)
+        _record_log(
+            build_id,
+            logs,
+            "source",
+            f"Read {len(records)} records from {len(hashes)} source files",
+        )
+        dimensions = dimension_sources(records)
+        generated = {
+            r.source_key for r in records if r.source_key and r.data.get("generated")
+        }
+        with sessions().begin() as db:
+            build = db.get(Build, build_id)
+            build.generation = generation
+            build.source_commit = commit
+            build.source_hashes = json.dumps(hashes, sort_keys=True)
+            build.dimension_tables = json.dumps(dimensions, sort_keys=True)
+            build.generated_files = json.dumps(sorted(generated))
+            build.config_hash = config_hash
+            build_type = build.build_type or "full"
+            previous = (
+                db.query(Build)
+                .filter(
+                    Build.id < build_id,
+                    Build.generation == generation,
+                    Build.status == "succeeded",
+                    Build.source_hashes.is_not(None),
                 )
-        records, filtered = filter_records(records, get_filters())
+                .order_by(Build.id.desc())
+                .first()
+            )
+            if build_type == "incremental" and previous is None:
+                raise ValueError(
+                    "A successful full build is required before incremental builds"
+                )
+            if build_type == "incremental" and previous.config_hash != config_hash:
+                raise ValueError("Build configuration changed; run a full build")
+            previous_hashes = json.loads(previous.source_hashes) if previous else {}
+            previous_generated = (
+                set(json.loads(previous.generated_files or "[]")) if previous else set()
+            )
+            prior_dimensions = (
+                json.loads(previous.dimension_tables or "{}") if previous else {}
+            )
+            failed_builds = (
+                db.query(Build)
+                .filter(
+                    Build.generation == generation,
+                    Build.id > (previous.id if previous else 0),
+                    Build.id < build_id,
+                    Build.status == "failed",
+                )
+                .all()
+            )
+            if build_type == "incremental" and any(
+                (row.build_type != "incremental" and row.affected_files)
+                or (
+                    row.affected_files
+                    and row.config_hash
+                    and row.config_hash != config_hash
+                )
+                for row in failed_builds
+            ):
+                raise ValueError(
+                    "A full build failed; run a full build to repair the generation"
+                )
+            dirty = set()
+            old_ids = set()
+            dirty_tables = set()
+            for failed in failed_builds:
+                if failed.affected_files:
+                    saved = json.loads(failed.affected_files)
+                    dirty.update(saved.get("files", []))
+                    old_ids.update(saved.get("vector_ids", []))
+                    dirty_tables.update(
+                        tuple(table) for table in saved.get("dimension_tables", [])
+                    )
+        changes = hash_difference(previous_hashes, hashes)
         counts = dict.fromkeys(KINDS.values(), 0)
-        counts.update(Counter(r.kind for r in records))
         counts.update(adapter_stats)
+        physical_changes = source_file_difference(
+            previous_hashes, hashes, previous_generated, generated
+        )
+        counts.update({name: len(paths) for name, paths in physical_changes.items()})
         counts["filtered"] = filtered
+        _record_log(
+            build_id,
+            logs,
+            "plan",
+            "Files: "
+            + ", ".join(
+                f"{name}={len(paths)}"
+                for name, paths in sorted(physical_changes.items())
+            )
+            + f"; filtered={filtered}",
+        )
+        touched = set().union(*changes.values()) | dirty
+        selected = (
+            records
+            if build_type == "full"
+            else incremental_plan(
+                records, {"added": touched, "changed": set(), "deleted": set()}
+            )
+        )
+        counts.update(Counter(r.kind for r in selected))
+        for path in touched:
+            dirty_tables.update(
+                tuple(table) for table in prior_dimensions.get(path, [])
+            )
+            dirty_tables.update(tuple(table) for table in dimensions.get(path, []))
+        if build_type == "incremental" and dirty_tables:
+            selected = [r for r in selected if r.kind != "dimension_value"] + [
+                r
+                for r in records
+                if r.kind == "dimension_value"
+                and (r.data["database"], r.data["table"]) in dirty_tables
+            ]
+        from .relationships import reconcile
         from .stages import STAGES
 
-        with build_storage(values, stats) as storage:
+        values["_build_id"] = build_id
+        manager = (
+            build_storage(values, stats)
+            if build_type == "full"
+            else incremental_storage(values, stats)
+        )
+        with manager as storage:
+            storage.build_id = build_id
+            storage.all_records = records
+            storage.is_incremental = build_type == "incremental"
+            if build_type == "incremental":
+                params = {
+                    "generation": generation,
+                    "files": sorted(touched),
+                    "tables": [
+                        {"database": db, "table": table}
+                        for db, table in sorted(dirty_tables)
+                    ],
+                }
+                found = storage.execute(
+                    "MATCH (n:SDAEntity {generation:$generation}) WHERE n.source_file IN $files OR n.source_key IN $files OR any(s IN coalesce(n.source_files, []) WHERE s IN $files) OR (n:SDADimensionValue AND any(t IN $tables WHERE t.database = n.database AND t.table = n.table)) RETURN n.ref AS ref",
+                    params,
+                )
+                old_ids.update(row["ref"] for row in found if row["ref"])
+                with sessions().begin() as db:
+                    db.get(Build, build_id).affected_files = json.dumps(
+                        {
+                            "files": sorted(touched),
+                            "vector_ids": sorted(old_ids),
+                            "dimension_tables": sorted(dirty_tables),
+                        }
+                    )
+                storage.execute(
+                    "MATCH (:SDATable {generation:$generation})-[r:DEPENDS_ON]->(:SDATable {generation:$generation}) WHERE r.source_file IN $files DELETE r",
+                    {"generation": generation, "files": sorted(touched)},
+                )
+                storage.execute(
+                    "MATCH (n:SDAEntity {generation:$generation}) WHERE n.source_file IN $files OR n.source_key IN $files OR any(s IN coalesce(n.source_files, []) WHERE s IN $files) OR (n:SDADimensionValue AND any(t IN $tables WHERE t.database = n.database AND t.table = n.table)) DETACH DELETE n",
+                    params,
+                )
+                if old_ids:
+                    storage._vectors.delete_vectors(sorted(old_ids))
+                if dirty_tables:
+                    storage.execute(
+                        "UNWIND $tables AS row MATCH (f:SDAField {generation:$generation, database:row.database, table:row.table}) REMOVE f.dimension_count, f.dimension_too_many, f.dimension_samples",
+                        params,
+                    )
             for stage in STAGES:
-                result = stage(records, values["knowledge_generation"], storage)
+                if (
+                    build_type == "incremental"
+                    and stage.__module__.endswith("dimension_stage")
+                    and not dirty_tables
+                    and not any(record.kind == "field" for record in selected)
+                ):
+                    continue
+                stage_started = time.monotonic()
+                result = stage(selected, generation, storage)
+                elapsed = time.monotonic() - stage_started
+                stage_counts = dict(result.counts)
                 counts.update(result.counts)
                 failures.extend(result.failures)
+                summary = ", ".join(
+                    f"{key}={value}" for key, value in sorted(stage_counts.items())
+                )
+                if result.errors:
+                    _record_log(
+                        build_id,
+                        logs,
+                        _stage_name(stage),
+                        f"Failed after {elapsed:.3f}s: " + "; ".join(result.errors),
+                        "error",
+                    )
+                else:
+                    _record_log(
+                        build_id,
+                        logs,
+                        _stage_name(stage),
+                        f"Completed in {elapsed:.3f}s"
+                        + (f": {summary}" if summary else ""),
+                    )
                 if result.errors:
                     raise ValueError("; ".join(result.errors))
+            reconcile(storage, records, generation)
+            _record_log(build_id, logs, "relationships", "Reconciled relationships")
         read_graph(values)
         read_vectors(values)
         status = "succeeded"
+        _record_log(build_id, logs, "build", "Build succeeded")
     except Exception as exc:  # noqa: BLE001 - record failure of background work
         error = str(exc)
+        with suppress(Exception):
+            _record_log(build_id, logs, "build", f"Build failed: {error}", "error")
     finally:
         counts.update(stats.counts())
         with sessions().begin() as db:
             build = db.get(Build, build_id)
-            build.status = status
-            build.counts = json.dumps(counts)
-            build.error = error
-            build.parse_failures = json.dumps(failures, ensure_ascii=False)
-            build.finished_at = datetime.now(UTC).isoformat()
+            if build is not None:
+                build.status = status
+                build.counts = json.dumps(counts)
+                build.error = error
+                build.parse_failures = json.dumps(failures, ensure_ascii=False)
+                build.finished_at = datetime.now(UTC).isoformat()
 
 
 def describe(names=None, database=None, search=None):

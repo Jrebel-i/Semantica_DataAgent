@@ -13,14 +13,19 @@ class Adapter:
     }
 
     def read(self, directory, parameters):
+        import hashlib
+
         from semantica_dataagent.canonical import ReadResult, Record
 
+        source = "third_party.source"
+        digest = hashlib.sha256((directory / source).read_bytes()).hexdigest()
         return ReadResult(
             [
                 Record(
                     "table",
                     {"database": "prod", "name": parameters["prefix"], "comment": ""},
+                    source,
                 )
             ],
-            {},
+            {source: digest},
         )

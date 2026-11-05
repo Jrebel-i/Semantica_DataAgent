@@ -153,7 +153,14 @@ class DtbAdapter:
             snapshot / "表信息.xlsx", base, hashes, stats
         )
         declared = self._declared_lineage(
-            tasks, task_ids, task_outputs, upstream, tables_by_task, stats
+            tasks,
+            task_ids,
+            task_outputs,
+            upstream,
+            tables_by_task,
+            stats,
+            (snapshot / "任务信息.json").relative_to(base).as_posix(),
+            (snapshot / "表信息.xlsx").relative_to(base).as_posix(),
         )
         dimensions = self._dimensions(base, parameters, hashes, stats)
 
@@ -197,7 +204,7 @@ class DtbAdapter:
     @staticmethod
     def _hash(path, base, hashes):
         raw = path.read_bytes()
-        hashes[str(path.relative_to(base))] = hashlib.sha256(raw).hexdigest()
+        hashes[path.relative_to(base).as_posix()] = hashlib.sha256(raw).hexdigest()
         return raw
 
     def _tasks(self, path, base, hashes, stats):
@@ -227,6 +234,7 @@ class DtbAdapter:
         if missing:
             raise ValueError(f"DTB task file lacks columns: {', '.join(missing)}")
 
+        source = path.relative_to(base).as_posix()
         records, task_ids, outputs, upstream = [], {}, {}, {}
         for row in rows:
             if not isinstance(row, list):
@@ -258,7 +266,7 @@ class DtbAdapter:
                 data["description"] = description
             if parameters is not None:
                 data["parameters"] = parameters
-            records.append(Record("task", data))
+            records.append(Record("task", data, source))
             if task_id:
                 task_ids[task_id] = name
             output = _qualified(fields.get("output_table_name"))
@@ -355,6 +363,7 @@ class DtbAdapter:
                         f"{database}.{table}"
                     )
 
+            source = path.relative_to(base).as_posix()
             records = []
             for key in sorted(table_rows):
                 item = table_rows[key]
@@ -366,9 +375,12 @@ class DtbAdapter:
                             "name": item["name"],
                             "comment": item["comment"],
                         },
+                        source,
                     )
                 )
-                records.extend(Record("field", field) for field in item["fields"])
+                records.extend(
+                    Record("field", field, source) for field in item["fields"]
+                )
             return records, {
                 task_id: sorted(names) for task_id, names in tables_by_task.items()
             }
@@ -376,7 +388,15 @@ class DtbAdapter:
             book.close()
 
     def _declared_lineage(
-        self, tasks, task_ids, task_outputs, upstream, tables_by_task, stats
+        self,
+        tasks,
+        task_ids,
+        task_outputs,
+        upstream,
+        tables_by_task,
+        stats,
+        task_source,
+        table_source,
     ):
         name_by_id = task_ids
         outputs = {name: list(names) for name, names in task_outputs.items()}
@@ -418,6 +438,9 @@ class DtbAdapter:
                                     "parse_status": "success",
                                     "task_id": name,
                                 },
+                                task_source,
+                                None,
+                                (task_source, table_source),
                             )
                         )
         return records
@@ -477,6 +500,8 @@ class DtbAdapter:
             }
             seen_columns = set()
             rows_read = 0
+            meta_source = meta_path.relative_to(base).as_posix()
+            rows_source = rows_path.relative_to(base).as_posix()
             raw = self._hash(rows_path, base, hashes)
             for line_number, line in enumerate(raw.splitlines(), start=1):
                 if not line.strip():
@@ -514,6 +539,9 @@ class DtbAdapter:
                                 "value": value,
                                 "row_id": row_id,
                             },
+                            rows_source,
+                            None,
+                            (rows_source, meta_source),
                         )
                     )
             stats["dimension_rows"] += rows_read

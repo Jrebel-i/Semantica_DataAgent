@@ -126,6 +126,16 @@ def test_build_and_retrieve_through_http(tmp_path, monkeypatch):
         with httpx.Client(
             base_url=base, headers=headers, timeout=180, trust_env=False
         ) as c:
+
+            def wait_build(ident, timeout=900):
+                deadline = time.monotonic() + timeout
+                while time.monotonic() < deadline:
+                    build = c.get(f"/api/v1/builds/{ident}").json()
+                    if build["status"] in {"succeeded", "failed", "cancelled"}:
+                        return build
+                    time.sleep(0.2)
+                raise AssertionError(f"Build {ident} did not finish: {build}")
+
             values = {
                 "neo4j_uri": os.environ["TEST_NEO4J_URI"],
                 "neo4j_user": os.environ["TEST_NEO4J_USER"],
@@ -140,21 +150,17 @@ def test_build_and_retrieve_through_http(tmp_path, monkeypatch):
             response = c.post("/api/v1/builds")
             assert response.status_code == 202, response.text
             ident = response.json()["id"]
+            queued_id = None
             try:
-                assert entered.wait(timeout=120), c.get(
-                    f"/api/v1/builds/{ident}"
-                ).json()
-                assert c.post("/api/v1/builds").status_code == 409
+                assert entered.wait(timeout=120)
+                queued = c.post("/api/v1/builds")
+                assert queued.status_code == 202
+                queued_id = queued.json()["id"]
+                assert queued.json()["status"] == "queued"
+                assert c.get(f"/api/v1/builds/{queued_id}").json()["status"] == "queued"
             finally:
                 release.set()
-            build_started = time.monotonic()
-            deadline = build_started + 900
-            while time.monotonic() < deadline:
-                build = c.get(f"/api/v1/builds/{ident}").json()
-                if build["status"] != "running":
-                    break
-                time.sleep(0.2)
-            print("build_elapsed_ms=", round((time.monotonic() - build_started) * 1000))
+            build = wait_build(ident)
             assert build["status"] == "succeeded", build.get("error")
             assert build["counts"]["embedding_requests"] > 0
             assert (
@@ -163,18 +169,10 @@ def test_build_and_retrieve_through_http(tmp_path, monkeypatch):
             )
             assert build["counts"]["embedding_retries"] >= 0
             assert build["counts"]["embedding_elapsed_ms"] > 0
-            print(
-                "embedding_stats=",
-                {
-                    key: build["counts"][key]
-                    for key in (
-                        "embedding_requests",
-                        "embedding_successful_batches",
-                        "embedding_retries",
-                        "embedding_elapsed_ms",
-                    )
-                },
-            )
+            assert queued_id is not None
+            queued_build = wait_build(queued_id)
+            assert queued_build["status"] == "succeeded", queued_build.get("error")
+            assert queued_build["id"] > build["id"]
             assert build["counts"]["test_stage"] == 1
             assert any(
                 f["task_id"] == "bad_sql" and f["reason"]
@@ -230,12 +228,7 @@ def test_build_and_retrieve_through_http(tmp_path, monkeypatch):
                 == 200
             )
             second = c.post("/api/v1/builds").json()["id"]
-            deadline = time.monotonic() + 900
-            while time.monotonic() < deadline:
-                rebuilt = c.get(f"/api/v1/builds/{second}").json()
-                if rebuilt["status"] != "running":
-                    break
-                time.sleep(0.2)
+            rebuilt = wait_build(second)
             assert rebuilt["status"] == "succeeded", rebuilt.get("error")
             assert rebuilt["counts"]["filtered"] == 0
             channel = next(
@@ -294,12 +287,7 @@ def test_build_and_retrieve_through_http(tmp_path, monkeypatch):
             )
             fields_path.write_text(json.dumps(fields))
             third = c.post("/api/v1/builds").json()["id"]
-            deadline = time.monotonic() + 900
-            while time.monotonic() < deadline:
-                final_build = c.get(f"/api/v1/builds/{third}").json()
-                if final_build["status"] != "running":
-                    break
-                time.sleep(0.2)
+            final_build = wait_build(third)
             assert final_build["status"] == "succeeded", final_build.get("error")
             calls.update(neo4j=0, milvus=0)
             assert asyncio.run(check_cache_field())["fields"][0]["status"] == "pass"

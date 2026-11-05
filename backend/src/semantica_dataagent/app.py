@@ -1,17 +1,18 @@
 import asyncio
+import base64
 import json
 import os
 import re
 import secrets
 import time
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Literal
 from urllib.parse import urlsplit
 
 import httpx
 from cryptography.fernet import Fernet
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from mcp.server.fastmcp import FastMCP
@@ -19,10 +20,10 @@ from neo4j import AsyncGraphDatabase
 from pydantic import BaseModel, Field
 from pymilvus import MilvusClient
 from sqlalchemy import text, update
-from sqlalchemy.exc import IntegrityError
 
 from . import knowledge
-from .db import Build, Setting, Token, digest, sessions
+from .build_queue import build_queue
+from .db import Build, PluginConfig, Setting, Token, digest, sessions
 from .embedding_client import validate_settings
 
 
@@ -38,12 +39,23 @@ async def lifespan(application):
                 finished_at=datetime.now(UTC).isoformat(),
             )
         )
+        db.execute(
+            update(Build)
+            .where(Build.status == "queued")
+            .values(
+                status="cancelled",
+                error="Build cancelled because the application restarted before it started",
+                finished_at=datetime.now(UTC).isoformat(),
+            )
+        )
+    build_queue.start()
     server = create_mcp()
     application.state.mcp_app = server.streamable_http_app()
     async with server.session_manager.run():
         try:
             yield
         finally:
+            build_queue.stop()
             knowledge.close_readers()
 
 
@@ -312,41 +324,98 @@ async def health() -> dict[str, Status]:
     return dict(zip(names, results, strict=True))
 
 
+class BuildLog(BaseModel):
+    timestamp: datetime
+    stage: str
+    level: Literal["info", "error"]
+    message: str
+
+
 class BuildView(BaseModel):
     id: int
-    status: str
-    started_at: str
-    finished_at: str | None
+    status: Literal["queued", "running", "succeeded", "failed", "cancelled"]
+    started_at: datetime
+    finished_at: datetime | None
     counts: dict[str, int]
     error: str | None
     parse_failures: list[dict[str, str]]
+    build_type: Literal["full", "incremental"]
+    triggered_by: str | None
+    source_commit: str | None
+    logs: list[BuildLog]
+
+
+class BuildRequest(BaseModel):
+    build_type: Literal["full", "incremental"] = "full"
+
+
+def build_logs(value: str | None) -> list[BuildLog]:
+    try:
+        entries = json.loads(value or "[]")
+    except (TypeError, json.JSONDecodeError):
+        return []
+    if not isinstance(entries, list):
+        return []
+    return [
+        BuildLog.model_validate(entry) for entry in entries if isinstance(entry, dict)
+    ]
 
 
 def build_view(row: Build) -> BuildView:
+    def utc(value):
+        if value is None:
+            return None
+        parsed = datetime.fromisoformat(value)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=UTC)
+        return parsed.astimezone(UTC)
+
     return BuildView(
         id=row.id,
         status=row.status,
-        started_at=row.started_at,
-        finished_at=row.finished_at,
+        started_at=utc(row.started_at),
+        finished_at=utc(row.finished_at),
         counts=json.loads(row.counts),
         error=row.error,
         parse_failures=json.loads(row.parse_failures or "[]"),
+        build_type=row.build_type or "full",
+        triggered_by=row.triggered_by,
+        source_commit=row.source_commit,
+        logs=build_logs(row.logs),
     )
 
 
 @app.post("/api/v1/builds", status_code=202, response_model=BuildView)
-def start_build(background: BackgroundTasks, _: Annotated[str, Depends(admin)]):
-    try:
-        with sessions().begin() as db:
-            row = Build(
-                status="running", started_at=datetime.now(UTC).isoformat(), counts="{}"
-            )
-            db.add(row)
-            db.flush()
-            result = build_view(row)
-    except IntegrityError:
-        raise HTTPException(status_code=409, detail="Build already running") from None
-    background.add_task(knowledge.run_build, result.id)
+def start_build(
+    _: Annotated[str, Depends(admin)],
+    credentials: Annotated[HTTPAuthorizationCredentials, Depends(bearer)],
+    body: BuildRequest | None = None,
+):
+    now = datetime.now(UTC)
+    build_type = body.build_type if body else "full"
+    with sessions().begin() as db:
+        token = db.get(Token, digest(credentials.credentials))
+        row = Build(
+            status="queued",
+            started_at=now.isoformat(),
+            counts="{}",
+            build_type=build_type,
+            triggered_by=token.name,
+            logs=json.dumps(
+                [
+                    {
+                        "timestamp": now.isoformat(),
+                        "stage": "queue",
+                        "level": "info",
+                        "message": f"{build_type} build queued",
+                    }
+                ]
+            ),
+        )
+        db.add(row)
+        db.flush()
+        result = build_view(row)
+    build_queue.enqueue()
     return result
 
 
@@ -563,3 +632,149 @@ def write_filters(body: FilterRules, _: Annotated[str, Depends(admin)]):
         else:
             row.value = body.model_dump_json()
     return body
+
+
+class SourceFileUpload(BaseModel):
+    path: str
+    content_base64: str
+
+
+class SourceUpload(BaseModel):
+    target: str
+    files: list[SourceFileUpload] = []
+    archive_base64: str | None = None
+    replace: bool = False
+
+
+class SourceCommit(BaseModel):
+    commit: str
+
+
+class SourceContent(BaseModel):
+    path: str
+    content: str
+    encoding: Literal["utf-8", "base64"]
+
+
+class SourceHistory(BaseModel):
+    commit: str
+    author: str
+    date: datetime
+    message: str
+
+
+class SourceDiff(BaseModel):
+    diff: str
+
+
+def source_path():
+    with sessions()() as db:
+        value = db.get(Setting, "source_directory")
+        if value is None or not value.value:
+            raise HTTPException(422, "Source directory is not configured")
+        return value.value
+
+
+@contextmanager
+def source_repository():
+    from . import source_directory
+
+    try:
+        with source_directory.repository(source_path()) as root:
+            yield root
+    except (ValueError, OSError) as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@app.post("/api/v1/source/upload", response_model=SourceCommit)
+def upload_sources(
+    body: SourceUpload,
+    _: Annotated[str, Depends(admin)],
+    credentials: Annotated[HTTPAuthorizationCredentials, Depends(bearer)],
+):
+    from . import source_directory as source
+
+    if body.archive_base64 is not None and body.files:
+        raise HTTPException(422, "Choose files or an archive")
+    try:
+        if body.archive_base64 is not None:
+            files = source.unpack_archive(source.decode(body.archive_base64))
+            target = source.relative(body.target)
+            prefix = target.name + "/"
+            if (
+                body.replace
+                and files
+                and all(name.startswith(prefix) for name in files)
+            ):
+                files = {name[len(prefix) :]: data for name, data in files.items()}
+        else:
+            if len(body.files) > source.MAX_FILES or sum(
+                len(item.content_base64) for item in body.files
+            ) > (source.MAX_BYTES + 2) // 3 * 4 + 4 * len(body.files):
+                raise ValueError("Upload too large")
+            files = {
+                item.path: source.decode(item.content_base64) for item in body.files
+            }
+            if len(files) != len(body.files):
+                raise ValueError("Duplicate path")
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    with sessions()() as db:
+        user = db.get(Token, digest(credentials.credentials))
+        author = user.name
+        config = db.get(PluginConfig, ("source", "markdown"))
+        category_root = (
+            json.loads(config.parameters).get("path", "knowledge")
+            if config
+            else "knowledge"
+        )
+    with source_repository() as root:
+        return SourceCommit(
+            commit=source.upload(
+                root, body.target, files, body.replace, author, category_root
+            )
+        )
+
+
+@app.get("/api/v1/source/files", response_model=list[str])
+def source_files(_: Annotated[str, Depends(admin)]):
+    from . import source_directory as source
+
+    with source_repository() as root:
+        return source.list_files(root)
+
+
+@app.get("/api/v1/source/file", response_model=SourceContent)
+def source_file(path: str, _: Annotated[str, Depends(admin)]):
+    from . import source_directory as source
+
+    with source_repository() as root:
+        file = source.safe(root, source.relative(path))
+        if not file.is_file():
+            raise HTTPException(404, "Source file not found")
+        raw = file.read_bytes()
+        try:
+            content = raw.decode("utf-8")
+            if "\x00" in content:
+                raise UnicodeDecodeError("utf-8", raw, 0, 1, "Binary content")
+            encoding = "utf-8"
+        except UnicodeDecodeError:
+            content = base64.b64encode(raw).decode("ascii")
+            encoding = "base64"
+        return SourceContent(path=path, content=content, encoding=encoding)
+
+
+@app.get("/api/v1/source/history", response_model=list[SourceHistory])
+def source_history(path: str, _: Annotated[str, Depends(admin)]):
+    from . import source_directory as source
+
+    with source_repository() as root:
+        return source.history(root, path)
+
+
+@app.get("/api/v1/source/diff", response_model=SourceDiff)
+def source_diff(path: str, before: str, after: str, _: Annotated[str, Depends(admin)]):
+    from . import source_directory as source
+
+    with source_repository() as root:
+        return SourceDiff(diff=source.diff(root, path, before, after))

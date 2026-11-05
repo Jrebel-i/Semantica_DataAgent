@@ -1,8 +1,64 @@
 {
   "components": {
     "schemas": {
+      "BuildLog": {
+        "properties": {
+          "level": {
+            "enum": [
+              "info",
+              "error"
+            ],
+            "title": "Level",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "stage": {
+            "title": "Stage",
+            "type": "string"
+          },
+          "timestamp": {
+            "format": "date-time",
+            "title": "Timestamp",
+            "type": "string"
+          }
+        },
+        "required": [
+          "timestamp",
+          "stage",
+          "level",
+          "message"
+        ],
+        "title": "BuildLog",
+        "type": "object"
+      },
+      "BuildRequest": {
+        "properties": {
+          "build_type": {
+            "default": "full",
+            "enum": [
+              "full",
+              "incremental"
+            ],
+            "title": "Build Type",
+            "type": "string"
+          }
+        },
+        "title": "BuildRequest",
+        "type": "object"
+      },
       "BuildView": {
         "properties": {
+          "build_type": {
+            "enum": [
+              "full",
+              "incremental"
+            ],
+            "title": "Build Type",
+            "type": "string"
+          },
           "counts": {
             "additionalProperties": {
               "type": "integer"
@@ -24,6 +80,7 @@
           "finished_at": {
             "anyOf": [
               {
+                "format": "date-time",
                 "type": "string"
               },
               {
@@ -36,6 +93,13 @@
             "title": "Id",
             "type": "integer"
           },
+          "logs": {
+            "items": {
+              "$ref": "#/components/schemas/BuildLog"
+            },
+            "title": "Logs",
+            "type": "array"
+          },
           "parse_failures": {
             "items": {
               "additionalProperties": {
@@ -46,13 +110,43 @@
             "title": "Parse Failures",
             "type": "array"
           },
+          "source_commit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Commit"
+          },
           "started_at": {
+            "format": "date-time",
             "title": "Started At",
             "type": "string"
           },
           "status": {
+            "enum": [
+              "queued",
+              "running",
+              "succeeded",
+              "failed",
+              "cancelled"
+            ],
             "title": "Status",
             "type": "string"
+          },
+          "triggered_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Triggered By"
           }
         },
         "required": [
@@ -62,7 +156,11 @@
           "finished_at",
           "counts",
           "error",
-          "parse_failures"
+          "parse_failures",
+          "build_type",
+          "triggered_by",
+          "source_commit",
+          "logs"
         ],
         "title": "BuildView",
         "type": "object"
@@ -538,6 +636,143 @@
         "title": "SettingsUpdate",
         "type": "object"
       },
+      "SourceCommit": {
+        "properties": {
+          "commit": {
+            "title": "Commit",
+            "type": "string"
+          }
+        },
+        "required": [
+          "commit"
+        ],
+        "title": "SourceCommit",
+        "type": "object"
+      },
+      "SourceContent": {
+        "properties": {
+          "content": {
+            "title": "Content",
+            "type": "string"
+          },
+          "encoding": {
+            "enum": [
+              "utf-8",
+              "base64"
+            ],
+            "title": "Encoding",
+            "type": "string"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "content",
+          "encoding"
+        ],
+        "title": "SourceContent",
+        "type": "object"
+      },
+      "SourceDiff": {
+        "properties": {
+          "diff": {
+            "title": "Diff",
+            "type": "string"
+          }
+        },
+        "required": [
+          "diff"
+        ],
+        "title": "SourceDiff",
+        "type": "object"
+      },
+      "SourceFileUpload": {
+        "properties": {
+          "content_base64": {
+            "title": "Content Base64",
+            "type": "string"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "content_base64"
+        ],
+        "title": "SourceFileUpload",
+        "type": "object"
+      },
+      "SourceHistory": {
+        "properties": {
+          "author": {
+            "title": "Author",
+            "type": "string"
+          },
+          "commit": {
+            "title": "Commit",
+            "type": "string"
+          },
+          "date": {
+            "format": "date-time",
+            "title": "Date",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "commit",
+          "author",
+          "date",
+          "message"
+        ],
+        "title": "SourceHistory",
+        "type": "object"
+      },
+      "SourceUpload": {
+        "properties": {
+          "archive_base64": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Archive Base64"
+          },
+          "files": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/SourceFileUpload"
+            },
+            "title": "Files",
+            "type": "array"
+          },
+          "replace": {
+            "default": false,
+            "title": "Replace",
+            "type": "boolean"
+          },
+          "target": {
+            "title": "Target",
+            "type": "string"
+          }
+        },
+        "required": [
+          "target"
+        ],
+        "title": "SourceUpload",
+        "type": "object"
+      },
       "Status": {
         "properties": {
           "elapsed_ms": {
@@ -869,6 +1104,23 @@
       },
       "post": {
         "operationId": "start_build_api_v1_builds_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/BuildRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
         "responses": {
           "202": {
             "content": {
@@ -879,6 +1131,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
           }
         },
         "security": [
@@ -1446,6 +1708,230 @@
           }
         ],
         "summary": "Download Skill"
+      }
+    },
+    "/api/v1/source/diff": {
+      "get": {
+        "operationId": "source_diff_api_v1_source_diff_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "title": "Path",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "before",
+            "required": true,
+            "schema": {
+              "title": "Before",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "after",
+            "required": true,
+            "schema": {
+              "title": "After",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourceDiff"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Source Diff"
+      }
+    },
+    "/api/v1/source/file": {
+      "get": {
+        "operationId": "source_file_api_v1_source_file_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "title": "Path",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourceContent"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Source File"
+      }
+    },
+    "/api/v1/source/files": {
+      "get": {
+        "operationId": "source_files_api_v1_source_files_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "title": "Response Source Files Api V1 Source Files Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Source Files"
+      }
+    },
+    "/api/v1/source/history": {
+      "get": {
+        "operationId": "source_history_api_v1_source_history_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "title": "Path",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/SourceHistory"
+                  },
+                  "title": "Response Source History Api V1 Source History Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Source History"
+      }
+    },
+    "/api/v1/source/upload": {
+      "post": {
+        "operationId": "upload_sources_api_v1_source_upload_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SourceUpload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourceCommit"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Upload Sources"
       }
     },
     "/api/v1/table-lineage": {

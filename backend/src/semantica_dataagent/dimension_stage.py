@@ -67,6 +67,40 @@ def write(records, generation, storage):
     values, statuses = prepare(
         records, int(storage._settings.get("dimension_value_limit", "1000"))
     )
+    changed_fields = {
+        (r.data["database"], r.data["table"], r.data["name"])
+        for r in records
+        if r.kind == "field"
+    }
+    if storage.is_incremental and changed_fields:
+        _, all_statuses = prepare(
+            storage.all_records,
+            int(storage._settings.get("dimension_value_limit", "1000")),
+        )
+        statuses = [
+            s
+            for s in statuses
+            if (s["database"], s["table"], s["field"]) not in changed_fields
+        ] + [
+            s
+            for s in all_statuses
+            if (s["database"], s["table"], s["field"]) in changed_fields
+        ]
+    sources = defaultdict(set)
+    primary_sources = defaultdict(set)
+    for record in records:
+        if record.kind == "dimension_value":
+            item = record.data
+            table = (item["database"], item["table"])
+            sources[table].add(record.source_file)
+            primary_sources[
+                (item["database"], item["table"], item["field"], item["value"])
+            ].add(record.source_file)
+    for value in values:
+        key = (value["database"], value["table"], value["field"], value["value"])
+        value["source_files"] = sorted(sources[key[:2]])
+        value["source_file"] = min(primary_sources[key])
+        value["build_id"] = storage.build_id
     storage.execute(
         "CREATE FULLTEXT INDEX sda_dimension_values IF NOT EXISTS FOR (n:SDADimensionValue) ON EACH [n.normalized, n.aliases] OPTIONS {indexConfig: {`fulltext.analyzer`: 'cjk'}}",
         {},
@@ -77,7 +111,7 @@ def write(records, generation, storage):
         {"rows": statuses, "generation": generation},
     )
     storage.execute(
-        "UNWIND $rows AS row MATCH (f:SDAField {generation:$generation, database:row.database, table:row.table, name:row.field}) CREATE (v:SDAEntity:SDADimensionValue) SET v = row, v.generation = $generation CREATE (f)-[:HAS_VALUE]->(v)",
+        "UNWIND $rows AS row CREATE (v:SDAEntity:SDADimensionValue) SET v = row, v.generation = $generation",
         {"rows": values, "generation": generation},
     )
     return StageResult(counts={"dimension_value": len(values)})

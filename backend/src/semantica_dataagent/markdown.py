@@ -221,8 +221,8 @@ class MarkdownAdapter:
         root = directory / relative
         if not root.exists():
             return ReadResult([], {})
-        if not root.is_dir():
-            raise ValueError("Markdown root is not a directory")
+        if not root.is_dir() or not root.resolve().is_relative_to(directory.resolve()):
+            raise ValueError("Markdown root is not a directory within source directory")
         records, hashes = [], {}
         for category in sorted(p for p in root.iterdir() if p.is_dir()):
             docs = []
@@ -240,8 +240,11 @@ class MarkdownAdapter:
                         "category": category.name,
                         "path": path.relative_to(category).as_posix(),
                         "content": raw.decode("utf-8"),
+                        "_source_file": path.relative_to(directory).as_posix(),
                     }
                 )
+            if not docs:
+                continue
             if not any(d["path"] == "index.md" for d in docs):
                 listing = []
                 for doc in docs:
@@ -261,7 +264,24 @@ class MarkdownAdapter:
                         "content": "# 自动生成的索引地图\n\n自动生成\n\n"
                         + "\n".join(listing),
                         "generated": True,
+                        "_source_file": docs[0]["_source_file"]
+                        if docs
+                        else (relative / category.name / "index.md").as_posix(),
+                        "_source_key": (
+                            relative / category.name / "index.md"
+                        ).as_posix(),
+                        "_source_files": [d["_source_file"] for d in docs],
                     }
                 )
-            records.extend(Record("document", d) for d in docs)
+            for doc in docs:
+                source = doc.pop("_source_file")
+                source_key = doc.pop("_source_key", None)
+                source_files = tuple(doc.pop("_source_files", []))
+                if doc.get("generated"):
+                    hashes[source_key] = hashlib.sha256(
+                        doc["content"].encode()
+                    ).hexdigest()
+                records.append(
+                    Record("document", doc, source, source_key, source_files)
+                )
         return ReadResult(records, hashes)

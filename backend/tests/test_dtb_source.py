@@ -155,3 +155,20 @@ def test_structural_file_errors_are_not_treated_as_empty(tmp_path):
     (snapshot / "表信息.xlsx").write_bytes(b"")
     with pytest.raises(ValueError, match="Invalid DTB task file"):
         DtbAdapter().read(tmp_path, {})
+
+
+def test_every_record_carries_source_provenance():
+    from semantica_dataagent import knowledge
+
+    result = DtbAdapter().read(FIXTURES, {})
+    assert all(record.source_file in result.hashes for record in result.records)
+    lineage = [record for record in result.records if record.kind == "lineage"]
+    assert lineage
+    assert all(set(record.source_files) <= set(result.hashes) for record in lineage)
+    records, hashes, commit, stats = knowledge.read_sources(
+        {"source_directory": str(FIXTURES)}, [("source", DtbAdapter(), True, {})]
+    )
+    assert len(records) == len(result.records)
+    assert hashes == result.hashes
+    assert commit is None
+    assert stats["dtb_files_hashed"] == len(result.hashes)

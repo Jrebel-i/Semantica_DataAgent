@@ -32,21 +32,74 @@ def resolve_task(task, declared, parsed):
     ]
 
 
+def _provenance(record, build_id):
+    return {
+        "source_file": record.source_file,
+        "source_key": record.source_key or record.source_file,
+        "source_files": list(record.source_files),
+        "build_id": build_id,
+    }
+
+
+def _edge_provenance(task, declarations, build_id):
+    files = {task.source_file, *task.source_files}
+    for declaration in declarations:
+        files.add(declaration.source_file)
+        files.update(declaration.source_files)
+    return {
+        "source_file": task.source_file,
+        "source_key": task.source_key or task.source_file,
+        "source_files": sorted(files),
+        "build_id": build_id,
+    }
+
+
 def write(records, generation, storage):
-    tasks = [r for r in records if r.kind == "task"]
+    all_records = storage.all_records if storage.all_records is not None else records
+    all_tasks = [r for r in all_records if r.kind == "task"]
+    all_declarations = [r for r in all_records if r.kind == "lineage"]
+    rebuild_all = not storage.is_incremental or any(
+        record.kind == "lineage" for record in records
+    )
+    if rebuild_all:
+        tasks = all_tasks
+        storage.execute(
+            "MATCH (t:SDATask {generation:$generation}) DETACH DELETE t",
+            {"generation": generation},
+        )
+        storage.execute(
+            "MATCH (:SDALineageTable {generation:$generation})-[r:DEPENDS_ON]->(:SDALineageTable {generation:$generation}) DELETE r",
+            {"generation": generation},
+        )
+        storage.execute(
+            "MATCH (:SDATable {generation:$generation})-[r:DEPENDS_ON]->(:SDATable {generation:$generation}) DELETE r",
+            {"generation": generation},
+        )
+    else:
+        tasks = [r for r in records if r.kind == "task"]
+        names = [r.data["name"] for r in tasks]
+        storage.execute(
+            "MATCH (:SDALineageTable {generation:$generation})-[r:DEPENDS_ON]->(:SDALineageTable {generation:$generation}) WHERE r.task_id IN $names DELETE r",
+            {"generation": generation, "names": names},
+        )
+        storage.execute(
+            "MATCH (:SDATable {generation:$generation})-[r:DEPENDS_ON]->(:SDATable {generation:$generation}) WHERE r.task_id IN $names DELETE r",
+            {"generation": generation, "names": names},
+        )
     names = [r.data["name"] for r in tasks]
     if len(names) != len(set(names)):
         raise ValueError("Duplicate task name")
-    declarations = [r.data for r in records if r.kind == "lineage"]
+    declarations = {}
+    for record in all_declarations:
+        task_id = record.data.get("task_id")
+        if task_id:
+            pair = (record.data["upstream"], record.data["downstream"])
+            declarations.setdefault(task_id, {}).setdefault(pair, []).append(record)
     rows, edges, failures = [], [], []
     for task in tasks:
         name = task.data["name"]
         ref = "task:" + quote(name, safe="")
-        declared = [
-            (d["upstream"], d["downstream"])
-            for d in declarations
-            if d.get("task_id") == name
-        ]
+        declared = list(declarations.get(name, {}))
         result, resolved = resolve_task(task, declared, parse_task(task))
         reads = sorted(set(result.reads) | {u for u, _ in declared})
         writes = sorted(set(result.writes) | {d for _, d in declared})
@@ -61,6 +114,7 @@ def write(records, generation, storage):
                 "reads": reads,
                 "writes": writes,
                 "has_output": bool(writes),
+                **_provenance(task, storage.build_id),
             }
         )
         edges.extend(
@@ -71,6 +125,9 @@ def write(records, generation, storage):
                 "parse_status": result.status,
                 "task_id": name,
                 "ref": ref,
+                **_edge_provenance(
+                    task, declarations.get(name, {}).get((u, d), []), storage.build_id
+                ),
             }
             for u, d, e in resolved
         )
@@ -78,19 +135,27 @@ def write(records, generation, storage):
             failures.append(
                 {"task_id": name, "reason": result.reason or "Parse failed"}
             )
-    # Legacy lineage records can be independent of a task.
-    edges.extend(
-        {
-            "upstream": d["upstream"],
-            "downstream": d["downstream"],
-            "evidence": d["evidence"],
-            "parse_status": d["parse_status"],
-            "task_id": "",
-            "ref": "",
-        }
-        for d in declarations
-        if not d.get("task_id")
-    )
+    # Legacy lineage records can be independent of a task, or refer to a task
+    # that is not present in this source snapshot.
+    if rebuild_all:
+        known = {record.data["name"] for record in all_tasks}
+        edges.extend(
+            {
+                "upstream": record.data["upstream"],
+                "downstream": record.data["downstream"],
+                "evidence": record.data["evidence"],
+                "parse_status": record.data["parse_status"],
+                "task_id": record.data.get("task_id", ""),
+                "ref": (
+                    "task:" + quote(record.data["task_id"], safe="")
+                    if record.data.get("task_id")
+                    else ""
+                ),
+                **_provenance(record, storage.build_id),
+            }
+            for record in all_declarations
+            if record.data.get("task_id") not in known
+        )
     storage.execute(
         "UNWIND $rows AS row CREATE (t:SDAEntity:SDATask) SET t = row, t.generation = $generation",
         {"rows": rows, "generation": generation},
@@ -108,6 +173,30 @@ def write(records, generation, storage):
     storage.execute(
         """UNWIND $rows AS row MERGE (a:SDAEntity:SDALineageTable {generation:$generation, name:row.upstream}) MERGE (b:SDAEntity:SDALineageTable {generation:$generation, name:row.downstream}) CREATE (a)-[r:DEPENDS_ON]->(b) SET r = row""",
         {"rows": edges, "generation": generation},
+    )
+    lineage_nodes = {}
+    for edge in edges:
+        for name in (edge["upstream"], edge["downstream"]):
+            node = lineage_nodes.setdefault(
+                name,
+                {
+                    "name": name,
+                    "source_file": edge["source_file"],
+                    "source_key": edge["source_key"],
+                    "source_files": set(),
+                },
+            )
+            node["source_files"].update(edge["source_files"])
+    storage.execute(
+        """UNWIND $rows AS row MERGE (n:SDAEntity:SDALineageTable {generation:$generation, name:row.name}) SET n.source_file = row.source_file, n.source_key = row.source_key, n.source_files = row.source_files, n.build_id = $build_id""",
+        {
+            "rows": [
+                {**row, "source_files": sorted(row["source_files"])}
+                for row in lineage_nodes.values()
+            ],
+            "generation": generation,
+            "build_id": storage.build_id,
+        },
     )
     storage.execute(
         """UNWIND $rows AS row MATCH (task:SDATask {generation:$generation, ref:row.ref})

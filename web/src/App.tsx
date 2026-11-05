@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useState } from "react";
 import { Alert, Space, Typography } from "antd";
+import { BuildPage } from "./BuildPage";
 import { getMessages, type Language } from "./i18n";
 import { BuildsPage } from "./BuildsPage";
 import { KnowledgePage } from "./KnowledgePage";
 import { SearchPage } from "./SearchPage";
 import { LanguageSwitcher } from "./LanguageSwitcher";
 import { PluginsPage } from "./PluginsPage";
+import { SourcePage } from "./SourcePage";
 import { Login } from "./Login";
 import { StatusPage, type Health } from "./StatusPage";
 import { TokensPage } from "./TokensPage";
@@ -99,6 +101,8 @@ export function App() {
               { path: "/builds", label: t.builds },
               ...(role === "admin"
                 ? [
+                    { path: "/builds", label: t.builds },
+                    { path: "/source", label: t.source },
                     { path: "/tokens", label: t.tokens },
                     { path: "/plugins", label: t.plugins },
                   ]
@@ -118,7 +122,19 @@ export function App() {
               </a>
             ))}
           </nav>
-          {path === "/plugins" ? (
+          {path === "/builds" ? (
+            role === "admin" ? (
+              <BuildPage token={token} messages={t} />
+            ) : (
+              <Alert title={t.forbidden} type="warning" />
+            )
+          ) : path === "/source" ? (
+            role === "admin" ? (
+              <SourcePage token={token} messages={t} />
+            ) : (
+              <Alert title={t.forbidden} type="warning" />
+            )
+          ) : path === "/plugins" ? (
             role === "admin" ? (
               <PluginsPage token={token} messages={t} />
             ) : (

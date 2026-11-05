@@ -296,7 +296,7 @@ def test_build_record_includes_embedding_statistics(tmp_path, monkeypatch, serve
 
     from cryptography.fernet import Fernet
 
-    from semantica_dataagent import knowledge, stages
+    from semantica_dataagent import knowledge, relationships, stages
     from semantica_dataagent.cli import initialize
     from semantica_dataagent.db import Build, sessions
     from semantica_dataagent.stage_contract import StageResult, StorageHandles
@@ -313,6 +313,10 @@ def test_build_record_includes_embedding_statistics(tmp_path, monkeypatch, serve
             embedding_retries=2,
             embedding_backoff_seconds=0,
             knowledge_generation="generated",
+            source_directory=str(tmp_path),
+            neo4j_uri="bolt://localhost",
+            neo4j_user="neo4j",
+            milvus_uri="http://localhost",
         ),
     )
 
@@ -332,6 +336,7 @@ def test_build_record_includes_embedding_statistics(tmp_path, monkeypatch, serve
         )
 
     monkeypatch.setattr(knowledge, "build_storage", storage)
+    monkeypatch.setattr(relationships, "reconcile", lambda *args: None)
     monkeypatch.setattr(knowledge, "read_graph", lambda vals: None)
     monkeypatch.setattr(knowledge, "read_vectors", lambda vals: None)
 

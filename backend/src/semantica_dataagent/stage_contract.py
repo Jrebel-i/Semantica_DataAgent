@@ -10,6 +10,9 @@ class StorageHandles:
     _vectors: object
     _settings: dict[str, str]
     _embedding_stats: object | None = None
+    build_id: int | None = None
+    all_records: list | None = None
+    is_incremental: bool = False
 
     def execute(self, query, parameters):
         from .knowledge import execute
@@ -29,7 +32,16 @@ class StorageHandles:
                 embed(self._settings, texts[batch], self._embedding_stats),
                 ids=ids[batch],
                 metadata=[
-                    {**item, "generation": self.generation} for item in metadata[batch]
+                    {
+                        **item,
+                        "generation": self.generation,
+                        **(
+                            {"build_id": self.build_id}
+                            if self.build_id is not None
+                            else {}
+                        ),
+                    }
+                    for item in metadata[batch]
                 ],
             )
 

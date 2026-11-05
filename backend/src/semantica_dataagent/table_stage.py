@@ -11,29 +11,44 @@ def write(records, generation, storage):
     )
     storage.execute("CALL db.awaitIndex('sda_knowledge', 120)", {})
     tables = [
-        dict(r.data, ref=reference(r.kind, r.data))
+        dict(
+            r.data,
+            ref=reference(r.kind, r.data),
+            source_file=r.source_file,
+            build_id=storage.build_id,
+        )
         for r in records
         if r.kind == "table"
     ]
     fields = [
-        dict(r.data, ref=reference(r.kind, r.data))
+        dict(
+            r.data,
+            ref=reference(r.kind, r.data),
+            source_file=r.source_file,
+            build_id=storage.build_id,
+        )
         for r in records
         if r.kind == "field"
     ]
-    table_keys = {(table["database"], table["name"]) for table in tables}
+    all_records = storage.all_records if storage.all_records is not None else records
+    table_keys = {
+        (r.data["database"], r.data["name"]) for r in all_records if r.kind == "table"
+    }
     refs = [item["ref"] for item in tables + fields]
     if len(set(refs)) != len(refs):
         raise ValueError("Duplicate table or field reference")
-    if any((field["database"], field["table"]) not in table_keys for field in fields):
+    if not storage.is_incremental and any(
+        (field["database"], field["table"]) not in table_keys for field in fields
+    ):
         raise ValueError("A field refers to a missing table")
-    if not tables:
+    if not storage.is_incremental and not table_keys:
         raise ValueError("Source has no tables")
     storage.execute(
         "UNWIND $rows AS row CREATE (n:SDAEntity:SDATable) SET n = row, n.generation = $generation",
         {"rows": tables, "generation": generation},
     )
     storage.execute(
-        "UNWIND $rows AS row MATCH (t:SDATable {generation:$generation, database:row.database, name:row.table}) CREATE (f:SDAEntity:SDAField) SET f = row, f.generation = $generation CREATE (t)-[:HAS_FIELD]->(f)",
+        "UNWIND $rows AS row CREATE (f:SDAEntity:SDAField) SET f = row, f.generation = $generation",
         {"rows": fields, "generation": generation},
     )
     entities = [("table", x) for x in tables] + [("field", x) for x in fields]

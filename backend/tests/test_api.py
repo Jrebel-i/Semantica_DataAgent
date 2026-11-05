@@ -347,7 +347,7 @@ def test_build_requires_admin_and_reports_failure_when_unconfigured(client):
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline:
         build = c.get(f"/api/v1/builds/{build_id}", headers=headers).json()
-        if build["status"] != "running":
+        if build["status"] in {"succeeded", "failed", "cancelled"}:
             break
         time.sleep(0.02)
     assert build["status"] == "failed"
@@ -473,9 +473,9 @@ def test_parser_without_matching_type_is_unsupported(client):
 def test_third_party_plugin_validation_and_next_build(client, tmp_path, monkeypatch):
     from contextlib import nullcontext
 
-    from semantica_dataagent import knowledge, stages
+    from semantica_dataagent import knowledge, relationships, stages
     from semantica_dataagent.db import Build, sessions
-    from semantica_dataagent.stage_contract import StageResult
+    from semantica_dataagent.stage_contract import StageResult, StorageHandles
 
     fixture = Path(__file__).parent / "fixtures" / "third_party"
     monkeypatch.syspath_prepend(str(fixture))
@@ -514,14 +514,28 @@ def test_third_party_plugin_validation_and_next_build(client, tmp_path, monkeypa
         == 200
     )
     seen = []
+    (tmp_path / "third_party.source").write_text("fixture data")
     monkeypatch.setattr(
         knowledge,
         "settings",
-        lambda: {"source_directory": str(tmp_path), "knowledge_generation": "test"},
+        lambda: {
+            "source_directory": str(tmp_path),
+            "knowledge_generation": "test",
+            "embedding_model": "test",
+            "embedding_url": "http://localhost",
+            "neo4j_uri": "bolt://localhost",
+            "neo4j_user": "neo4j",
+            "milvus_uri": "http://localhost",
+        },
     )
     monkeypatch.setattr(
-        knowledge, "build_storage", lambda values, stats=None: nullcontext(None)
+        knowledge,
+        "build_storage",
+        lambda values, stats=None: nullcontext(
+            StorageHandles("test", None, None, values)
+        ),
     )
+    monkeypatch.setattr(relationships, "reconcile", lambda *args: None)
     monkeypatch.setattr(knowledge, "read_graph", lambda values: None)
     monkeypatch.setattr(knowledge, "read_vectors", lambda values: None)
     monkeypatch.setattr(
