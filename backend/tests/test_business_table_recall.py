@@ -1,5 +1,7 @@
 """Business terms in documents can retrieve their associated warehouse tables."""
 
+import pytest
+
 from semantica_dataagent import knowledge
 
 
@@ -74,7 +76,10 @@ def test_document_relations_include_quoted_sql_table_names():
     ]
 
 
-def test_direct_table_matches_outrank_frequently_mentioned_table(monkeypatch):
+@pytest.mark.parametrize("include_vector_match", [True, False])
+def test_direct_table_matches_outrank_frequently_mentioned_table(
+    monkeypatch, include_vector_match
+):
     inventory = {"ref": "table:shop.inventory", "name": "inventory", "comment": "库存"}
     hub = {"ref": "table:shop.orders", "name": "orders", "comment": "订单"}
     documents = [
@@ -87,7 +92,11 @@ def test_direct_table_matches_outrank_frequently_mentioned_table(monkeypatch):
             return [
                 [
                     {"entity": {"metadata": item}}
-                    for item in [*documents, hub, inventory]
+                    for item in [
+                        *documents,
+                        hub,
+                        *([inventory] if include_vector_match else []),
+                    ]
                 ]
             ]
 
