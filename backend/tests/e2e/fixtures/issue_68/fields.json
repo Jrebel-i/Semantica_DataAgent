@@ -1,0 +1,1 @@
+[{"database":"warehouse","table":"order_metrics","name":"amount","type":"decimal","comment":"amount","partition":false}]

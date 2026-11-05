@@ -956,19 +956,20 @@ def describe(names=None, database=None, search=None):
 
 
 # Ranking constants are versioned so clients can interpret scores consistently.
-RANKING_VERSION = "1"
+RANKING_VERSION = "3"
 RRF_K = 60
 SOURCE_WEIGHTS = {"exact": 2.0, "fulltext": 1.0, "vector": 1.0, "graph": 0.5}
 
 
-def fuse(sources, limit):
+def fuse(sources, limit, weights=None):
+    weights = SOURCE_WEIGHTS if weights is None else weights
     merged = {}
     for source, hits in sources.items():
         for rank, item in enumerate(hits, 1):
             entry = merged.setdefault(
                 item["ref"], {**item, "score": 0.0, "sources": []}
             )
-            entry["score"] += SOURCE_WEIGHTS[source] / (RRF_K + rank)
+            entry["score"] += weights[source] / (RRF_K + rank)
             entry["sources"].append(source)
     for entry in merged.values():
         if entry["ref"].startswith("task:") and not entry.get("has_output", False):
@@ -1009,12 +1010,13 @@ def search(query, scope, top_k, category=None):
     generation = values["knowledge_generation"]
     limit = max(50, top_k)
     scopes = ["tables", "fields", "tasks", "docs"] if scope == "all" else [scope]
+    search_scopes = ["tables", "docs"] if scope == "tables" else scopes
     params = {
         "generation": generation,
         "query": query,
         "term": re.sub(r'([+\-&|!(){}\[\]^"~*?:\\/])', r"\\\1", query),
         "limit": limit,
-        "scopes": scopes,
+        "scopes": search_scopes,
         "category": category,
     }
 
@@ -1038,7 +1040,7 @@ def search(query, scope, top_k, category=None):
 
     def semantic():
         predicate = 'metadata["generation"] == ' + json.dumps(generation)
-        predicate += ' and metadata["scope"] in ' + json.dumps(scopes)
+        predicate += ' and metadata["scope"] in ' + json.dumps(search_scopes)
         if category is not None:
             predicate += ' and metadata["category"] == ' + json.dumps(
                 category, ensure_ascii=False
@@ -1066,7 +1068,7 @@ def search(query, scope, top_k, category=None):
     sources = {"exact": [], "fulltext": [], "vector": vectors, "graph": []}
     for row in rows:
         sources[row["source"]].append(row["item"])
-    seeds = [x["ref"] for x in fuse(sources, 10)]
+    seeds = [x["ref"] for x in fuse(sources, max(10, top_k))]
     if seeds:
         rows = execute(
             read_graph(values),
@@ -1084,10 +1086,46 @@ def search(query, scope, top_k, category=None):
           MATCH (seed:SDAChunk)<-[:HAS_CHUNK]-(:SDADocument {generation:$generation})<-[:HAS_DOCUMENT]-(n:SDATable {generation:$generation})
           RETURN n
         }
-        WITH n
+        WITH seed, n
         WHERE ((n:SDATable AND 'tables' IN $scopes) OR (n:SDAField AND 'fields' IN $scopes) OR (n:SDATask AND 'tasks' IN $scopes) OR (n:SDAChunk AND 'docs' IN $scopes)) AND ($category IS NULL OR n.category = $category)
-        RETURN DISTINCT properties(n) AS item LIMIT $limit""",
-            {**params, "seeds": seeds},
+        WITH DISTINCT seed, n
+        ORDER BY seed.ref, n.ref
+        WITH seed, collect(n)[..$limit] AS neighbors
+        UNWIND neighbors AS n
+        RETURN seed.ref AS seed_ref, properties(n) AS item""",
+            {**params, "scopes": scopes, "seeds": seeds},
         )
-        sources["graph"] = [row["item"] for row in rows]
-    return mark_ambiguity(fuse(sources, limit * 4), query)[:top_k]
+        seed_order = {ref: i for i, ref in enumerate(seeds)}
+        rows.sort(
+            key=lambda row: (
+                seed_order.get(row.get("seed_ref"), len(seeds)),
+                row["item"]["ref"],
+            )
+        )
+        seen = set()
+        for row in rows:
+            item = row["item"]
+            if item["ref"] not in seen:
+                sources["graph"].append(item)
+                seen.add(item["ref"])
+    if scope == "tables":
+        for source in ("exact", "fulltext", "vector"):
+            sources[source] = [
+                item for item in sources[source] if item["ref"].startswith("table:")
+            ]
+    weights = {**SOURCE_WEIGHTS, "graph": 1.5} if scope == "tables" else SOURCE_WEIGHTS
+    candidate_limit = (
+        sum(len(items) for items in sources.values())
+        if scope == "tables"
+        else limit * 4
+    )
+    results = fuse(sources, candidate_limit, weights)
+    if scope == "tables":
+        results.sort(
+            key=lambda item: (
+                not ({"exact", "fulltext"} & set(item["sources"])),
+                -item["score"],
+                item["ref"],
+            )
+        )
+    return mark_ambiguity(results, query)[:top_k]
