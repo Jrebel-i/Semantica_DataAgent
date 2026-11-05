@@ -22,6 +22,7 @@ from .agent_types import (
     AgentEvent,
     AgentTurnRequest,
 )
+from .mcp_context import CONVERSATION_HEADER
 from .skill import read_skill
 
 PROVIDER_KEY = "dataagent"
@@ -347,7 +348,10 @@ class PiRunner:
             "mcpServers": {
                 MCP_SERVER: {
                     "url": request.mcp_url,
-                    "headers": {"Authorization": f"Bearer ${{{TOKEN_ENV}}}"},
+                    "headers": {
+                        "Authorization": f"Bearer ${{{TOKEN_ENV}}}",
+                        CONVERSATION_HEADER: request.conversation_id,
+                    },
                     "exposure": "direct",
                     "description": (
                         "Semantica DataAgent warehouse knowledge: search tables, "

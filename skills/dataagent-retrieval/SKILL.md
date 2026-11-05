@@ -73,15 +73,20 @@ Read `validate_sql` completely:
 
 ## Ambiguity and clarification
 
-When results have `ambiguous: true`, several candidates have similar strength, confidence is
-`low`, or two documents define the same metric differently:
+When a result has `ambiguous: true`, its confidence is `low`, several candidates have similar
+strength, or two documents define the same metric differently, stop and call
+`request_clarification` before answering:
 
-- Do not choose the definition or scope yourself.
-- Briefly list the candidate definitions or tables using plain text, with the exact evidence
-  `ref` for each and what differs (for example payment date versus order date).
-- Ask the questioner to choose one. Do not make the choice a global rule.
-
-<!-- request_clarification (#20) will replace this plain-text section. -->
+- Pass 1 to 3 questions. Each question has 2 to 5 options.
+- Every option must contain a short `label` and a `ref` copied exactly from a retrieval result
+  you already received. Never invent a reference id or use an index map as evidence.
+- State the difference in each label (for example payment date versus order date), then wait
+  for the user's choice. Do not pick a definition, write SQL, or repeat the choices as a
+  plain-text question.
+- The client renders the returned questions as selectable cards. The user's next message is
+  the answer to this one question.
+- A clarification choice only applies to the current question. Do not turn it into a global
+  rule or assume it for another conversation.
 
 ## Answer shape
 

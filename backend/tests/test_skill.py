@@ -96,3 +96,5 @@ def test_skill_source_is_a_valid_agent_skill():
         "request_clarification",
     ):
         assert tool in text
+    assert "Every option must contain" in text
+    assert "Do not pick a definition" in text

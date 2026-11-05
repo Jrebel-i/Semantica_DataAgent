@@ -182,6 +182,7 @@ const messages = {
     citationUnsupported: "该引用类型暂不支持直接打开",
     loadingCitation: "正在加载来源…",
     clarification: "需要澄清",
+    clarificationHint: "选择一个口径。选择只对当前问题有效。",
     answerFailed: "回答失败",
     unavailable: "不可用",
     providerSettings: "模型服务配置",
@@ -413,6 +414,8 @@ const messages = {
     citationUnsupported: "This citation type cannot be opened directly yet",
     loadingCitation: "Loading source…",
     clarification: "Clarification needed",
+    clarificationHint:
+      "Choose one interpretation. It applies only to this question.",
     answerFailed: "Answer failed",
     unavailable: "unavailable",
     providerSettings: "Model providers",

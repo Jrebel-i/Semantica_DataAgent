@@ -230,6 +230,12 @@ def test_pi_config_is_isolated_and_never_writes_secrets(tmp_path: Path):
     assert "${DATAAGENT_TOKEN}" in mcp
     assert "user-token-secret-value" not in mcp
     assert '"exposure": "direct"' in mcp
+    assert (
+        json.loads(mcp)["mcpServers"]["dataagent"]["headers"][
+            "x-dataagent-conversation-id"
+        ]
+        == "conv-one"
+    )
     assert settings["compaction"] == {
         "enabled": True,
         "reserveTokens": 16384,

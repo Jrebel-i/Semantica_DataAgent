@@ -25,8 +25,9 @@ type ToolCall = {
   result?: string;
 };
 type Clarification = {
+  id?: string;
   question?: string;
-  options?: { label?: string; ref?: string }[];
+  options?: { id?: string; label?: string; ref?: string }[];
 };
 type LiveTurn = {
   question: string;
@@ -313,34 +314,47 @@ function CitationList({
 function ClarificationList({
   groups,
   messages,
+  disabled,
+  onSelect,
 }: {
   groups: Clarification[][];
   messages: Messages;
+  disabled: boolean;
+  onSelect: (
+    question: Clarification,
+    option: NonNullable<Clarification["options"]>[number],
+  ) => void;
 }) {
   if (groups.length === 0) return null;
   return (
     <section aria-label={messages.clarification}>
       <Typography.Title level={5}>{messages.clarification}</Typography.Title>
+      <p>{messages.clarificationHint}</p>
       {groups.map((questions, index) => (
         <div key={index}>
           {questions.map((question, questionIndex) => (
-            <article key={questionIndex}>
+            <article key={question.id ?? questionIndex}>
               <p>{question.question}</p>
-              {question.options && question.options.length > 0 && (
-                <ul>
-                  {question.options.map((option) => (
-                    <li key={`${option.label}-${option.ref}`}>
-                      {option.label}
-                      {option.ref && (
-                        <>
-                          {" "}
-                          <code>{option.ref}</code>
-                        </>
-                      )}
-                    </li>
-                  ))}
-                </ul>
-              )}
+              <Space wrap>
+                {(question.options ?? []).map((option, optionIndex) => (
+                  <Button
+                    key={
+                      option.id ??
+                      `${option.label}-${option.ref}-${optionIndex}`
+                    }
+                    disabled={disabled}
+                    onClick={() => onSelect(question, option)}
+                  >
+                    <span>{option.label}</span>
+                    {option.ref && (
+                      <>
+                        {" "}
+                        <code>{option.ref}</code>
+                      </>
+                    )}
+                  </Button>
+                ))}
+              </Space>
             </article>
           ))}
         </div>
@@ -355,12 +369,17 @@ function TurnBlock({
   copied,
   onCopy,
   onOpen,
+  onClarify,
 }: {
   turn: Turn;
   messages: Messages;
   copied: string;
   onCopy: (sql: string) => void;
   onOpen: (ref: string) => void;
+  onClarify: (
+    question: Clarification,
+    option: NonNullable<Clarification["options"]>[number],
+  ) => void;
 }) {
   const sql = sqlBlocks(turn.sql);
   const citations = citationsOf(turn.citations);
@@ -381,7 +400,12 @@ function TurnBlock({
         onCopy={onCopy}
       />
       <CitationList citations={citations} messages={messages} onOpen={onOpen} />
-      <ClarificationList groups={clarifications} messages={messages} />
+      <ClarificationList
+        groups={clarifications}
+        messages={messages}
+        disabled={false}
+        onSelect={onClarify}
+      />
     </article>
   );
 }
@@ -498,15 +522,13 @@ export function ChatPage({
     setLive((current) => (current ? change(current) : current));
   }
 
-  async function ask(event: FormEvent) {
-    event.preventDefault();
-    const prompt = question.trim();
-    if (!prompt || !providerId || !model || sending) return;
+  async function submitPrompt(prompt: string) {
+    const trimmed = prompt.trim();
+    if (!trimmed || !providerId || !model || sending) return;
     setSending(true);
     setError("");
-    setQuestion("");
     setLive({
-      question: prompt,
+      question: trimmed,
       text: "",
       tools: [],
       sql: [],
@@ -593,6 +615,29 @@ export function ChatPage({
     } finally {
       setSending(false);
     }
+  }
+
+  function ask(event: FormEvent) {
+    event.preventDefault();
+    const prompt = question.trim();
+    setQuestion("");
+    void submitPrompt(prompt);
+  }
+
+  function chooseClarification(
+    clarification: Clarification,
+    option: NonNullable<Clarification["options"]>[number],
+  ) {
+    const label = option.label?.trim() ?? "";
+    const ref = option.ref?.trim() ?? "";
+    if (!label || !ref) return;
+    const prompt = [
+      "澄清选择：请只针对当前问题按所选口径继续回答，不要把它作为全局规则。",
+      `问题：${clarification.question ?? ""}`,
+      `选项：${label}`,
+      `证据：${ref}`,
+    ].join("\n");
+    void submitPrompt(prompt);
   }
 
   async function openConversation(id: string) {
@@ -894,6 +939,7 @@ export function ChatPage({
           copied={copied}
           onCopy={(sql) => void copySql(sql)}
           onOpen={(ref) => void openCitation(ref)}
+          onClarify={chooseClarification}
         />
       ))}
       {live && (
@@ -914,7 +960,12 @@ export function ChatPage({
             messages={t}
             onOpen={(ref) => void openCitation(ref)}
           />
-          <ClarificationList groups={live.clarifications} messages={t} />
+          <ClarificationList
+            groups={live.clarifications}
+            messages={t}
+            disabled={sending}
+            onSelect={chooseClarification}
+          />
           {live.error && <Alert type="error" title={live.error} />}
         </article>
       )}

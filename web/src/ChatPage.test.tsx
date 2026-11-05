@@ -362,3 +362,68 @@ test.each(["claude", "codex"])(
     );
   },
 );
+test("a clarification option continues the same conversation with its evidence", async () => {
+  const firstSse = [
+    'event: conversation\ndata: {"conversation_id":"conv-clarify","turn_id":1}',
+    'event: clarification\ndata: {"questions":[{"id":"q1","question":"销售额按支付口径还是下单口径？","options":[{"id":"o1","label":"支付销售额（支付成功时间）","ref":"document:metrics/definitions/sales.md#chunk-1"},{"id":"o2","label":"下单销售额（订单创建时间）","ref":"document:metrics/sales_order.md#chunk-1"}]}]}',
+    'event: done\ndata: {"text":"请选择口径。","sql":[],"citations":[]}',
+  ].join("\n\n");
+  const secondSse = [
+    'event: conversation\ndata: {"conversation_id":"conv-clarify","turn_id":2}',
+    'event: done\ndata: {"text":"按支付口径。","sql":[{"sql":"SELECT SUM(amount) FROM shop.payments","dialect":"hive"}],"citations":[{"ref":"document:metrics/definitions/sales.md#chunk-1","type":"document"}]}',
+  ].join("\n\n");
+  const askBodies: string[] = [];
+  const fetcher = vi.fn(
+    async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/v1/agents")
+        return json([{ id: "pi", name: "pi", available: true }]);
+      if (url === "/api/v1/providers") return json([provider]);
+      if (url === "/api/v1/conversations") return json([]);
+      if (url === "/api/v1/conversations/ask") {
+        askBodies.push(String(init?.body));
+        return new Response(askBodies.length === 1 ? firstSse : secondSse, {
+          status: 200,
+          headers: { "Content-Type": "text/event-stream" },
+        });
+      }
+      return new Response("", { status: 404 });
+    },
+  );
+  vi.stubGlobal("fetch", fetcher);
+  render(
+    <ChatPage
+      token="personal-token"
+      role="user"
+      messages={getMessages("zh")}
+    />,
+  );
+
+  await waitFor(() =>
+    expect((screen.getByLabelText("模型") as HTMLSelectElement).value).toBe(
+      provider.models[0],
+    ),
+  );
+  fireEvent.change(screen.getByLabelText("问题"), {
+    target: { value: "上个月销售额是多少？" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: /提\s*问/ }));
+  fireEvent.click(
+    await screen.findByRole("button", { name: /支付销售额（支付成功时间）/ }),
+  );
+
+  expect(
+    await screen.findByText("SELECT SUM(amount) FROM shop.payments"),
+  ).toBeTruthy();
+  await waitFor(() => expect(askBodies).toHaveLength(2));
+  const followUp = JSON.parse(askBodies[1]) as {
+    question: string;
+    conversation_id: string;
+  };
+  expect(followUp.conversation_id).toBe("conv-clarify");
+  expect(followUp.question).toContain("支付销售额（支付成功时间）");
+  expect(followUp.question).toContain(
+    "document:metrics/definitions/sales.md#chunk-1",
+  );
+  expect(followUp.question).toContain("不要把它作为全局规则");
+});
