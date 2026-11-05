@@ -63,6 +63,7 @@ async def lifespan(application):
                 finished_at=datetime.now(UTC).isoformat(),
             )
         )
+    await asyncio.to_thread(knowledge.cleanup_interrupted_generations)
     build_queue.start()
     with sessions()() as db:
         interval = db.get(Setting, "schedule_interval_seconds")
