@@ -53,3 +53,28 @@ def test_proposal_rejects_target_absent_from_current_generation(client, monkeypa
     assert result.isError
     assert result.structuredContent["code"] == "invalid_input"
     assert result.structuredContent["message"] != "Unknown tool"
+
+
+def test_correction_and_gap_tools_publish_self_contained_schemas():
+    import json
+
+    from semantica_dataagent.app import create_mcp
+
+    tools = {
+        tool.name: tool.parameters for tool in create_mcp()._tool_manager.list_tools()
+    }
+    for name in ("propose_correction", "report_knowledge_gap"):
+        assert name in tools, f"{name} is unavailable"
+        schema = json.dumps(tools[name])
+        assert '"$ref"' not in schema
+        assert '"$defs"' not in schema
+
+
+def test_user_cannot_reject_correction(client):
+    c, _ = client
+    requester = _requester(role="user", token="rejection-reader")
+    response = c.post(
+        "/api/v1/corrections/nonexistent/reject",
+        headers={"Authorization": f"Bearer {requester.token}"},
+    )
+    assert response.status_code == 403
