@@ -4,20 +4,21 @@ import asyncio
 import json
 import logging
 import os
+import shutil
 import uuid
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import func
+from sqlalchemy import func, text
 
 from .agent_runner import DONE, ERROR, AgentEvent, AgentTurnRequest, get_runner
 from .auth import Requester, current_requester
-from .db import Conversation, Provider, Turn, TurnEvent, sessions
+from .db import Conversation, Provider, Setting, Turn, TurnEvent, sessions
 from .provider_api import provider_config
 
 router = APIRouter()
@@ -61,6 +62,7 @@ class ConversationView(BaseModel):
     created_at: datetime
     updated_at: datetime
     turn_count: int
+    resumable: bool
 
 
 class ConversationDetail(ConversationView):
@@ -73,6 +75,31 @@ def agent_root() -> Path:
         return Path(configured)
     database = Path(os.environ["DATAAGENT_DB_PATH"])
     return database.parent / "agent-workspaces"
+
+
+def cleanup_expired_sessions() -> None:
+    """Serialize cleanup with turn creation so active work cannot be removed."""
+    with sessions().begin() as db:
+        db.execute(text("BEGIN IMMEDIATE"))
+        setting = db.get(Setting, "session_retention_days")
+        cutoff = datetime.now(UTC) - timedelta(
+            days=int(setting.value) if setting else 30
+        )
+        active = db.query(Turn.conversation_id).filter(Turn.status == "running")
+        rows = (
+            db.query(Conversation)
+            .filter(
+                Conversation.resumable.is_(True),
+                Conversation.updated_at < cutoff,
+                ~Conversation.id.in_(active),
+            )
+            .all()
+        )
+        for row in rows:
+            workspace = agent_root() / row.id
+            if workspace.exists():
+                shutil.rmtree(workspace)
+            row.resumable = False
 
 
 def public_base_url() -> str:
@@ -128,6 +155,7 @@ def _view(row: Conversation, turn_count: int) -> ConversationView:
         created_at=row.created_at,
         updated_at=row.updated_at,
         turn_count=turn_count,
+        resumable=row.resumable,
     )
 
 
@@ -169,6 +197,7 @@ def _finish_turn(turn_id: int, status: str, event: AgentEvent | None, error=None
 
 @router.get("/api/v1/conversations", response_model=list[ConversationView])
 def conversations(requester: Annotated[Requester, Depends(current_requester)]):
+    cleanup_expired_sessions()
     with sessions()() as db:
         rows = (
             db.query(Conversation)
@@ -195,6 +224,7 @@ def conversations(requester: Annotated[Requester, Depends(current_requester)]):
 def conversation_detail(
     conversation_id: str, requester: Annotated[Requester, Depends(current_requester)]
 ):
+    cleanup_expired_sessions()
     with sessions()() as db:
         row = db.get(Conversation, conversation_id)
         if row is None or row.owner_id != requester.id:
@@ -244,11 +274,17 @@ async def ask(
     requester: Annotated[Requester, Depends(current_requester)],
 ):
     now = datetime.now(UTC)
+    cleanup_expired_sessions()
     with sessions().begin() as db:
+        db.execute(text("BEGIN IMMEDIATE"))
         if body.conversation_id:
             conversation = db.get(Conversation, body.conversation_id)
             if conversation is None or conversation.owner_id != requester.id:
                 raise HTTPException(404, "Conversation not found")
+            if not conversation.resumable:
+                raise HTTPException(
+                    409, "Conversation session expired and cannot be resumed"
+                )
             agent_id = body.agent or conversation.agent
             provider_id = body.provider_id or conversation.provider_id
             model = body.model or conversation.model

@@ -41,6 +41,32 @@ from .scheduler import scheduler
 @asynccontextmanager
 async def lifespan(application):
     from .agent_sandbox import cleanup_orphans
+    from .conversation_api import cleanup_expired_sessions
+    from .db import Turn
+
+    with sessions().begin() as db:
+        db.execute(
+            update(Turn)
+            .where(Turn.status == "running")
+            .values(
+                status="failed",
+                error="Application restarted",
+                finished_at=datetime.now(UTC),
+            )
+        )
+    await asyncio.to_thread(cleanup_expired_sessions)
+
+    async def cleanup_loop():
+        while True:
+            await asyncio.sleep(3600)
+            try:
+                await asyncio.to_thread(cleanup_expired_sessions)
+            except Exception:
+                import logging
+
+                logging.getLogger(__name__).exception("Session cleanup failed")
+
+    cleanup_task = asyncio.create_task(cleanup_loop())
 
     if os.environ.get("DATAAGENT_AGENT_MODE", "sandbox") != "local":
         await asyncio.to_thread(cleanup_orphans)
@@ -74,6 +100,7 @@ async def lifespan(application):
         try:
             yield
         finally:
+            cleanup_task.cancel()
             scheduler.stop()
             build_queue.stop()
             knowledge.close_readers()
@@ -96,6 +123,7 @@ KEYS = {
     "source_directory",
     "knowledge_generation",
     "generation_retention",
+    "session_retention_days",
     "schedule_interval_seconds",
     "dimension_value_limit",
     "embedding_concurrency",
@@ -226,6 +254,13 @@ def put_settings(
         or not 1 <= int(retention) <= 100
     ):
         raise HTTPException(status_code=422, detail="Invalid generation retention")
+    session_retention = body.values.get("session_retention_days")
+    if session_retention and (
+        not session_retention.isascii()
+        or not session_retention.isdigit()
+        or not 1 <= int(session_retention) <= 36500
+    ):
+        raise HTTPException(status_code=422, detail="Invalid session retention")
     generation = body.values.get("knowledge_generation")
     if generation and not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,63}", generation):
         raise HTTPException(status_code=422, detail="Invalid generation")
