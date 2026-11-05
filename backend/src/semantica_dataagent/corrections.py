@@ -295,6 +295,14 @@ def approve(
             else:
                 override.comment = patch
             row.patch = patch
+            row.diff = "".join(
+                difflib.unified_diff(
+                    row.original.splitlines(keepends=True),
+                    patch.splitlines(keepends=True),
+                    fromfile=row.target,
+                    tofile=row.target,
+                )
+            )
             row.status = "approved"
             row.reviewer_id = requester.id
             row.reviewed_at = datetime.now(UTC)

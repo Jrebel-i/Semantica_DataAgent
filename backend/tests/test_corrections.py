@@ -400,3 +400,181 @@ def test_interrupted_approval_recovers_without_duplicate_commits(
     assert (root / "knowledge/metrics/sales.md").read_text() == (
         "after\n" if expected == "approved" else "before\n"
     )
+
+
+def test_modified_approval_keeps_original_and_final_patches(
+    client, monkeypatch, tmp_path
+):
+    from test_source_api import upload
+
+    from semantica_dataagent import knowledge
+    from semantica_dataagent.app import create_mcp
+
+    c, token = client
+    headers = {"Authorization": f"Bearer {token}"}
+    root = tmp_path / "source"
+    assert (
+        c.put(
+            "/api/v1/settings",
+            headers=headers,
+            json={"values": {"source_directory": str(root)}},
+        ).status_code
+        == 200
+    )
+    assert (
+        upload(c, headers, "knowledge/metrics", {"sales.md": "before\n"}).status_code
+        == 200
+    )
+    monkeypatch.setattr(knowledge, "existing_refs", lambda refs: set(refs))
+    monkeypatch.setattr(knowledge, "read_graph", lambda values: object())
+    monkeypatch.setattr(
+        knowledge,
+        "execute",
+        lambda *args: [
+            {
+                "node": {
+                    "content": "before\n",
+                    "source_file": "knowledge/metrics/sales.md",
+                }
+            }
+        ],
+    )
+    result = call(
+        create_mcp(),
+        "propose_correction",
+        {
+            "target": "document:metrics/sales.md",
+            "patch": "proposed\n",
+            "reason": "reason",
+        },
+        _requester(token="edited-proposer"),
+    )
+    assert not result.isError, result.structuredContent
+    proposal = result.structuredContent["proposal_id"]
+    response = c.post(
+        f"/api/v1/corrections/{proposal}/approve",
+        headers=headers,
+        json={"patch": "admin edit\n"},
+    )
+    assert response.status_code == 200, response.text
+    detail = response.json()
+    assert detail["original_patch"] == "proposed\n"
+    assert detail["patch"] == "admin edit\n"
+    assert "+admin edit" in detail["diff"]
+    assert (root / "knowledge/metrics/sales.md").read_text() == "admin edit\n"
+
+
+def test_approval_rejects_existing_staged_changes(client, monkeypatch, tmp_path):
+    import subprocess
+
+    from test_source_api import upload
+
+    from semantica_dataagent import knowledge
+    from semantica_dataagent.app import create_mcp
+
+    c, token = client
+    headers = {"Authorization": f"Bearer {token}"}
+    root = tmp_path / "source"
+    assert (
+        c.put(
+            "/api/v1/settings",
+            headers=headers,
+            json={"values": {"source_directory": str(root)}},
+        ).status_code
+        == 200
+    )
+    assert (
+        upload(c, headers, "knowledge/metrics", {"sales.md": "before\n"}).status_code
+        == 200
+    )
+    (root / "other.txt").write_text("keep staged")
+    subprocess.run(["git", "-C", str(root), "add", "other.txt"], check=True)
+    monkeypatch.setattr(knowledge, "existing_refs", lambda refs: set(refs))
+    monkeypatch.setattr(knowledge, "read_graph", lambda values: object())
+    monkeypatch.setattr(
+        knowledge,
+        "execute",
+        lambda *args: [
+            {
+                "node": {
+                    "content": "before\n",
+                    "source_file": "knowledge/metrics/sales.md",
+                }
+            }
+        ],
+    )
+    result = call(
+        create_mcp(),
+        "propose_correction",
+        {"target": "document:metrics/sales.md", "patch": "after\n", "reason": "reason"},
+        _requester(token="staged-proposer"),
+    )
+    proposal = result.structuredContent["proposal_id"]
+    response = c.post(f"/api/v1/corrections/{proposal}/approve", headers=headers)
+    assert response.status_code == 409 and "staged" in response.text
+    assert (root / "knowledge/metrics/sales.md").read_text() == "before\n"
+    assert (
+        c.get(f"/api/v1/corrections/{proposal}", headers=headers).json()["status"]
+        == "pending"
+    )
+    assert "other.txt" in subprocess.check_output(
+        ["git", "-C", str(root), "diff", "--cached", "--name-only"], text=True
+    )
+
+
+def test_concurrent_admin_approvals_only_one_succeeds(client, monkeypatch, tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+
+    from test_source_api import upload
+
+    from semantica_dataagent import knowledge
+    from semantica_dataagent.app import create_mcp
+
+    c, token = client
+    headers = {"Authorization": f"Bearer {token}"}
+    root = tmp_path / "source"
+    assert (
+        c.put(
+            "/api/v1/settings",
+            headers=headers,
+            json={"values": {"source_directory": str(root)}},
+        ).status_code
+        == 200
+    )
+    assert (
+        upload(c, headers, "knowledge/metrics", {"sales.md": "before\n"}).status_code
+        == 200
+    )
+    monkeypatch.setattr(knowledge, "existing_refs", lambda refs: set(refs))
+    monkeypatch.setattr(knowledge, "read_graph", lambda values: object())
+    monkeypatch.setattr(
+        knowledge,
+        "execute",
+        lambda *args: [
+            {
+                "node": {
+                    "content": "before\n",
+                    "source_file": "knowledge/metrics/sales.md",
+                }
+            }
+        ],
+    )
+    result = call(
+        create_mcp(),
+        "propose_correction",
+        {"target": "document:metrics/sales.md", "patch": "after\n", "reason": "reason"},
+        _requester(token="concurrent-proposer"),
+    )
+    proposal = result.structuredContent["proposal_id"]
+    barrier = Barrier(2)
+
+    def approve(_):
+        barrier.wait()
+        return c.post(
+            f"/api/v1/corrections/{proposal}/approve", headers=headers
+        ).status_code
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        statuses = list(pool.map(approve, range(2)))
+    assert sorted(statuses) == [200, 409]
