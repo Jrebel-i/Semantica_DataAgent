@@ -59,6 +59,7 @@ class Build(Base):
     parse_failures: Mapped[str] = mapped_column(default="[]", server_default="[]")
     logs: Mapped[str | None]
     build_type: Mapped[str | None]
+    correction_proposal_id: Mapped[str | None]
     triggered_by: Mapped[str | None]
     source_commit: Mapped[str | None]
     generation: Mapped[str | None]
@@ -148,3 +149,39 @@ class Clarification(Base):
     questions: Mapped[str]
     status: Mapped[str] = mapped_column(default="pending")
     created_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC))
+
+
+class KnowledgeGap(Base):
+    __tablename__ = "knowledge_gaps"
+    id: Mapped[str] = mapped_column(primary_key=True, default=lambda: uuid.uuid4().hex)
+    owner_id: Mapped[str]
+    question: Mapped[str]
+    missing: Mapped[str]
+    created_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC))
+
+
+class CorrectionProposal(Base):
+    __tablename__ = "correction_proposals"
+    id: Mapped[str] = mapped_column(primary_key=True, default=lambda: uuid.uuid4().hex)
+    owner_id: Mapped[str]
+    conversation_id: Mapped[str | None]
+    target: Mapped[str]
+    patch: Mapped[str]
+    original: Mapped[str]
+    diff: Mapped[str]
+    reason: Mapped[str]
+    status: Mapped[str] = mapped_column(default="pending")
+    original_patch: Mapped[str | None]
+    source_directory: Mapped[str | None]
+    source_path: Mapped[str | None]
+    reviewer_name: Mapped[str | None]
+    commit_sha: Mapped[str | None]
+    reviewer_id: Mapped[str | None]
+    reviewed_at: Mapped[datetime | None]
+    created_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC))
+
+
+class MetadataOverride(Base):
+    __tablename__ = "metadata_overrides"
+    target: Mapped[str] = mapped_column(primary_key=True)
+    comment: Mapped[str]

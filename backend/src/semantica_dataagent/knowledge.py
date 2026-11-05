@@ -540,6 +540,9 @@ def run_build(build_id):
             build.config_hash = config_hash
         records, hashes, commit, adapter_stats = read_sources(values, plugins)
         records, filtered = filter_records(records, filters)
+        from .table_stage import apply_overrides
+
+        records = apply_overrides(records)
         validate_records(records)
         _record_log(
             build_id,

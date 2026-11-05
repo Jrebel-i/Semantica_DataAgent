@@ -95,29 +95,34 @@ class BuildQueue:
 build_queue = BuildQueue()
 
 
-def enqueue_build(build_type, triggered_by, queue=None, *, notify=True):
+def add_queued_build(db, build_type, triggered_by, correction_proposal_id=None):
     now = datetime.now(UTC).isoformat()
+    row = Build(
+        status="queued",
+        started_at=now,
+        counts="{}",
+        build_type=build_type,
+        triggered_by=triggered_by,
+        correction_proposal_id=correction_proposal_id,
+        logs=json.dumps(
+            [
+                {
+                    "timestamp": now,
+                    "stage": "queue",
+                    "level": "info",
+                    "message": f"{build_type} build queued",
+                }
+            ]
+        ),
+    )
+    db.add(row)
+    db.flush()
+    return row.id
+
+
+def enqueue_build(build_type, triggered_by, queue=None, *, notify=True):
     with sessions().begin() as db:
-        row = Build(
-            status="queued",
-            started_at=now,
-            counts="{}",
-            build_type=build_type,
-            triggered_by=triggered_by,
-            logs=json.dumps(
-                [
-                    {
-                        "timestamp": now,
-                        "stage": "queue",
-                        "level": "info",
-                        "message": f"{build_type} build queued",
-                    }
-                ]
-            ),
-        )
-        db.add(row)
-        db.flush()
-        build_id = row.id
+        build_id = add_queued_build(db, build_type, triggered_by)
     if notify:
         (queue or build_queue).enqueue()
     return build_id

@@ -1,6 +1,30 @@
 """Write table and field knowledge for one generation."""
 
 
+def apply_overrides(records):
+    """Overlay approved comments on imported records without changing the source."""
+    from dataclasses import replace
+
+    from .db import MetadataOverride, sessions
+    from .knowledge import reference
+
+    with sessions()() as db:
+        overrides = {
+            row.target: row.comment for row in db.query(MetadataOverride).all()
+        }
+    result = []
+    for record in records:
+        key = (
+            reference(record.kind, record.data)
+            if record.kind in {"table", "field"}
+            else None
+        )
+        if key in overrides:
+            record = replace(record, data={**record.data, "comment": overrides[key]})
+        result.append(record)
+    return result
+
+
 def write(records, generation, storage):
     from .knowledge import reference
     from .stage_contract import StageResult

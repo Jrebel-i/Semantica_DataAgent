@@ -83,7 +83,7 @@ async def lifespan(application):
         )
         db.execute(
             update(Build)
-            .where(Build.status == "queued")
+            .where(Build.status == "queued", Build.correction_proposal_id.is_(None))
             .values(
                 status="cancelled",
                 error="Build cancelled because the application restarted before it started",
@@ -91,6 +91,9 @@ async def lifespan(application):
             )
         )
     await asyncio.to_thread(knowledge.cleanup_interrupted_generations)
+    from .corrections import recover_applying
+
+    await asyncio.to_thread(recover_applying)
     build_queue.start()
     with sessions()() as db:
         interval = db.get(Setting, "schedule_interval_seconds")
@@ -583,6 +586,14 @@ app.include_router(conversation_router)
 
 from .ask_api import ask_dataagent
 from .clarification import request_clarification
+from .corrections import propose_correction
+from .corrections import router as corrections_router
+
+app.include_router(corrections_router)
+from .gaps import report_knowledge_gap
+from .gaps import router as gaps_router
+
+app.include_router(gaps_router)
 
 
 def create_mcp():
@@ -604,6 +615,8 @@ def create_mcp():
     server.tool()(validate_sql)
     server.tool()(find_join_path)
     server.tool()(request_clarification)
+    server.tool()(report_knowledge_gap)
+    server.tool()(propose_correction)
     server.tool()(ask_dataagent)
 
     from .skill import register_prompt

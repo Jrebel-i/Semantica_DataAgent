@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Alert, Space, Typography } from "antd";
+import { CorrectionsPage } from "./CorrectionsPage";
 import { BuildPage } from "./BuildPage";
 import { getMessages, type Language } from "./i18n";
 import { ChatPage } from "./ChatPage";
@@ -99,10 +100,12 @@ export function App() {
               { path: "/knowledge", label: t.knowledge },
               { path: "/search", label: t.searchDebug },
               { path: "/mcp-access", label: t.mcpAccess },
+              { path: "/knowledge-gaps", label: t.gapTitle },
               { path: "/builds", label: t.builds },
               ...(role === "admin"
                 ? [
                     { path: "/source", label: t.source },
+                    { path: "/corrections", label: t.correctionTitle },
                     { path: "/tokens", label: t.tokens },
                     { path: "/plugins", label: t.plugins },
                   ]
@@ -122,7 +125,15 @@ export function App() {
               </a>
             ))}
           </nav>
-          {path === "/chat" ? (
+          {path === "/knowledge-gaps" ? (
+            <CorrectionsPage token={token} gaps messages={t} />
+          ) : path === "/corrections" ? (
+            role === "admin" ? (
+              <CorrectionsPage token={token} messages={t} />
+            ) : (
+              <Alert title={t.forbidden} type="warning" />
+            )
+          ) : path === "/chat" ? (
             <ChatPage token={token} role={role} messages={t} />
           ) : path === "/builds" ? (
             role === "admin" ? (
