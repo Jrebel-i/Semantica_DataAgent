@@ -16,6 +16,7 @@ from pymilvus.exceptions import (
 )
 from semantica.utils.exceptions import ProcessingError
 
+from .embedding_client import EmbeddingError
 from .storage_errors import StorageUnavailable
 
 PAGE_ITEMS = 25
@@ -43,6 +44,23 @@ def classify_error(exc):
         if cause is None or cause is exc:
             break
         exc = cause
+    if isinstance(exc, EmbeddingError):
+        # Retries exhausted (cause present) mean the service stayed unreachable.
+        # A 4xx or missing configuration raises directly and is a request/config
+        # failure, which must not be reported as retryable.
+        if exc.__cause__ is not None:
+            return error(
+                "unavailable",
+                "A required service is unavailable",
+                True,
+                "Check service connectivity and retry",
+            )
+        return error(
+            "internal_error",
+            "The tool could not complete the request",
+            False,
+            "Contact the service administrator",
+        )
     if isinstance(
         exc,
         (

@@ -170,6 +170,126 @@ def test_existing_lineage_validation_and_registration_order():
     asyncio.run(run())
 
 
+def test_sql_tools_follow_the_uniform_registration_contract(monkeypatch):
+    from semantica_dataagent import sql_validation
+    from semantica_dataagent.app import create_mcp
+
+    monkeypatch.setattr(
+        sql_validation, "load_snapshot", lambda: sql_validation.Snapshot([], [], [])
+    )
+    server = create_mcp()
+    names = {tool.name for tool in server._tool_manager.list_tools()}
+    assert {"validate_sql", "find_join_path"} <= names
+
+    valid = call_registered(server, "validate_sql", {"sql": "SELECT 1"})
+    assert not valid.isError
+
+    undeclared = call_registered(
+        server,
+        "validate_sql",
+        {"sql": "SELECT 1", "database": "shop"},
+    )
+    assert undeclared.isError
+    assert undeclared.structuredContent["code"] == "invalid_input"
+    assert undeclared.structuredContent["retryable"] is False
+
+    too_few = call_registered(server, "find_join_path", {"tables": ["shop.orders"]})
+    assert too_few.isError
+    assert too_few.structuredContent["code"] == "invalid_input"
+    assert too_few.structuredContent["retryable"] is False
+
+
+def test_find_join_path_rejects_table_count_without_loading_snapshot(monkeypatch):
+    from semantica_dataagent import sql_validation
+    from semantica_dataagent.app import create_mcp
+
+    def fail():
+        raise AssertionError("snapshot should not be loaded for invalid arguments")
+
+    monkeypatch.setattr(sql_validation, "load_snapshot", fail)
+    result = call_registered(
+        create_mcp(), "find_join_path", {"tables": ["shop.orders"]}
+    )
+
+    assert result.isError
+    assert result.structuredContent["code"] == "invalid_input"
+    assert result.structuredContent["retryable"] is False
+
+
+def test_get_capabilities_lists_sql_tools(monkeypatch):
+    from semantica_dataagent import knowledge
+    from semantica_dataagent.app import create_mcp
+
+    monkeypatch.setattr(
+        knowledge, "settings", lambda: {"knowledge_generation": "default"}
+    )
+    result = call_registered(create_mcp(), "get_capabilities", {})
+
+    assert not result.isError
+    assert {"validate_sql", "find_join_path"} <= set(result.structuredContent["tools"])
+
+
+def test_embedding_retry_exhaustion_is_unavailable_through_registered_tool(
+    unavailable_port, monkeypatch
+):
+    from semantica_dataagent import knowledge
+    from semantica_dataagent.app import create_mcp
+
+    values = storage_values(unavailable_port)
+    values["embedding_url"] = f"http://127.0.0.1:{unavailable_port}"
+    values.update(
+        {
+            "embedding_retries": "0",
+            "embedding_backoff_seconds": "0",
+            "embedding_timeout_seconds": "0.2",
+        }
+    )
+    monkeypatch.setattr(knowledge, "settings", lambda: values)
+    result = call_registered(
+        create_mcp(),
+        "search_knowledge",
+        {"query": "orders", "scope": "tables", "top_k": 1},
+    )
+
+    assert result.isError
+    assert result.structuredContent["code"] == "unavailable"
+    assert result.structuredContent["retryable"] is True
+    assert "private" not in json.dumps(result.model_dump())
+
+
+def test_embedding_4xx_is_internal_error_through_registered_tool(monkeypatch):
+    from test_embedding_client import FakeEmbedding
+
+    from semantica_dataagent import knowledge
+    from semantica_dataagent.app import create_mcp
+
+    embedding = FakeEmbedding(actions=[{"status": 400}]).start()
+    try:
+        values = storage_values(1)
+        values["embedding_url"] = embedding.url
+        values.update(
+            {
+                "embedding_retries": "3",
+                "embedding_backoff_seconds": "0",
+                "embedding_timeout_seconds": "0.2",
+            }
+        )
+        monkeypatch.setattr(knowledge, "settings", lambda: values)
+        result = call_registered(
+            create_mcp(),
+            "search_knowledge",
+            {"query": "orders", "scope": "tables", "top_k": 1},
+        )
+    finally:
+        embedding.stop()
+
+    assert result.isError
+    assert result.structuredContent["code"] == "internal_error"
+    assert result.structuredContent["retryable"] is False
+    assert embedding.requests == 1
+    assert "private" not in json.dumps(result.model_dump())
+
+
 def test_semantica_wrapped_connection_failure_is_unavailable():
     async def run():
         server = FastMCP("test")
