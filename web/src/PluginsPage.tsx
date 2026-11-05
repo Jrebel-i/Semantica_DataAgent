@@ -49,6 +49,10 @@ export function PluginsPage({
   const [sessionRetention, setSessionRetention] = useState("30");
   const [dimLimit, setDimLimit] = useState("1000");
   const [embedding, setEmbedding] = useState(EMBEDDING_DEFAULTS);
+  const [langfuseEnabled, setLangfuseEnabled] = useState(false);
+  const [langfuseUrl, setLangfuseUrl] = useState("");
+  const [langfusePublicKey, setLangfusePublicKey] = useState("");
+  const [langfuseSecretKey, setLangfuseSecretKey] = useState("");
   const [failure, setFailure] = useState(false);
   const headers = {
     Authorization: `Bearer ${token}`,
@@ -66,6 +70,9 @@ export function PluginsPage({
         setPlugins((await p.json()) as Plugin[]);
         setRules((await f.json()) as Rules);
         const data = (await settings.json()) as Record<string, string | null>;
+        setLangfuseEnabled(data.langfuse_enabled === "true");
+        setLangfuseUrl(data.langfuse_url || "");
+        setLangfusePublicKey(data.langfuse_public_key || "");
         setDimLimit(data.dimension_value_limit || "1000");
         setSessionRetention(data.session_retention_days || "30");
         setEmbedding(
@@ -167,6 +174,63 @@ export function PluginsPage({
             })
               .then((response) => {
                 if (!response.ok) throw new Error();
+                setFailure(false);
+              })
+              .catch(() => setFailure(true));
+          }}
+        >
+          {t.save}
+        </button>
+      </fieldset>
+      <fieldset>
+        <legend>{t.langfuseSettings}</legend>
+        <label>
+          {t.langfuseEnabled}
+          <input
+            type="checkbox"
+            checked={langfuseEnabled}
+            onChange={(e) => setLangfuseEnabled(e.target.checked)}
+          />
+        </label>
+        <label>
+          {t.langfuseUrl}
+          <input
+            value={langfuseUrl}
+            onChange={(e) => setLangfuseUrl(e.target.value)}
+          />
+        </label>
+        <label>
+          {t.langfusePublicKey}
+          <input
+            value={langfusePublicKey}
+            onChange={(e) => setLangfusePublicKey(e.target.value)}
+          />
+        </label>
+        <label>
+          {t.langfuseSecretKey}
+          <input
+            type="password"
+            value={langfuseSecretKey}
+            onChange={(e) => setLangfuseSecretKey(e.target.value)}
+          />
+        </label>
+        <button
+          onClick={() => {
+            const values: Record<string, string> = {
+              langfuse_enabled: String(langfuseEnabled),
+              langfuse_url: langfuseUrl,
+              langfuse_public_key: langfusePublicKey,
+            };
+            if (langfuseSecretKey)
+              values.langfuse_secret_key = langfuseSecretKey;
+            void fetch("/api/v1/settings", {
+              method: "PUT",
+              headers,
+              body: JSON.stringify({ values }),
+            })
+              .then((response) => {
+                if (!response.ok) throw new Error();
+                setLangfuseSecretKey("");
                 setFailure(false);
               })
               .catch(() => setFailure(true));

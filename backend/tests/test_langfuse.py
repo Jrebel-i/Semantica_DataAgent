@@ -39,5 +39,8 @@ def test_reporting_failure_does_not_interrupt_caller():
     def failed(_payload):
         raise TimeoutError("telemetry unavailable")
 
-    module.report(True, {"name": "validate_sql"}, failed)
-    assert "answer" == "answer"
+    def answer():
+        module.report(True, {"name": "validate_sql"}, failed)
+        return "answer"
+
+    assert answer() == "answer"
