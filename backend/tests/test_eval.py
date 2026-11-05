@@ -75,13 +75,22 @@ def test_table_recall_at_five_counts_tables_not_documents_or_duplicates(question
         table("shop", "orders"),
         table("shop", "payments"),
         table("shop", "refunds"),
-        table("shop", "orders"),
+        table("shop", "inventory"),
     ]
     recall, retrieved, missing = table_recall(
         ["shop.orders", "shop.payments"], hits, top_k=5
     )
     assert recall == 1.0
     assert retrieved == ["shop.orders", "shop.payments", "shop.refunds"]
+    assert missing == []
+    assert "shop.inventory" not in retrieved
+
+    recall, _, missing = table_recall(["shop.inventory"], hits, top_k=5)
+    assert recall == 0.0
+    assert missing == ["shop.inventory"]
+
+    recall, _, missing = table_recall(["shop.inventory"], hits, top_k=6)
+    assert recall == 1.0
     assert missing == []
 
     recall, _, missing = table_recall(["shop.orders", "shop.customers"], hits, 2)
