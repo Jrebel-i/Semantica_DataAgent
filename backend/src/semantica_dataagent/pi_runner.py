@@ -6,6 +6,7 @@ import json
 import os
 import re
 import shutil
+import uuid
 from collections import deque
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
@@ -302,8 +303,18 @@ class PiRunner:
     def __init__(self, binary: str | None = None):
         self.binary = binary
 
+    def _sandboxed(self) -> bool:
+        return (
+            not self.binary
+            and os.environ.get("DATAAGENT_AGENT_MODE", "sandbox") != "local"
+        )
+
     def available(self) -> bool:
-        return bool(self.binary or shutil.which("pi"))
+        return bool(
+            shutil.which("docker")
+            if self._sandboxed()
+            else self.binary or shutil.which("pi")
+        )
 
     def _binary(self) -> str:
         binary = self.binary or shutil.which("pi")
@@ -312,7 +323,7 @@ class PiRunner:
         return binary
 
     def write_config(self, request: AgentTurnRequest) -> tuple[Path, Path, str]:
-        config = request.workspace / "config"
+        config = request.workspace / ("work/config" if self._sandboxed() else "config")
         sessions = request.workspace / "sessions"
         work = request.workspace / "work"
         for directory in (config, sessions, work):
@@ -368,8 +379,10 @@ class PiRunner:
         env = self._environment(request, config, sessions)
         model = f"{PROVIDER_KEY}/{request.model}"
         skill = read_skill()
+        sandboxed = self._sandboxed()
+        container_name = f"sda-agent-{uuid.uuid4().hex}"
         command = [
-            self._binary(),
+            "pi" if sandboxed else self._binary(),
             "--mode",
             "rpc",
             "--session-id",
@@ -385,6 +398,55 @@ class PiRunner:
             "--append-system-prompt",
             "Follow this retrieval skill exactly for warehouse questions.\n\n" + skill,
         ]
+        if sandboxed:
+            command[command.index(str(sessions))] = "/sessions"
+            env["PI_CODING_AGENT_DIR"] = "/workspace/config"
+            env["PI_CODING_AGENT_SESSION_DIR"] = "/sessions"
+            docker = [
+                "docker",
+                "run",
+                "--rm",
+                "-i",
+                "--name",
+                container_name,
+                "--label",
+                "com.semantica-dataagent.agent=1",
+                "--network",
+                "none",
+                "--read-only",
+                "--tmpfs",
+                "/tmp:rw,nosuid,nodev",
+                "--cap-drop",
+                "ALL",
+                "--security-opt",
+                "no-new-privileges",
+                "--pids-limit",
+                "512",
+                "--cpus",
+                os.environ.get("DATAAGENT_AGENT_CPUS", "2"),
+                "--memory",
+                os.environ.get("DATAAGENT_AGENT_MEMORY", "2g"),
+                "--user",
+                f"{os.getuid()}:{os.getgid()}",
+                "--mount",
+                f"type=bind,src={work},dst=/workspace",
+                "--mount",
+                f"type=bind,src={sessions},dst=/sessions",
+                "--workdir",
+                "/workspace",
+            ]
+            env["HOME"] = "/tmp"
+            for key in (
+                "PI_CODING_AGENT_DIR",
+                "PI_CODING_AGENT_SESSION_DIR",
+                "PI_OFFLINE",
+                TOKEN_ENV,
+                KEY_ENV,
+                "HOME",
+            ):
+                if key in env:
+                    docker.extend(["--env", key])
+            command = docker + ["semantica-dataagent-agent-runner:1.2.0"] + command[1:]
         process = await asyncio.create_subprocess_exec(
             *command,
             cwd=work,
@@ -443,6 +505,16 @@ class PiRunner:
                 return
             yield _redact_event(parser.finish(), secrets)
         finally:
+            if sandboxed:
+                cleanup = await asyncio.create_subprocess_exec(
+                    "docker",
+                    "rm",
+                    "-f",
+                    container_name,
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.DEVNULL,
+                )
+                await cleanup.wait()
             if not finished:
                 await _stop(process)
             drain.cancel()
