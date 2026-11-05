@@ -18,6 +18,14 @@
 | OpenAPI 与类型漂移 | `pnpm --dir web check:types`；更新时先 `uv run --directory backend python -m semantica_dataagent.openapi > web/contract/openapi.json`，再 `pnpm --dir web types` |
 | 全量套件 | 仅发布级验收时执行项目所有测试；本票按任务书只运行相关测试。 |
 
+## API 时间字段
+
+所有 REST 响应里的时间字段一律是 ISO 8601、带显式 UTC 偏移（`Z` 或 `+00:00`，全项目统一由 Pydantic 输出 `Z`）。数据库里已有的无时区值按 UTC 解释，在序列化时补上时区，不能把无时区字符串直接返回给客户端；秒级精度不丢。
+
+- 响应模型的时间字段使用 `semantica_dataagent.api_time.UtcDatetime`，不要直接写 `datetime` 或裸 `str`。
+- 新增或修改返回时间的接口时，把该接口加进 `backend/tests/test_api_time.py` 的接口清单；该测试同时检查 OpenAPI 把时间字段声明为 `date-time`。
+- 前端直接用服务端返回值构造 `Date`，不再为缺时区的值补 `Z`。
+
 ## 平台与环境矩阵
 
 Python 3.12 / uv；Node 24 / pnpm 10；开发机 WSL2 Linux；存储运行在 k8s，见 [infrastructure.md](infrastructure.md)。
