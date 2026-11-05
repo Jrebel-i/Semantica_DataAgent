@@ -39,18 +39,44 @@ def reconcile(storage, records, generation):
     ]
     for query in queries:
         storage.execute(query, {"generation": generation})
+    import re
+
     from .markdown import doc_ref, table_name
 
+    tables = {
+        (record.data["database"].casefold(), record.data["name"].casefold()): (
+            record.data["database"],
+            record.data["name"],
+        )
+        for record in records
+        if record.kind == "table"
+    }
     links = []
     for record in records:
-        if record.kind == "document" and (match := table_name(record.data["path"])):
-            links.append(
-                {
-                    "ref": doc_ref(record.data["category"], record.data["path"]),
-                    "database": match[0],
-                    "name": match[1],
-                }
+        if record.kind != "document":
+            continue
+        path = record.data["path"]
+        if path == "index.md":
+            continue
+        candidates = set(
+            re.findall(
+                r"(?<![A-Za-z0-9_])([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)(?![A-Za-z0-9_])",
+                record.data["content"],
             )
+        )
+        match = table_name(path)
+        if match:
+            candidates.add(match)
+        for database, name in candidates:
+            actual = tables.get((database.casefold(), name.casefold()))
+            if actual:
+                links.append(
+                    {
+                        "ref": doc_ref(record.data["category"], path),
+                        "database": actual[0],
+                        "name": actual[1],
+                    }
+                )
     storage.execute(
         "UNWIND $rows AS row MATCH (d:SDADocument {generation:$generation, ref:row.ref}), (t:SDATable {generation:$generation, database:row.database, name:row.name}) MERGE (t)-[:HAS_DOCUMENT]->(d)",
         {"generation": generation, "rows": links},
