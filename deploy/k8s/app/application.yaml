@@ -74,8 +74,7 @@ spec:
             - name: data
               mountPath: /data
           readinessProbe:
-            httpGet:
-              path: /healthz
+            tcpSocket:
               port: 8000
             initialDelaySeconds: 5
             periodSeconds: 10
