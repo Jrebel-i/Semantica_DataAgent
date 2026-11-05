@@ -23,12 +23,21 @@ PAGE_ITEMS = 25
 PAGE_CHARS = 12000
 
 
-def error(code, message, retryable, next_action):
+class ToolUnavailable(Exception):
+    """A retryable tool failure that carries resumable state for the caller."""
+
+    def __init__(self, message: str, **details):
+        super().__init__(message)
+        self.details = details
+
+
+def error(code, message, retryable, next_action, **details):
     body = {
         "code": code,
         "message": message,
         "retryable": retryable,
         "next_action": next_action,
+        **details,
     }
     return CallToolResult(
         content=[TextContent(type="text", text=json.dumps(body))],
@@ -44,6 +53,14 @@ def classify_error(exc):
         if cause is None or cause is exc:
             break
         exc = cause
+    if isinstance(exc, ToolUnavailable):
+        return error(
+            "unavailable",
+            str(exc),
+            True,
+            "Retry the call, reusing conversation_id when present",
+            **exc.details,
+        )
     if isinstance(exc, EmbeddingError):
         # Retries exhausted (cause present) mean the service stayed unreachable.
         # A 4xx or missing configuration raises directly and is a request/config

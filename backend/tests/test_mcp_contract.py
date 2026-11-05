@@ -7,6 +7,7 @@ import socket
 import httpx
 import pytest
 from mcp.server.fastmcp import FastMCP
+from mcp.shared.memory import create_connected_server_and_client_session
 from mcp.types import CallToolRequest, CallToolRequestParams
 from neo4j.exceptions import ServiceUnavailable
 from pymilvus.exceptions import (
@@ -18,6 +19,36 @@ from pymilvus.exceptions import (
 from semantica.utils.exceptions import ProcessingError
 
 from semantica_dataagent.mcp_contract import install_contract
+
+
+def test_all_mcp_tool_input_schemas_are_self_contained():
+    from semantica_dataagent.app import create_mcp
+
+    def forbidden_paths(value, path):
+        if isinstance(value, dict):
+            for key, child in value.items():
+                child_path = f"{path}.{key}"
+                if key in {"$ref", "$defs"}:
+                    yield child_path
+                yield from forbidden_paths(child, child_path)
+        elif isinstance(value, list):
+            for index, child in enumerate(value):
+                yield from forbidden_paths(child, f"{path}[{index}]")
+
+    async def run():
+        async with create_connected_server_and_client_session(create_mcp()) as client:
+            tools = (await client.list_tools()).tools
+        assert tools, "MCP client returned no tools"
+        violations = [
+            f"{tool.name}: {path}"
+            for tool in tools
+            for path in forbidden_paths(tool.inputSchema, "inputSchema")
+        ]
+        assert not violations, "MCP schemas contain $ref or $defs:\n" + "\n".join(
+            violations
+        )
+
+    asyncio.run(run())
 
 
 def call_registered(server, name, arguments):

@@ -137,3 +137,13 @@ class GenerationPointer(Base):
     __tablename__ = "generation_pointer"
     id: Mapped[int] = mapped_column(primary_key=True)
     generation: Mapped[str]
+
+
+class Clarification(Base):
+    __tablename__ = "clarifications"
+    id: Mapped[str] = mapped_column(primary_key=True, default=lambda: uuid.uuid4().hex)
+    owner_id: Mapped[str]
+    conversation_id: Mapped[str | None]
+    questions: Mapped[str]
+    status: Mapped[str] = mapped_column(default="pending")
+    created_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC))

@@ -22,7 +22,7 @@ from pymilvus import MilvusClient
 from sqlalchemy import text, update
 
 from . import knowledge
-from .auth import admin, bearer, current_user
+from .auth import _authenticated, admin, bearer, current_user
 from .build_queue import build_queue, enqueue_build
 from .db import (
     Build,
@@ -103,6 +103,10 @@ KEYS = {
     "embedding_timeout_per_input_seconds",
     "embedding_retries",
     "embedding_backoff_seconds",
+    "assistant_agent",
+    "assistant_provider_id",
+    "assistant_model",
+    "assistant_timeout_seconds",
 }
 SECRET = {"neo4j_password"}
 
@@ -225,6 +229,14 @@ def put_settings(
     generation = body.values.get("knowledge_generation")
     if generation and not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,63}", generation):
         raise HTTPException(status_code=422, detail="Invalid generation")
+    timeout = body.values.get("assistant_timeout_seconds")
+    if timeout:
+        try:
+            seconds = float(timeout)
+        except ValueError:
+            seconds = 0
+        if not 0.1 <= seconds <= 3600:
+            raise HTTPException(status_code=422, detail="Invalid assistant timeout")
     for key in ("neo4j_uri", "milvus_uri", "embedding_url"):
         value = body.values.get(key)
         if value:
@@ -540,6 +552,9 @@ from .conversation_api import router as conversation_router
 
 app.include_router(conversation_router)
 
+from .ask_api import ask_dataagent
+from .clarification import request_clarification
+
 
 def create_mcp():
     server = FastMCP(
@@ -559,6 +574,8 @@ def create_mcp():
     server.tool()(read_task_sql)
     server.tool()(validate_sql)
     server.tool()(find_join_path)
+    server.tool()(request_clarification)
+    server.tool()(ask_dataagent)
 
     from .skill import register_prompt
 
@@ -599,7 +616,7 @@ class MCPAuthentication:
             request = Request(scope, receive)
             try:
                 credentials = await bearer(request)
-                current_user(credentials)
+                requester = _authenticated(credentials)
             except HTTPException as exc:
                 await JSONResponse(
                     {"detail": exc.detail},
@@ -607,6 +624,11 @@ class MCPAuthentication:
                     headers=exc.headers,
                 )(scope, receive, send)
                 return
+            from .mcp_context import CONVERSATION_HEADER, bind_mcp_context
+
+            with bind_mcp_context(requester, request.headers.get(CONVERSATION_HEADER)):
+                await self.inner.state.mcp_app(scope, receive, send)
+            return
         await self.inner.state.mcp_app(scope, receive, send)
 
 

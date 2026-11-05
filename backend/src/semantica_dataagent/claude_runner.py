@@ -8,6 +8,7 @@ import shutil
 import uuid
 from collections import deque
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from .agent_sandbox import SessionSandbox, register_session, unregister_session
 from .agent_types import (
@@ -19,6 +20,7 @@ from .agent_types import (
     TOOL_START,
     AgentEvent,
 )
+from .mcp_context import CONVERSATION_HEADER
 from .pi_runner import (
     STREAM_LIMIT,
     _clarification_questions,
@@ -150,30 +152,37 @@ class ClaudeRunner:
             else self.binary or shutil.which("claude")
         )
 
+    def write_config(self, request, mcp_url=None) -> Path:
+        config = request.workspace / "sessions" / "claude"
+        config.mkdir(parents=True, exist_ok=True)
+        _write_json(
+            config / "mcp.json",
+            {
+                "mcpServers": {
+                    "dataagent": {
+                        "type": "http",
+                        "url": mcp_url or request.mcp_url,
+                        "headers": {
+                            "Authorization": "Bearer ${DATAAGENT_TOKEN}",
+                            CONVERSATION_HEADER: request.conversation_id,
+                        },
+                    }
+                }
+            },
+        )
+        return config
+
     async def run(self, request):
         sandboxed = self._sandboxed()
         work = request.workspace / "work"
-        config = request.workspace / "sessions" / "claude"
         work.mkdir(parents=True, exist_ok=True)
-        config.mkdir(parents=True, exist_ok=True)
         sandbox = None
         model_url, mcp_url = request.provider.base_url, request.mcp_url
         if sandboxed:
             sandbox = SessionSandbox(request.workspace, model_url, mcp_url)
             model_url, mcp_url = sandbox.model_url, sandbox.mcp_url
+        config = self.write_config(request, mcp_url)
         mcp = config / "mcp.json"
-        _write_json(
-            mcp,
-            {
-                "mcpServers": {
-                    "dataagent": {
-                        "type": "http",
-                        "url": mcp_url,
-                        "headers": {"Authorization": "Bearer ${DATAAGENT_TOKEN}"},
-                    }
-                }
-            },
-        )
         session = str(uuid.UUID(request.session_id))
         existing = any(config.glob(f"projects/*/{session}.jsonl"))
         env = {
