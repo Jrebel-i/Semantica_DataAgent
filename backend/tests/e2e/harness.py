@@ -418,6 +418,17 @@ class CheckContext:
         self.build = runtime.build or {}
         self.build_id = self.build.get("id")
         self.generation = runtime.config.generation
+        try:
+            response = self.rest.get("/api/v1/generations")
+            if response.is_success:
+                current = next(
+                    (row for row in response.json()["generations"] if row["current"]),
+                    None,
+                )
+                if current:
+                    self.generation = current["name"]
+        except httpx.HTTPError:
+            pass
         self.source_dir = runtime.config.source_dir
         self.work_dir = runtime.run_dir
         self.health = runtime.health
@@ -1034,26 +1045,44 @@ def _stop_service(server: subprocess.Popen[str] | None) -> dict[str, Any]:
     }
 
 
+def _owned_generations(runtime: Runtime) -> set[str]:
+    import sqlite3
+
+    names = {runtime.config.generation}
+    if runtime.db_path.exists():
+        with sqlite3.connect(runtime.db_path) as db:
+            names.update(
+                row[0]
+                for row in db.execute(
+                    "SELECT generation FROM builds WHERE generation IS NOT NULL"
+                )
+            )
+    return names
+
+
 def _cleanup_neo4j(runtime: Runtime) -> dict[str, Any]:
     try:
         from neo4j import GraphDatabase
 
-        query = "MATCH (n:SDAEntity {generation:$generation})"
+        query = "MATCH (n:SDAEntity) WHERE n.generation IN $generations"
         with GraphDatabase.driver(
             runtime.config.neo4j_uri,
             auth=(runtime.config.neo4j_user, runtime.password),
             connection_timeout=10,
         ) as driver:
             before, _, _ = driver.execute_query(
-                query + " RETURN count(n) AS n", generation=runtime.config.generation
+                query + " RETURN count(n) AS n",
+                generations=list(_owned_generations(runtime)),
             )
             count = before[0]["n"] if before else 0
             if count:
                 driver.execute_query(
-                    query + " DETACH DELETE n", generation=runtime.config.generation
+                    query + " DETACH DELETE n",
+                    generations=list(_owned_generations(runtime)),
                 )
             after, _, _ = driver.execute_query(
-                query + " RETURN count(n) AS n", generation=runtime.config.generation
+                query + " RETURN count(n) AS n",
+                generations=list(_owned_generations(runtime)),
             )
             remaining = after[0]["n"] if after else 0
         status = "deleted" if count else "absent"
@@ -1065,21 +1094,21 @@ def _cleanup_neo4j(runtime: Runtime) -> dict[str, Any]:
 
 
 def _cleanup_milvus(runtime: Runtime) -> dict[str, Any]:
-    collection = "sda_" + runtime.config.generation
+    collections = {"sda_" + name for name in _owned_generations(runtime)}
     client = None
     try:
         from pymilvus import MilvusClient
 
         client = MilvusClient(uri=runtime.config.milvus_uri, timeout=10)
         names = set(client.list_collections())
-        if collection not in names:
-            return {"status": "absent", "collection": collection}
-        client.drop_collection(collection)
-        remaining = collection in set(client.list_collections())
+        for collection in collections & names:
+            client.drop_collection(collection)
+        remaining = collections & set(client.list_collections())
         return {
-            "status": "failed" if remaining else "dropped",
-            "collection": collection,
-            "remaining": remaining,
+            "status": "failed"
+            if remaining
+            else ("dropped" if collections & names else "absent"),
+            "remaining": sorted(remaining),
         }
     except Exception as exc:  # noqa: BLE001 - cleanup failure is reported, not raised
         return {"status": "failed", "error": f"{type(exc).__name__}: {exc}"}
