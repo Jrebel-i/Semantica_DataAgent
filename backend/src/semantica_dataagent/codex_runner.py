@@ -7,6 +7,7 @@ import os
 import shutil
 from collections import deque
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from .agent_sandbox import SessionSandbox, register_session, unregister_session
 from .agent_types import (
@@ -18,6 +19,7 @@ from .agent_types import (
     TOOL_START,
     AgentEvent,
 )
+from .mcp_context import CONVERSATION_HEADER
 from .pi_runner import (
     STREAM_LIMIT,
     _clarification_questions,
@@ -134,17 +136,9 @@ class CodexRunner:
             else self.binary or shutil.which("codex")
         )
 
-    async def run(self, request):
-        sandboxed = self._sandboxed()
-        work = request.workspace / "work"
+    def write_config(self, request, model_url=None, mcp_url=None) -> Path:
         config = request.workspace / "sessions" / "codex"
-        work.mkdir(parents=True, exist_ok=True)
         config.mkdir(parents=True, exist_ok=True)
-        sandbox = None
-        model_url, mcp_url = request.provider.base_url, request.mcp_url
-        if sandboxed:
-            sandbox = SessionSandbox(request.workspace, model_url, mcp_url)
-            model_url, mcp_url = sandbox.model_url, sandbox.mcp_url
         auth = (
             'env_key = "DATAAGENT_PROVIDER_KEY"\n'
             if request.provider.api_key
@@ -159,15 +153,32 @@ class CodexRunner:
                 ensure_ascii=False,
             )
             + '\n[model_providers.dataagent]\nname = "dataagent"\nbase_url = '
-            + json.dumps(model_url)
+            + json.dumps(model_url or request.provider.base_url)
             + '\nwire_api = "responses"\n'
             + auth
             + "[mcp_servers.dataagent]\nurl = "
-            + json.dumps(mcp_url)
+            + json.dumps(mcp_url or request.mcp_url)
             + '\nbearer_token_env_var = "DATAAGENT_TOKEN"\n'
+            + "http_headers = { "
+            + json.dumps(CONVERSATION_HEADER)
+            + " = "
+            + json.dumps(request.conversation_id)
+            + " }\n"
         )
         (config / "config.toml").write_text(cfg, encoding="utf-8")
         os.chmod(config / "config.toml", 0o600)
+        return config
+
+    async def run(self, request):
+        sandboxed = self._sandboxed()
+        work = request.workspace / "work"
+        work.mkdir(parents=True, exist_ok=True)
+        sandbox = None
+        model_url, mcp_url = request.provider.base_url, request.mcp_url
+        if sandboxed:
+            sandbox = SessionSandbox(request.workspace, model_url, mcp_url)
+            model_url, mcp_url = sandbox.model_url, sandbox.mcp_url
+        config = self.write_config(request, model_url, mcp_url)
         marker = config / "thread-id.json"
         thread = (
             json.loads(marker.read_text())["thread_id"] if marker.exists() else None
