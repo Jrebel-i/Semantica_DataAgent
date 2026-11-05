@@ -1,0 +1,213 @@
+- id: d01
+  question: "我们现在一共有多少笔交易订单？"
+  expected_tables: [shop.orders]
+  expected_fields: [shop.orders.id]
+  caliber: "订单数按订单编号去重；样例表以 id 作为订单编号。"
+  reference_sql: "SELECT COUNT(DISTINCT id) AS order_count FROM shop.orders"
+  notes: "出处：samples/demo/tables.json shop.orders（交易订单）；samples/demo/knowledge/metrics/orders.md（按订单编号去重）。"
+- id: d02
+  question: "每天分别有多少笔订单？"
+  expected_tables: [shop.orders]
+  expected_fields: [shop.orders.id, shop.orders.dt]
+  caliber: "按日期分区 dt 分组，订单编号去重计数。"
+  reference_sql: "SELECT dt, COUNT(DISTINCT id) AS order_count FROM shop.orders GROUP BY dt"
+  notes: "出处：samples/demo/fields.json shop.orders.dt（日期分区）；samples/demo/knowledge/metrics/orders.md。"
+- id: d03
+  question: "订单商品明细一共有多少条？"
+  expected_tables: [shop.order_items]
+  expected_fields: [shop.order_items.id]
+  caliber: "统计订单商品明细记录数，按业务编号去重。"
+  reference_sql: "SELECT COUNT(DISTINCT id) AS item_count FROM shop.order_items"
+  notes: "出处：samples/demo/tables.json shop.order_items（订单商品明细）；samples/demo/fields.json。"
+- id: d04
+  question: "平台注册顾客账号有多少个？"
+  expected_tables: [shop.customers]
+  expected_fields: [shop.customers.id]
+  caliber: "顾客按注册账号统计，账号编号去重。"
+  reference_sql: "SELECT COUNT(DISTINCT id) AS customer_count FROM shop.customers"
+  notes: "出处：samples/demo/knowledge/operations/customers.md（顾客按注册账号统计）；samples/demo/fields.json。"
+- id: d05
+  question: "商品资料里一共有多少个商品？"
+  expected_tables: [shop.products]
+  expected_fields: [shop.products.id]
+  caliber: "商品以商品编号识别并去重。"
+  reference_sql: "SELECT COUNT(DISTINCT id) AS product_count FROM shop.products"
+  notes: "出处：samples/demo/knowledge/operations/products.md（商品以商品编号识别）；samples/demo/fields.json。"
+- id: d06
+  question: "支付流水一共有多少笔？"
+  expected_tables: [shop.payments]
+  expected_fields: [shop.payments.id]
+  caliber: "按支付流水业务编号去重计数。"
+  reference_sql: "SELECT COUNT(DISTINCT id) AS payment_count FROM shop.payments"
+  notes: "出处：samples/demo/tables.json shop.payments（支付流水）；samples/demo/fields.json。"
+- id: d07
+  question: "退款记录一共有多少条？"
+  expected_tables: [shop.refunds]
+  expected_fields: [shop.refunds.id]
+  caliber: "按退款记录业务编号去重计数。"
+  reference_sql: "SELECT COUNT(DISTINCT id) AS refund_count FROM shop.refunds"
+  notes: "出处：samples/demo/tables.json shop.refunds（退款记录）；samples/demo/fields.json。"
+- id: d08
+  question: "发货物流记录有多少条？"
+  expected_tables: [shop.shipments]
+  expected_fields: [shop.shipments.id]
+  caliber: "按发货物流记录业务编号去重计数。"
+  reference_sql: "SELECT COUNT(DISTINCT id) AS shipment_count FROM shop.shipments"
+  notes: "出处：samples/demo/knowledge/operations/shipping.md（发货时间记录物流状态）；samples/demo/fields.json。"
+- id: d09
+  question: "我们合作了多少家供应商？"
+  expected_tables: [shop.suppliers]
+  expected_fields: [shop.suppliers.id]
+  caliber: "按供应商编号去重计数。"
+  reference_sql: "SELECT COUNT(DISTINCT id) AS supplier_count FROM shop.suppliers"
+  notes: "出处：samples/demo/tables.json shop.suppliers（供应商）；samples/demo/fields.json。"
+- id: d10
+  question: "商品评价一共有多少条？"
+  expected_tables: [shop.reviews]
+  expected_fields: [shop.reviews.id]
+  caliber: "按评价记录业务编号去重计数。"
+  reference_sql: "SELECT COUNT(DISTINCT id) AS review_count FROM shop.reviews"
+  notes: "出处：samples/demo/tables.json shop.reviews（商品评价）；samples/demo/fields.json。"
+- id: d11
+  question: "商品分类一共有多少个？"
+  expected_tables: [shop.categories]
+  expected_fields: [shop.categories.id]
+  caliber: "按商品分类编号去重计数。"
+  reference_sql: "SELECT COUNT(DISTINCT id) AS category_count FROM shop.categories"
+  notes: "出处：samples/demo/tables.json shop.categories（商品分类）；samples/demo/fields.json。"
+- id: d12
+  question: "地区维度里一共有多少个地区？"
+  expected_tables: [shop.regions]
+  expected_fields: [shop.regions.id]
+  caliber: "按地区编号去重计数。"
+  reference_sql: "SELECT COUNT(DISTINCT id) AS region_count FROM shop.regions"
+  notes: "出处：samples/demo/tables.json shop.regions（地区维度）；samples/demo/fields.json。"
+- id: d13
+  question: "渠道维度里一共有多少个渠道？"
+  expected_tables: [shop.channels]
+  expected_fields: [shop.channels.id]
+  caliber: "按渠道编号去重计数。"
+  reference_sql: "SELECT COUNT(DISTINCT id) AS channel_count FROM shop.channels"
+  notes: "出处：samples/demo/tables.json shop.channels（渠道维度）；samples/demo/fields.json。"
+- id: d14
+  question: "每日销售额表里有多少条汇总记录？"
+  expected_tables: [shop.daily_sales]
+  expected_fields: [shop.daily_sales.id]
+  caliber: "按每日销售额记录的 id 去重计数。"
+  reference_sql: "SELECT COUNT(DISTINCT id) AS daily_sales_count FROM shop.daily_sales"
+  notes: "出处：samples/demo/tables.json shop.daily_sales（每日销售额）；samples/demo/tasks.json load_daily_sales。"
+- id: d15
+  question: "顾客分群一共有多少个记录？"
+  expected_tables: [shop.customer_segments]
+  expected_fields: [shop.customer_segments.id]
+  caliber: "按顾客分群记录的业务编号去重计数。"
+  reference_sql: "SELECT COUNT(DISTINCT id) AS segment_count FROM shop.customer_segments"
+  notes: "出处：samples/demo/tables.json shop.customer_segments（顾客分群）；samples/demo/fields.json。"
+- id: d16
+  question: "退货记录一共有多少条？"
+  expected_tables: [shop.returns]
+  expected_fields: [shop.returns.id]
+  caliber: "按退货记录业务编号去重计数；退货流程与退款流程分开。"
+  reference_sql: "SELECT COUNT(DISTINCT id) AS return_count FROM shop.returns"
+  notes: "出处：samples/demo/knowledge/operations/returns.md（退货与退款不同流程）；samples/demo/fields.json。"
+- id: d17
+  question: "网页渠道的渠道记录有多少条？"
+  expected_tables: [shop.channels]
+  expected_fields: [shop.channels.id]
+  caliber: "渠道编号等于网页，真实维度值为“网页”。"
+  reference_sql: "SELECT COUNT(DISTINCT id) AS channel_count FROM shop.channels WHERE id = '网页'"
+  notes: "出处：samples/demo/dimension_values.json shop.channels.id（网页、移动端）；samples/demo/fields.json。"
+- id: d18
+  question: "移动端渠道的渠道记录有多少条？"
+  expected_tables: [shop.channels]
+  expected_fields: [shop.channels.id]
+  caliber: "渠道编号等于移动端，真实维度值为“移动端”。"
+  reference_sql: "SELECT COUNT(DISTINCT id) AS channel_count FROM shop.channels WHERE id = '移动端'"
+  notes: "出处：samples/demo/dimension_values.json shop.channels.id（网页、移动端）。"
+- id: d19
+  question: "安卓系统的渠道有多少条？"
+  expected_tables: [shop.channels]
+  expected_fields: [shop.channels.id, shop.channels.os_type]
+  caliber: "操作系统代码 os_type 等于 android；真实维度值来自 channels。"
+  reference_sql: "SELECT COUNT(DISTINCT id) AS channel_count FROM shop.channels WHERE os_type = 'android'"
+  notes: "出处：samples/demo/dimension_values.json shop.channels.os_type（android、ios、 HK ）。"
+- id: d20
+  question: "苹果系统的渠道有多少条？"
+  expected_tables: [shop.channels]
+  expected_fields: [shop.channels.id, shop.channels.os_name]
+  caliber: "操作系统名称 os_name 等于苹果。"
+  reference_sql: "SELECT COUNT(DISTINCT id) AS channel_count FROM shop.channels WHERE os_name = '苹果'"
+  notes: "出处：samples/demo/dimension_values.json shop.channels.os_name（安卓、苹果、香港）。"
+- id: d21
+  question: "香港渠道有多少条？"
+  expected_tables: [shop.channels]
+  expected_fields: [shop.channels.id, shop.channels.os_type]
+  caliber: "真实维度值 os_type 为带空格的“ HK ”，按原值精确过滤。"
+  reference_sql: "SELECT COUNT(DISTINCT id) AS channel_count FROM shop.channels WHERE os_type = ' HK '"
+  notes: "出处：samples/demo/dimension_values.json shop.channels.os_type（第 3 行值保留空格）。"
+- id: d22
+  question: "华东地区的地区记录有多少条？"
+  expected_tables: [shop.regions]
+  expected_fields: [shop.regions.id]
+  caliber: "地区编号等于华东，真实维度值为“华东”。"
+  reference_sql: "SELECT COUNT(DISTINCT id) AS region_count FROM shop.regions WHERE id = '华东'"
+  notes: "出处：samples/demo/dimension_values.json shop.regions.id（华东）。"
+- id: d23
+  question: "家居类目的商品分类有多少个？"
+  expected_tables: [shop.categories]
+  expected_fields: [shop.categories.id]
+  caliber: "分类编号等于家居，真实维度值为“家居”。"
+  reference_sql: "SELECT COUNT(DISTINCT id) AS category_count FROM shop.categories WHERE id = '家居'"
+  notes: "出处：samples/demo/dimension_values.json shop.categories.id（家居）。"
+- id: d24
+  question: "订单数据会流到每日销售额表吗？按订单编号看一下两边能对上的记录。"
+  expected_tables: [shop.orders, shop.daily_sales]
+  expected_fields: [shop.orders.id, shop.daily_sales.id]
+  caliber: "load_daily_sales 任务把 shop.orders 写入 shop.daily_sales，按订单编号 id 关联；该血缘关系为强证据。"
+  reference_sql: "SELECT id AS order_id FROM shop.orders WHERE id IN (SELECT id FROM shop.daily_sales)"
+  notes: "出处：samples/demo/tasks.json load_daily_sales（INSERT INTO shop.daily_sales SELECT * FROM shop.orders）；samples/demo/lineage.json 强血缘边。"
+- id: d25
+  question: "哪些订单已经产生了支付流水？"
+  expected_tables: [shop.orders, shop.payments]
+  expected_fields: [shop.orders.id, shop.payments.id]
+  caliber: "订单业务编号出现在支付流水中；用 IN 子查询表示关联，避免假设支付流水字段结构。"
+  reference_sql: "SELECT id AS order_id FROM shop.orders WHERE id IN (SELECT id FROM shop.payments)"
+  notes: "出处：samples/demo/tables.json shop.orders（交易订单）与 shop.payments（支付流水）；samples/demo/fields.json 两表 id 均为业务编号。"
+- id: d26
+  question: "统计销售额时要按支付成功时间还是下单时间？"
+  expected_tables: [shop.orders, shop.payments]
+  expected_fields: [shop.orders.id, shop.payments.id]
+  caliber: "支付销售额按支付成功时间归属，下单销售额按订单创建时间归属，两者不可混用；问题口径不明确应澄清。"
+  reference_sql: "SELECT id AS order_id FROM shop.orders WHERE id IN (SELECT id FROM shop.payments)"
+  clarify: true
+  notes: "出处：samples/demo/knowledge/metrics/definitions/sales.md（按支付成功时间汇总）；samples/demo/knowledge/metrics/sales_order.md（按订单创建时间，且应澄清）。"
+- id: d27
+  question: "订单数统计时要不要把已取消订单算进去？"
+  expected_tables: [shop.orders]
+  expected_fields: [shop.orders.id]
+  caliber: "订单数按订单编号去重统计已创建订单；取消订单是否纳入需要按业务问题明确。"
+  reference_sql: "SELECT COUNT(DISTINCT id) AS order_count FROM shop.orders"
+  clarify: true
+  notes: "出处：samples/demo/knowledge/metrics/orders.md（取消订单是否纳入需明确）。"
+- id: d28
+  question: "销售额要不要扣掉退款？净额怎么算？"
+  expected_tables: [shop.payments, shop.refunds]
+  expected_fields: [shop.payments.id, shop.refunds.id]
+  caliber: "全额退款从净支付销售额扣除，部分退款按实际退款金额扣除；问题未说明全额/部分及日期口径时应澄清。"
+  reference_sql: "SELECT id AS payment_id FROM shop.payments WHERE id NOT IN (SELECT id FROM shop.refunds)"
+  clarify: true
+  notes: "出处：samples/demo/knowledge/metrics/definitions/sales.md（退款处理：全额扣除、部分按实际金额、退款日与支付日不同）。"
+- id: d29
+  question: "订单数量为什么要按订单编号去重？"
+  expected_tables: [shop.orders]
+  expected_fields: [shop.orders.id]
+  caliber: "订单数按订单编号去重统计已创建订单，避免同一订单多行导致重复计数。"
+  reference_sql: "SELECT COUNT(DISTINCT id) AS order_count FROM shop.orders"
+  notes: "出处：samples/demo/knowledge/metrics/orders.md（按订单编号去重统计已创建订单）；samples/demo/knowledge/operations/dictionaries/shop.orders.md（订单编号关联订单明细）。"
+- id: d30
+  question: "订单表是由哪个上游任务加载的？"
+  expected_tables: [shop.orders]
+  expected_fields: [shop.orders.id, shop.orders.dt]
+  caliber: "shop.orders 由 load_orders 从 staging.orders 加载；查询订单表本身以确认分析对象存在。"
+  reference_sql: "SELECT id, dt FROM shop.orders WHERE dt >= '2025-01-01'"
+  notes: "出处：samples/demo/tasks.json load_orders（INSERT OVERWRITE TABLE shop.orders ... FROM staging.orders）；samples/demo/lineage.json staging.orders -> shop.orders。"
