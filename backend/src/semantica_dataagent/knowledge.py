@@ -893,6 +893,22 @@ def delete_generation_data(values):
         client.close()
 
 
+def existing_refs(refs):
+    """Return the evidence ids present in the current knowledge generation."""
+    wanted = sorted({ref for ref in refs if ref})
+    if not wanted:
+        return set()
+    values = settings()
+    rows = execute(
+        read_graph(values),
+        """MATCH (n:SDAEntity {generation:$generation})
+        WHERE n.ref IN $refs
+        RETURN DISTINCT n.ref AS ref""",
+        {"generation": values["knowledge_generation"], "refs": wanted},
+    )
+    return {row["ref"] for row in rows if row.get("ref")}
+
+
 def describe(names=None, database=None, search=None):
     values = settings()
     store = read_graph(values)

@@ -12,8 +12,14 @@ from mcp.types import CallToolRequest, CallToolRequestParams
 
 from semantica_dataagent.agent_runner import DONE, TEXT_DELTA, AgentEvent
 from semantica_dataagent.auth import Requester
-from semantica_dataagent.db import Clarification, Conversation, Token, Turn, digest, sessions
-
+from semantica_dataagent.db import (
+    Clarification,
+    Conversation,
+    Token,
+    Turn,
+    digest,
+    sessions,
+)
 
 SYNTHETIC_QUESTIONS = [
     {
@@ -40,7 +46,9 @@ def bound(requester: Requester, conversation_id: str | None = None):
         yield
 
 
-def call(server, name: str, arguments: dict, requester: Requester, conversation_id=None):
+def call(
+    server, name: str, arguments: dict, requester: Requester, conversation_id=None
+):
     async def run():
         server.get_context = lambda: None
         handler = server._mcp_server.request_handlers[CallToolRequest]
@@ -91,11 +99,13 @@ def test_request_clarification_records_caller_and_returns_structured_questions(
     monkeypatch.setattr(
         knowledge,
         "existing_refs",
-        lambda refs: {
-            "document:metrics/definitions/sales.md#chunk-1",
-            "document:metrics/sales_order.md#chunk-1",
-        }
-        & set(refs),
+        lambda refs: (
+            {
+                "document:metrics/definitions/sales.md#chunk-1",
+                "document:metrics/sales_order.md#chunk-1",
+            }
+            & set(refs)
+        ),
     )
     requester = _requester()
     result = call(
@@ -119,7 +129,9 @@ def test_request_clarification_records_caller_and_returns_structured_questions(
         assert row is not None
         assert row.owner_id == requester.id
         assert row.conversation_id is None
-        assert json.loads(row.questions)[0]["question"] == "销售额按支付口径还是下单口径？"
+        assert (
+            json.loads(row.questions)[0]["question"] == "销售额按支付口径还是下单口径？"
+        )
 
 
 def test_request_clarification_rejects_a_ref_outside_the_current_generation(
@@ -157,7 +169,10 @@ def test_request_clarification_rejects_a_ref_outside_the_current_generation(
             {
                 "question": "选项太多",
                 "options": [
-                    {"label": f"选项{index}", "ref": "document:metrics/sales.md#chunk-1"}
+                    {
+                        "label": f"选项{index}",
+                        "ref": "document:metrics/sales.md#chunk-1",
+                    }
                     for index in range(6)
                 ],
             }
@@ -397,4 +412,3 @@ def test_ask_dataagent_timeout_returns_unavailable_and_a_resumable_conversation(
     with sessions()() as db:
         conversation = db.get(Conversation, body["conversation_id"])
         assert conversation is not None and conversation.owner_id == requester.id
-

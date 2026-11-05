@@ -22,7 +22,7 @@ from pymilvus import MilvusClient
 from sqlalchemy import text, update
 
 from . import knowledge
-from .auth import admin, bearer, current_user
+from .auth import _authenticated, admin, bearer, current_user
 from .build_queue import build_queue, enqueue_build
 from .db import (
     Build,
@@ -540,6 +540,8 @@ from .conversation_api import router as conversation_router
 
 app.include_router(conversation_router)
 
+from .clarification import request_clarification
+
 
 def create_mcp():
     server = FastMCP(
@@ -559,6 +561,7 @@ def create_mcp():
     server.tool()(read_task_sql)
     server.tool()(validate_sql)
     server.tool()(find_join_path)
+    server.tool()(request_clarification)
 
     from .skill import register_prompt
 
@@ -599,7 +602,7 @@ class MCPAuthentication:
             request = Request(scope, receive)
             try:
                 credentials = await bearer(request)
-                current_user(credentials)
+                requester = _authenticated(credentials)
             except HTTPException as exc:
                 await JSONResponse(
                     {"detail": exc.detail},
@@ -607,6 +610,11 @@ class MCPAuthentication:
                     headers=exc.headers,
                 )(scope, receive, send)
                 return
+            from .mcp_context import CONVERSATION_HEADER, bind_mcp_context
+
+            with bind_mcp_context(requester, request.headers.get(CONVERSATION_HEADER)):
+                await self.inner.state.mcp_app(scope, receive, send)
+            return
         await self.inner.state.mcp_app(scope, receive, send)
 
 
