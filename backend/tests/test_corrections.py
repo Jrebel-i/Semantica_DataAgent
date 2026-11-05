@@ -111,3 +111,47 @@ def test_proposal_rejects_another_users_conversation(client, monkeypatch):
     assert result.isError
     assert result.structuredContent["code"] == "invalid_input"
     assert result.structuredContent["message"] != "Unknown tool"
+
+
+def test_rejected_document_proposal_does_not_change_source(
+    client, monkeypatch, tmp_path
+):
+    from semantica_dataagent import knowledge
+    from semantica_dataagent.app import create_mcp
+
+    c, token = client
+    headers = {"Authorization": f"Bearer {token}"}
+    root = tmp_path / "source"
+    document = root / "knowledge" / "metrics" / "sales.md"
+    document.parent.mkdir(parents=True)
+    document.write_text("旧的销售额定义\n")
+    configured = c.put(
+        "/api/v1/settings",
+        headers=headers,
+        json={"values": {"source_directory": str(root)}},
+    )
+    assert configured.status_code == 200, configured.text
+    monkeypatch.setattr(knowledge, "existing_refs", lambda refs: set(refs))
+    result = call(
+        create_mcp(),
+        "propose_correction",
+        {
+            "target": "document:metrics/sales.md",
+            "patch": "新的销售额定义\n",
+            "reason": "口径已更新",
+        },
+        _requester(token="reject-proposer"),
+    )
+    assert not result.isError, result.structuredContent
+    proposal_id = result.structuredContent["proposal_id"]
+    details = c.get(f"/api/v1/corrections/{proposal_id}", headers=headers)
+    assert details.status_code == 200, details.text
+    assert "-旧的销售额定义" in details.json()["diff"]
+    assert "+新的销售额定义" in details.json()["diff"]
+    response = c.post(f"/api/v1/corrections/{proposal_id}/reject", headers=headers)
+    assert response.status_code == 200, response.text
+    assert document.read_text() == "旧的销售额定义\n"
+    assert (
+        c.get(f"/api/v1/corrections/{proposal_id}", headers=headers).json()["status"]
+        == "rejected"
+    )
