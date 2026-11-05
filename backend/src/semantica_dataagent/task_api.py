@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
 from . import knowledge
-from .app import current_user
+from .auth import current_user
 
 router = APIRouter()
 

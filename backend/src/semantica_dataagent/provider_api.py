@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from .agent_runner import ProviderConfig, list_agents
-from .app import admin, current_user
+from .auth import admin, current_user
 from .crypto import decrypt, encrypt
 from .db import Provider, sessions
 

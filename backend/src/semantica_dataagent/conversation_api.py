@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func
 
 from .agent_runner import DONE, ERROR, AgentEvent, AgentTurnRequest, get_runner
-from .app import Requester, current_requester
+from .auth import Requester, current_requester
 from .db import Conversation, Provider, Turn, TurnEvent, sessions
 from .provider_api import provider_config
 

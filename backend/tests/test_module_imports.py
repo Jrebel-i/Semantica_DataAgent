@@ -5,6 +5,7 @@ import subprocess
 import sys
 
 import pytest
+
 import semantica_dataagent
 
 
