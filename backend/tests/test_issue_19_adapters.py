@@ -18,6 +18,8 @@ def test_cli_sample_is_translated_to_unified_events(agent):
     for line in path.read_text().splitlines():
         events.extend(parser.feed(json.loads(line)))
     events.append(parser.finish())
-    assert any(event.type == "text_delta" and event.data["text"] == "hello" for event in events)
+    assert any(
+        event.type == "text_delta" and event.data["text"] == "hello" for event in events
+    )
     assert events[-1].type == "done"
     assert events[-1].data["text"] == "hello"
