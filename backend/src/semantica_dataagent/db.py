@@ -148,3 +148,12 @@ class Clarification(Base):
     questions: Mapped[str]
     status: Mapped[str] = mapped_column(default="pending")
     created_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC))
+
+
+class KnowledgeGap(Base):
+    __tablename__ = "knowledge_gaps"
+    id: Mapped[str] = mapped_column(primary_key=True, default=lambda: uuid.uuid4().hex)
+    owner_id: Mapped[str]
+    question: Mapped[str]
+    missing: Mapped[str]
+    created_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC))

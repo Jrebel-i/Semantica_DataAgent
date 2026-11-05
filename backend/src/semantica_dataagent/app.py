@@ -583,6 +583,10 @@ app.include_router(conversation_router)
 
 from .ask_api import ask_dataagent
 from .clarification import request_clarification
+from .gaps import report_knowledge_gap
+from .gaps import router as gaps_router
+
+app.include_router(gaps_router)
 
 
 def create_mcp():
@@ -604,6 +608,7 @@ def create_mcp():
     server.tool()(validate_sql)
     server.tool()(find_join_path)
     server.tool()(request_clarification)
+    server.tool()(report_knowledge_gap)
     server.tool()(ask_dataagent)
 
     from .skill import register_prompt
