@@ -1114,7 +1114,12 @@ def search(query, scope, top_k, category=None):
                 item for item in sources[source] if item["ref"].startswith("table:")
             ]
     weights = {**SOURCE_WEIGHTS, "graph": 1.5} if scope == "tables" else SOURCE_WEIGHTS
-    results = fuse(sources, limit * 4, weights)
+    candidate_limit = (
+        sum(len(items) for items in sources.values())
+        if scope == "tables"
+        else limit * 4
+    )
+    results = fuse(sources, candidate_limit, weights)
     if scope == "tables":
         results.sort(
             key=lambda item: (
