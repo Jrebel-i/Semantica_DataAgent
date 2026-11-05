@@ -429,6 +429,7 @@ export function ChatPage({
   const [turns, setTurns] = useState<Turn[]>([]);
   const [live, setLive] = useState<LiveTurn | null>(null);
   const [currentConversationId, setCurrentConversationId] = useState("");
+  const [resumable, setResumable] = useState(true);
   const [sending, setSending] = useState(false);
   const [loadingConversation, setLoadingConversation] = useState(false);
   const [error, setError] = useState("");
@@ -650,6 +651,7 @@ export function ChatPage({
       if (!response.ok) throw new Error();
       const detail = (await response.json()) as ConversationDetail;
       setCurrentConversationId(detail.id);
+      setResumable(detail.resumable !== false);
       setTurns(detail.turns);
       setLive(null);
       setAgentId(detail.agent);
@@ -664,6 +666,7 @@ export function ChatPage({
 
   function newConversation() {
     setCurrentConversationId("");
+    setResumable(true);
     setTurns([]);
     setLive(null);
     setError("");
@@ -816,7 +819,9 @@ export function ChatPage({
     }
   }
 
-  const canAsk = Boolean(question.trim() && providerId && model && !sending);
+  const canAsk = Boolean(
+    question.trim() && providerId && model && !sending && resumable,
+  );
 
   return (
     <section>
@@ -847,6 +852,7 @@ export function ChatPage({
                   disabled={sending}
                 >
                   {conversation.title}
+                  {conversation.resumable === false && ` (${t.sessionExpired})`}
                 </Button>
                 <span>
                   {" "}
@@ -911,6 +917,7 @@ export function ChatPage({
             </select>
           </label>
         </Space>
+        {!resumable && <Alert type="info" title={t.sessionExpired} />}
         <label style={{ display: "block", marginTop: 12 }}>
           {t.askQuestion}
           <Input.TextArea
@@ -918,6 +925,7 @@ export function ChatPage({
             value={question}
             onChange={(event) => setQuestion(event.target.value)}
             rows={3}
+            disabled={!resumable}
           />
         </label>
         <Button

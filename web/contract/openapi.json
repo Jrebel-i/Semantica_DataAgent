@@ -302,6 +302,10 @@
             "title": "Provider Id",
             "type": "string"
           },
+          "resumable": {
+            "title": "Resumable",
+            "type": "boolean"
+          },
           "title": {
             "title": "Title",
             "type": "string"
@@ -332,6 +336,7 @@
           "created_at",
           "updated_at",
           "turn_count",
+          "resumable",
           "turns"
         ],
         "title": "ConversationDetail",
@@ -360,6 +365,10 @@
             "title": "Provider Id",
             "type": "string"
           },
+          "resumable": {
+            "title": "Resumable",
+            "type": "boolean"
+          },
           "title": {
             "title": "Title",
             "type": "string"
@@ -382,7 +391,8 @@
           "model",
           "created_at",
           "updated_at",
-          "turn_count"
+          "turn_count",
+          "resumable"
         ],
         "title": "ConversationView",
         "type": "object"

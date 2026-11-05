@@ -164,6 +164,8 @@ const messages = {
     askSubmit: "提问",
     asking: "回答中…",
     askError: "问答失败，请重试",
+    sessionRetention: "会话保留天数",
+    sessionExpired: "会话已过期，无法继续追问；历史记录仍可查看",
     conversationList: "历史对话",
     newConversation: "新对话",
     turnCount: "轮",
@@ -396,6 +398,9 @@ const messages = {
     askSubmit: "Ask",
     asking: "Answering…",
     askError: "Q&A failed. Please try again.",
+    sessionRetention: "Session retention days",
+    sessionExpired:
+      "Session expired; follow-up is unavailable. History remains available.",
     conversationList: "Conversations",
     newConversation: "New conversation",
     turnCount: "turns",

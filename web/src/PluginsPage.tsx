@@ -46,6 +46,7 @@ export function PluginsPage({
   const [plugins, setPlugins] = useState<Plugin[]>([]);
   const [rules, setRules] = useState<Rules | null>(null);
   const [errors, setErrors] = useState<Record<string, Issue[]>>({});
+  const [sessionRetention, setSessionRetention] = useState("30");
   const [dimLimit, setDimLimit] = useState("1000");
   const [embedding, setEmbedding] = useState(EMBEDDING_DEFAULTS);
   const [failure, setFailure] = useState(false);
@@ -66,6 +67,7 @@ export function PluginsPage({
         setRules((await f.json()) as Rules);
         const data = (await settings.json()) as Record<string, string | null>;
         setDimLimit(data.dimension_value_limit || "1000");
+        setSessionRetention(data.session_retention_days || "30");
         setEmbedding(
           Object.fromEntries(
             Object.entries(EMBEDDING_DEFAULTS).map(([key, fallback]) => [
@@ -359,6 +361,36 @@ export function PluginsPage({
           <button onClick={() => void saveRules()}>{t.save}</button>
         </fieldset>
       )}
+      <fieldset>
+        <label>
+          {t.sessionRetention}
+          <input
+            type="number"
+            min="1"
+            max="36500"
+            value={sessionRetention}
+            onChange={(e) => setSessionRetention(e.target.value)}
+          />
+        </label>
+        <button
+          onClick={() => {
+            void fetch("/api/v1/settings", {
+              method: "PUT",
+              headers,
+              body: JSON.stringify({
+                values: { session_retention_days: sessionRetention },
+              }),
+            })
+              .then((response) => {
+                if (!response.ok) throw new Error();
+                setFailure(false);
+              })
+              .catch(() => setFailure(true));
+          }}
+        >
+          {t.save}
+        </button>
+      </fieldset>
     </section>
   );
 }

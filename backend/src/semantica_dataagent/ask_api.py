@@ -6,10 +6,16 @@ import os
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import func
+from sqlalchemy import func, text
 
 from .agent_runner import DONE, ERROR, AgentEvent, AgentTurnRequest, get_runner
-from .conversation_api import _finish_turn, _record_event, agent_root, public_base_url
+from .conversation_api import (
+    _finish_turn,
+    _record_event,
+    agent_root,
+    cleanup_expired_sessions,
+    public_base_url,
+)
 from .db import Conversation, Provider, Setting, Turn, sessions
 from .mcp_context import current_requester
 from .mcp_contract import ToolUnavailable
@@ -66,11 +72,15 @@ def _choices() -> tuple[str, str, str]:
 
 def _start_turn(question: str, conversation_id: str | None, owner_id: str):
     now = datetime.now(UTC)
+    cleanup_expired_sessions()
     with sessions().begin() as db:
+        db.execute(text("BEGIN IMMEDIATE"))
         if conversation_id:
             conversation = db.get(Conversation, conversation_id)
             if conversation is None or conversation.owner_id != owner_id:
                 raise ValueError("Conversation not found")
+            if not conversation.resumable:
+                raise ValueError("Conversation session expired and cannot be resumed")
             agent_id = conversation.agent
             provider_id = conversation.provider_id
             model = conversation.model

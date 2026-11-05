@@ -97,6 +97,15 @@ test("renders schema, reports validation errors and saves enabled state", async 
       },
     }),
   );
+  fireEvent.change(screen.getByLabelText("Session retention days"), {
+    target: { value: "12" },
+  });
+  fireEvent.click(screen.getAllByText("Save").at(-1)!);
+  await waitFor(() =>
+    expect(requests).toContainEqual({
+      values: { session_retention_days: "12" },
+    }),
+  );
   expect((screen.getByLabelText("count") as HTMLInputElement).value).toBe("2");
   expect(screen.getByLabelText("active")).toBeTruthy();
   expect(screen.getByLabelText("mode")).toBeTruthy();
