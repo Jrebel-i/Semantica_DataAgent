@@ -956,7 +956,7 @@ def describe(names=None, database=None, search=None):
 
 
 # Ranking constants are versioned so clients can interpret scores consistently.
-RANKING_VERSION = "2"
+RANKING_VERSION = "3"
 RRF_K = 60
 SOURCE_WEIGHTS = {"exact": 2.0, "fulltext": 1.0, "vector": 1.0, "graph": 0.5}
 
@@ -1114,4 +1114,16 @@ def search(query, scope, top_k, category=None):
                 item for item in sources[source] if item["ref"].startswith("table:")
             ]
     weights = {**SOURCE_WEIGHTS, "graph": 1.5} if scope == "tables" else SOURCE_WEIGHTS
-    return mark_ambiguity(fuse(sources, limit * 4, weights), query)[:top_k]
+    results = fuse(sources, limit * 4, weights)
+    if scope == "tables":
+        results.sort(
+            key=lambda item: (
+                not (
+                    "exact" in item["sources"]
+                    or {"fulltext", "vector"} <= set(item["sources"])
+                ),
+                -item["score"],
+                item["ref"],
+            )
+        )
+    return mark_ambiguity(results, query)[:top_k]
