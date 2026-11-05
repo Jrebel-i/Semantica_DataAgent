@@ -298,6 +298,8 @@ spec:
             secretKeyRef:
               name: langfuse-config
               key: admin-password
+        - name: LANGFUSE_MIGRATION_V4_WRITE_MODE
+          value: dual
         resources:
           requests:
             cpu: 100m
@@ -337,6 +339,8 @@ spec:
         - *id025
         - *id026
         - *id027
+        - name: LANGFUSE_MIGRATION_V4_WRITE_MODE
+          value: dual
         resources:
           requests:
             cpu: 100m
