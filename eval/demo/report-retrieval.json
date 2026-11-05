@@ -1,0 +1,1064 @@
+{
+  "generated_at": "2026-11-05T09:25:07.607803+00:00",
+  "metrics": {
+    "agent_errors": 0,
+    "below_threshold": false,
+    "caliber_hit_rate": null,
+    "questions": 30,
+    "reference_sql_caliber_hit_rate": 1.0,
+    "retrieval_errors": 0,
+    "table_hit_rate_at_5": 0.9666666666666667,
+    "table_recall_at_5": 0.9833333333333333,
+    "validate_sql_pass_rate": 1.0
+  },
+  "mode": "retrieval",
+  "results": [
+    {
+      "answer_sql": [],
+      "answer_text": "",
+      "caliber": "订单数按订单编号去重；样例表以 id 作为订单编号。",
+      "caliber_hit": true,
+      "clarify": false,
+      "dialect": "hive",
+      "duration_ms": 747,
+      "expected_fields": [
+        "shop.orders.id"
+      ],
+      "expected_tables": [
+        "shop.orders"
+      ],
+      "failure_categories": [],
+      "failure_reasons": [],
+      "id": "d01",
+      "missing_tables": [],
+      "notes": "出处：samples/demo/tables.json shop.orders（交易订单）；samples/demo/knowledge/metrics/orders.md（按订单编号去重）。",
+      "question": "我们现在一共有多少笔交易订单？",
+      "reference_sql": "SELECT COUNT(DISTINCT id) AS order_count FROM shop.orders",
+      "retrieved_tables": [
+        "shop.orders",
+        "shop.daily_sales",
+        "shop.order_items",
+        "shop.returns",
+        "shop.inventory"
+      ],
+      "table_recall_at_5": 1.0,
+      "validate_sql": {
+        "status": "pass",
+        "valid": true
+      }
+    },
+    {
+      "answer_sql": [],
+      "answer_text": "",
+      "caliber": "按日期分区 dt 分组，订单编号去重计数。",
+      "caliber_hit": true,
+      "clarify": false,
+      "dialect": "hive",
+      "duration_ms": 168,
+      "expected_fields": [
+        "shop.orders.id",
+        "shop.orders.dt"
+      ],
+      "expected_tables": [
+        "shop.orders"
+      ],
+      "failure_categories": [],
+      "failure_reasons": [],
+      "id": "d02",
+      "missing_tables": [],
+      "notes": "出处：samples/demo/fields.json shop.orders.dt（日期分区）；samples/demo/knowledge/metrics/orders.md。",
+      "question": "每天分别有多少笔订单？",
+      "reference_sql": "SELECT dt, COUNT(DISTINCT id) AS order_count FROM shop.orders GROUP BY dt",
+      "retrieved_tables": [
+        "shop.orders",
+        "shop.daily_sales",
+        "shop.order_items",
+        "shop.reviews",
+        "shop.returns"
+      ],
+      "table_recall_at_5": 1.0,
+      "validate_sql": {
+        "status": "pass",
+        "valid": true
+      }
+    },
+    {
+      "answer_sql": [],
+      "answer_text": "",
+      "caliber": "统计订单商品明细记录数，按业务编号去重。",
+      "caliber_hit": true,
+      "clarify": false,
+      "dialect": "hive",
+      "duration_ms": 164,
+      "expected_fields": [
+        "shop.order_items.id"
+      ],
+      "expected_tables": [
+        "shop.order_items"
+      ],
+      "failure_categories": [],
+      "failure_reasons": [],
+      "id": "d03",
+      "missing_tables": [],
+      "notes": "出处：samples/demo/tables.json shop.order_items（订单商品明细）；samples/demo/fields.json。",
+      "question": "订单商品明细一共有多少条？",
+      "reference_sql": "SELECT COUNT(DISTINCT id) AS item_count FROM shop.order_items",
+      "retrieved_tables": [
+        "shop.orders",
+        "shop.order_items",
+        "shop.reviews",
+        "shop.products",
+        "shop.categories"
+      ],
+      "table_recall_at_5": 1.0,
+      "validate_sql": {
+        "status": "pass",
+        "valid": true
+      }
+    },
+    {
+      "answer_sql": [],
+      "answer_text": "",
+      "caliber": "顾客按注册账号统计，账号编号去重。",
+      "caliber_hit": true,
+      "clarify": false,
+      "dialect": "hive",
+      "duration_ms": 170,
+      "expected_fields": [
+        "shop.customers.id"
+      ],
+      "expected_tables": [
+        "shop.customers"
+      ],
+      "failure_categories": [],
+      "failure_reasons": [],
+      "id": "d04",
+      "missing_tables": [],
+      "notes": "出处：samples/demo/knowledge/operations/customers.md（顾客按注册账号统计）；samples/demo/fields.json。",
+      "question": "平台注册顾客账号有多少个？",
+      "reference_sql": "SELECT COUNT(DISTINCT id) AS customer_count FROM shop.customers",
+      "retrieved_tables": [
+        "shop.customers",
+        "shop.customer_segments",
+        "shop.daily_sales",
+        "shop.orders",
+        "shop.refunds"
+      ],
+      "table_recall_at_5": 1.0,
+      "validate_sql": {
+        "status": "pass",
+        "valid": true
+      }
+    },
+    {
+      "answer_sql": [],
+      "answer_text": "",
+      "caliber": "商品以商品编号识别并去重。",
+      "caliber_hit": true,
+      "clarify": false,
+      "dialect": "hive",
+      "duration_ms": 193,
+      "expected_fields": [
+        "shop.products.id"
+      ],
+      "expected_tables": [
+        "shop.products"
+      ],
+      "failure_categories": [],
+      "failure_reasons": [],
+      "id": "d05",
+      "missing_tables": [],
+      "notes": "出处：samples/demo/knowledge/operations/products.md（商品以商品编号识别）；samples/demo/fields.json。",
+      "question": "商品资料里一共有多少个商品？",
+      "reference_sql": "SELECT COUNT(DISTINCT id) AS product_count FROM shop.products",
+      "retrieved_tables": [
+        "shop.products",
+        "shop.categories",
+        "shop.reviews",
+        "shop.order_items",
+        "shop.daily_sales"
+      ],
+      "table_recall_at_5": 1.0,
+      "validate_sql": {
+        "status": "pass",
+        "valid": true
+      }
+    },
+    {
+      "answer_sql": [],
+      "answer_text": "",
+      "caliber": "按支付流水业务编号去重计数。",
+      "caliber_hit": true,
+      "clarify": false,
+      "dialect": "hive",
+      "duration_ms": 182,
+      "expected_fields": [
+        "shop.payments.id"
+      ],
+      "expected_tables": [
+        "shop.payments"
+      ],
+      "failure_categories": [],
+      "failure_reasons": [],
+      "id": "d06",
+      "missing_tables": [],
+      "notes": "出处：samples/demo/tables.json shop.payments（支付流水）；samples/demo/fields.json。",
+      "question": "支付流水一共有多少笔？",
+      "reference_sql": "SELECT COUNT(DISTINCT id) AS payment_count FROM shop.payments",
+      "retrieved_tables": [
+        "shop.payments",
+        "shop.orders",
+        "shop.daily_sales",
+        "shop.inventory",
+        "shop.shipments"
+      ],
+      "table_recall_at_5": 1.0,
+      "validate_sql": {
+        "status": "pass",
+        "valid": true
+      }
+    },
+    {
+      "answer_sql": [],
+      "answer_text": "",
+      "caliber": "按退款记录业务编号去重计数。",
+      "caliber_hit": true,
+      "clarify": false,
+      "dialect": "hive",
+      "duration_ms": 169,
+      "expected_fields": [
+        "shop.refunds.id"
+      ],
+      "expected_tables": [
+        "shop.refunds"
+      ],
+      "failure_categories": [],
+      "failure_reasons": [],
+      "id": "d07",
+      "missing_tables": [],
+      "notes": "出处：samples/demo/tables.json shop.refunds（退款记录）；samples/demo/fields.json。",
+      "question": "退款记录一共有多少条？",
+      "reference_sql": "SELECT COUNT(DISTINCT id) AS refund_count FROM shop.refunds",
+      "retrieved_tables": [
+        "shop.refunds",
+        "shop.returns",
+        "shop.daily_sales",
+        "shop.orders",
+        "shop.inventory"
+      ],
+      "table_recall_at_5": 1.0,
+      "validate_sql": {
+        "status": "pass",
+        "valid": true
+      }
+    },
+    {
+      "answer_sql": [],
+      "answer_text": "",
+      "caliber": "按发货物流记录业务编号去重计数。",
+      "caliber_hit": true,
+      "clarify": false,
+      "dialect": "hive",
+      "duration_ms": 164,
+      "expected_fields": [
+        "shop.shipments.id"
+      ],
+      "expected_tables": [
+        "shop.shipments"
+      ],
+      "failure_categories": [],
+      "failure_reasons": [],
+      "id": "d08",
+      "missing_tables": [],
+      "notes": "出处：samples/demo/knowledge/operations/shipping.md（发货时间记录物流状态）；samples/demo/fields.json。",
+      "question": "发货物流记录有多少条？",
+      "reference_sql": "SELECT COUNT(DISTINCT id) AS shipment_count FROM shop.shipments",
+      "retrieved_tables": [
+        "shop.shipments",
+        "shop.returns",
+        "shop.refunds",
+        "shop.daily_sales",
+        "shop.order_items"
+      ],
+      "table_recall_at_5": 1.0,
+      "validate_sql": {
+        "status": "pass",
+        "valid": true
+      }
+    },
+    {
+      "answer_sql": [],
+      "answer_text": "",
+      "caliber": "按供应商编号去重计数。",
+      "caliber_hit": true,
+      "clarify": false,
+      "dialect": "hive",
+      "duration_ms": 178,
+      "expected_fields": [
+        "shop.suppliers.id"
+      ],
+      "expected_tables": [
+        "shop.suppliers"
+      ],
+      "failure_categories": [],
+      "failure_reasons": [],
+      "id": "d09",
+      "missing_tables": [],
+      "notes": "出处：samples/demo/tables.json shop.suppliers（供应商）；samples/demo/fields.json。",
+      "question": "我们合作了多少家供应商？",
+      "reference_sql": "SELECT COUNT(DISTINCT id) AS supplier_count FROM shop.suppliers",
+      "retrieved_tables": [
+        "shop.suppliers",
+        "shop.orders",
+        "shop.daily_sales",
+        "shop.customers",
+        "shop.products"
+      ],
+      "table_recall_at_5": 1.0,
+      "validate_sql": {
+        "status": "pass",
+        "valid": true
+      }
+    },
+    {
+      "answer_sql": [],
+      "answer_text": "",
+      "caliber": "按评价记录业务编号去重计数。",
+      "caliber_hit": true,
+      "clarify": false,
+      "dialect": "hive",
+      "duration_ms": 175,
+      "expected_fields": [
+        "shop.reviews.id"
+      ],
+      "expected_tables": [
+        "shop.reviews"
+      ],
+      "failure_categories": [],
+      "failure_reasons": [],
+      "id": "d10",
+      "missing_tables": [],
+      "notes": "出处：samples/demo/tables.json shop.reviews（商品评价）；samples/demo/fields.json。",
+      "question": "商品评价一共有多少条？",
+      "reference_sql": "SELECT COUNT(DISTINCT id) AS review_count FROM shop.reviews",
+      "retrieved_tables": [
+        "shop.reviews",
+        "shop.categories",
+        "shop.products",
+        "shop.order_items",
+        "shop.daily_sales"
+      ],
+      "table_recall_at_5": 1.0,
+      "validate_sql": {
+        "status": "pass",
+        "valid": true
+      }
+    },
+    {
+      "answer_sql": [],
+      "answer_text": "",
+      "caliber": "按商品分类编号去重计数。",
+      "caliber_hit": true,
+      "clarify": false,
+      "dialect": "hive",
+      "duration_ms": 169,
+      "expected_fields": [
+        "shop.categories.id"
+      ],
+      "expected_tables": [
+        "shop.categories"
+      ],
+      "failure_categories": [],
+      "failure_reasons": [],
+      "id": "d11",
+      "missing_tables": [],
+      "notes": "出处：samples/demo/tables.json shop.categories（商品分类）；samples/demo/fields.json。",
+      "question": "商品分类一共有多少个？",
+      "reference_sql": "SELECT COUNT(DISTINCT id) AS category_count FROM shop.categories",
+      "retrieved_tables": [
+        "shop.categories",
+        "shop.products",
+        "shop.reviews",
+        "shop.order_items",
+        "shop.daily_sales"
+      ],
+      "table_recall_at_5": 1.0,
+      "validate_sql": {
+        "status": "pass",
+        "valid": true
+      }
+    },
+    {
+      "answer_sql": [],
+      "answer_text": "",
+      "caliber": "按地区编号去重计数。",
+      "caliber_hit": true,
+      "clarify": false,
+      "dialect": "hive",
+      "duration_ms": 171,
+      "expected_fields": [
+        "shop.regions.id"
+      ],
+      "expected_tables": [
+        "shop.regions"
+      ],
+      "failure_categories": [],
+      "failure_reasons": [],
+      "id": "d12",
+      "missing_tables": [],
+      "notes": "出处：samples/demo/tables.json shop.regions（地区维度）；samples/demo/fields.json。",
+      "question": "地区维度里一共有多少个地区？",
+      "reference_sql": "SELECT COUNT(DISTINCT id) AS region_count FROM shop.regions",
+      "retrieved_tables": [
+        "shop.regions",
+        "shop.channels",
+        "shop.orders",
+        "shop.visits",
+        "shop.inventory"
+      ],
+      "table_recall_at_5": 1.0,
+      "validate_sql": {
+        "status": "pass",
+        "valid": true
+      }
+    },
+    {
+      "answer_sql": [],
+      "answer_text": "",
+      "caliber": "按渠道编号去重计数。",
+      "caliber_hit": true,
+      "clarify": false,
+      "dialect": "hive",
+      "duration_ms": 164,
+      "expected_fields": [
+        "shop.channels.id"
+      ],
+      "expected_tables": [
+        "shop.channels"
+      ],
+      "failure_categories": [],
+      "failure_reasons": [],
+      "id": "d13",
+      "missing_tables": [],
+      "notes": "出处：samples/demo/tables.json shop.channels（渠道维度）；samples/demo/fields.json。",
+      "question": "渠道维度里一共有多少个渠道？",
+      "reference_sql": "SELECT COUNT(DISTINCT id) AS channel_count FROM shop.channels",
+      "retrieved_tables": [
+        "shop.channels",
+        "shop.regions",
+        "shop.orders",
+        "shop.daily_sales",
+        "shop.customers"
+      ],
+      "table_recall_at_5": 1.0,
+      "validate_sql": {
+        "status": "pass",
+        "valid": true
+      }
+    },
+    {
+      "answer_sql": [],
+      "answer_text": "",
+      "caliber": "按每日销售额记录的 id 去重计数。",
+      "caliber_hit": true,
+      "clarify": false,
+      "dialect": "hive",
+      "duration_ms": 180,
+      "expected_fields": [
+        "shop.daily_sales.id"
+      ],
+      "expected_tables": [
+        "shop.daily_sales"
+      ],
+      "failure_categories": [],
+      "failure_reasons": [],
+      "id": "d14",
+      "missing_tables": [],
+      "notes": "出处：samples/demo/tables.json shop.daily_sales（每日销售额）；samples/demo/tasks.json load_daily_sales。",
+      "question": "每日销售额表里有多少条汇总记录？",
+      "reference_sql": "SELECT COUNT(DISTINCT id) AS daily_sales_count FROM shop.daily_sales",
+      "retrieved_tables": [
+        "shop.daily_sales",
+        "shop.refunds",
+        "shop.returns",
+        "shop.orders",
+        "shop.inventory"
+      ],
+      "table_recall_at_5": 1.0,
+      "validate_sql": {
+        "status": "pass",
+        "valid": true
+      }
+    },
+    {
+      "answer_sql": [],
+      "answer_text": "",
+      "caliber": "按顾客分群记录的业务编号去重计数。",
+      "caliber_hit": true,
+      "clarify": false,
+      "dialect": "hive",
+      "duration_ms": 213,
+      "expected_fields": [
+        "shop.customer_segments.id"
+      ],
+      "expected_tables": [
+        "shop.customer_segments"
+      ],
+      "failure_categories": [],
+      "failure_reasons": [],
+      "id": "d15",
+      "missing_tables": [],
+      "notes": "出处：samples/demo/tables.json shop.customer_segments（顾客分群）；samples/demo/fields.json。",
+      "question": "顾客分群一共有多少个记录？",
+      "reference_sql": "SELECT COUNT(DISTINCT id) AS segment_count FROM shop.customer_segments",
+      "retrieved_tables": [
+        "shop.customer_segments",
+        "shop.customers",
+        "shop.returns",
+        "shop.refunds",
+        "shop.daily_sales"
+      ],
+      "table_recall_at_5": 1.0,
+      "validate_sql": {
+        "status": "pass",
+        "valid": true
+      }
+    },
+    {
+      "answer_sql": [],
+      "answer_text": "",
+      "caliber": "按退货记录业务编号去重计数；退货流程与退款流程分开。",
+      "caliber_hit": true,
+      "clarify": false,
+      "dialect": "hive",
+      "duration_ms": 176,
+      "expected_fields": [
+        "shop.returns.id"
+      ],
+      "expected_tables": [
+        "shop.returns"
+      ],
+      "failure_categories": [],
+      "failure_reasons": [],
+      "id": "d16",
+      "missing_tables": [],
+      "notes": "出处：samples/demo/knowledge/operations/returns.md（退货与退款不同流程）；samples/demo/fields.json。",
+      "question": "退货记录一共有多少条？",
+      "reference_sql": "SELECT COUNT(DISTINCT id) AS return_count FROM shop.returns",
+      "retrieved_tables": [
+        "shop.returns",
+        "shop.refunds",
+        "shop.daily_sales",
+        "shop.orders",
+        "shop.reviews"
+      ],
+      "table_recall_at_5": 1.0,
+      "validate_sql": {
+        "status": "pass",
+        "valid": true
+      }
+    },
+    {
+      "answer_sql": [],
+      "answer_text": "",
+      "caliber": "渠道编号等于网页，真实维度值为“网页”。",
+      "caliber_hit": true,
+      "clarify": false,
+      "dialect": "hive",
+      "duration_ms": 181,
+      "expected_fields": [
+        "shop.channels.id"
+      ],
+      "expected_tables": [
+        "shop.channels"
+      ],
+      "failure_categories": [],
+      "failure_reasons": [],
+      "id": "d17",
+      "missing_tables": [],
+      "notes": "出处：samples/demo/dimension_values.json shop.channels.id（网页、移动端）；samples/demo/fields.json。",
+      "question": "网页渠道的渠道记录有多少条？",
+      "reference_sql": "SELECT COUNT(DISTINCT id) AS channel_count FROM shop.channels WHERE id = '网页'",
+      "retrieved_tables": [
+        "shop.channels",
+        "shop.refunds",
+        "shop.returns",
+        "shop.orders",
+        "shop.daily_sales"
+      ],
+      "table_recall_at_5": 1.0,
+      "validate_sql": {
+        "status": "pass",
+        "valid": true
+      }
+    },
+    {
+      "answer_sql": [],
+      "answer_text": "",
+      "caliber": "渠道编号等于移动端，真实维度值为“移动端”。",
+      "caliber_hit": true,
+      "clarify": false,
+      "dialect": "hive",
+      "duration_ms": 172,
+      "expected_fields": [
+        "shop.channels.id"
+      ],
+      "expected_tables": [
+        "shop.channels"
+      ],
+      "failure_categories": [],
+      "failure_reasons": [],
+      "id": "d18",
+      "missing_tables": [],
+      "notes": "出处：samples/demo/dimension_values.json shop.channels.id（网页、移动端）。",
+      "question": "移动端渠道的渠道记录有多少条？",
+      "reference_sql": "SELECT COUNT(DISTINCT id) AS channel_count FROM shop.channels WHERE id = '移动端'",
+      "retrieved_tables": [
+        "shop.channels",
+        "shop.returns",
+        "shop.refunds",
+        "shop.orders",
+        "shop.customers"
+      ],
+      "table_recall_at_5": 1.0,
+      "validate_sql": {
+        "status": "pass",
+        "valid": true
+      }
+    },
+    {
+      "answer_sql": [],
+      "answer_text": "",
+      "caliber": "操作系统代码 os_type 等于 android；真实维度值来自 channels。",
+      "caliber_hit": true,
+      "clarify": false,
+      "dialect": "hive",
+      "duration_ms": 171,
+      "expected_fields": [
+        "shop.channels.id",
+        "shop.channels.os_type"
+      ],
+      "expected_tables": [
+        "shop.channels"
+      ],
+      "failure_categories": [],
+      "failure_reasons": [],
+      "id": "d19",
+      "missing_tables": [],
+      "notes": "出处：samples/demo/dimension_values.json shop.channels.os_type（android、ios、 HK ）。",
+      "question": "安卓系统的渠道有多少条？",
+      "reference_sql": "SELECT COUNT(DISTINCT id) AS channel_count FROM shop.channels WHERE os_type = 'android'",
+      "retrieved_tables": [
+        "shop.channels",
+        "shop.categories",
+        "shop.products",
+        "shop.customers",
+        "shop.regions"
+      ],
+      "table_recall_at_5": 1.0,
+      "validate_sql": {
+        "status": "pass",
+        "valid": true
+      }
+    },
+    {
+      "answer_sql": [],
+      "answer_text": "",
+      "caliber": "操作系统名称 os_name 等于苹果。",
+      "caliber_hit": true,
+      "clarify": false,
+      "dialect": "hive",
+      "duration_ms": 185,
+      "expected_fields": [
+        "shop.channels.id",
+        "shop.channels.os_name"
+      ],
+      "expected_tables": [
+        "shop.channels"
+      ],
+      "failure_categories": [],
+      "failure_reasons": [],
+      "id": "d20",
+      "missing_tables": [],
+      "notes": "出处：samples/demo/dimension_values.json shop.channels.os_name（安卓、苹果、香港）。",
+      "question": "苹果系统的渠道有多少条？",
+      "reference_sql": "SELECT COUNT(DISTINCT id) AS channel_count FROM shop.channels WHERE os_name = '苹果'",
+      "retrieved_tables": [
+        "shop.channels",
+        "shop.orders",
+        "shop.products",
+        "shop.customers",
+        "shop.suppliers"
+      ],
+      "table_recall_at_5": 1.0,
+      "validate_sql": {
+        "status": "pass",
+        "valid": true
+      }
+    },
+    {
+      "answer_sql": [],
+      "answer_text": "",
+      "caliber": "真实维度值 os_type 为带空格的“ HK ”，按原值精确过滤。",
+      "caliber_hit": true,
+      "clarify": false,
+      "dialect": "hive",
+      "duration_ms": 169,
+      "expected_fields": [
+        "shop.channels.id",
+        "shop.channels.os_type"
+      ],
+      "expected_tables": [
+        "shop.channels"
+      ],
+      "failure_categories": [],
+      "failure_reasons": [],
+      "id": "d21",
+      "missing_tables": [],
+      "notes": "出处：samples/demo/dimension_values.json shop.channels.os_type（第 3 行值保留空格）。",
+      "question": "香港渠道有多少条？",
+      "reference_sql": "SELECT COUNT(DISTINCT id) AS channel_count FROM shop.channels WHERE os_type = ' HK '",
+      "retrieved_tables": [
+        "shop.channels",
+        "shop.daily_sales",
+        "shop.orders",
+        "shop.customers",
+        "shop.products"
+      ],
+      "table_recall_at_5": 1.0,
+      "validate_sql": {
+        "status": "pass",
+        "valid": true
+      }
+    },
+    {
+      "answer_sql": [],
+      "answer_text": "",
+      "caliber": "地区编号等于华东，真实维度值为“华东”。",
+      "caliber_hit": true,
+      "clarify": false,
+      "dialect": "hive",
+      "duration_ms": 167,
+      "expected_fields": [
+        "shop.regions.id"
+      ],
+      "expected_tables": [
+        "shop.regions"
+      ],
+      "failure_categories": [],
+      "failure_reasons": [],
+      "id": "d22",
+      "missing_tables": [],
+      "notes": "出处：samples/demo/dimension_values.json shop.regions.id（华东）。",
+      "question": "华东地区的地区记录有多少条？",
+      "reference_sql": "SELECT COUNT(DISTINCT id) AS region_count FROM shop.regions WHERE id = '华东'",
+      "retrieved_tables": [
+        "shop.regions",
+        "shop.refunds",
+        "shop.returns",
+        "shop.orders",
+        "shop.visits"
+      ],
+      "table_recall_at_5": 1.0,
+      "validate_sql": {
+        "status": "pass",
+        "valid": true
+      }
+    },
+    {
+      "answer_sql": [],
+      "answer_text": "",
+      "caliber": "分类编号等于家居，真实维度值为“家居”。",
+      "caliber_hit": true,
+      "clarify": false,
+      "dialect": "hive",
+      "duration_ms": 167,
+      "expected_fields": [
+        "shop.categories.id"
+      ],
+      "expected_tables": [
+        "shop.categories"
+      ],
+      "failure_categories": [],
+      "failure_reasons": [],
+      "id": "d23",
+      "missing_tables": [],
+      "notes": "出处：samples/demo/dimension_values.json shop.categories.id（家居）。",
+      "question": "家居类目的商品分类有多少个？",
+      "reference_sql": "SELECT COUNT(DISTINCT id) AS category_count FROM shop.categories WHERE id = '家居'",
+      "retrieved_tables": [
+        "shop.categories",
+        "shop.products",
+        "shop.reviews",
+        "shop.order_items",
+        "shop.orders"
+      ],
+      "table_recall_at_5": 1.0,
+      "validate_sql": {
+        "status": "pass",
+        "valid": true
+      }
+    },
+    {
+      "answer_sql": [],
+      "answer_text": "",
+      "caliber": "load_daily_sales 任务把 shop.orders 写入 shop.daily_sales，按订单编号 id 关联；该血缘关系为强证据。",
+      "caliber_hit": true,
+      "clarify": false,
+      "dialect": "hive",
+      "duration_ms": 168,
+      "expected_fields": [
+        "shop.orders.id",
+        "shop.daily_sales.id"
+      ],
+      "expected_tables": [
+        "shop.orders",
+        "shop.daily_sales"
+      ],
+      "failure_categories": [],
+      "failure_reasons": [],
+      "id": "d24",
+      "missing_tables": [],
+      "notes": "出处：samples/demo/tasks.json load_daily_sales（INSERT INTO shop.daily_sales SELECT * FROM shop.orders）；samples/demo/lineage.json 强血缘边。",
+      "question": "订单数据会流到每日销售额表吗？按订单编号看一下两边能对上的记录。",
+      "reference_sql": "SELECT id AS order_id FROM shop.orders WHERE id IN (SELECT id FROM shop.daily_sales)",
+      "retrieved_tables": [
+        "shop.daily_sales",
+        "shop.orders",
+        "shop.order_items",
+        "shop.returns",
+        "shop.refunds"
+      ],
+      "table_recall_at_5": 1.0,
+      "validate_sql": {
+        "status": "pass",
+        "valid": true
+      }
+    },
+    {
+      "answer_sql": [],
+      "answer_text": "",
+      "caliber": "订单业务编号出现在支付流水中；用 IN 子查询表示关联，避免假设支付流水字段结构。",
+      "caliber_hit": true,
+      "clarify": false,
+      "dialect": "hive",
+      "duration_ms": 183,
+      "expected_fields": [
+        "shop.orders.id",
+        "shop.payments.id"
+      ],
+      "expected_tables": [
+        "shop.orders",
+        "shop.payments"
+      ],
+      "failure_categories": [],
+      "failure_reasons": [],
+      "id": "d25",
+      "missing_tables": [],
+      "notes": "出处：samples/demo/tables.json shop.orders（交易订单）与 shop.payments（支付流水）；samples/demo/fields.json 两表 id 均为业务编号。",
+      "question": "哪些订单已经产生了支付流水？",
+      "reference_sql": "SELECT id AS order_id FROM shop.orders WHERE id IN (SELECT id FROM shop.payments)",
+      "retrieved_tables": [
+        "shop.payments",
+        "shop.orders",
+        "shop.daily_sales",
+        "shop.shipments",
+        "shop.order_items"
+      ],
+      "table_recall_at_5": 1.0,
+      "validate_sql": {
+        "status": "pass",
+        "valid": true
+      }
+    },
+    {
+      "answer_sql": [],
+      "answer_text": "",
+      "caliber": "支付销售额按支付成功时间归属，下单销售额按订单创建时间归属，两者不可混用；问题口径不明确应澄清。",
+      "caliber_hit": true,
+      "clarify": true,
+      "dialect": "hive",
+      "duration_ms": 167,
+      "expected_fields": [
+        "shop.orders.id",
+        "shop.payments.id"
+      ],
+      "expected_tables": [
+        "shop.orders",
+        "shop.payments"
+      ],
+      "failure_categories": [],
+      "failure_reasons": [],
+      "id": "d26",
+      "missing_tables": [],
+      "notes": "出处：samples/demo/knowledge/metrics/definitions/sales.md（按支付成功时间汇总）；samples/demo/knowledge/metrics/sales_order.md（按订单创建时间，且应澄清）。",
+      "question": "统计销售额时要按支付成功时间还是下单时间？",
+      "reference_sql": "SELECT id AS order_id FROM shop.orders WHERE id IN (SELECT id FROM shop.payments)",
+      "retrieved_tables": [
+        "shop.daily_sales",
+        "shop.orders",
+        "shop.order_items",
+        "shop.promotions",
+        "shop.payments"
+      ],
+      "table_recall_at_5": 1.0,
+      "validate_sql": {
+        "status": "pass",
+        "valid": true
+      }
+    },
+    {
+      "answer_sql": [],
+      "answer_text": "",
+      "caliber": "订单数按订单编号去重统计已创建订单；取消订单是否纳入需要按业务问题明确。",
+      "caliber_hit": true,
+      "clarify": true,
+      "dialect": "hive",
+      "duration_ms": 177,
+      "expected_fields": [
+        "shop.orders.id"
+      ],
+      "expected_tables": [
+        "shop.orders"
+      ],
+      "failure_categories": [],
+      "failure_reasons": [],
+      "id": "d27",
+      "missing_tables": [],
+      "notes": "出处：samples/demo/knowledge/metrics/orders.md（取消订单是否纳入需明确）。",
+      "question": "订单数统计时要不要把已取消订单算进去？",
+      "reference_sql": "SELECT COUNT(DISTINCT id) AS order_count FROM shop.orders",
+      "retrieved_tables": [
+        "shop.orders",
+        "shop.daily_sales",
+        "shop.order_items",
+        "shop.returns",
+        "shop.refunds"
+      ],
+      "table_recall_at_5": 1.0,
+      "validate_sql": {
+        "status": "pass",
+        "valid": true
+      }
+    },
+    {
+      "answer_sql": [],
+      "answer_text": "",
+      "caliber": "全额退款从净支付销售额扣除，部分退款按实际退款金额扣除；问题未说明全额/部分及日期口径时应澄清。",
+      "caliber_hit": true,
+      "clarify": true,
+      "dialect": "hive",
+      "duration_ms": 164,
+      "expected_fields": [
+        "shop.payments.id",
+        "shop.refunds.id"
+      ],
+      "expected_tables": [
+        "shop.payments",
+        "shop.refunds"
+      ],
+      "failure_categories": [
+        "检索没召回"
+      ],
+      "failure_reasons": [
+        "table recall@5 0.50 < 1.00: missing shop.payments"
+      ],
+      "id": "d28",
+      "missing_tables": [
+        "shop.payments"
+      ],
+      "notes": "出处：samples/demo/knowledge/metrics/definitions/sales.md（退款处理：全额扣除、部分按实际金额、退款日与支付日不同）。",
+      "question": "销售额要不要扣掉退款？净额怎么算？",
+      "reference_sql": "SELECT id AS payment_id FROM shop.payments WHERE id NOT IN (SELECT id FROM shop.refunds)",
+      "retrieved_tables": [
+        "shop.refunds",
+        "shop.daily_sales",
+        "shop.orders",
+        "shop.returns",
+        "shop.inventory"
+      ],
+      "table_recall_at_5": 0.5,
+      "validate_sql": {
+        "status": "pass",
+        "valid": true
+      }
+    },
+    {
+      "answer_sql": [],
+      "answer_text": "",
+      "caliber": "订单数按订单编号去重统计已创建订单，避免同一订单多行导致重复计数。",
+      "caliber_hit": true,
+      "clarify": false,
+      "dialect": "hive",
+      "duration_ms": 168,
+      "expected_fields": [
+        "shop.orders.id"
+      ],
+      "expected_tables": [
+        "shop.orders"
+      ],
+      "failure_categories": [],
+      "failure_reasons": [],
+      "id": "d29",
+      "missing_tables": [],
+      "notes": "出处：samples/demo/knowledge/metrics/orders.md（按订单编号去重统计已创建订单）；samples/demo/knowledge/operations/dictionaries/shop.orders.md（订单编号关联订单明细）。",
+      "question": "订单数量为什么要按订单编号去重？",
+      "reference_sql": "SELECT COUNT(DISTINCT id) AS order_count FROM shop.orders",
+      "retrieved_tables": [
+        "shop.orders",
+        "shop.daily_sales",
+        "shop.order_items",
+        "shop.returns",
+        "shop.reviews"
+      ],
+      "table_recall_at_5": 1.0,
+      "validate_sql": {
+        "status": "pass",
+        "valid": true
+      }
+    },
+    {
+      "answer_sql": [],
+      "answer_text": "",
+      "caliber": "shop.orders 由 load_orders 从 staging.orders 加载；查询订单表本身以确认分析对象存在。",
+      "caliber_hit": true,
+      "clarify": false,
+      "dialect": "hive",
+      "duration_ms": 170,
+      "expected_fields": [
+        "shop.orders.id",
+        "shop.orders.dt"
+      ],
+      "expected_tables": [
+        "shop.orders"
+      ],
+      "failure_categories": [],
+      "failure_reasons": [],
+      "id": "d30",
+      "missing_tables": [],
+      "notes": "出处：samples/demo/tasks.json load_orders（INSERT OVERWRITE TABLE shop.orders ... FROM staging.orders）；samples/demo/lineage.json staging.orders -> shop.orders。",
+      "question": "订单表是由哪个上游任务加载的？",
+      "reference_sql": "SELECT id, dt FROM shop.orders WHERE dt >= '2025-01-01'",
+      "retrieved_tables": [
+        "shop.orders",
+        "shop.daily_sales",
+        "shop.order_items",
+        "shop.returns",
+        "shop.shipments"
+      ],
+      "table_recall_at_5": 1.0,
+      "validate_sql": {
+        "status": "pass",
+        "valid": true
+      }
+    }
+  ],
+  "scoring": {
+    "caliber_hit_rate": null,
+    "reference_sql_caliber_hit_rate": "Retrieval mode self-check: the same caliber rule applied to reference_sql. It is reported separately and is not used as the agent caliber metric.",
+    "table_recall_at_5": "Mean over questions of |expected tables intersected with the first 5 table hits| / |expected tables|; duplicate hits count once.",
+    "validate_sql_pass_rate": "Fraction of questions whose checked SQL returns validate_sql status=pass. Retrieval mode checks reference_sql; agent mode checks the agent answer SQL."
+  },
+  "source": "questions.yaml",
+  "top_k": 5
+}
