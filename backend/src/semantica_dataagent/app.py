@@ -44,6 +44,8 @@ async def lifespan(application):
     from .conversation_api import cleanup_expired_sessions
     from .db import Turn
 
+    if os.environ.get("DATAAGENT_AGENT_MODE", "sandbox") != "local":
+        await asyncio.to_thread(cleanup_orphans)
     with sessions().begin() as db:
         db.execute(
             update(Turn)
@@ -68,8 +70,6 @@ async def lifespan(application):
 
     cleanup_task = asyncio.create_task(cleanup_loop())
 
-    if os.environ.get("DATAAGENT_AGENT_MODE", "sandbox") != "local":
-        await asyncio.to_thread(cleanup_orphans)
     with sessions().begin() as db:
         db.execute(
             update(Build)
@@ -101,6 +101,7 @@ async def lifespan(application):
             yield
         finally:
             cleanup_task.cancel()
+            await asyncio.gather(cleanup_task, return_exceptions=True)
             scheduler.stop()
             build_queue.stop()
             knowledge.close_readers()
