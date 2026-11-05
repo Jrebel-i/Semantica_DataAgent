@@ -62,6 +62,8 @@ PYTHONPYCACHEPREFIX="$(mktemp -d)" uv run --directory backend pytest -p no:cache
 
 ## 语言与框架规则
 
+- commit、PR 标题与正文、交接文档一律用中文。类型前缀（`agent:`、`build:`、`mcp:`、`test:` 等）、代码标识符、命令和日志原文保持原样。例如 `agent: 在会话沙箱中运行 Claude 和 Codex (#19)`。
+
 ## 发布
 
 <!-- 版本号规则、产物清单、发布渠道，以及如何确认发布成功。 -->
