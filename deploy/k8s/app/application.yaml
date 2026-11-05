@@ -48,7 +48,7 @@ spec:
         fsGroup: 1000
       containers:
         - name: dataagent
-          image: 172.16.242.124:31640/dataagent-app:issue-26
+          image: 172.16.242.124:31640/dataagent-app:b37f9ce
           imagePullPolicy: Always
           ports:
             - containerPort: 8000
