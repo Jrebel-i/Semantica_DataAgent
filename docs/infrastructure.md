@@ -66,3 +66,15 @@ The script performs Cypher, creates and deletes a uniquely named Milvus collecti
 管理员可在插件设置页开启 Langfuse 并填写地址和项目公钥、私钥；私钥加密存储且界面不回显，留空保留已有值。上报使用锁文件固定的 httpx，通过有界队列异步发送，超时或发送失败不会中断请求。允许上报的应用字段集中列在 `telemetry.py` 的 `ALLOWED_FIELDS`，包括追踪标识、agent、provider、模型、工具名称、参数、结果摘要、耗时、SQL 校验和回答；其他字段会被丢弃。
 
 同一 Pod 内 ClickHouse 原生协议监听 9001，MinIO 监听 9000；六个容器的启动和就绪检查只使用 TCP 或 HTTP，不依赖容器内 exec。启动脚本通过 NodePort 健康端点等待 Web 初始化。
+
+## DataAgent 应用和会话 Pod
+
+应用清单位于 `deploy/k8s/app/`，前端和本地 MCP 共用 `http://172.16.242.124:31630`，MCP 地址为 `/mcp/`。集群内应用 Service 是 `dataagent:8000`。应用单副本使用 `dataagent-data` PVC 保存 SQLite、源目录和会话文件；默认 `local-path` 是节点本地 RWO 卷。会话 Pod 限定在应用所在节点，并只以子路径挂载本对话的工作目录和会话文件。轮次结束时删除 Pod，重启应用时按会话标签清理遗留 Pod；节点不可用时本地卷不会自动迁移。应用的 ServiceAccount 只在本命名空间操作 Pod、日志和 exec。
+
+应用和 runner 分别使用 `172.16.242.124:31640/dataagent-app:issue-26` 和 `172.16.242.124:31640/dataagent-agent-runner:1.2.1`。仓库是集群内 HTTP registry，无认证；节点 containerd 的信任配置由维护者管理。从 WSL 构建时运行 `docker build -f deploy/k8s/app/Dockerfile -t semantica-dataagent-app:issue-26 .` 和 `docker build -t semantica-dataagent-agent-runner:1.2.1 deploy/agent-runner`，分别 `docker save` 到磁盘 tar，再用固定版本 crane 的 `push --insecure` 推送；不要修改 Docker Desktop 配置。crane v0.20.3 的 Linux x86_64 发布包 SHA-256 为 `36c67a932f489b3f2724b64af90b599a8ef2aa7b004872597373c0ad694dc059`。镜像基础层按 digest 固定；发布前对镜像进行真实集群拉取验证。
+
+首次安装先创建 `dataagent-encryption` Secret（`key` 为新生成的 Fernet 密钥），不要覆盖已有密钥或 PVC。`kubectl apply -f deploy/k8s/app/bootstrap.yaml` 后等待 `dataagent-bootstrap` 就绪，在其中执行 `semantica-dataagent init` 并安全保存只显示一次的管理员 token；将源文件放到 PVC 的 `/data/source`。删除 bootstrap Pod 后 `kubectl apply -k deploy/k8s/app`。初始化只对空数据库执行；升级不能重新初始化数据库。应用从本命名空间现有 `neo4j-auth` Secret 的 `auth` 环境变量取得开发 Neo4j 凭据，只有用户名与设置一致且没有显式设置密码时使用；用户在设置中保存的密码优先。设置 Neo4j `bolt://neo4j:7687`、Milvus `http://milvus:19530`、embedding `http://embedding:7997` 和源目录 `/data/source`，在前端配置 provider 并触发全量构建。API key 加密存储，避免将密钥写入命令、镜像或日志。
+
+会话 Pod 的 init 容器解析当前 provider 和 MCP 地址，安装 IPv4/IPv6 iptables 默认拒绝规则，只允许到解析出的目标 IP 和端口，以及到 Pod 的集群 DNS 的 TCP/UDP 53；允许已建立连接的返回流量。agent 容器非 root、只读根文件系统、丢弃全部 capability，无法改规则。地址在每轮 init 时解析，DNS 仍可访问集群 DNS；模型网关地址改变时新轮次重新解析。`NetworkPolicy` 同时限制会话 Pod，但本集群只有 flannel，**目前不执行 NetworkPolicy**，实际限制由 iptables 执行。标准 NetworkPolicy 无法按 FQDN 表达动态 provider，当前对外 TCP 443 较宽，iptables 仍限定到解析后的地址；启用策略引擎或使用其他 provider 端口前需相应更新策略并重新验证。
+
+升级先推送新镜像并更新清单中的镜像引用，再 `kubectl apply -k deploy/k8s/app`，验证首页、MCP 和会话出站；单副本 Recreate 会短暂中断服务。回滚使用上一版镜像引用重新 apply，保留 PVC 和加密 Secret；不可删除 PVC 来回滚。全量知识构建和当前代切换按现有构建 API 执行，回滚知识使用保留代切换，镜像回滚不会自动切换知识代。
