@@ -6,7 +6,6 @@ import json
 import os
 import re
 import shutil
-import uuid
 from collections import deque
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
@@ -22,6 +21,7 @@ from .agent_runner import (
     AgentEvent,
     AgentTurnRequest,
 )
+from .agent_sandbox import SessionSandbox
 from .skill import read_skill
 
 PROVIDER_KEY = "dataagent"
@@ -380,7 +380,7 @@ class PiRunner:
         model = f"{PROVIDER_KEY}/{request.model}"
         skill = read_skill()
         sandboxed = self._sandboxed()
-        container_name = f"sda-agent-{uuid.uuid4().hex}"
+        sandbox = None
         command = [
             "pi" if sandboxed else self._binary(),
             "--mode",
@@ -399,43 +399,22 @@ class PiRunner:
             "Follow this retrieval skill exactly for warehouse questions.\n\n" + skill,
         ]
         if sandboxed:
+            sandbox = SessionSandbox(
+                request.workspace, request.provider.base_url, request.mcp_url
+            )
+            await asyncio.to_thread(sandbox.start)
+            # Configuration contains only environment references for secrets.
+            models = json.loads((config / "models.json").read_text())
+            models["providers"][PROVIDER_KEY]["baseUrl"] = sandbox.model_url
+            _write_json(config / "models.json", models)
+            mcp = json.loads((config / "mcp.json").read_text())
+            mcp["mcpServers"][MCP_SERVER]["url"] = sandbox.mcp_url
+            _write_json(config / "mcp.json", mcp)
             command[command.index(str(sessions))] = "/sessions"
             env["PI_CODING_AGENT_DIR"] = "/workspace/config"
             env["PI_CODING_AGENT_SESSION_DIR"] = "/sessions"
-            docker = [
-                "docker",
-                "run",
-                "--rm",
-                "-i",
-                "--name",
-                container_name,
-                "--label",
-                "com.semantica-dataagent.agent=1",
-                "--network",
-                "none",
-                "--read-only",
-                "--tmpfs",
-                "/tmp:rw,nosuid,nodev",
-                "--cap-drop",
-                "ALL",
-                "--security-opt",
-                "no-new-privileges",
-                "--pids-limit",
-                "512",
-                "--cpus",
-                os.environ.get("DATAAGENT_AGENT_CPUS", "2"),
-                "--memory",
-                os.environ.get("DATAAGENT_AGENT_MEMORY", "2g"),
-                "--user",
-                f"{os.getuid()}:{os.getgid()}",
-                "--mount",
-                f"type=bind,src={work},dst=/workspace",
-                "--mount",
-                f"type=bind,src={sessions},dst=/sessions",
-                "--workdir",
-                "/workspace",
-            ]
             env["HOME"] = "/tmp"
+            docker = ["docker", "exec", "-i"]
             for key in (
                 "PI_CODING_AGENT_DIR",
                 "PI_CODING_AGENT_SESSION_DIR",
@@ -446,7 +425,7 @@ class PiRunner:
             ):
                 if key in env:
                     docker.extend(["--env", key])
-            command = docker + ["semantica-dataagent-agent-runner:1.2.0"] + command[1:]
+            command = docker + [sandbox.name, *command]
         process = await asyncio.create_subprocess_exec(
             *command,
             cwd=work,
@@ -505,16 +484,8 @@ class PiRunner:
                 return
             yield _redact_event(parser.finish(), secrets)
         finally:
-            if sandboxed:
-                cleanup = await asyncio.create_subprocess_exec(
-                    "docker",
-                    "rm",
-                    "-f",
-                    container_name,
-                    stdout=asyncio.subprocess.DEVNULL,
-                    stderr=asyncio.subprocess.DEVNULL,
-                )
-                await cleanup.wait()
+            if sandbox is not None:
+                await asyncio.to_thread(sandbox.close)
             if not finished:
                 await _stop(process)
             drain.cancel()

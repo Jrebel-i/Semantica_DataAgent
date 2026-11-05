@@ -162,3 +162,9 @@ grep -E '^E2E_(RESULT|DONE) ' "$LOG"
 `POST /api/v1/builds` 不传请求体时保持原全量构建；传 `{"build_type":"incremental"}` 在当前知识代增量构建，返回记录包含构建类型、令牌名称和源目录 commit。源目录未处于干净 Git 提交时 commit 为 null。增量以同一知识代上一次成功构建的源文件哈希为基线；首次构建、源目录/启用插件/过滤规则/维度上限/embedding 配置变化或最近一次全量构建失败后需先做全量构建。文件统计区分新增、变化、删除；自动生成索引的派生哈希不计入源文件统计。上传和构建读取共享目录锁，构建在读取完来源快照后释放锁。
 
 每个节点和向量记录来源路径及写入它的 build id。自动生成索引记录其派生来源列表；空目录不产生知识类节点。修改或删除源文件时删除其节点、相关关系和向量，再写新记录；字段、维度值、文档与表的关系以及依赖边根据当前记录重新合并。维度值去重和别名可能跨文件依赖同一张表的行：该表涉及的维度值作为一个受影响单元重算；其他表和文件不重写。失败的增量构建记录待修复来源和向量 id，下一次增量即使源文件已恢复也会重试清理。Neo4j 与 Milvus 之间不做事务；运行中仍可能看到部分更新，失败后需重试。
+
+## 在线 agent 容器
+
+构建镜像：`docker build -t semantica-dataagent-agent-runner:1.2.0 deploy/agent-runner`。默认使用 Docker 沙箱；仅在可信的开发环境排障时设置 `DATAAGENT_AGENT_MODE=local`，此模式没有文件和网络隔离。容器的 CPU 和内存默认分别为 2 核和 2g，可用 `DATAAGENT_AGENT_CPUS`、`DATAAGENT_AGENT_MEMORY` 配置。
+
+Docker Desktop / WSL 下，agent 只连接 internal 网络；同一网络中的专用中继仅转发到当前 provider 和 MCP 的两个目标地址。中继还连接 Docker bridge，并把配置中的宿主机 loopback 地址转换为 `host.docker.internal`；所以 WSL mirrored 网络中的 `127.0.0.1:3425` 和后端监听端口可由中继访问。两端 URL 的路径保留，HTTPS 保留原主机名以验证证书。不要把容器连接到普通 bridge 或挂载其他宿主机路径。

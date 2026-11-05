@@ -9,8 +9,10 @@ from pathlib import Path
 
 import pytest
 
-from semantica_dataagent import agent_runner  # noqa: F401
-from semantica_dataagent import pi_runner
+from semantica_dataagent import (
+    agent_runner,  # noqa: F401
+    pi_runner,
+)
 
 
 def _docker_available():
@@ -52,32 +54,28 @@ def test_session_sandbox_files_network_and_cleanup(tmp_path):
     )
     try:
         sandbox.start()
-        script = """import json, os, socket, urllib.request
-
-def reachable(url):
-    try:
-        with urllib.request.urlopen(url, timeout=3) as response:
-            return response.status == 200
-    except Exception:
-        return False
-
-print(json.dumps({
-    "host_home": os.path.exists("/home/ub"),
-    "host_secret": os.path.exists(%r),
-    "source": os.path.exists(%r),
-    "application": os.path.exists(%r),
-    "external": reachable("https://example.com"),
-    "host_port": reachable("http://host.docker.internal:%s"),
-    "model": reachable(os.environ["DATAAGENT_MODEL_URL"]),
-    "mcp": reachable(os.environ["DATAAGENT_MCP_URL"]),
-}))
+        script = """const fs = require('fs');
+const test = async (url) => {
+  try { return (await fetch(url, {signal: AbortSignal.timeout(3000)})).ok; }
+  catch { return false; }
+};
+(async () => console.log(JSON.stringify({
+  host_home: fs.existsSync('/home/ub'),
+  host_secret: fs.existsSync(%s),
+  source: fs.existsSync(%s),
+  application: fs.existsSync(%s),
+  external: await test('https://example.com'),
+  host_port: await test('http://host.docker.internal:%s'),
+  model: await test(process.env.DATAAGENT_MODEL_URL),
+  mcp: await test(process.env.DATAAGENT_MCP_URL),
+})))();
 """ % (
-            str(marker),
-            str(Path.cwd()),
-            str(Path(pi_runner.__file__)),
+            json.dumps(str(marker)),
+            json.dumps(str(Path.cwd())),
+            json.dumps(str(Path(pi_runner.__file__))),
             servers[2].server_port,
-        )
-        result = json.loads(sandbox.exec(["python3", "-c", script]))
+        )  # noqa: UP031
+        result = json.loads(sandbox.exec(["node", "-e", script]))
         assert not any(
             result[key] for key in ("host_home", "host_secret", "source", "application")
         ), result
