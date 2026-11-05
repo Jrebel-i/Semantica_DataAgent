@@ -130,6 +130,7 @@ class KnowledgeGeneration(Base):
     name: Mapped[str] = mapped_column(primary_key=True)
     build_id: Mapped[int | None]
     created_at: Mapped[str | None]
+    deleting: Mapped[bool] = mapped_column(default=False, server_default="0")
 
 
 class GenerationPointer(Base):

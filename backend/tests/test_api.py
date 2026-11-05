@@ -674,3 +674,26 @@ def test_search_route_requires_auth_and_returns_fusion_hits(client, monkeypatch)
         headers={"Authorization": f"Bearer {token}"},
     )
     assert invalid.status_code == 422
+
+
+def test_generation_listing_and_switch(client):
+    from semantica_dataagent.db import GenerationPointer, KnowledgeGeneration, sessions
+    from semantica_dataagent.knowledge import settings
+
+    c, token = client
+    headers = {"Authorization": f"Bearer {token}"}
+    with sessions().begin() as db:
+        db.add_all([KnowledgeGeneration(name="old"), KnowledgeGeneration(name="new")])
+        db.add(GenerationPointer(id=1, generation="new"))
+    assert c.get("/api/v1/generations").status_code == 401
+    response = c.get("/api/v1/generations", headers=headers)
+    assert response.status_code == 200
+    assert {row["name"]: row["current"] for row in response.json()["generations"]} == {
+        "old": False,
+        "new": True,
+    }
+    assert (
+        c.post("/api/v1/generations/missing/switch", headers=headers).status_code == 404
+    )
+    assert c.post("/api/v1/generations/old/switch", headers=headers).status_code == 200
+    assert settings()["knowledge_generation"] == "old"

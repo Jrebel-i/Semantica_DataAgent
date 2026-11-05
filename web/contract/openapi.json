@@ -635,6 +635,89 @@
         "title": "FilterRules",
         "type": "object"
       },
+      "GenerationView": {
+        "properties": {
+          "counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Counts",
+            "type": "object"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "current": {
+            "title": "Current",
+            "type": "boolean"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "source_commit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Commit"
+          }
+        },
+        "required": [
+          "name",
+          "current",
+          "created_at",
+          "source_commit",
+          "counts"
+        ],
+        "title": "GenerationView",
+        "type": "object"
+      },
+      "GenerationsView": {
+        "properties": {
+          "behind": {
+            "title": "Behind",
+            "type": "boolean"
+          },
+          "generations": {
+            "items": {
+              "$ref": "#/components/schemas/GenerationView"
+            },
+            "title": "Generations",
+            "type": "array"
+          },
+          "source_head": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Head"
+          }
+        },
+        "required": [
+          "generations",
+          "source_head",
+          "behind"
+        ],
+        "title": "GenerationsView",
+        "type": "object"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -2037,6 +2120,73 @@
           }
         ],
         "summary": "Write Filters"
+      }
+    },
+    "/api/v1/generations": {
+      "get": {
+        "operationId": "list_generations_api_v1_generations_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GenerationsView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Generations"
+      }
+    },
+    "/api/v1/generations/{name}/switch": {
+      "post": {
+        "operationId": "switch_generation_api_v1_generations__name__switch_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GenerationView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Switch Generation"
       }
     },
     "/api/v1/me": {

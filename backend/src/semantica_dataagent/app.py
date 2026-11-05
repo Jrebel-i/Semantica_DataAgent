@@ -24,7 +24,16 @@ from sqlalchemy import text, update
 from . import knowledge
 from .auth import admin, bearer, current_user
 from .build_queue import build_queue
-from .db import Build, PluginConfig, Setting, Token, digest, sessions
+from .db import (
+    Build,
+    GenerationPointer,
+    KnowledgeGeneration,
+    PluginConfig,
+    Setting,
+    Token,
+    digest,
+    sessions,
+)
 from .embedding_client import validate_settings
 
 
@@ -80,6 +89,7 @@ KEYS = {
     "embedding_model",
     "source_directory",
     "knowledge_generation",
+    "generation_retention",
     "dimension_value_limit",
     "embedding_concurrency",
     "embedding_timeout_seconds",
@@ -191,6 +201,13 @@ def put_settings(
         not limit.isascii() or not limit.isdigit() or not 1 <= int(limit) <= 1000000
     ):
         raise HTTPException(status_code=422, detail="Invalid dimension value limit")
+    retention = body.values.get("generation_retention")
+    if retention and (
+        not retention.isascii()
+        or not retention.isdigit()
+        or not 1 <= int(retention) <= 100
+    ):
+        raise HTTPException(status_code=422, detail="Invalid generation retention")
     generation = body.values.get("knowledge_generation")
     if generation and not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,63}", generation):
         raise HTTPException(status_code=422, detail="Invalid generation")
@@ -356,6 +373,91 @@ def build_view(row: Build) -> BuildView:
         source_commit=row.source_commit,
         logs=build_logs(row.logs),
     )
+
+
+class GenerationView(BaseModel):
+    name: str
+    current: bool
+    created_at: str | None
+    source_commit: str | None
+    counts: dict[str, int]
+
+
+class GenerationsView(BaseModel):
+    generations: list[GenerationView]
+    source_head: str | None
+    behind: bool
+
+
+@app.get("/api/v1/generations", response_model=GenerationsView)
+def list_generations(_: Annotated[str, Depends(current_user)]):
+    from pathlib import Path
+
+    from .source_directory import git
+
+    values = knowledge.settings()
+    head = None
+    try:
+        head = (
+            git(Path(values["source_directory"]), "rev-parse", "--verify", "HEAD")
+            .decode()
+            .strip()
+        )
+    except (KeyError, OSError, ValueError, RuntimeError):
+        pass
+    with sessions()() as db:
+        pointer = db.get(GenerationPointer, 1)
+        rows = (
+            db.query(KnowledgeGeneration)
+            .order_by(KnowledgeGeneration.created_at.desc())
+            .all()
+        )
+        result = []
+        for row in rows:
+            build = db.get(Build, row.build_id) if row.build_id else None
+            result.append(
+                GenerationView(
+                    name=row.name,
+                    current=bool(pointer and row.name == pointer.generation),
+                    created_at=row.created_at,
+                    source_commit=build.source_commit if build else None,
+                    counts=json.loads(build.counts) if build else {},
+                )
+            )
+        current = next((row for row in result if row.current), None)
+        return GenerationsView(
+            generations=result,
+            source_head=head,
+            behind=bool(
+                head
+                and current
+                and current.source_commit
+                and head != current.source_commit
+            ),
+        )
+
+
+@app.post("/api/v1/generations/{name}/switch", response_model=GenerationView)
+def switch_generation(name: str, _: Annotated[str, Depends(admin)]):
+    with sessions().begin() as db:
+        row = db.get(KnowledgeGeneration, name)
+        if row is None:
+            raise HTTPException(status_code=404, detail="Generation not found")
+        if row.deleting:
+            raise HTTPException(status_code=409, detail="Generation is being deleted")
+        pointer = db.get(GenerationPointer, 1)
+        if pointer is None:
+            db.add(GenerationPointer(id=1, generation=name))
+        else:
+            pointer.generation = name
+        build = db.get(Build, row.build_id) if row.build_id else None
+        return GenerationView(
+            name=name,
+            current=True,
+            created_at=row.created_at,
+            source_commit=build.source_commit if build else None,
+            counts=json.loads(build.counts) if build else {},
+        )
 
 
 @app.post("/api/v1/builds", status_code=202, response_model=BuildView)

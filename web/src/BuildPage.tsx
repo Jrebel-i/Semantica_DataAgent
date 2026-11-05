@@ -12,6 +12,7 @@ import type { components } from "./api";
 import type { Messages } from "./i18n";
 
 type Build = components["schemas"]["BuildView"];
+type Generations = components["schemas"]["GenerationsView"];
 type BuildType = Build["build_type"];
 type BuildStatus = Build["status"];
 
@@ -50,6 +51,8 @@ export function BuildPage({
   messages: Messages;
 }) {
   const [builds, setBuilds] = useState<Build[]>([]);
+  const [retention, setRetention] = useState("2");
+  const [generations, setGenerations] = useState<Generations | null>(null);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -59,6 +62,20 @@ export function BuildPage({
     });
     if (!response.ok) throw new Error();
     setBuilds((await response.json()) as Build[]);
+    const versions = await fetch("/api/v1/generations", {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (versions.ok) setGenerations((await versions.json()) as Generations);
+  }, [token]);
+  useEffect(() => {
+    void fetch("/api/v1/settings", {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then((response) => (response.ok ? response.json() : null))
+      .then((data: { generation_retention?: string } | null) => {
+        if (data?.generation_retention) setRetention(data.generation_retention);
+      })
+      .catch(() => undefined);
   }, [token]);
   useEffect(() => {
     void load().catch(() => setError(t.buildError));
@@ -91,10 +108,86 @@ export function BuildPage({
       setError(t.buildError);
     }
   }
+  async function saveRetention() {
+    try {
+      const response = await fetch("/api/v1/settings", {
+        method: "PUT",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ values: { generation_retention: retention } }),
+      });
+      if (!response.ok) throw new Error();
+    } catch {
+      setError(t.buildError);
+    }
+  }
+  async function switchGeneration(name: string) {
+    try {
+      const response = await fetch(
+        `/api/v1/generations/${encodeURIComponent(name)}/switch`,
+        { method: "POST", headers: { Authorization: `Bearer ${token}` } },
+      );
+      if (!response.ok) throw new Error();
+      await load();
+    } catch {
+      setError(t.buildError);
+    }
+  }
   const selected = builds.find((build) => build.id === selectedId) ?? null;
   return (
     <section>
       <Typography.Title level={2}>{t.builds}</Typography.Title>
+      {generations?.behind && (
+        <Alert
+          type="warning"
+          title={t.generationBehind}
+          action={
+            <Button onClick={() => void trigger("full")}>{t.buildFull}</Button>
+          }
+        />
+      )}
+      <Typography.Title level={3}>{t.generations}</Typography.Title>
+      <label>
+        {t.generationRetention}{" "}
+        <input
+          type="number"
+          min="1"
+          max="100"
+          value={retention}
+          onChange={(event) => setRetention(event.target.value)}
+        />
+      </label>{" "}
+      <Button onClick={() => void saveRetention()}>{t.generationSave}</Button>
+      <Table
+        rowKey="name"
+        pagination={false}
+        dataSource={generations?.generations ?? []}
+        columns={[
+          { title: t.generationName, dataIndex: "name" },
+          {
+            title: t.buildStartedAt,
+            render: (_, row) => displayTime(row.created_at),
+          },
+          { title: t.generationCommit, dataIndex: "source_commit" },
+          {
+            title: t.generationCounts,
+            render: (_, row) => JSON.stringify(row.counts),
+          },
+          {
+            title: t.generationCurrent,
+            render: (_, row) =>
+              row.current ? (
+                t.generationCurrent
+              ) : (
+                <Button onClick={() => void switchGeneration(row.name)}>
+                  {t.generationSwitch}
+                </Button>
+              ),
+          },
+        ]}
+      />
       <Space>
         <Button type="primary" onClick={() => void trigger("full")}>
           {t.buildFull}

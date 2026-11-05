@@ -756,13 +756,21 @@ def run_build(build_id):
                     )
                 )
                 db.get(GenerationPointer, 1).generation = generation
+            new_values = None
+        if build_type == "full":
+            try:
+                prune_generations(values)
+            except Exception as exc:  # noqa: BLE001 - retain metadata for retry
+                _record_log(
+                    build_id, logs, "retention", f"Cleanup failed: {exc}", "error"
+                )
         status = "succeeded"
     except Exception as exc:  # noqa: BLE001 - record failure of background work
         error = str(exc)
         if new_values is not None:
             try:
                 delete_generation_data(new_values)
-            except Exception as cleanup_error:
+            except Exception as cleanup_error:  # noqa: BLE001
                 error += f"; cleanup failed: {cleanup_error}"
         with suppress(Exception):
             _record_log(build_id, logs, "build", f"Build failed: {error}", "error")
@@ -776,6 +784,46 @@ def run_build(build_id):
                 build.error = error
                 build.parse_failures = json.dumps(failures, ensure_ascii=False)
                 build.finished_at = datetime.now(UTC).isoformat()
+
+
+def prune_generations(values):
+    retention = int(values.get("generation_retention", "2"))
+    with sessions()() as db:
+        pointer = db.get(GenerationPointer, 1)
+        rows = (
+            db.query(KnowledgeGeneration)
+            .order_by(KnowledgeGeneration.created_at.desc())
+            .all()
+        )
+        keep = {pointer.generation}
+        for row in rows:
+            if len(keep) >= retention:
+                break
+            keep.add(row.name)
+        expired = [row.name for row in rows if row.name not in keep]
+    for name in expired:
+        from sqlalchemy import select, update
+
+        with sessions().begin() as db:
+            claimed = db.execute(
+                update(KnowledgeGeneration)
+                .where(KnowledgeGeneration.name == name)
+                .where(
+                    KnowledgeGeneration.name
+                    != select(GenerationPointer.generation)
+                    .where(GenerationPointer.id == 1)
+                    .scalar_subquery()
+                )
+                .values(deleting=True)
+            ).rowcount
+        if not claimed:
+            continue
+        delete_generation_data({**values, "knowledge_generation": name})
+        with sessions().begin() as db:
+            row = db.get(KnowledgeGeneration, name)
+            pointer = db.get(GenerationPointer, 1)
+            if row and pointer.generation != name:
+                db.delete(row)
 
 
 def delete_generation_data(values):

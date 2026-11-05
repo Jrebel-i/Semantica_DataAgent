@@ -2,10 +2,10 @@
 
 import os
 import shutil
-from pathlib import Path
 import threading
 import time
 import uuid
+from pathlib import Path
 
 import pytest
 from cryptography.fernet import Fernet
@@ -90,6 +90,12 @@ def test_full_rebuild_keeps_searching_previous_generation(tmp_path, monkeypatch)
                 "quokkawindow" in (hit.get("content") or "")
                 for hit in search_knowledge("quokkawindow", "docs", 10)
             )
+            from semantica_dataagent.knowledge import settings
+
+            old_generation = settings()["knowledge_generation"]
+            (docs / "sales.md").write_text(
+                "# Sales\n\nThe wallabywindow metric counts returns.\n"
+            )
             original = stages.STAGES[0]
 
             def paused(*args, **kwargs):
@@ -111,8 +117,32 @@ def test_full_rebuild_keeps_searching_previous_generation(tmp_path, monkeypatch)
                 release.set()
                 result = wait(build_id)
             assert result["status"] == "succeeded", result
-            from semantica_dataagent.knowledge import settings
-
+            current = settings()["knowledge_generation"]
+            assert current != old_generation
+            assert any(
+                "wallabywindow" in (hit.get("content") or "")
+                for hit in search_knowledge("wallabywindow", "docs", 10)
+            )
+            assert (
+                client.post(f"/api/v1/generations/{old_generation}/switch").status_code
+                == 200
+            )
+            assert any(
+                "quokkawindow" in (hit.get("content") or "")
+                for hit in search_knowledge("quokkawindow", "docs", 10)
+            )
+            assert (
+                client.post(f"/api/v1/generations/{current}/switch").status_code == 200
+            )
+            monkeypatch.setattr(stages, "STAGES", (original, *stages.STAGES[1:]))
+            third = wait(submit())
+            assert third["status"] == "succeeded", third
+            assert not vectors.has_collection("sda_" + old_generation)
+            rows, _, _ = driver.execute_query(
+                "MATCH (n:SDAEntity {generation:$generation}) RETURN count(n) AS n",
+                generation=old_generation,
+            )
+            assert rows[0]["n"] == 0
             current = settings()["knowledge_generation"]
             before = set(vectors.list_collections())
 
@@ -126,8 +156,8 @@ def test_full_rebuild_keeps_searching_previous_generation(tmp_path, monkeypatch)
             assert settings()["knowledge_generation"] == current
             assert set(vectors.list_collections()) == before
             assert any(
-                "quokkawindow" in (hit.get("content") or "")
-                for hit in search_knowledge("quokkawindow", "docs", 10)
+                "wallabywindow" in (hit.get("content") or "")
+                for hit in search_knowledge("wallabywindow", "docs", 10)
             )
     finally:
         release.set()
