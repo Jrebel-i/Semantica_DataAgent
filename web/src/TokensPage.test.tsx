@@ -55,6 +55,7 @@ test("renders tokens with antd and formats the server UTC value directly", async
   render(<TokensPage token="admin" messages={getMessages("zh")} />);
 
   expect(await screen.findByText("Alice")).toBeTruthy();
+  expect(screen.getByText("用户")).toBeTruthy();
   expect(screen.getByText(new Date(created).toLocaleString())).toBeTruthy();
   expect(screen.queryByText(/Invalid Date/)).toBeNull();
   expect(screen.getByText("从未使用")).toBeTruthy();

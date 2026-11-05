@@ -15,8 +15,8 @@ import type { Messages } from "./i18n";
 
 type TokenRow = components["schemas"]["TokenInfo"];
 
-function localTime(value: string | null, fallback: string) {
-  return value ? new Date(value).toLocaleString() : fallback;
+function localTime(value: string | null) {
+  return value ? new Date(value).toLocaleString() : "";
 }
 
 export function TokensPage({
@@ -112,14 +112,19 @@ export function TokensPage({
         pagination={false}
         columns={[
           { title: t.name, dataIndex: "name" },
-          { title: t.role, dataIndex: "role" },
+          {
+            title: t.role,
+            render: (_, row) =>
+              row.role === "admin" ? t.roleAdmin : t.roleUser,
+          },
           {
             title: t.created,
-            render: (_, row) => localTime(row.created_at, t.never),
+            render: (_, row) => localTime(row.created_at),
           },
           {
             title: t.lastUsed,
-            render: (_, row) => localTime(row.last_used_at, t.never),
+            render: (_, row) =>
+              row.last_used_at ? localTime(row.last_used_at) : t.never,
           },
           {
             title: t.status,

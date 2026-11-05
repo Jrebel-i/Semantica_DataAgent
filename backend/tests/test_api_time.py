@@ -15,7 +15,7 @@ from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
 TIME_NAME = re.compile(r"(^|_)(at|date|time|timestamp)$")
-UTC_SUFFIX = re.compile(r"(Z|[+-]00:00)$")
+UTC_SUFFIX = re.compile(r"Z$")
 
 
 def time_fields(payload, path=""):
@@ -86,24 +86,25 @@ def test_rest_time_fields_have_utc_offset(client):
     headers = {"Authorization": f"Bearer {admin_token}"}
     with sessions().begin() as db:
         owner = db.get(Token, digest(admin_token))
+        build = Build(
+            status="succeeded",
+            started_at="2026-01-01T00:00:00",
+            finished_at="2026-01-01T00:01:00",
+            counts="{}",
+            logs=json.dumps(
+                [
+                    {
+                        "timestamp": "2026-01-01T00:00:00",
+                        "stage": "build",
+                        "level": "info",
+                        "message": "started",
+                    }
+                ]
+            ),
+        )
         db.add_all(
             [
-                Build(
-                    status="succeeded",
-                    started_at="2026-01-01T00:00:00",
-                    finished_at="2026-01-01T00:01:00",
-                    counts="{}",
-                    logs=json.dumps(
-                        [
-                            {
-                                "timestamp": "2026-01-01T00:00:00",
-                                "stage": "build",
-                                "level": "info",
-                                "message": "started",
-                            }
-                        ]
-                    ),
-                ),
+                build,
                 KnowledgeGeneration(name="naive", created_at="2026-01-01T00:00:00"),
                 GenerationPointer(id=1, generation="naive"),
                 Provider(
@@ -138,9 +139,18 @@ def test_rest_time_fields_have_utc_offset(client):
                 ),
             ]
         )
+        db.flush()
+        build_id = build.id
 
+    issued = c.post(
+        "/api/v1/tokens", headers=headers, json={"name": "time", "role": "user"}
+    )
+    switched = c.post("/api/v1/generations/naive/switch", headers=headers)
+    assert switched.status_code == 200, switched.text
     payloads = {
+        "token_issued": issued.json(),
         "tokens": c.get("/api/v1/tokens", headers=headers).json(),
+        "build": c.get(f"/api/v1/builds/{build_id}", headers=headers).json(),
         "builds": c.get("/api/v1/builds", headers=headers).json(),
         "generations": c.get("/api/v1/generations", headers=headers).json(),
         "providers": c.get("/api/v1/providers", headers=headers).json(),
