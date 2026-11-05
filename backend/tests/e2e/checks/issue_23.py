@@ -9,7 +9,64 @@ import uuid
 
 import httpx
 
-from semantica_dataagent.telemetry import ALLOWED_FIELDS
+# Independent contract: changing the implementation allowlist must not change this check.
+ALLOWED_FIELDS = frozenset(
+    {
+        "id",
+        "traceId",
+        "parentObservationId",
+        "name",
+        "input",
+        "output",
+        "metadata",
+        "agent",
+        "provider",
+        "model",
+        "source",
+        "token_name",
+        "tool",
+        "arguments",
+        "result",
+        "duration_ms",
+        "status",
+        "sql",
+        "dialect",
+        "query",
+        "table",
+        "tables",
+        "database",
+        "text",
+        "summary",
+        "limit",
+        "direction",
+        "depth",
+        "document",
+        "category",
+        "ref",
+        "type",
+        "is_error",
+        "started_at",
+        "ended_at",
+        "startTime",
+        "endTime",
+        "valid",
+        "errors",
+        "warnings",
+        "names",
+        "scope",
+        "top_k",
+        "keyword",
+        "field",
+        "doc_id",
+        "section",
+        "task_id",
+        "questions",
+        "question",
+        "options",
+        "label",
+        "conversation_id",
+    }
+)
 
 LANGFUSE = "http://172.16.242.124:31631"
 
