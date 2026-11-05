@@ -188,8 +188,8 @@ def parse_args(argv: list[str] | None = None) -> Config:
     )
     parser.add_argument("--neo4j-password-env", default="NEO4J_PASSWORD")
     parser.add_argument("--milvus-uri", default="http://172.16.242.124:31612")
-    parser.add_argument("--embedding-url", default="http://127.0.0.1:17997")
-    parser.add_argument("--embedding-model", default="model/bge-m3")
+    parser.add_argument("--embedding-url", default="http://127.0.0.1:17998")
+    parser.add_argument("--embedding-model", default="model/bge-small-zh-v1.5")
     parser.add_argument("--build-timeout", type=float, default=900.0)
     parser.add_argument("--start-timeout", type=float, default=30.0)
     parser.add_argument("--poll-interval", type=float, default=1.0)
@@ -898,7 +898,8 @@ def _configure(runtime: Runtime) -> None:
         runtime.logger.line(
             f"storage configured: generation={runtime.config.generation} "
             f"neo4j={runtime.config.neo4j_uri} milvus={runtime.config.milvus_uri} "
-            f"embedding={runtime.config.embedding_url}"
+            f"embedding={runtime.config.embedding_url} "
+            f"embedding_model={runtime.config.embedding_model}"
         )
         health = client.get("/healthz")
         if health.status_code == 200:
