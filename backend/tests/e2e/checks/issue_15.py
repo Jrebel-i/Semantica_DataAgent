@@ -38,3 +38,49 @@ def check_generation_switch_and_rollback(ctx):
         )
         ctx.require(hits, f"generation {name} is not searchable")
     return {"first": first, "second": current}
+
+
+def check_scheduled_incremental_build(ctx):
+    response = ctx.rest.put(
+        "/api/v1/settings", json={"values": {"schedule_interval_seconds": "1"}}
+    )
+    ctx.require(response.status_code == 200, response.text)
+    scheduled = None
+    try:
+        deadline = time.monotonic() + 120
+        while time.monotonic() < deadline:
+            rows = ctx.rest.get("/api/v1/builds").json()
+            scheduled = next(
+                (row for row in rows if row["triggered_by"] == "scheduler"), None
+            )
+            if scheduled:
+                break
+            time.sleep(0.2)
+        ctx.require(scheduled is not None, "scheduler did not submit a build")
+        response = ctx.rest.put(
+            "/api/v1/settings", json={"values": {"schedule_interval_seconds": "60"}}
+        )
+        ctx.require(response.status_code == 200, response.text)
+        deadline = time.monotonic() + ctx.config.build_timeout
+        while time.monotonic() < deadline:
+            scheduled = ctx.rest.get(f"/api/v1/builds/{scheduled['id']}").json()
+            if scheduled["status"] in {"succeeded", "failed", "cancelled"}:
+                break
+            time.sleep(0.2)
+        ctx.require(
+            scheduled["status"] == "succeeded", f"scheduled build failed: {scheduled}"
+        )
+        ctx.require(
+            scheduled["build_type"] == "incremental",
+            "scheduler did not request an incremental build",
+        )
+        ctx.require(
+            ctx.rest.get("/api/v1/settings").json()["schedule_interval_seconds"]
+            == "60",
+            "updated interval was not saved",
+        )
+        return {"build_id": scheduled["id"], "triggered_by": scheduled["triggered_by"]}
+    finally:
+        ctx.rest.put(
+            "/api/v1/settings", json={"values": {"schedule_interval_seconds": "0"}}
+        )
