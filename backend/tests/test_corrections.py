@@ -291,3 +291,112 @@ def test_failed_atomic_replace_preserves_original_document(tmp_path, monkeypatch
         corrections._atomic_write(path, "changed\n")
     assert path.read_text() == "original\n"
     assert list(tmp_path.iterdir()) == [path]
+
+
+import pytest
+
+
+@pytest.mark.parametrize("crash_at", ["write", "add", "commit", "finalize"])
+def test_interrupted_approval_recovers_without_duplicate_commits(
+    client, monkeypatch, tmp_path, crash_at
+):
+    import os
+    import signal
+    import subprocess
+
+    from test_source_api import upload
+
+    from semantica_dataagent import corrections, knowledge
+    from semantica_dataagent.auth import Requester
+    from semantica_dataagent.db import Build, CorrectionProposal, sessions
+
+    c, token = client
+    headers = {"Authorization": f"Bearer {token}"}
+    root = tmp_path / "source"
+    assert (
+        c.put(
+            "/api/v1/settings",
+            headers=headers,
+            json={"values": {"source_directory": str(root)}},
+        ).status_code
+        == 200
+    )
+    assert (
+        upload(c, headers, "knowledge/metrics", {"sales.md": "before\n"}).status_code
+        == 200
+    )
+    requester = _requester(token="recovery-admin-" + crash_at)
+    monkeypatch.setattr(knowledge, "read_graph", lambda _: object())
+    monkeypatch.setattr(
+        knowledge,
+        "execute",
+        lambda *args: [{"node": {"source_file": "knowledge/metrics/sales.md"}}],
+    )
+    monkeypatch.setattr(corrections.build_queue, "enqueue", lambda: None)
+    with sessions().begin() as db:
+        db.add(
+            CorrectionProposal(
+                id="recovery-" + crash_at,
+                owner_id=requester.id,
+                target="document:metrics/sales.md",
+                patch="after\n",
+                original_patch="after\n",
+                original="before\n",
+                diff="diff",
+                reason="reason",
+                status="pending",
+            )
+        )
+    proposal = "recovery-" + crash_at
+    pid = os.fork()
+    if pid == 0:
+        real_write = corrections._atomic_write
+        real_git = corrections.git
+        real_finalize = corrections._finalize
+
+        def write_then_die(*args):
+            result = real_write(*args)
+            if crash_at == "write":
+                os.kill(os.getpid(), signal.SIGKILL)
+            return result
+
+        def git_then_die(root, *args, **kwargs):
+            result = real_git(root, *args, **kwargs)
+            if args and args[0] == crash_at:
+                os.kill(os.getpid(), signal.SIGKILL)
+            return result
+
+        def finalize_then_die(*args):
+            real_finalize(*args)
+            os.kill(os.getpid(), signal.SIGKILL)
+
+        corrections._atomic_write = write_then_die
+        corrections.git = git_then_die
+        if crash_at == "finalize":
+            corrections._finalize = finalize_then_die
+        corrections.approve(
+            proposal,
+            "admin",
+            Requester(id=requester.id, role="admin", token=requester.token),
+        )
+        os._exit(2)
+    _, status = os.waitpid(pid, 0)
+    assert os.WIFSIGNALED(status) and os.WTERMSIG(status) == signal.SIGKILL
+    corrections.recover_applying()
+    corrections.recover_applying()
+    with sessions()() as db:
+        row = db.get(CorrectionProposal, proposal)
+        expected = "approved" if crash_at in {"commit", "finalize"} else "pending"
+        assert row.status == expected
+        assert db.query(Build).filter_by(build_type="incremental").count() == (
+            1 if expected == "approved" else 0
+        )
+    commits = subprocess.check_output(
+        ["git", "-C", str(root), "log", "--format=%s"], text=True
+    )
+    assert commits.count("Approve correction " + proposal) == (
+        1 if expected == "approved" else 0
+    )
+    assert (root / "knowledge/metrics/sales.md").read_text() == (
+        "after\n" if expected == "approved" else "before\n"
+    )

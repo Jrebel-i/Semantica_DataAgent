@@ -84,6 +84,7 @@ def propose_correction(target: Text, patch: Text, reason: Text) -> dict:
                 conversation_id=conversation_id,
                 target=target,
                 patch=patch,
+                original_patch=patch,
                 original=original,
                 diff=diff,
                 reason=reason,
@@ -106,7 +107,7 @@ from sqlalchemy import text
 
 from .auth import admin
 from .auth import current_requester as rest_requester
-from .build_queue import enqueue_build
+from .build_queue import add_queued_build, build_queue
 from .db import MetadataOverride, Token
 from .source_directory import git, relative, repository, safe
 
@@ -120,6 +121,8 @@ class ProposalView(BaseModel):
     target: str
     patch: str
     original: str
+    original_patch: str | None
+    commit_sha: str | None
     diff: str
     reason: str
     status: str
@@ -178,6 +181,95 @@ def reject(
         return ProposalView.model_validate(row)
 
 
+def _finalize(proposal_id: str, commit_sha: str) -> ProposalView:
+    with sessions().begin() as db:
+        db.execute(text("BEGIN IMMEDIATE"))
+        row = db.get(CorrectionProposal, proposal_id)
+        if row is None or row.status != "applying":
+            raise ValueError("Proposal is not applying")
+        row.commit_sha = commit_sha
+        row.status = "approved"
+        row.reviewed_at = datetime.now(UTC)
+        add_queued_build(
+            db, "incremental", row.reviewer_name, correction_proposal_id=row.id
+        )
+        db.flush()
+        result = ProposalView.model_validate(row)
+    build_queue.enqueue()
+    return result
+
+
+def recover_applying(only_id: str | None = None):
+    """Recover document approvals interrupted before or after the git commit."""
+    with sessions()() as db:
+        query = db.query(CorrectionProposal).filter_by(status="applying")
+        if only_id is not None:
+            query = query.filter_by(id=only_id)
+        ids = [r.id for r in query.all()]
+    for proposal_id in ids:
+        with sessions()() as db:
+            row = db.get(CorrectionProposal, proposal_id)
+            directory, source_path, old, patch = (
+                row.source_directory,
+                row.source_path,
+                row.original,
+                row.patch,
+            )
+        with repository(directory) as root:
+            path = safe(root, relative(source_path))
+            message = f"Approve correction {proposal_id}"
+            commits = (
+                git(
+                    root,
+                    "log",
+                    "--all",
+                    "--format=%H",
+                    "--fixed-strings",
+                    "--grep",
+                    message,
+                )
+                .decode()
+                .splitlines()
+            )
+            matches = [
+                sha
+                for sha in commits
+                if git(root, "show", "-s", "--format=%s", sha).decode().strip()
+                == message
+            ]
+            if len(matches) > 1:
+                raise ValueError("Multiple commits for one correction")
+            if matches:
+                if git(root, "show", f"{matches[0]}:{source_path}").decode() != patch:
+                    raise ValueError("Correction commit content mismatch")
+                _finalize(proposal_id, matches[0])
+                continue
+            current = path.read_text(encoding="utf-8")
+            staged = (
+                git(root, "diff", "--cached", "--name-only", "-z").decode().split("\0")
+            )
+            staged = [item for item in staged if item]
+            if current == old and source_path not in staged:
+                staged = []
+            elif any(item != source_path for item in staged):
+                raise ValueError("Unrelated staged changes prevent correction recovery")
+            if staged:
+                if git(root, "show", f":{source_path}").decode() != patch:
+                    raise ValueError("Staged document differs from correction")
+                git(root, "reset", "--quiet", "HEAD", "--", source_path)
+            if current == patch:
+                _atomic_write(path, old)
+            elif current != old:
+                raise ValueError("Document changed during correction recovery")
+            with sessions().begin() as db:
+                row = db.get(CorrectionProposal, proposal_id)
+                if row.status == "applying":
+                    row.status = "pending"
+                    row.patch = row.original_patch
+                    row.reviewer_id = None
+                    row.reviewer_name = None
+
+
 @router.post("/api/v1/corrections/{proposal_id}/approve", response_model=ProposalView)
 def approve(
     proposal_id: str,
@@ -189,61 +281,35 @@ def approve(
         db.execute(text("BEGIN IMMEDIATE"))
         row = _pending(db, proposal_id)
         patch = body.patch if body and body.patch is not None else row.patch
-        token = db.query(Token).filter_by(id=requester.id).one()
-        reviewer_name = token.name
-        if row.target.startswith("document:"):
-            values = knowledge.settings()
-            nodes = knowledge.execute(
-                knowledge.read_graph(values),
-                "MATCH (n:SDADocument {generation:$generation, ref:$ref}) RETURN properties(n) AS node",
-                {"generation": values["knowledge_generation"], "ref": row.target},
-            )
-            if len(nodes) != 1 or not nodes[0]["node"].get("source_file"):
-                raise HTTPException(409, "Document no longer exists")
-            try:
-                with repository(values["source_directory"]) as root:
-                    path = safe(root, relative(nodes[0]["node"]["source_file"]))
-                    original = path.read_text(encoding="utf-8")
-                    if original != row.original:
-                        raise ValueError("Document changed since proposal")
-                    if git(root, "diff", "--cached", "--name-only"):
-                        raise ValueError("Source repository has staged changes")
-                    if (
-                        any(c in token.name for c in "<>\n\r\x00")
-                        or token.name != token.name.strip()
-                        or not token.name
-                    ):
-                        raise ValueError("Invalid git author")
-                    try:
-                        _atomic_write(path, patch)
-                        git(root, "add", "--", str(path.relative_to(root)))
-                        git(
-                            root,
-                            "commit",
-                            "--quiet",
-                            "-m",
-                            f"Approve correction {proposal_id}",
-                            author=token.name,
-                        )
-                    except Exception:
-                        _atomic_write(path, original)
-                        git(
-                            root,
-                            "reset",
-                            "--quiet",
-                            "HEAD",
-                            "--",
-                            str(path.relative_to(root)),
-                        )
-                        raise
-            except (OSError, ValueError) as exc:
-                raise HTTPException(409, str(exc)) from exc
-        else:
+        reviewer_name = db.query(Token).filter_by(id=requester.id).one().name
+        if (
+            any(c in reviewer_name for c in "<>\n\r\x00")
+            or reviewer_name != reviewer_name.strip()
+            or not reviewer_name
+        ):
+            raise HTTPException(422, "Invalid git author")
+        if not row.target.startswith("document:"):
             override = db.get(MetadataOverride, row.target)
             if override is None:
                 db.add(MetadataOverride(target=row.target, comment=patch))
             else:
                 override.comment = patch
+            row.patch = patch
+            row.status = "approved"
+            row.reviewer_id = requester.id
+            row.reviewed_at = datetime.now(UTC)
+            db.flush()
+            return ProposalView.model_validate(row)
+        values = knowledge.settings()
+        nodes = knowledge.execute(
+            knowledge.read_graph(values),
+            "MATCH (n:SDADocument {generation:$generation, ref:$ref}) RETURN properties(n) AS node",
+            {"generation": values["knowledge_generation"], "ref": row.target},
+        )
+        if len(nodes) != 1 or not nodes[0]["node"].get("source_file"):
+            raise HTTPException(409, "Document no longer exists")
+        row.source_directory = values["source_directory"]
+        row.source_path = nodes[0]["node"]["source_file"]
         row.patch = patch
         row.diff = "".join(
             difflib.unified_diff(
@@ -253,11 +319,33 @@ def approve(
                 tofile=row.target,
             )
         )
-        row.status = "approved"
+        row.status = "applying"
         row.reviewer_id = requester.id
-        row.reviewed_at = datetime.now(UTC)
-        db.flush()
-        result = ProposalView.model_validate(row)
-    if result.target.startswith("document:"):
-        enqueue_build("incremental", reviewer_name)
-    return result
+        row.reviewer_name = reviewer_name
+        source_directory, source_path, original = (
+            row.source_directory,
+            row.source_path,
+            row.original,
+        )
+    try:
+        with repository(source_directory) as root:
+            path = safe(root, relative(source_path))
+            if path.read_text(encoding="utf-8") != original:
+                raise ValueError("Document changed since proposal")
+            if git(root, "diff", "--cached", "--name-only"):
+                raise ValueError("Source repository has staged changes")
+            _atomic_write(path, patch)
+            git(root, "add", "--", source_path)
+            git(
+                root,
+                "commit",
+                "--quiet",
+                "-m",
+                f"Approve correction {proposal_id}",
+                author=reviewer_name,
+            )
+            sha = git(root, "rev-parse", "HEAD").decode().strip()
+            return _finalize(proposal_id, sha)
+    except (OSError, ValueError) as exc:
+        recover_applying(proposal_id)
+        raise HTTPException(409, str(exc)) from exc

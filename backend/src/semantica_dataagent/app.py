@@ -83,7 +83,7 @@ async def lifespan(application):
         )
         db.execute(
             update(Build)
-            .where(Build.status == "queued")
+            .where(Build.status == "queued", Build.correction_proposal_id.is_(None))
             .values(
                 status="cancelled",
                 error="Build cancelled because the application restarted before it started",
@@ -91,6 +91,9 @@ async def lifespan(application):
             )
         )
     await asyncio.to_thread(knowledge.cleanup_interrupted_generations)
+    from .corrections import recover_applying
+
+    await asyncio.to_thread(recover_applying)
     build_queue.start()
     with sessions()() as db:
         interval = db.get(Setting, "schedule_interval_seconds")

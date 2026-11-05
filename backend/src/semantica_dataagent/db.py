@@ -59,6 +59,7 @@ class Build(Base):
     parse_failures: Mapped[str] = mapped_column(default="[]", server_default="[]")
     logs: Mapped[str | None]
     build_type: Mapped[str | None]
+    correction_proposal_id: Mapped[str | None]
     triggered_by: Mapped[str | None]
     source_commit: Mapped[str | None]
     generation: Mapped[str | None]
@@ -170,6 +171,11 @@ class CorrectionProposal(Base):
     diff: Mapped[str]
     reason: Mapped[str]
     status: Mapped[str] = mapped_column(default="pending")
+    original_patch: Mapped[str | None]
+    source_directory: Mapped[str | None]
+    source_path: Mapped[str | None]
+    reviewer_name: Mapped[str | None]
+    commit_sha: Mapped[str | None]
     reviewer_id: Mapped[str | None]
     reviewed_at: Mapped[datetime | None]
     created_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC))
