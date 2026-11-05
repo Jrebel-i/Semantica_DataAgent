@@ -266,6 +266,14 @@ def recover_applying(only_id: str | None = None):
                 if row.status == "applying":
                     row.status = "pending"
                     row.patch = row.original_patch
+                    row.diff = "".join(
+                        difflib.unified_diff(
+                            row.original.splitlines(keepends=True),
+                            row.patch.splitlines(keepends=True),
+                            fromfile=row.target,
+                            tofile=row.target,
+                        )
+                    )
                     row.reviewer_id = None
                     row.reviewer_name = None
 
@@ -335,6 +343,7 @@ def approve(
             row.source_path,
             row.original,
         )
+    attempted_write = False
     try:
         with repository(source_directory) as root:
             path = safe(root, relative(source_path))
@@ -342,6 +351,7 @@ def approve(
                 raise ValueError("Document changed since proposal")
             if git(root, "diff", "--cached", "--name-only"):
                 raise ValueError("Source repository has staged changes")
+            attempted_write = True
             _atomic_write(path, patch)
             git(root, "add", "--", source_path)
             git(
@@ -355,5 +365,21 @@ def approve(
             sha = git(root, "rev-parse", "HEAD").decode().strip()
             return _finalize(proposal_id, sha)
     except (OSError, ValueError) as exc:
-        recover_applying(proposal_id)
+        if attempted_write:
+            recover_applying(proposal_id)
+        else:
+            with sessions().begin() as db:
+                row = db.get(CorrectionProposal, proposal_id)
+                row.status = "pending"
+                row.patch = row.original_patch
+                row.diff = "".join(
+                    difflib.unified_diff(
+                        row.original.splitlines(keepends=True),
+                        row.patch.splitlines(keepends=True),
+                        fromfile=row.target,
+                        tofile=row.target,
+                    )
+                )
+                row.reviewer_id = None
+                row.reviewer_name = None
         raise HTTPException(409, str(exc)) from exc

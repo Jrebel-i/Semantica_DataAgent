@@ -487,8 +487,11 @@ def test_approval_rejects_existing_staged_changes(client, monkeypatch, tmp_path)
         upload(c, headers, "knowledge/metrics", {"sales.md": "before\n"}).status_code
         == 200
     )
-    (root / "other.txt").write_text("keep staged")
-    subprocess.run(["git", "-C", str(root), "add", "other.txt"], check=True)
+    (root / "knowledge/metrics/sales.md").write_text("external staged\n")
+    subprocess.run(
+        ["git", "-C", str(root), "add", "knowledge/metrics/sales.md"], check=True
+    )
+    (root / "knowledge/metrics/sales.md").write_text("before\n")
     monkeypatch.setattr(knowledge, "existing_refs", lambda refs: set(refs))
     monkeypatch.setattr(knowledge, "read_graph", lambda values: object())
     monkeypatch.setattr(
@@ -517,7 +520,7 @@ def test_approval_rejects_existing_staged_changes(client, monkeypatch, tmp_path)
         c.get(f"/api/v1/corrections/{proposal}", headers=headers).json()["status"]
         == "pending"
     )
-    assert "other.txt" in subprocess.check_output(
+    assert "knowledge/metrics/sales.md" in subprocess.check_output(
         ["git", "-C", str(root), "diff", "--cached", "--name-only"], text=True
     )
 
