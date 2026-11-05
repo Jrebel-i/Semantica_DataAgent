@@ -78,3 +78,5 @@ The script performs Cypher, creates and deletes a uniquely named Milvus collecti
 会话 Pod 的 init 容器解析当前 provider 和 MCP 地址，安装 IPv4/IPv6 iptables 默认拒绝规则，只允许到解析出的目标 IP 和端口，以及到 Pod 的集群 DNS 的 TCP/UDP 53；允许已建立连接的返回流量。agent 容器非 root、只读根文件系统、丢弃全部 capability，无法改规则。地址在每轮 init 时解析，DNS 仍可访问集群 DNS；模型网关地址改变时新轮次重新解析。`NetworkPolicy` 同时限制会话 Pod，但本集群只有 flannel，**目前不执行 NetworkPolicy**，实际限制由 iptables 执行。标准 NetworkPolicy 无法按 FQDN 表达动态 provider，当前对外 TCP 443 较宽，iptables 仍限定到解析后的地址；启用策略引擎或使用其他 provider 端口前需相应更新策略并重新验证。
 
 升级先推送新镜像并更新清单中的镜像引用，再 `kubectl apply -k deploy/k8s/app`，验证首页、MCP 和会话出站；单副本 Recreate 会短暂中断服务。回滚使用上一版镜像引用重新 apply，保留 PVC 和加密 Secret；不可删除 PVC 来回滚。全量知识构建和当前代切换按现有构建 API 执行，回滚知识使用保留代切换，镜像回滚不会自动切换知识代。
+
+2026-11-05 的部署验收使用 `samples/demo` 初始化 `/data/source`，首次全量构建 56.5 秒（20 张表、15 篇文档）；这只是示例知识，接入实际业务前由管理员上传并全量构建真实源目录。验收脚本 `backend/tests/e2e/k8s/verify.py` 从 `DATAAGENT_TOKEN` 环境变量取令牌，检查内网首页、pi 问答的 SQL 和引用、轮次后 Pod 清理以及本地 MCP 检索；出站限制使用票专属 harness 检查复验。不要把令牌写进命令历史或日志。
