@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, text
 
 from .agent_runner import DONE, ERROR, AgentEvent, AgentTurnRequest, get_runner
+from .api_time import UtcDatetime
 from .auth import Requester, current_requester
 from .db import Conversation, Provider, Setting, Turn, TurnEvent, sessions
 from .provider_api import provider_config
@@ -48,8 +49,8 @@ class TurnView(BaseModel):
     sql: list[dict]
     citations: list[dict]
     error: str | None
-    started_at: datetime
-    finished_at: datetime | None
+    started_at: UtcDatetime
+    finished_at: UtcDatetime | None
     events: list[EventView] = []
 
 
@@ -59,8 +60,8 @@ class ConversationView(BaseModel):
     agent: str
     provider_id: str
     model: str
-    created_at: datetime
-    updated_at: datetime
+    created_at: UtcDatetime
+    updated_at: UtcDatetime
     turn_count: int
     resumable: bool
 

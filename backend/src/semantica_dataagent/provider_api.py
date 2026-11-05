@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from .agent_runner import ProviderConfig, list_agents
+from .api_time import UtcDatetime
 from .auth import admin, current_user
 from .crypto import decrypt, encrypt
 from .db import Provider, sessions
@@ -52,8 +53,8 @@ class ProviderView(BaseModel):
     base_url: str
     models: list[str]
     has_api_key: bool
-    created_at: datetime
-    updated_at: datetime
+    created_at: UtcDatetime
+    updated_at: UtcDatetime
 
 
 def _validate_address(value: str) -> str:

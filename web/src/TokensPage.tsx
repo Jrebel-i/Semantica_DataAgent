@@ -1,14 +1,23 @@
 import { useCallback, useEffect, useState } from "react";
+import {
+  Alert,
+  Button,
+  Input,
+  Modal,
+  Select,
+  Space,
+  Table,
+  Tag,
+  Typography,
+} from "antd";
+import type { components } from "./api";
 import type { Messages } from "./i18n";
 
-type TokenRow = {
-  id: string;
-  name: string;
-  role: "user" | "admin";
-  created_at: string;
-  last_used_at: string | null;
-  revoked: boolean;
-};
+type TokenRow = components["schemas"]["TokenInfo"];
+
+function localTime(value: string | null) {
+  return value ? new Date(value).toLocaleString() : "";
+}
 
 export function TokensPage({
   token,
@@ -20,7 +29,7 @@ export function TokensPage({
   const [rows, setRows] = useState<TokenRow[]>([]);
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
-  const [role, setRole] = useState("user");
+  const [role, setRole] = useState<TokenRow["role"]>("user");
   const [issued, setIssued] = useState("");
   const [confirm, setConfirm] = useState<string | null>(null);
   const [error, setError] = useState("");
@@ -49,7 +58,8 @@ export function TokensPage({
         body: JSON.stringify({ name, role }),
       });
       if (!response.ok) throw new Error();
-      const result = (await response.json()) as { token: string };
+      const result =
+        (await response.json()) as components["schemas"]["TokenIssued"];
       setIssued(result.token);
       setError("");
       void refresh();
@@ -74,117 +84,160 @@ export function TokensPage({
       setError(t.tokenError);
     }
   }
+  const closeIssue = () => {
+    setOpen(false);
+    setIssued("");
+  };
   return (
     <section>
-      <h2>{t.tokens}</h2>
-      {error && <p role="alert">{error}</p>}
-      <button
-        onClick={() => {
-          setOpen(true);
-          setName("");
-          setRole("user");
-          setError("");
-        }}
-      >
-        {t.issue}
-      </button>
-      <table>
-        <thead>
-          <tr>
-            {[t.name, t.role, t.created, t.lastUsed, t.status, ""].map(
-              (heading, i) => (
-                <th key={i}>{heading}</th>
+      <Typography.Title level={2}>{t.tokens}</Typography.Title>
+      {error && <Alert type="error" title={error} />}
+      <Space style={{ marginBottom: 16 }}>
+        <Button
+          autoInsertSpace={false}
+          type="primary"
+          onClick={() => {
+            setOpen(true);
+            setName("");
+            setRole("user");
+            setError("");
+          }}
+        >
+          {t.issue}
+        </Button>
+      </Space>
+      <Table
+        rowKey="id"
+        dataSource={rows}
+        pagination={false}
+        columns={[
+          { title: t.name, dataIndex: "name" },
+          {
+            title: t.role,
+            render: (_, row) =>
+              row.role === "admin" ? t.roleAdmin : t.roleUser,
+          },
+          {
+            title: t.created,
+            render: (_, row) => localTime(row.created_at),
+          },
+          {
+            title: t.lastUsed,
+            render: (_, row) =>
+              row.last_used_at ? localTime(row.last_used_at) : t.never,
+          },
+          {
+            title: t.status,
+            render: (_, row) =>
+              row.revoked ? (
+                <Tag color="red">{t.revoked}</Tag>
+              ) : (
+                <Tag color="green">{t.active}</Tag>
               ),
-            )}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((row) => (
-            <tr key={row.id}>
-              <td>{row.name}</td>
-              <td>{row.role}</td>
-              <td>
-                {new Date(
-                  row.created_at.endsWith("Z")
-                    ? row.created_at
-                    : row.created_at + "Z",
-                ).toLocaleString()}
-              </td>
-              <td>
-                {row.last_used_at
-                  ? new Date(
-                      row.last_used_at.endsWith("Z")
-                        ? row.last_used_at
-                        : row.last_used_at + "Z",
-                    ).toLocaleString()
-                  : t.never}
-              </td>
-              <td>{row.revoked ? t.revoked : t.active}</td>
-              <td>
-                {!row.revoked && (
-                  <button onClick={() => setConfirm(row.id)}>{t.revoke}</button>
-                )}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+          },
+          {
+            title: t.actions,
+            render: (_, row) =>
+              !row.revoked && (
+                <Button
+                  autoInsertSpace={false}
+                  danger
+                  onClick={() => setConfirm(row.id)}
+                >
+                  {t.revoke}
+                </Button>
+              ),
+          },
+        ]}
+      />
       {open && (
-        <div role="dialog" aria-modal="true" aria-label={t.issue}>
+        <Modal
+          destroyOnHidden
+          open
+          title={t.issue}
+          onCancel={closeIssue}
+          footer={null}
+        >
           {issued ? (
-            <>
-              <p>{t.once}</p>
-              <code>{issued}</code>
-              <button
-                onClick={() => void navigator.clipboard.writeText(issued)}
-              >
-                {t.copy}
-              </button>
-            </>
+            <Space orientation="vertical">
+              <Typography.Text>{t.once}</Typography.Text>
+              <Typography.Text code>{issued}</Typography.Text>
+              <Space>
+                <Button
+                  autoInsertSpace={false}
+                  onClick={() => void navigator.clipboard.writeText(issued)}
+                >
+                  {t.copy}
+                </Button>
+                <Button autoInsertSpace={false} onClick={closeIssue}>
+                  {t.close}
+                </Button>
+              </Space>
+            </Space>
           ) : (
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                void create();
-              }}
-            >
-              <label>
-                {t.name}
-                <input
-                  required
-                  maxLength={200}
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                />
-              </label>
-              <label>
-                {t.role}
-                <select value={role} onChange={(e) => setRole(e.target.value)}>
-                  <option value="user">user</option>
-                  <option value="admin">admin</option>
-                </select>
-              </label>
-              <button type="submit">{t.create}</button>
-            </form>
+            <Space orientation="vertical" style={{ width: "100%" }}>
+              <Typography.Text>{t.name}</Typography.Text>
+              <Input
+                aria-label={t.name}
+                required
+                maxLength={200}
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+              />
+              <Typography.Text>{t.role}</Typography.Text>
+              <Select
+                aria-label={t.role}
+                style={{ width: "100%" }}
+                value={role}
+                onChange={setRole}
+                options={[
+                  { value: "user", label: t.roleUser },
+                  { value: "admin", label: t.roleAdmin },
+                ]}
+              />
+              <Space>
+                <Button
+                  autoInsertSpace={false}
+                  type="primary"
+                  onClick={() => void create()}
+                >
+                  {t.create}
+                </Button>
+                <Button autoInsertSpace={false} onClick={closeIssue}>
+                  {t.close}
+                </Button>
+              </Space>
+            </Space>
           )}
-          <button
-            onClick={() => {
-              setOpen(false);
-              setIssued("");
-            }}
-          >
-            {t.close}
-          </button>
-        </div>
+        </Modal>
       )}
-      {confirm && (
-        <div role="dialog" aria-modal="true" aria-label={t.confirmRevoke}>
-          <p>{t.confirmRevoke}?</p>
-          <button onClick={() => void revoke(confirm)}>
-            {t.confirmRevoke}
-          </button>
-          <button onClick={() => setConfirm(null)}>{t.cancel}</button>
-        </div>
+      {confirm !== null && (
+        <Modal
+          destroyOnHidden
+          open
+          title={t.confirmRevoke}
+          onCancel={() => setConfirm(null)}
+          footer={[
+            <Button
+              autoInsertSpace={false}
+              key="cancel"
+              onClick={() => setConfirm(null)}
+            >
+              {t.cancel}
+            </Button>,
+            <Button
+              autoInsertSpace={false}
+              key="revoke"
+              danger
+              type="primary"
+              onClick={() => confirm && void revoke(confirm)}
+            >
+              {t.confirmRevoke}
+            </Button>,
+          ]}
+        >
+          <p>{`${t.confirmRevoke}?`}</p>
+        </Modal>
       )}
     </section>
   );
