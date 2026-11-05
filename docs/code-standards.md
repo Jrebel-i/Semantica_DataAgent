@@ -87,7 +87,7 @@ uv run --directory backend python tests/e2e/harness.py \
   --log "$HOME/wt/sda/scratch/issue-47/e2e.log"
 ```
 
-`--neo4j-password-command` 的 stdout 只进入进程内存（去掉末尾换行和可选的 `neo4j/` 前缀），不打印、不落盘。也可以改用环境变量 `NEO4J_PASSWORD` 或 `--neo4j-password-env <名称>`。默认存储是测试实例 `bolt://172.16.242.124:31611`、`http://172.16.242.124:31612` 和本机 embedding `http://127.0.0.1:17997`；工具拒绝连接开发实例的 31601 / 31602 / 31603。
+`--neo4j-password-command` 的 stdout 只进入进程内存（去掉末尾换行和可选的 `neo4j/` 前缀），不打印、不落盘。也可以改用环境变量 `NEO4J_PASSWORD` 或 `--neo4j-password-env <名称>`。默认存储是测试实例 `bolt://172.16.242.124:31611`、`http://172.16.242.124:31612` 和本机 embedding `http://127.0.0.1:17998`（`model/bge-small-zh-v1.5`）；需要 bge-m3 时传入 `--embedding-url http://127.0.0.1:17997 --embedding-model model/bge-m3`；工具拒绝连接开发实例的 31601 / 31602 / 31603。
 
 常用参数：
 
@@ -97,6 +97,7 @@ uv run --directory backend python tests/e2e/harness.py \
 | `--source-dir` | 源目录，默认仓库内 `samples/demo` |
 | `--source ID[:JSON]` | 启用的源适配器及参数，可重复；默认 `canonical` + `markdown` |
 | `--parser ID` | 启用的任务解析器，可重复；默认全部解析器 |
+| `--embedding-url` / `--embedding-model` | embedding 服务地址和模型名；默认使用本机小模型，可同时指定以切换 bge-m3 |
 | `--checks <文件>` | 票专属检查文件，可重复 |
 | `--generation` / `--generation-prefix` | 指定知识代名，或使用前缀加随机后缀（默认 `e2e_`） |
 | `--build-timeout` | 等待构建结束的秒数，默认 900 |
