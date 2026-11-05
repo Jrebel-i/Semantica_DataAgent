@@ -1118,10 +1118,7 @@ def search(query, scope, top_k, category=None):
     if scope == "tables":
         results.sort(
             key=lambda item: (
-                not (
-                    "exact" in item["sources"]
-                    or {"fulltext", "vector"} <= set(item["sources"])
-                ),
+                not ({"exact", "fulltext"} & set(item["sources"])),
                 -item["score"],
                 item["ref"],
             )
