@@ -412,3 +412,46 @@ def test_ask_dataagent_timeout_returns_unavailable_and_a_resumable_conversation(
     with sessions()() as db:
         conversation = db.get(Conversation, body["conversation_id"])
         assert conversation is not None and conversation.owner_id == requester.id
+
+
+def test_ask_dataagent_uses_configured_default_agent_provider_and_model(
+    client, monkeypatch
+):
+    from semantica_dataagent import agent_runner
+    from semantica_dataagent.app import create_mcp
+
+    c, admin_token = client
+    runner = FakeRunner()
+    monkeypatch.setitem(agent_runner.RUNNERS, "pi", runner)
+    provider = c.post(
+        "/api/v1/providers",
+        headers={"Authorization": f"Bearer {admin_token}"},
+        json={
+            "name": "Configured gateway",
+            "base_url": "http://127.0.0.1:3425",
+            "models": ["first-model", "configured-model"],
+        },
+    ).json()
+    settings = c.put(
+        "/api/v1/settings",
+        headers={"Authorization": f"Bearer {admin_token}"},
+        json={
+            "values": {
+                "assistant_agent": "pi",
+                "assistant_provider_id": provider["id"],
+                "assistant_model": "configured-model",
+            }
+        },
+    )
+    assert settings.status_code == 200, settings.text
+
+    result = call(
+        create_mcp(),
+        "ask_dataagent",
+        {"question": "按支付口径统计上个月销售额"},
+        _requester(token="configured-user-token"),
+    )
+
+    assert not result.isError, result.structuredContent
+    assert runner.requests[0].provider.id == provider["id"]
+    assert runner.requests[0].model == "configured-model"
