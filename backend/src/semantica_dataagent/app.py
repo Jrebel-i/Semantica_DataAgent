@@ -584,6 +584,9 @@ app.include_router(conversation_router)
 from .ask_api import ask_dataagent
 from .clarification import request_clarification
 from .corrections import propose_correction
+from .corrections import router as corrections_router
+
+app.include_router(corrections_router)
 from .gaps import report_knowledge_gap
 from .gaps import router as gaps_router
 

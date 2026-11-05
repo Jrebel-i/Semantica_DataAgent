@@ -69,3 +69,168 @@ def propose_correction(target: Text, patch: Text, reason: Text) -> dict:
         "diff": diff,
         "conversation_id": conversation_id,
     }
+
+
+from datetime import UTC, datetime
+
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
+from sqlalchemy import text
+
+from .auth import admin
+from .auth import current_requester as rest_requester
+from .build_queue import enqueue_build
+from .db import MetadataOverride, Token
+from .source_directory import git, relative, repository, safe
+
+router = APIRouter()
+
+
+class ProposalView(BaseModel):
+    id: str
+    owner_id: str
+    conversation_id: str | None
+    target: str
+    patch: str
+    original: str
+    diff: str
+    reason: str
+    status: str
+    reviewer_id: str | None
+    reviewed_at: datetime | None
+    created_at: datetime
+    model_config = {"from_attributes": True}
+
+
+class Approval(BaseModel):
+    patch: Text | None = None
+
+
+@router.get("/api/v1/corrections", response_model=list[ProposalView])
+def list_proposals(_admin: Annotated[str, Depends(admin)]):
+    with sessions()() as db:
+        return [
+            ProposalView.model_validate(row)
+            for row in db.query(CorrectionProposal)
+            .order_by(CorrectionProposal.created_at.desc())
+            .all()
+        ]
+
+
+@router.get("/api/v1/corrections/{proposal_id}", response_model=ProposalView)
+def get_proposal(proposal_id: str, _admin: Annotated[str, Depends(admin)]):
+    with sessions()() as db:
+        row = db.get(CorrectionProposal, proposal_id)
+        if row is None:
+            raise HTTPException(404, "Proposal not found")
+        return ProposalView.model_validate(row)
+
+
+def _pending(db, proposal_id):
+    row = db.get(CorrectionProposal, proposal_id)
+    if row is None:
+        raise HTTPException(404, "Proposal not found")
+    if row.status != "pending":
+        raise HTTPException(409, "Proposal already reviewed")
+    return row
+
+
+@router.post("/api/v1/corrections/{proposal_id}/reject", response_model=ProposalView)
+def reject(
+    proposal_id: str,
+    _admin: Annotated[str, Depends(admin)],
+    requester: Annotated[object, Depends(rest_requester)],
+):
+    with sessions().begin() as db:
+        db.execute(text("BEGIN IMMEDIATE"))
+        row = _pending(db, proposal_id)
+        row.status = "rejected"
+        row.reviewer_id = requester.id
+        row.reviewed_at = datetime.now(UTC)
+        db.flush()
+        return ProposalView.model_validate(row)
+
+
+@router.post("/api/v1/corrections/{proposal_id}/approve", response_model=ProposalView)
+def approve(
+    proposal_id: str,
+    _admin: Annotated[str, Depends(admin)],
+    requester: Annotated[object, Depends(rest_requester)],
+    body: Approval | None = None,
+):
+    with sessions().begin() as db:
+        db.execute(text("BEGIN IMMEDIATE"))
+        row = _pending(db, proposal_id)
+        patch = body.patch if body and body.patch is not None else row.patch
+        token = db.query(Token).filter_by(id=requester.id).one()
+        reviewer_name = token.name
+        if row.target.startswith("document:"):
+            values = knowledge.settings()
+            nodes = knowledge.execute(
+                knowledge.read_graph(values),
+                "MATCH (n:SDADocument {generation:$generation, ref:$ref}) RETURN properties(n) AS node",
+                {"generation": values["knowledge_generation"], "ref": row.target},
+            )
+            if len(nodes) != 1 or not nodes[0]["node"].get("source_file"):
+                raise HTTPException(409, "Document no longer exists")
+            try:
+                with repository(values["source_directory"]) as root:
+                    path = safe(root, relative(nodes[0]["node"]["source_file"]))
+                    original = path.read_text(encoding="utf-8")
+                    if original != row.original:
+                        raise ValueError("Document changed since proposal")
+                    if git(root, "diff", "--cached", "--name-only"):
+                        raise ValueError("Source repository has staged changes")
+                    if (
+                        any(c in token.name for c in "<>\n\r\x00")
+                        or token.name != token.name.strip()
+                        or not token.name
+                    ):
+                        raise ValueError("Invalid git author")
+                    try:
+                        path.write_text(patch, encoding="utf-8")
+                        git(root, "add", "--", str(path.relative_to(root)))
+                        git(
+                            root,
+                            "commit",
+                            "--quiet",
+                            "-m",
+                            f"Approve correction {proposal_id}",
+                            author=token.name,
+                        )
+                    except Exception:
+                        path.write_text(original, encoding="utf-8")
+                        git(
+                            root,
+                            "reset",
+                            "--quiet",
+                            "HEAD",
+                            "--",
+                            str(path.relative_to(root)),
+                        )
+                        raise
+            except (OSError, ValueError) as exc:
+                raise HTTPException(409, str(exc)) from exc
+        else:
+            override = db.get(MetadataOverride, row.target)
+            if override is None:
+                db.add(MetadataOverride(target=row.target, comment=patch))
+            else:
+                override.comment = patch
+        row.patch = patch
+        row.diff = "".join(
+            difflib.unified_diff(
+                row.original.splitlines(keepends=True),
+                patch.splitlines(keepends=True),
+                fromfile=row.target,
+                tofile=row.target,
+            )
+        )
+        row.status = "approved"
+        row.reviewer_id = requester.id
+        row.reviewed_at = datetime.now(UTC)
+        db.flush()
+        result = ProposalView.model_validate(row)
+    if result.target.startswith("document:"):
+        enqueue_build("incremental", reviewer_name)
+    return result

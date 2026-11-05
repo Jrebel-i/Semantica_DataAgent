@@ -132,6 +132,19 @@ def test_rejected_document_proposal_does_not_change_source(
     )
     assert configured.status_code == 200, configured.text
     monkeypatch.setattr(knowledge, "existing_refs", lambda refs: set(refs))
+    monkeypatch.setattr(knowledge, "read_graph", lambda values: object())
+    monkeypatch.setattr(
+        knowledge,
+        "execute",
+        lambda *args: [
+            {
+                "node": {
+                    "content": document.read_text(),
+                    "source_file": "knowledge/metrics/sales.md",
+                }
+            }
+        ],
+    )
     result = call(
         create_mcp(),
         "propose_correction",
@@ -185,6 +198,19 @@ def test_approval_commits_document_and_enqueues_incremental_build(
         ["git", "-C", str(root), "rev-parse", "HEAD"], text=True
     ).strip()
     monkeypatch.setattr(knowledge, "existing_refs", lambda refs: set(refs))
+    monkeypatch.setattr(knowledge, "read_graph", lambda values: object())
+    monkeypatch.setattr(
+        knowledge,
+        "execute",
+        lambda *args: [
+            {
+                "node": {
+                    "content": "旧定义\n",
+                    "source_file": "knowledge/metrics/sales.md",
+                }
+            }
+        ],
+    )
     result = call(
         create_mcp(),
         "propose_correction",
