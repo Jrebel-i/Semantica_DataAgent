@@ -1,0 +1,42 @@
+"""Business terms in documents can retrieve their associated warehouse tables."""
+
+from semantica_dataagent import knowledge
+
+
+def test_document_business_term_recalls_english_table(monkeypatch):
+    document = {
+        "ref": "document:metrics/sales.md#chunk-1",
+        "doc_id": "document:metrics/sales.md",
+        "content": "销售额：SUM(amount)，来源表 warehouse.order_metrics。",
+        "scope": "docs",
+    }
+    table = {
+        "ref": "table:warehouse.order_metrics",
+        "database": "warehouse",
+        "name": "order_metrics",
+        "comment": "order metrics",
+    }
+
+    class Vectors:
+        def search(self, **kwargs):
+            return (
+                [[{"entity": {"metadata": document}}]]
+                if '"docs"' in kwargs["filter"]
+                else [[]]
+            )
+
+    def execute(_graph, cypher, params):
+        if "db.index.fulltext.queryNodes" in cypher:
+            return []
+        if "seeds" in params and document["ref"] in params["seeds"]:
+            return [{"item": table}]
+        return []
+
+    monkeypatch.setattr(knowledge, "settings", lambda: {"knowledge_generation": "test"})
+    monkeypatch.setattr(knowledge, "embed", lambda *_: [[1.0, 0.0]])
+    monkeypatch.setattr(knowledge, "read_graph", lambda _: object())
+    monkeypatch.setattr(knowledge, "read_vectors", lambda _: Vectors())
+    monkeypatch.setattr(knowledge, "execute", execute)
+
+    hits = knowledge.search("销售额", "tables", 5)
+    assert table["ref"] in [hit["ref"] for hit in hits], "业务词未召回文档关联的数仓表"
