@@ -91,6 +91,51 @@ def _requester(role: str = "admin", token: str = "admin-token") -> Requester:
         return Requester(id=row.id, role=role, token=token)
 
 
+def test_existing_refs_follow_the_switched_generation_not_the_setting(
+    client, monkeypatch
+):
+    from semantica_dataagent import knowledge
+    from semantica_dataagent.db import (
+        GenerationPointer,
+        KnowledgeGeneration,
+        Setting,
+        sessions,
+    )
+
+    c, token = client
+    with sessions().begin() as db:
+        db.add_all([KnowledgeGeneration(name="old"), KnowledgeGeneration(name="new")])
+        db.add(Setting(key="knowledge_generation", value="old"))
+        db.add(GenerationPointer(id=1, generation="old"))
+    refs = {
+        "old": {"document:metrics/only-old.md#chunk-1"},
+        "new": {"document:metrics/only-new.md#chunk-1"},
+    }
+    seen = []
+
+    def execute(store, query, parameters):
+        seen.append(parameters["generation"])
+        wanted = set(parameters["refs"])
+        return [
+            {"ref": ref}
+            for ref in refs[parameters["generation"]]
+            if ref in wanted
+        ]
+
+    monkeypatch.setattr(knowledge, "read_graph", lambda values: object())
+    monkeypatch.setattr(knowledge, "execute", execute)
+    old_ref = "document:metrics/only-old.md#chunk-1"
+
+    assert knowledge.existing_refs([old_ref]) == {old_ref}
+    response = c.post(
+        "/api/v1/generations/new/switch",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200, response.text
+    assert knowledge.existing_refs([old_ref]) == set()
+    assert seen == ["old", "new"]
+
+
 def test_mcp_middleware_binds_the_caller_and_conversation_header(client):
     from semantica_dataagent.app import MCPAuthentication
     from semantica_dataagent.mcp_context import (
