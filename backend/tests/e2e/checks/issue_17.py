@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import subprocess
+import threading
 from pathlib import Path
 
 PROVIDER_SECRET = "issue17-e2e-provider-key-not-a-secret"
@@ -99,15 +101,50 @@ def check_online_agent_streams_validated_sql_and_reuses_session(ctx):
         "search_knowledge 查口径和相关表，写出 SQL 后必须调用 validate_sql，"
         "并在回答里附引用 id。"
     )
-    first = _ask(
-        ctx,
-        {
-            "question": question,
-            "agent": "pi",
-            "provider_id": provider_id,
-            "model": model,
-        },
+    observed = threading.Event()
+    stop = threading.Event()
+
+    def watch_sandbox():
+        while not stop.wait(0.2):
+            result = subprocess.run(
+                [
+                    "docker",
+                    "ps",
+                    "--filter",
+                    "label=com.semantica-dataagent.agent=1",
+                    "--format",
+                    "{{.Image}}",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if "semantica-dataagent-agent-runner:1.2.0" in result.stdout:
+                observed.set()
+
+    watcher = threading.Thread(target=watch_sandbox, daemon=True)
+    watcher.start()
+    try:
+        first = _ask(
+            ctx,
+            {
+                "question": question,
+                "agent": "pi",
+                "provider_id": provider_id,
+                "model": model,
+            },
+        )
+    finally:
+        stop.set()
+        watcher.join()
+    ctx.require(observed.is_set(), "no agent sandbox was observed during the turn")
+    remaining = subprocess.run(
+        ["docker", "ps", "-aq", "--filter", "label=com.semantica-dataagent.agent=1"],
+        capture_output=True,
+        text=True,
+        check=True,
     )
+    ctx.require(not remaining.stdout.strip(), "agent containers remain after the turn")
     names = [name for name, _ in first]
     ctx.require(names and names[0] == "conversation", f"first events: {names}")
     ctx.require(names[-1] == "done", f"stream ended with: {names[-1:]}")
@@ -164,6 +201,24 @@ def check_online_agent_streams_validated_sql_and_reuses_session(ctx):
         },
     )
     ctx.require(follow_up[-1][0] == "done", f"follow-up: {follow_up[-1][0]}")
+    second_validations = [
+        data
+        for name, data in follow_up
+        if name == "tool_end" and str(data.get("name", "")).endswith("validate_sql")
+    ]
+    ctx.require(
+        any(
+            "status=pass" in str(item.get("summary", "")) for item in second_validations
+        ),
+        "follow-up SQL was not validated",
+    )
+    second_done = follow_up[-1][1]
+    ctx.require(
+        second_done.get("sql") and second_done.get("citations"),
+        "follow-up lacks SQL or citations",
+    )
+    ended = ctx.rest.post(f"/api/v1/conversations/{conversation_id}/end")
+    ctx.require(ended.status_code == 204, f"end returned {ended.status_code}")
     history = ctx.rest.get(f"/api/v1/conversations/{conversation_id}").json()
     ctx.require(
         [item["sequence"] for item in history["turns"]] == [1, 2],
