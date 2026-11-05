@@ -1,0 +1,375 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres
+  namespace: semantica-dataagent-langfuse
+spec:
+  accessModes:
+  - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: clickhouse
+  namespace: semantica-dataagent-langfuse
+spec:
+  accessModes:
+  - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: redis
+  namespace: semantica-dataagent-langfuse
+spec:
+  accessModes:
+  - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: minio
+  namespace: semantica-dataagent-langfuse
+spec:
+  accessModes:
+  - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: langfuse
+  namespace: semantica-dataagent-langfuse
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: langfuse
+  template:
+    metadata:
+      labels:
+        app: langfuse
+    spec:
+      containers:
+      - name: postgres
+        image: postgres:16.9
+        env:
+        - name: POSTGRES_USER
+          value: postgres
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: langfuse-config
+              key: password
+        - name: POSTGRES_DB
+          value: postgres
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: '2'
+            memory: 2Gi
+        ports:
+        - containerPort: 5432
+        volumeMounts:
+        - name: postgres
+          mountPath: /var/lib/postgresql/data
+      - name: clickhouse
+        image: clickhouse/clickhouse-server:26.3.62.3
+        env:
+        - name: CLICKHOUSE_USER
+          value: clickhouse
+        - name: CLICKHOUSE_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: langfuse-config
+              key: password
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: '2'
+            memory: 4Gi
+        ports:
+        - containerPort: 8123
+        - containerPort: 9000
+        volumeMounts:
+        - name: clickhouse
+          mountPath: /var/lib/clickhouse
+      - name: redis
+        image: redis:7.4.2
+        env:
+        - name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: langfuse-config
+              key: password
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: '2'
+            memory: 2Gi
+        ports:
+        - containerPort: 6379
+        volumeMounts:
+        - name: redis
+          mountPath: /data
+        command:
+        - sh
+        - -c
+        - exec redis-server --requirepass "$REDIS_PASSWORD" --maxmemory-policy noeviction
+      - name: minio
+        image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+        env:
+        - name: MINIO_ROOT_USER
+          value: langfuse
+        - name: MINIO_ROOT_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: langfuse-config
+              key: password
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: '2'
+            memory: 2Gi
+        ports:
+        - containerPort: 9002
+        volumeMounts:
+        - name: minio
+          mountPath: /data
+        command:
+        - sh
+        - -c
+        - mkdir -p /data/langfuse; exec minio server --address :9002 /data
+      - name: web
+        image: docker.langfuse.com/langfuse/langfuse:4.75.0
+        env:
+        - &id001
+          name: NEXTAUTH_URL
+          value: http://172.16.242.124:31631
+        - &id002
+          name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: langfuse-config
+              key: database-url
+        - &id003
+          name: SALT
+          valueFrom:
+            secretKeyRef:
+              name: langfuse-config
+              key: salt
+        - &id004
+          name: ENCRYPTION_KEY
+          valueFrom:
+            secretKeyRef:
+              name: langfuse-config
+              key: encryption-key
+        - &id005
+          name: TELEMETRY_ENABLED
+          value: 'false'
+        - &id006
+          name: CLICKHOUSE_MIGRATION_URL
+          value: clickhouse://localhost:9000
+        - &id007
+          name: CLICKHOUSE_URL
+          value: http://localhost:8123
+        - &id008
+          name: CLICKHOUSE_USER
+          value: clickhouse
+        - &id009
+          name: CLICKHOUSE_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: langfuse-config
+              key: password
+        - &id010
+          name: CLICKHOUSE_CLUSTER_ENABLED
+          value: 'false'
+        - &id011
+          name: REDIS_HOST
+          value: localhost
+        - &id012
+          name: REDIS_PORT
+          value: '6379'
+        - &id013
+          name: REDIS_AUTH
+          valueFrom:
+            secretKeyRef:
+              name: langfuse-config
+              key: password
+        - &id014
+          name: LANGFUSE_S3_EVENT_UPLOAD_BUCKET
+          value: langfuse
+        - &id015
+          name: LANGFUSE_S3_EVENT_UPLOAD_REGION
+          value: auto
+        - &id016
+          name: LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID
+          value: langfuse
+        - &id017
+          name: LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT
+          value: http://localhost:9002
+        - &id018
+          name: LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE
+          value: 'true'
+        - &id019
+          name: LANGFUSE_S3_EVENT_UPLOAD_PREFIX
+          value: event/
+        - &id020
+          name: LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              name: langfuse-config
+              key: password
+        - &id021
+          name: LANGFUSE_S3_MEDIA_UPLOAD_BUCKET
+          value: langfuse
+        - &id022
+          name: LANGFUSE_S3_MEDIA_UPLOAD_REGION
+          value: auto
+        - &id023
+          name: LANGFUSE_S3_MEDIA_UPLOAD_ACCESS_KEY_ID
+          value: langfuse
+        - &id024
+          name: LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT
+          value: http://localhost:9002
+        - &id025
+          name: LANGFUSE_S3_MEDIA_UPLOAD_FORCE_PATH_STYLE
+          value: 'true'
+        - &id026
+          name: LANGFUSE_S3_MEDIA_UPLOAD_PREFIX
+          value: media/
+        - &id027
+          name: LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              name: langfuse-config
+              key: password
+        - name: NEXTAUTH_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: langfuse-config
+              key: nextauth-secret
+        - name: LANGFUSE_INIT_ORG_ID
+          value: dataagent
+        - name: LANGFUSE_INIT_ORG_NAME
+          value: DataAgent
+        - name: LANGFUSE_INIT_PROJECT_ID
+          value: dataagent-dev
+        - name: LANGFUSE_INIT_PROJECT_NAME
+          value: dataagent-dev
+        - name: LANGFUSE_INIT_PROJECT_PUBLIC_KEY
+          valueFrom:
+            secretKeyRef:
+              name: langfuse-dev-keys
+              key: public-key
+        - name: LANGFUSE_INIT_PROJECT_SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              name: langfuse-dev-keys
+              key: secret-key
+        - name: LANGFUSE_INIT_USER_EMAIL
+          value: admin@dataagent.local
+        - name: LANGFUSE_INIT_USER_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: langfuse-config
+              key: admin-password
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: '2'
+            memory: 3Gi
+        ports:
+        - containerPort: 3000
+      - name: worker
+        image: docker.langfuse.com/langfuse/langfuse-worker:4.75.0
+        env:
+        - *id001
+        - *id002
+        - *id003
+        - *id004
+        - *id005
+        - *id006
+        - *id007
+        - *id008
+        - *id009
+        - *id010
+        - *id011
+        - *id012
+        - *id013
+        - *id014
+        - *id015
+        - *id016
+        - *id017
+        - *id018
+        - *id019
+        - *id020
+        - *id021
+        - *id022
+        - *id023
+        - *id024
+        - *id025
+        - *id026
+        - *id027
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: '2'
+            memory: 3Gi
+      volumes:
+      - name: postgres
+        persistentVolumeClaim:
+          claimName: postgres
+      - name: clickhouse
+        persistentVolumeClaim:
+          claimName: clickhouse
+      - name: redis
+        persistentVolumeClaim:
+          claimName: redis
+      - name: minio
+        persistentVolumeClaim:
+          claimName: minio
+  strategy:
+    type: Recreate
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: langfuse
+  namespace: semantica-dataagent-langfuse
+spec:
+  type: NodePort
+  selector:
+    app: langfuse
+  ports:
+  - port: 3000
+    targetPort: 3000
+    nodePort: 31631
