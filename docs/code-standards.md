@@ -153,7 +153,6 @@ grep -E '^E2E_(RESULT|DONE) ' "$LOG"
 
 `source_directory` 指向项目仓库以外、包含规范数据模型文件的目录。`embedding_url` 是 OpenAI 兼容 embedding 服务的 base URL，应用向其 `/embeddings` 发送请求；应用配置的 `embedding_model` 默认 `model/bge-m3`（infinity 部署的模型名），本地日常集成测试则显式配置小模型。构建集合维度取自 embedding 响应，不在构建或检索代码里写死 1024；512 / 1024 两种维度都必须可用。embedding 客户端（`embedding_client.py`）在进程内共享一个并发上限，构建写入向量和 MCP 检索都要先取得槽位；每次请求的超时为 `embedding_timeout_seconds + embedding_timeout_per_input_seconds × 批内文本数`。默认并发 2、基础超时 60 秒、每条文本 20 秒、重试 2 次、退避基数 1 秒。只重试连接断开、超时和 5xx；4xx 及响应格式错误直接失败。构建记录在 `counts` 里写入 `embedding_requests`、`embedding_successful_batches`、`embedding_retries`、`embedding_elapsed_ms`。`knowledge_generation` 默认 `default`，只允许英文字母开头、后接字母数字下划线；构建和检索只操作这一代。管理员调用 `POST /api/v1/builds`，请求以 `queued` 记录持久化并按提交顺序逐个执行；前一个结束后自动开始下一个，不再返回冲突。用 `GET /api/v1/builds` 或 `/api/v1/builds/{id}` 查看状态、逐阶段日志和统计；统计中的实体计数是本次构建实际写入或变更的实体数，所有时间字段为带时区的 UTC。进程重启时，运行中的构建标为 `failed`（中断），排队中的构建标为 `cancelled` 并记录原因。已认证用户可从 `/api/v1/tables` 查询知识浏览数据，MCP streamable HTTP 地址为 `/mcp/`。当前代原地覆盖，知识代切换及旧代保留由后续工单实现。
 
-
 ## 源目录上传
 
 管理员在源文件页上传文件、文件夹或 zip。目标目录相对于 `source_directory`；替换整个知识类时目标格式为 `<Markdown 适配器路径>/<知识类>`（默认 `knowledge/<知识类>`），未包含的文件会删除。zip 可以直接包含文档，也可以包含同名知识类顶层文件夹。单次上传最多 1000 个文件（zip 中包括目录条目），解压后总大小不超过 20 MiB；源文件浏览支持 UTF-8 文本，二进制文件可以下载。源目录必须在项目仓库以外；首次上传将已有源文件一并纳入首个提交。上传以令牌名称为 Git 作者，Git 无法表示的名称（首尾空白、尖括号或换行）需更换令牌名称。进程间上传使用目录锁串行化；仓库已有暂存内容时拒绝上传，避免把其他人的修改收入提交。
