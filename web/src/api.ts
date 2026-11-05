@@ -653,6 +653,8 @@ export interface components {
             model: string;
             /** Provider Id */
             provider_id: string;
+            /** Resumable */
+            resumable: boolean;
             /** Title */
             title: string;
             /** Turn Count */
@@ -680,6 +682,8 @@ export interface components {
             model: string;
             /** Provider Id */
             provider_id: string;
+            /** Resumable */
+            resumable: boolean;
             /** Title */
             title: string;
             /** Turn Count */
