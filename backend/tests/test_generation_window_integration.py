@@ -109,7 +109,12 @@ def test_full_rebuild_keeps_searching_previous_generation(tmp_path, monkeypatch)
             assert entered.wait(120), "rebuild did not reach the write stage"
             try:
                 for _ in range(3):
-                    hits = search_knowledge("quokkawindow", "docs", 10)
+                    try:
+                        hits = search_knowledge("quokkawindow", "docs", 10)
+                    except Exception as exc:  # noqa: BLE001 - search must remain available
+                        pytest.fail(
+                            f"old generation search failed during full rebuild: {exc}"
+                        )
                     assert any(
                         "quokkawindow" in (hit.get("content") or "") for hit in hits
                     ), "old generation disappeared during full rebuild"
@@ -155,9 +160,28 @@ def test_full_rebuild_keeps_searching_previous_generation(tmp_path, monkeypatch)
             assert "injected stage failure" in failed["error"]
             assert settings()["knowledge_generation"] == current
             assert set(vectors.list_collections()) == before
+            release.clear()
+            entered.clear()
+            monkeypatch.setattr(stages, "STAGES", (paused, *stages.STAGES[1:]))
+            (docs / "sales.md").write_text(
+                "# Sales\n\nThe koalawindow metric counts orders.\n"
+            )
+            response = client.post("/api/v1/builds", json={"build_type": "incremental"})
+            assert response.status_code == 202, response.text
+            incremental_id = response.json()["id"]
+            assert entered.wait(120), "incremental build did not reach write stage"
+            try:
+                hits = search_knowledge("wallabywindow", "docs", 10)
+                assert isinstance(hits, list), (
+                    "incremental search should return a result"
+                )
+            finally:
+                release.set()
+                incremental = wait(incremental_id)
+            assert incremental["status"] == "succeeded", incremental
             assert any(
-                "wallabywindow" in (hit.get("content") or "")
-                for hit in search_knowledge("wallabywindow", "docs", 10)
+                "koalawindow" in (hit.get("content") or "")
+                for hit in search_knowledge("koalawindow", "docs", 10)
             )
     finally:
         release.set()

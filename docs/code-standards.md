@@ -151,7 +151,7 @@ grep -E '^E2E_(RESULT|DONE) ' "$LOG"
 
 ## 构建和知识浏览
 
-`source_directory` 指向项目仓库以外、包含规范数据模型文件的目录。`embedding_url` 是 OpenAI 兼容 embedding 服务的 base URL，应用向其 `/embeddings` 发送请求；应用配置的 `embedding_model` 默认 `model/bge-m3`（infinity 部署的模型名），本地日常集成测试则显式配置小模型。构建集合维度取自 embedding 响应，不在构建或检索代码里写死 1024；512 / 1024 两种维度都必须可用。embedding 客户端（`embedding_client.py`）在进程内共享一个并发上限，构建写入向量和 MCP 检索都要先取得槽位；每次请求的超时为 `embedding_timeout_seconds + embedding_timeout_per_input_seconds × 批内文本数`。默认并发 2、基础超时 60 秒、每条文本 20 秒、重试 2 次、退避基数 1 秒。只重试连接断开、超时和 5xx；4xx 及响应格式错误直接失败。构建记录在 `counts` 里写入 `embedding_requests`、`embedding_successful_batches`、`embedding_retries`、`embedding_elapsed_ms`。`knowledge_generation` 默认 `default`，只允许英文字母开头、后接字母数字下划线；构建和检索只操作这一代。管理员调用 `POST /api/v1/builds`，请求以 `queued` 记录持久化并按提交顺序逐个执行；前一个结束后自动开始下一个，不再返回冲突。用 `GET /api/v1/builds` 或 `/api/v1/builds/{id}` 查看状态、逐阶段日志和统计；统计中的实体计数是本次构建实际写入或变更的实体数，所有时间字段为带时区的 UTC。进程重启时，运行中的构建标为 `failed`（中断），排队中的构建标为 `cancelled` 并记录原因。已认证用户可从 `/api/v1/tables` 查询知识浏览数据，MCP streamable HTTP 地址为 `/mcp/`。当前代原地覆盖，知识代切换及旧代保留由后续工单实现。
+`source_directory` 指向项目仓库以外、包含规范数据模型文件的目录。`embedding_url` 是 OpenAI 兼容 embedding 服务的 base URL，应用向其 `/embeddings` 发送请求；应用配置的 `embedding_model` 默认 `model/bge-m3`（infinity 部署的模型名），本地日常集成测试则显式配置小模型。构建集合维度取自 embedding 响应，不在构建或检索代码里写死 1024；512 / 1024 两种维度都必须可用。embedding 客户端（`embedding_client.py`）在进程内共享一个并发上限，构建写入向量和 MCP 检索都要先取得槽位；每次请求的超时为 `embedding_timeout_seconds + embedding_timeout_per_input_seconds × 批内文本数`。默认并发 2、基础超时 60 秒、每条文本 20 秒、重试 2 次、退避基数 1 秒。只重试连接断开、超时和 5xx；4xx 及响应格式错误直接失败。构建记录在 `counts` 里写入 `embedding_requests`、`embedding_successful_batches`、`embedding_retries`、`embedding_elapsed_ms`。`knowledge_generation` 默认 `default`，只允许英文字母开头、后接字母数字下划线；构建和检索只操作这一代。管理员调用 `POST /api/v1/builds`，请求以 `queued` 记录持久化并按提交顺序逐个执行；前一个结束后自动开始下一个，不再返回冲突。用 `GET /api/v1/builds` 或 `/api/v1/builds/{id}` 查看状态、逐阶段日志和统计；统计中的实体计数是本次构建实际写入或变更的实体数，所有时间字段为带时区的 UTC。进程重启时，运行中的构建标为 `failed`（中断），排队中的构建标为 `cancelled` 并记录原因。已认证用户可从 `/api/v1/tables` 查询知识浏览数据，MCP streamable HTTP 地址为 `/mcp/`。全量重建写入新知识代，成功后切换当前指针；默认保留两代，管理员可配置保留数和切换已保留的代。
 
 ## 源目录上传
 
@@ -161,7 +161,7 @@ grep -E '^E2E_(RESULT|DONE) ' "$LOG"
 
 `POST /api/v1/builds` 不传请求体时保持原全量构建；传 `{"build_type":"incremental"}` 在当前知识代增量构建，返回记录包含构建类型、令牌名称和源目录 commit。源目录未处于干净 Git 提交时 commit 为 null。增量以同一知识代上一次成功构建的源文件哈希为基线；首次构建、源目录/启用插件/过滤规则/维度上限/embedding 配置变化或最近一次全量构建失败后需先做全量构建。文件统计区分新增、变化、删除；自动生成索引的派生哈希不计入源文件统计。上传和构建读取共享目录锁，构建在读取完来源快照后释放锁。
 
-每个节点和向量记录来源路径及写入它的 build id。自动生成索引记录其派生来源列表；空目录不产生知识类节点。修改或删除源文件时删除其节点、相关关系和向量，再写新记录；字段、维度值、文档与表的关系以及依赖边根据当前记录重新合并。维度值去重和别名可能跨文件依赖同一张表的行：该表涉及的维度值作为一个受影响单元重算；其他表和文件不重写。失败的增量构建记录待修复来源和向量 id，下一次增量即使源文件已恢复也会重试清理。Neo4j 与 Milvus 之间不做事务；运行中仍可能看到部分更新，失败后需重试。
+每个节点和向量记录来源路径及写入它的 build id。自动生成索引记录其派生来源列表；空目录不产生知识类节点。修改或删除源文件时删除其节点、相关关系和向量，再写新记录；字段、维度值、文档与表的关系以及依赖边根据当前记录重新合并。维度值去重和别名可能跨文件依赖同一张表的行：该表涉及的维度值作为一个受影响单元重算；其他表和文件不重写。失败的增量构建记录待修复来源和向量 id，下一次增量即使源文件已恢复也会重试清理。Neo4j 与 Milvus 之间不做事务；运行中仍可能看到部分更新：单文件删除至重写期间检索可能暂时缺失，也可能因存储可见性延迟返回旧内容；完成后读取更新后的内容。失败后需重试。
 
 ## 在线 agent 容器
 
