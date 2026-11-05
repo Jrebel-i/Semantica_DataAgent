@@ -105,6 +105,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import text
 
+from .api_time import UtcDatetime
 from .auth import admin
 from .auth import current_requester as rest_requester
 from .build_queue import add_queued_build, build_queue
@@ -127,8 +128,8 @@ class ProposalView(BaseModel):
     reason: str
     status: str
     reviewer_id: str | None
-    reviewed_at: datetime | None
-    created_at: datetime
+    reviewed_at: UtcDatetime | None
+    created_at: UtcDatetime
     model_config = {"from_attributes": True}
 
 

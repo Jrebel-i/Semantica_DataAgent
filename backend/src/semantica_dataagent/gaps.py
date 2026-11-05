@@ -1,12 +1,12 @@
 """Record and browse knowledge gaps."""
 
 import uuid
-from datetime import datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
+from .api_time import UtcDatetime
 from .auth import current_user
 from .db import KnowledgeGap, sessions
 from .mcp_context import current_requester
@@ -33,7 +33,7 @@ class GapView(BaseModel):
     owner_id: str
     question: str
     missing: str
-    created_at: datetime
+    created_at: UtcDatetime
 
     model_config = {"from_attributes": True}
 

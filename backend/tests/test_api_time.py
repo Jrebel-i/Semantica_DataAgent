@@ -73,7 +73,9 @@ def test_rest_time_fields_have_utc_offset(client):
     from semantica_dataagent.db import (
         Build,
         Conversation,
+        CorrectionProposal,
         GenerationPointer,
+        KnowledgeGap,
         KnowledgeGeneration,
         Provider,
         Token,
@@ -105,6 +107,27 @@ def test_rest_time_fields_have_utc_offset(client):
         db.add_all(
             [
                 build,
+                CorrectionProposal(
+                    id="time-proposal",
+                    owner_id=owner.id,
+                    target="field:shop.orders.id",
+                    patch="new",
+                    original_patch="new",
+                    original="old",
+                    diff="diff",
+                    reason="reason",
+                    status="approved",
+                    reviewer_id=owner.id,
+                    reviewed_at=datetime(2026, 1, 1),
+                    created_at=datetime(2026, 1, 1),
+                ),
+                KnowledgeGap(
+                    id="time-gap",
+                    owner_id=owner.id,
+                    question="question",
+                    missing="missing",
+                    created_at=datetime(2026, 1, 1),
+                ),
                 KnowledgeGeneration(name="naive", created_at="2026-01-01T00:00:00"),
                 GenerationPointer(id=1, generation="naive"),
                 Provider(
@@ -150,6 +173,11 @@ def test_rest_time_fields_have_utc_offset(client):
     payloads = {
         "token_issued": issued.json(),
         "tokens": c.get("/api/v1/tokens", headers=headers).json(),
+        "corrections": c.get("/api/v1/corrections", headers=headers).json(),
+        "correction": c.get(
+            "/api/v1/corrections/time-proposal", headers=headers
+        ).json(),
+        "knowledge_gaps": c.get("/api/v1/knowledge-gaps", headers=headers).json(),
         "build": c.get(f"/api/v1/builds/{build_id}", headers=headers).json(),
         "builds": c.get("/api/v1/builds", headers=headers).json(),
         "generations": c.get("/api/v1/generations", headers=headers).json(),
