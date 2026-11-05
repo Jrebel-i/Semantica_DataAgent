@@ -704,3 +704,26 @@ def test_generation_listing_and_switch(client):
     )
     assert rejected.status_code == 409
     assert settings()["knowledge_generation"] == "old"
+
+
+def test_scheduler_interval_setting_is_validated_and_persisted(client):
+    c, token = client
+    headers = {"Authorization": f"Bearer {token}"}
+    response = c.put(
+        "/api/v1/settings",
+        headers=headers,
+        json={"values": {"schedule_interval_seconds": "5"}},
+    )
+    assert response.status_code == 200
+    assert (
+        c.get("/api/v1/settings", headers=headers).json()["schedule_interval_seconds"]
+        == "5"
+    )
+    assert (
+        c.put(
+            "/api/v1/settings",
+            headers=headers,
+            json={"values": {"schedule_interval_seconds": "-1"}},
+        ).status_code
+        == 422
+    )

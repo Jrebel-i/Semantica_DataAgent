@@ -41,7 +41,7 @@ PYTHONPYCACHEPREFIX="$(mktemp -d)" uv run --directory backend pytest -p no:cache
 
 ## 运行应用
 
-设置 `DATAAGENT_DB_PATH`（SQLite 文件路径）、`DATAAGENT_ENCRYPTION_KEY`（Fernet 密钥，使用 `python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'` 生成）和可选的 `DATAAGENT_LISTEN`（默认 `127.0.0.1:8000`）。在线问答的 agent 工作目录由 `DATAAGENT_AGENT_ROOT` 指定（默认是数据库文件同目录下的 `agent-workspaces`）；MCP 地址由 `DATAAGENT_PUBLIC_URL` 指定（默认从监听地址推导）。`uv run --directory backend semantica-dataagent init` 建库并仅输出一次管理员 token，妥善保存；再运行 `uv run --directory backend semantica-dataagent serve`。前端开发使用 `pnpm --dir web dev`。管理员通过 `/api/v1/settings` 的 PUT 写入 `values`；键为 `neo4j_uri`、`neo4j_user`、`neo4j_password`、`milvus_uri`、`embedding_url`、`embedding_model`、`embedding_concurrency`、`embedding_timeout_seconds`、`embedding_timeout_per_input_seconds`、`embedding_retries`、`embedding_backoff_seconds`、`source_directory`、`knowledge_generation`，空字符串或 null 删除。GET 不回显密码；连接地址不得包含用户信息、查询参数或片段，Neo4j 密码使用专用字段。配置修改对下一次健康检查生效；embedding 并发、超时、重试与退避参数在下一次构建开始时读取，检索请求则每次读取当前值。
+设置 `DATAAGENT_DB_PATH`（SQLite 文件路径）、`DATAAGENT_ENCRYPTION_KEY`（Fernet 密钥，使用 `python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'` 生成）和可选的 `DATAAGENT_LISTEN`（默认 `127.0.0.1:8000`）。在线问答的 agent 工作目录由 `DATAAGENT_AGENT_ROOT` 指定（默认是数据库文件同目录下的 `agent-workspaces`）；MCP 地址由 `DATAAGENT_PUBLIC_URL` 指定（默认从监听地址推导）。`uv run --directory backend semantica-dataagent init` 建库并仅输出一次管理员 token，妥善保存；再运行 `uv run --directory backend semantica-dataagent serve`。前端开发使用 `pnpm --dir web dev`。管理员通过 `/api/v1/settings` 的 PUT 写入 `values`；键为 `neo4j_uri`、`neo4j_user`、`neo4j_password`、`milvus_uri`、`embedding_url`、`embedding_model`、`embedding_concurrency`、`embedding_timeout_seconds`、`embedding_timeout_per_input_seconds`、`embedding_retries`、`embedding_backoff_seconds`、`source_directory`、`knowledge_generation`、`generation_retention`、`schedule_interval_seconds`，空字符串或 null 删除。GET 不回显密码；连接地址不得包含用户信息、查询参数或片段，Neo4j 密码使用专用字段。配置修改对下一次健康检查生效；embedding 并发、超时、重试与退避参数在下一次构建开始时读取，检索请求则每次读取当前值。
 
 ## 真实使用
 
@@ -159,7 +159,7 @@ grep -E '^E2E_(RESULT|DONE) ' "$LOG"
 
 ## 增量构建与来源
 
-`POST /api/v1/builds` 不传请求体时保持原全量构建；传 `{"build_type":"incremental"}` 在当前知识代增量构建，返回记录包含构建类型、令牌名称和源目录 commit。源目录未处于干净 Git 提交时 commit 为 null。增量以同一知识代上一次成功构建的源文件哈希为基线；首次构建、源目录/启用插件/过滤规则/维度上限/embedding 配置变化或最近一次全量构建失败后需先做全量构建。文件统计区分新增、变化、删除；自动生成索引的派生哈希不计入源文件统计。上传和构建读取共享目录锁，构建在读取完来源快照后释放锁。
+`POST /api/v1/builds` 不传请求体时保持原全量构建；传 `{"build_type":"incremental"}` 在当前知识代增量构建，返回记录包含构建类型、令牌名称和源目录 commit。源目录未处于干净 Git 提交时 commit 为 null。增量以同一知识代上一次成功构建的源文件哈希为基线；首次构建、源目录/启用插件/过滤规则/维度上限/embedding 配置变化或最近一次全量构建失败后需先做全量构建。文件统计区分新增、变化、删除；自动生成索引的派生哈希不计入源文件统计。上传和构建读取共享目录锁，构建在读取完来源快照后释放锁。定时增量构建使用 `schedule_interval_seconds`（0 或空值关闭，1–604800 秒启用），配置保存后立即重新计时；重启后按保存的间隔恢复，并与手动构建共用队列。
 
 每个节点和向量记录来源路径及写入它的 build id。自动生成索引记录其派生来源列表；空目录不产生知识类节点。修改或删除源文件时删除其节点、相关关系和向量，再写新记录；字段、维度值、文档与表的关系以及依赖边根据当前记录重新合并。维度值去重和别名可能跨文件依赖同一张表的行：该表涉及的维度值作为一个受影响单元重算；其他表和文件不重写。失败的增量构建记录待修复来源和向量 id，下一次增量即使源文件已恢复也会重试清理。Neo4j 与 Milvus 之间不做事务；运行中仍可能看到部分更新：单文件删除至重写期间检索可能暂时缺失，也可能因存储可见性延迟返回旧内容；完成后读取更新后的内容。失败后需重试。
 

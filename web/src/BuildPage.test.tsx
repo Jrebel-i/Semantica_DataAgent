@@ -102,3 +102,35 @@ test("shows queue state, logs, stats and triggers both build types", async () =>
   );
   expect(await screen.findByText("full build queued")).toBeTruthy();
 });
+
+test("loads and saves the scheduled build interval", async () => {
+  const requests: unknown[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string, options?: RequestInit) => {
+      if (url === "/api/v1/settings" && options?.method === "PUT") {
+        requests.push(JSON.parse(String(options.body)));
+        return Response.json({});
+      }
+      if (url === "/api/v1/settings")
+        return Response.json({ schedule_interval_seconds: "60" });
+      if (url === "/api/v1/generations")
+        return Response.json({
+          generations: [],
+          behind: false,
+          source_head: null,
+        });
+      return Response.json([]);
+    }),
+  );
+  render(<BuildPage token="token" messages={getMessages("zh")} />);
+  const input = (await screen.findByLabelText(
+    "间隔秒数（0 为关闭）",
+  )) as HTMLInputElement;
+  await waitFor(() => expect(input.value).toBe("60"));
+  fireEvent.change(input, { target: { value: "5" } });
+  fireEvent.click(screen.getByRole("button", { name: "保存定时" }));
+  await waitFor(() =>
+    expect(requests).toEqual([{ values: { schedule_interval_seconds: "5" } }]),
+  );
+});

@@ -52,6 +52,7 @@ export function BuildPage({
 }) {
   const [builds, setBuilds] = useState<Build[]>([]);
   const [retention, setRetention] = useState("2");
+  const [scheduleInterval, setScheduleInterval] = useState("0");
   const [generations, setGenerations] = useState<Generations | null>(null);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [error, setError] = useState("");
@@ -72,9 +73,19 @@ export function BuildPage({
       headers: { Authorization: `Bearer ${token}` },
     })
       .then((response) => (response.ok ? response.json() : null))
-      .then((data: { generation_retention?: string } | null) => {
-        if (data?.generation_retention) setRetention(data.generation_retention);
-      })
+      .then(
+        (
+          data: {
+            generation_retention?: string;
+            schedule_interval_seconds?: string;
+          } | null,
+        ) => {
+          if (data?.generation_retention)
+            setRetention(data.generation_retention);
+          if (data?.schedule_interval_seconds)
+            setScheduleInterval(data.schedule_interval_seconds);
+        },
+      )
       .catch(() => undefined);
   }, [token]);
   useEffect(() => {
@@ -123,6 +134,25 @@ export function BuildPage({
       setError(t.buildError);
     }
   }
+  async function saveSchedule() {
+    try {
+      const response = await fetch("/api/v1/settings", {
+        method: "PUT",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          values: { schedule_interval_seconds: scheduleInterval },
+        }),
+      });
+      if (!response.ok) throw new Error();
+      setNotice(t.scheduleSaved);
+      setError("");
+    } catch {
+      setError(t.buildError);
+    }
+  }
   async function switchGeneration(name: string) {
     try {
       const response = await fetch(
@@ -148,6 +178,18 @@ export function BuildPage({
           }
         />
       )}
+      <Typography.Title level={3}>{t.scheduleTitle}</Typography.Title>
+      <label>
+        {t.scheduleInterval}{" "}
+        <input
+          type="number"
+          min="0"
+          max="604800"
+          value={scheduleInterval}
+          onChange={(event) => setScheduleInterval(event.target.value)}
+        />
+      </label>{" "}
+      <Button onClick={() => void saveSchedule()}>{t.scheduleSave}</Button>
       <Typography.Title level={3}>{t.generations}</Typography.Title>
       <label>
         {t.generationRetention}{" "}

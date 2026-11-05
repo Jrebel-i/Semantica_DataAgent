@@ -23,7 +23,7 @@ from sqlalchemy import text, update
 
 from . import knowledge
 from .auth import admin, bearer, current_user
-from .build_queue import build_queue
+from .build_queue import build_queue, enqueue_build
 from .db import (
     Build,
     GenerationPointer,
@@ -35,6 +35,7 @@ from .db import (
     sessions,
 )
 from .embedding_client import validate_settings
+from .scheduler import scheduler
 
 
 @asynccontextmanager
@@ -63,12 +64,16 @@ async def lifespan(application):
             )
         )
     build_queue.start()
+    with sessions()() as db:
+        interval = db.get(Setting, "schedule_interval_seconds")
+        scheduler.start(int(interval.value) if interval else 0)
     server = create_mcp()
     application.state.mcp_app = server.streamable_http_app()
     async with server.session_manager.run():
         try:
             yield
         finally:
+            scheduler.stop()
             build_queue.stop()
             knowledge.close_readers()
 
@@ -90,6 +95,7 @@ KEYS = {
     "source_directory",
     "knowledge_generation",
     "generation_retention",
+    "schedule_interval_seconds",
     "dimension_value_limit",
     "embedding_concurrency",
     "embedding_timeout_seconds",
@@ -201,6 +207,13 @@ def put_settings(
         not limit.isascii() or not limit.isdigit() or not 1 <= int(limit) <= 1000000
     ):
         raise HTTPException(status_code=422, detail="Invalid dimension value limit")
+    interval = body.values.get("schedule_interval_seconds")
+    if interval and (
+        not interval.isascii()
+        or not interval.isdigit()
+        or not 0 <= int(interval) <= 604800
+    ):
+        raise HTTPException(status_code=422, detail="Invalid schedule interval")
     retention = body.values.get("generation_retention")
     if retention and (
         not retention.isascii()
@@ -253,6 +266,8 @@ def put_settings(
                     row.value = stored
                 else:
                     db.add(Setting(key=key, value=stored))
+    if "schedule_interval_seconds" in body.values:
+        scheduler.configure(int(interval) if interval else 0)
     return get_settings("admin")
 
 
@@ -470,30 +485,12 @@ def start_build(
     credentials: Annotated[HTTPAuthorizationCredentials, Depends(bearer)],
     body: BuildRequest | None = None,
 ):
-    now = datetime.now(UTC)
     build_type = body.build_type if body else "full"
-    with sessions().begin() as db:
-        token = db.get(Token, digest(credentials.credentials))
-        row = Build(
-            status="queued",
-            started_at=now.isoformat(),
-            counts="{}",
-            build_type=build_type,
-            triggered_by=token.name,
-            logs=json.dumps(
-                [
-                    {
-                        "timestamp": now.isoformat(),
-                        "stage": "queue",
-                        "level": "info",
-                        "message": f"{build_type} build queued",
-                    }
-                ]
-            ),
-        )
-        db.add(row)
-        db.flush()
-        result = build_view(row)
+    with sessions()() as db:
+        token_name = db.get(Token, digest(credentials.credentials)).name
+    build_id = enqueue_build(build_type, token_name, notify=False)
+    with sessions()() as db:
+        result = build_view(db.get(Build, build_id))
     build_queue.enqueue()
     return result
 
