@@ -492,6 +492,7 @@ def run_build(build_id):
     status, counts, error = "failed", {}, None
     failures = []
     new_values = None
+    published = False
     stats = EmbeddingStats()
     logs = []
     try:
@@ -756,6 +757,13 @@ def run_build(build_id):
                     )
                 )
                 db.get(GenerationPointer, 1).generation = generation
+                build = db.get(Build, build_id)
+                build.status = "succeeded"
+                build.counts = json.dumps({**counts, **stats.counts()})
+                build.error = None
+                build.parse_failures = json.dumps(failures, ensure_ascii=False)
+                build.finished_at = datetime.now(UTC).isoformat()
+            published = True
             new_values = None
         if build_type == "full":
             try:
@@ -767,6 +775,8 @@ def run_build(build_id):
         status = "succeeded"
     except Exception as exc:  # noqa: BLE001 - record failure of background work
         error = str(exc)
+        if published:
+            status = "succeeded"
         if new_values is not None:
             try:
                 delete_generation_data(new_values)
@@ -778,7 +788,7 @@ def run_build(build_id):
         counts.update(stats.counts())
         with sessions().begin() as db:
             build = db.get(Build, build_id)
-            if build is not None:
+            if build is not None and not published:
                 build.status = status
                 build.counts = json.dumps(counts)
                 build.error = error

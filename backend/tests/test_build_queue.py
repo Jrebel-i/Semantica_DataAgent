@@ -3,6 +3,7 @@ import time
 from contextlib import nullcontext
 from datetime import UTC, datetime
 
+import pytest
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
@@ -216,3 +217,96 @@ def test_queue_retries_after_a_transient_claim_failure(tmp_path, monkeypatch):
         queue.stop()
     assert executed == [build_id]
     assert attempts[:2] == ["failed", "retried"]
+
+
+@pytest.mark.parametrize("crash_before_commit", [True, False])
+def test_full_build_publication_survives_process_exit(
+    tmp_path, monkeypatch, crash_before_commit
+):
+    import json
+    import os
+
+    from semantica_dataagent import knowledge, relationships, stages
+    from semantica_dataagent.db import Build, GenerationPointer, sessions
+    from semantica_dataagent.stage_contract import StorageHandles
+
+    configure(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        knowledge,
+        "settings",
+        lambda: {
+            "source_directory": str(tmp_path),
+            "knowledge_generation": "old",
+            "embedding_model": "test",
+            "embedding_url": "http://localhost",
+            "neo4j_uri": "bolt://localhost",
+            "neo4j_user": "neo4j",
+            "milvus_uri": "http://localhost",
+        },
+    )
+    monkeypatch.setattr(knowledge, "configured", list)
+    monkeypatch.setattr(
+        knowledge,
+        "get_filters",
+        lambda: {
+            "database_include": [],
+            "database_exclude": [],
+            "task_include": [],
+            "task_exclude": [],
+        },
+    )
+    monkeypatch.setattr(knowledge, "read_sources", lambda *args: ([], {}, None, {}))
+    monkeypatch.setattr(
+        knowledge,
+        "build_storage",
+        lambda values, stats=None: nullcontext(
+            StorageHandles("new", None, None, values)
+        ),
+    )
+    monkeypatch.setattr(knowledge, "read_graph", lambda values: None)
+    monkeypatch.setattr(knowledge, "read_vectors", lambda values: None)
+    monkeypatch.setattr(relationships, "reconcile", lambda *args: None)
+    monkeypatch.setattr(stages, "STAGES", [])
+    monkeypatch.setattr(knowledge, "prune_generations", lambda values: os._exit(0))
+    with sessions().begin() as db:
+        db.add(GenerationPointer(id=1, generation="old"))
+        build = Build(
+            status="running",
+            started_at="2026-01-01T00:00:00+00:00",
+            counts="{}",
+            build_type="full",
+        )
+        db.add(build)
+        db.flush()
+        build_id = build.id
+    pid = os.fork()
+    if pid == 0:
+        if crash_before_commit:
+            from sqlalchemy import event
+            from sqlalchemy.orm import Session
+
+            @event.listens_for(Session, "before_flush")
+            def crash_before_publication(session, *_):
+                if any(
+                    isinstance(row, GenerationPointer) and row.generation != "old"
+                    for row in session.dirty
+                ):
+                    os._exit(0)
+
+        knowledge.run_build(build_id)
+        os._exit(1)
+    _, result = os.waitpid(pid, 0)
+    assert os.waitstatus_to_exitcode(result) == 0
+    with sessions()() as db:
+        pointer = db.get(GenerationPointer, 1)
+        build = db.get(Build, build_id)
+        if crash_before_commit:
+            assert pointer.generation == "old"
+            assert build.status == "running"
+        else:
+            assert pointer.generation == build.generation
+            assert build.status == "succeeded", (
+                "current generation was published without recording success"
+            )
+            assert build.finished_at
+            assert json.loads(build.counts)["added"] == 0
