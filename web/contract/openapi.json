@@ -1687,6 +1687,29 @@
         "summary": "Put Settings"
       }
     },
+    "/api/v1/skill": {
+      "get": {
+        "operationId": "download_skill_api_v1_skill_get",
+        "responses": {
+          "200": {
+            "content": {
+              "text/markdown": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "The retrieval skill as a Markdown attachment"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Download Skill"
+      }
+    },
     "/api/v1/source/diff": {
       "get": {
         "operationId": "source_diff_api_v1_source_diff_get",
