@@ -22,6 +22,7 @@ from pymilvus import MilvusClient
 from sqlalchemy import text, update
 
 from . import knowledge
+from .api_time import UtcDatetime
 from .auth import _authenticated, admin, bearer, current_user
 from .build_queue import build_queue, enqueue_build
 from .db import (
@@ -158,8 +159,8 @@ class TokenInfo(BaseModel):
     id: str
     name: str
     role: Literal["user", "admin"]
-    created_at: datetime
-    last_used_at: datetime | None
+    created_at: UtcDatetime
+    last_used_at: UtcDatetime | None
     revoked: bool
 
     model_config = {"from_attributes": True}
@@ -383,7 +384,7 @@ async def health() -> dict[str, Status]:
 
 
 class BuildLog(BaseModel):
-    timestamp: datetime
+    timestamp: UtcDatetime
     stage: str
     level: Literal["info", "error"]
     message: str
@@ -392,8 +393,8 @@ class BuildLog(BaseModel):
 class BuildView(BaseModel):
     id: int
     status: Literal["queued", "running", "succeeded", "failed", "cancelled"]
-    started_at: datetime
-    finished_at: datetime | None
+    started_at: UtcDatetime
+    finished_at: UtcDatetime | None
     counts: dict[str, int]
     error: str | None
     parse_failures: list[dict[str, str]]
@@ -420,19 +421,11 @@ def build_logs(value: str | None) -> list[BuildLog]:
 
 
 def build_view(row: Build) -> BuildView:
-    def utc(value):
-        if value is None:
-            return None
-        parsed = datetime.fromisoformat(value)
-        if parsed.tzinfo is None:
-            parsed = parsed.replace(tzinfo=UTC)
-        return parsed.astimezone(UTC)
-
     return BuildView(
         id=row.id,
         status=row.status,
-        started_at=utc(row.started_at),
-        finished_at=utc(row.finished_at),
+        started_at=row.started_at,
+        finished_at=row.finished_at,
         counts=json.loads(row.counts),
         error=row.error,
         parse_failures=json.loads(row.parse_failures or "[]"),
@@ -446,7 +439,7 @@ def build_view(row: Build) -> BuildView:
 class GenerationView(BaseModel):
     name: str
     current: bool
-    created_at: str | None
+    created_at: UtcDatetime | None
     source_commit: str | None
     counts: dict[str, int]
 
@@ -802,7 +795,7 @@ class SourceContent(BaseModel):
 class SourceHistory(BaseModel):
     commit: str
     author: str
-    date: datetime
+    date: UtcDatetime
     message: str
 
 
