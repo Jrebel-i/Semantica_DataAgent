@@ -153,7 +153,11 @@ def check_langfuse_observability(ctx):
                     ],
                 },
             ).json()["id"]
-            question = "查询 shop.payments 表，先调用 search_knowledge，再写按 dt 统计记录数的 Hive SQL，并调用 validate_sql 验证后回答。"
+            marker = "issue23bearer" + uuid.uuid4().hex
+            question = (
+                "查询 shop.payments 表，先调用 search_knowledge，再写按 dt 统计记录数的 Hive SQL，并调用 validate_sql 验证后回答。Bearer "
+                + marker
+            )
             online_id, _events = _ask(ctx, provider, question)
             ids.append(online_id)
             trace = _wait_trace(
@@ -166,6 +170,14 @@ def check_langfuse_observability(ctx):
                         for o in t.get("observations", [])
                     )
                 ),
+            )
+            ctx.require(
+                marker not in json.dumps(trace, ensure_ascii=False),
+                "Bearer secret leaked",
+            )
+            ctx.require(
+                "Bearer [REDACTED]" in str(trace.get("input")),
+                "question credential was not redacted",
             )
             names = [o.get("name") for o in trace.get("observations", [])]
             ctx.require(
@@ -193,6 +205,7 @@ def check_langfuse_observability(ctx):
                         "arguments": {
                             "sql": "SELECT 1 -- " + issued["token"],
                             "dialect": "hive",
+                            "unexpected_issue23": "private-extra-field",
                         },
                     },
                 },
@@ -246,6 +259,10 @@ def check_langfuse_observability(ctx):
                     for child in value:
                         check_fields(child)
 
+            ctx.require(
+                "private-extra-field" not in json.dumps(local_trace),
+                "extra field leaked",
+            )
             for item in (trace, local_trace):
                 for key in ("input", "output", "metadata"):
                     check_fields(item.get(key))
