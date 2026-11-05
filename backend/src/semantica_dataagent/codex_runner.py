@@ -224,6 +224,7 @@ class CodexRunner:
                     marker.write_text(parser.thread_id, encoding="utf-8")
                     thread = parser.thread_id
             code = await process.wait()
+            await drain
             if code and not parser.error:
                 parser.error = (
                     "\n".join(stderr)[-4000:] or f"codex exited with status {code}"

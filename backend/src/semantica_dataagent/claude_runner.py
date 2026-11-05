@@ -8,7 +8,6 @@ import shutil
 import uuid
 from collections import deque
 from dataclasses import dataclass, field
-from pathlib import Path
 
 from .agent_sandbox import SessionSandbox, register_session, unregister_session
 from .agent_types import DONE, ERROR, TEXT_DELTA, TOOL_END, TOOL_START, AgentEvent
@@ -217,6 +216,7 @@ class ClaudeRunner:
                 for event in parser.feed(record):
                     yield _redact_event(event, secrets)
             code = await process.wait()
+            await drain
             if code and not parser.error:
                 parser.error = (
                     "\n".join(stderr)[-4000:] or f"claude exited with status {code}"

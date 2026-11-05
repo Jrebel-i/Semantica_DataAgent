@@ -3,7 +3,6 @@ import json
 from pathlib import Path
 
 import pytest
-
 from semantica_dataagent.agent_runner import get_runner
 
 
