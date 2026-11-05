@@ -11,7 +11,8 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .agent_runner import (
+from .agent_sandbox import SessionSandbox, register_session, unregister_session
+from .agent_types import (
     CLARIFICATION,
     DONE,
     ERROR,
@@ -21,7 +22,6 @@ from .agent_runner import (
     AgentEvent,
     AgentTurnRequest,
 )
-from .agent_sandbox import SessionSandbox, register_session, unregister_session
 from .skill import read_skill
 
 PROVIDER_KEY = "dataagent"

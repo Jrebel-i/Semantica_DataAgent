@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict
 
 from . import knowledge
-from .app import current_user
+from .auth import current_user
 
 router = APIRouter()
 

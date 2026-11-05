@@ -5,7 +5,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends
 from fastapi.responses import Response
 
-from .app import current_user
+from .auth import current_user
 from .skill import SKILL_FILENAME, read_skill
 
 router = APIRouter()
