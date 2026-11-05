@@ -34,7 +34,13 @@ if __name__ == "__main__":
         remote(f"kubectl get namespace {NS} >/dev/null 2>&1", check=False).returncode
         == 0
     ):
-        raise SystemExit("Namespace already exists; refusing to replace credentials")
+        for name in ("langfuse-config", "langfuse-test-keys", "langfuse-dev-keys"):
+            remote(f"kubectl -n {NS} get secret {name} -o name")
+        remote(
+            "kubectl apply -f -", Path(__file__).with_name("langfuse.yaml").read_text()
+        )
+        remote(f"kubectl -n {NS} rollout status deployment/langfuse --timeout=600s")
+        raise SystemExit(0)
     remote(f"kubectl create namespace {NS}")
     password = secrets.token_hex(24)
     test = {

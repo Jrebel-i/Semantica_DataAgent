@@ -61,6 +61,6 @@ The script performs Cypher, creates and deletes a uniquely named Milvus collecti
 
 `deploy/k8s/langfuse/langfuse.yaml` 将固定版本 Langfuse 4.75.0、PostgreSQL、ClickHouse、Redis 和 MinIO 部署到 `semantica-dataagent-langfuse`，各存储使用 local-path PVC。Web 的 NodePort 为 `31631`，地址 `http://172.16.242.124:31631`。这是单副本部署；节点和卷故障会中断观测服务。
 
-首次安装在有 SSH 授权的机器运行 `uv run --directory backend python ../deploy/k8s/langfuse/initialize.py`。脚本拒绝覆盖已有命名空间，通过标准输入创建 Secret，先初始化 `dataagent-test`，再初始化 `dataagent-dev`。不要把 Secret 内容写入文件或日志。项目密钥分别保存在命名空间内的 `langfuse-test-keys` 与 `langfuse-dev-keys`；初始登录密码保存在 `langfuse-config`。常规更新使用 `kubectl apply -f deploy/k8s/langfuse/langfuse.yaml`，保留 PVC 和 Secret。删除 PVC 会删除观测数据；重新初始化前应备份并明确处理已有命名空间。
+首次安装在有 SSH 授权的机器运行 `uv run --directory backend python ../deploy/k8s/langfuse/initialize.py`。脚本在已有命名空间保留 Secret 并重用现有项目；首次通过标准输入创建 Secret，先初始化 `dataagent-test`，再初始化 `dataagent-dev`。不要把 Secret 内容写入文件或日志。项目密钥分别保存在命名空间内的 `langfuse-test-keys` 与 `langfuse-dev-keys`；初始登录密码保存在 `langfuse-config`。常规更新使用 `kubectl apply -f deploy/k8s/langfuse/langfuse.yaml`，保留 PVC 和 Secret。删除 PVC 会删除观测数据；重新初始化前应备份并明确处理已有命名空间。
 
 管理员可在插件设置页开启 Langfuse 并填写地址和项目公钥、私钥；私钥加密存储且界面不回显，留空保留已有值。上报使用锁文件固定的 httpx，通过有界队列异步发送，超时或发送失败不会中断请求。允许上报的应用字段集中列在 `telemetry.py` 的 `ALLOWED_FIELDS`，包括追踪标识、agent、provider、模型、工具名称、参数、结果摘要、耗时、SQL 校验和回答；其他字段会被丢弃。
