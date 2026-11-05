@@ -70,6 +70,84 @@ PYTHONPYCACHEPREFIX="$(mktemp -d)" uv run --directory backend pytest -p no:cache
 
 测试 embedding 使用 `TEST_EMBEDDING_URL=http://127.0.0.1:17997`。连接 `-test` Neo4j / Milvus / embedding 的集成测试，每次运行必须生成唯一知识代与集合前缀，只读取和清理本次创建的数据；在 `finally` 中删除这些节点和集合。不能清理或修改其他测试的代，缺少连接环境变量时必须明确跳过并说明原因。
 
+## 端到端测试工具
+
+测试 agent 不再为每张票手写起服务、配存储、构建和清理的脚本。工具在 `backend/tests/e2e/harness.py`，一条命令完成临时 SQLite + Fernet 密钥、`init` 管理员 token、随机空闲端口起 `serve`、配置测试存储与 embedding、启用源适配器与解析器、构建、执行检查，并在成功、失败、超时和中断时清理本代数据、停服务、删除临时库。
+
+从仓库根目录运行：
+
+```sh
+export TMPDIR="$HOME/wt/sda/scratch/tmp"
+uv run --directory backend python tests/e2e/harness.py \
+  --scratch "$HOME/wt/sda/scratch/issue-47" \
+  --source-dir ../samples/demo \
+  --source canonical --source markdown \
+  --neo4j-password-command "ssh baize@172.16.242.124 kubectl -n semantica-dataagent-test get secret neo4j-auth -o jsonpath='{.data.auth}' | base64 -d | cut -d/ -f2-" \
+  --checks tests/e2e/example_checks.py \
+  --log "$HOME/wt/sda/scratch/issue-47/e2e.log"
+```
+
+`--neo4j-password-command` 的 stdout 只进入进程内存（去掉末尾换行和可选的 `neo4j/` 前缀），不打印、不落盘。也可以改用环境变量 `NEO4J_PASSWORD` 或 `--neo4j-password-env <名称>`。默认存储是测试实例 `bolt://172.16.242.124:31611`、`http://172.16.242.124:31612` 和本机 embedding `http://127.0.0.1:17997`；工具拒绝连接开发实例的 31601 / 31602 / 31603。
+
+常用参数：
+
+| 参数 | 作用 |
+| --- | --- |
+| `--scratch` | 必填；本次临时目录和 `e2e-<代名>-serve.log` 的父目录 |
+| `--source-dir` | 源目录，默认仓库内 `samples/demo` |
+| `--source ID[:JSON]` | 启用的源适配器及参数，可重复；默认 `canonical` + `markdown` |
+| `--parser ID` | 启用的任务解析器，可重复；默认全部解析器 |
+| `--checks <文件>` | 票专属检查文件，可重复 |
+| `--generation` / `--generation-prefix` | 指定知识代名，或使用前缀加随机后缀（默认 `e2e_`） |
+| `--build-timeout` | 等待构建结束的秒数，默认 900 |
+| `--expect-build succeeded\|failed\|any` | 期望的构建结果，默认 `succeeded` |
+| `--no-builtin-checks` | 不跑内置检查（测试预期失败的构建时使用） |
+| `--expect-table` / `--search-query` / `--validate-sql` | 内置检查使用的表、检索词和 SQL |
+| `--log <文件>` | 同时把带时间戳的进度和最终结果写入该文件 |
+
+dtb 源的参数示例：
+
+```sh
+--source 'dtb:{"snapshot_path":"dtb","dimensions_path":"dimensions","latest":true,"dimension_row_limit":50000}' \
+--source 'markdown:{"path":"knowledge"}'
+```
+
+内置检查：`describe_tables`、`search_knowledge`、`get_lineage`、`validate_sql`、`get_capabilities`、`build_counts`（构建记录与计数）。内置检查在 `--expect-build failed` 时通常也会失败，测试失败构建的票应加 `--no-builtin-checks`，只保留票专属检查。
+
+票专属检查放在一个 Python 文件里，函数名以 `check_` 开头；不需要改工具本身。每个函数收到一个上下文，可同步或异步：
+
+```python
+def check_join_evidence(ctx):
+    edges = ctx.mcp_call(
+        "get_lineage", {"table": "shop.orders", "direction": "up", "depth": 1}
+    )
+    ctx.require(edges, "expected upstream lineage")
+    response = ctx.rest.get("/api/v1/tables", params={"database": "shop"})
+    ctx.require(response.status_code == 200, response.text)
+    return {"edges": len(edges)}  # 见下面的返回值约定
+```
+
+`ctx` 提供 `mcp_call(name, arguments, raw=False)`（工具失败时抛异常；`raw=True` 返回完整结果以便处理游标）、`rest`（已带 admin token 的同步 `httpx.Client`）、`token`、`build`、`build_id`、`generation`、`source_dir`、`health`、`work_dir` 和 `require(condition, message)`。检查函数抛异常、返回 `False`、或返回带 `ok: false` 的 dict 记为失败；返回 `None` / `True` / 其他 dict 都记为通过，dict 内容作为 `info` 写入结果。一个检查失败不会跳过其余检查。
+
+输出约定：进度行带本地时间戳；最后两行是不带时间戳的 `E2E_RESULT {json}` 和 `E2E_DONE exit=<码>`。只有构建结果符合 `--expect-build`、所有检查通过、清理全部成功（服务进程已退出、本代 Neo4j 节点和 Milvus 集合清空、临时库删除）时才返回 0。清理异常或无法确认无残留都返回非零。
+
+推荐的后台跑法（每 60 秒 tail 一次，直到看到 `E2E_DONE`）：
+
+```sh
+LOG="$HOME/wt/sda/scratch/issue-47/e2e.log"
+timeout 1800 nohup uv run --directory backend python tests/e2e/harness.py \
+  --scratch "$HOME/wt/sda/scratch/issue-47" \
+  --source-dir ../samples/demo --source canonical --source markdown \
+  --neo4j-password-command "…" --log "$LOG" >/dev/null 2>&1 &
+while ! grep -q '^E2E_DONE ' "$LOG" 2>/dev/null; do
+  sleep 60
+  tail -n 20 "$LOG"
+done
+grep -E '^E2E_(RESULT|DONE) ' "$LOG"
+```
+
+工具自身测试不访问网络，覆盖参数解析、检查加载、结果归一化、真实本地进程停止，以及“检查失败仍然执行清理”；守护测试与 lint 见上面的命令表。示例票专属检查在 `backend/tests/e2e/example_checks.py`。
+
 ## 构建和知识浏览
 
 `source_directory` 指向包含规范数据模型文件的目录，例如仓库内 `samples/demo`。`embedding_url` 是 OpenAI 兼容 embedding 服务的 base URL，应用向其 `/embeddings` 发送请求；`embedding_model` 默认 `model/bge-m3`（infinity 部署的模型名）。embedding 客户端（`embedding_client.py`）在进程内共享一个并发上限，构建写入向量和 MCP 检索都要先取得槽位；每次请求的超时为 `embedding_timeout_seconds + embedding_timeout_per_input_seconds × 批内文本数`。默认并发 2、基础超时 60 秒、每条文本 20 秒、重试 2 次、退避基数 1 秒。只重试连接断开、超时和 5xx；4xx 及响应格式错误直接失败。构建记录在 `counts` 里写入 `embedding_requests`、`embedding_successful_batches`、`embedding_retries`、`embedding_elapsed_ms`。`knowledge_generation` 默认 `default`，只允许英文字母开头、后接字母数字下划线；构建和检索只操作这一代。管理员调用 `POST /api/v1/builds`，用 `GET /api/v1/builds` 或 `/api/v1/builds/{id}` 查看结果；冲突构建返回 409。已认证用户可从 `/api/v1/tables` 查询知识浏览数据，MCP streamable HTTP 地址为 `/mcp/`。当前代原地覆盖，知识代切换及旧代保留由后续工单实现。
