@@ -30,7 +30,11 @@ def test_startup_cleans_interrupted_full_build(tmp_path, monkeypatch):
     monkeypatch.setenv("DATAAGENT_AGENT_MODE", "local")
     token = initialize()
     prefix = "test_" + uuid.uuid4().hex[:12]
-    current, orphan = prefix + "_current", prefix + "_orphan"
+    current, orphan, historical = (
+        prefix + "_current",
+        prefix + "_orphan",
+        prefix + "_history",
+    )
     driver = GraphDatabase.driver(
         os.environ["TEST_NEO4J_URI"],
         auth=(os.environ["TEST_NEO4J_USER"], os.environ["TEST_NEO4J_PASSWORD"]),
@@ -51,13 +55,28 @@ def test_startup_cleans_interrupted_full_build(tmp_path, monkeypatch):
                 },
             )
             assert response.status_code == 200, response.text
-        for generation in (current, orphan):
+        for generation in (current, orphan, historical):
             driver.execute_query(
                 "CREATE (:SDAEntity {generation:$generation})", generation=generation
             )
             vectors.create_collection("sda_" + generation, dimension=2)
         with sessions().begin() as db:
-            db.add(KnowledgeGeneration(name=current))
+            db.add_all(
+                [
+                    KnowledgeGeneration(name=current),
+                    KnowledgeGeneration(name=historical),
+                ]
+            )
+            db.add(
+                Build(
+                    status="failed",
+                    error="Build interrupted by application shutdown",
+                    started_at="2026-01-01",
+                    counts="{}",
+                    build_type="full",
+                    generation=historical,
+                )
+            )
             db.add(GenerationPointer(id=1, generation=current))
             build = Build(
                 status="running",
@@ -97,6 +116,14 @@ def test_startup_cleans_interrupted_full_build(tmp_path, monkeypatch):
                 generation=orphan,
             )
             assert rows[0]["n"] == 0, "orphan nodes remain"
+            assert vectors.has_collection("sda_" + historical), (
+                "published historical collection removed"
+            )
+            rows, _, _ = driver.execute_query(
+                "MATCH (n:SDAEntity {generation:$generation}) RETURN count(n) AS n",
+                generation=historical,
+            )
+            assert rows[0]["n"] == 1, "published historical nodes removed"
             assert vectors.has_collection("sda_" + current)
             rows, _, _ = driver.execute_query(
                 "MATCH (n:SDAEntity {generation:$generation}) RETURN count(n) AS n",
@@ -106,7 +133,7 @@ def test_startup_cleans_interrupted_full_build(tmp_path, monkeypatch):
             with sessions()() as db:
                 assert db.get(GenerationPointer, 1).generation == current
     finally:
-        for generation in (current, orphan):
+        for generation in (current, orphan, historical):
             driver.execute_query(
                 "MATCH (n:SDAEntity {generation:$generation}) DETACH DELETE n",
                 generation=generation,
