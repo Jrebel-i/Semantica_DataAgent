@@ -176,36 +176,6 @@ export function PluginsPage({
         </button>
       </fieldset>
       <fieldset>
-        <label>
-          {t.sessionRetention}
-          <input
-            type="number"
-            min="1"
-            max="36500"
-            value={sessionRetention}
-            onChange={(e) => setSessionRetention(e.target.value)}
-          />
-        </label>
-        <button
-          onClick={() => {
-            void fetch("/api/v1/settings", {
-              method: "PUT",
-              headers,
-              body: JSON.stringify({
-                values: { session_retention_days: sessionRetention },
-              }),
-            })
-              .then((response) => {
-                if (!response.ok) throw new Error();
-                setFailure(false);
-              })
-              .catch(() => setFailure(true));
-          }}
-        >
-          {t.save}
-        </button>
-      </fieldset>
-      <fieldset>
         <legend>{t.embeddingSettings}</legend>
         {(
           [
@@ -391,6 +361,36 @@ export function PluginsPage({
           <button onClick={() => void saveRules()}>{t.save}</button>
         </fieldset>
       )}
+      <fieldset>
+        <label>
+          {t.sessionRetention}
+          <input
+            type="number"
+            min="1"
+            max="36500"
+            value={sessionRetention}
+            onChange={(e) => setSessionRetention(e.target.value)}
+          />
+        </label>
+        <button
+          onClick={() => {
+            void fetch("/api/v1/settings", {
+              method: "PUT",
+              headers,
+              body: JSON.stringify({
+                values: { session_retention_days: sessionRetention },
+              }),
+            })
+              .then((response) => {
+                if (!response.ok) throw new Error();
+                setFailure(false);
+              })
+              .catch(() => setFailure(true));
+          }}
+        >
+          {t.save}
+        </button>
+      </fieldset>
     </section>
   );
 }

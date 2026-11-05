@@ -587,9 +587,9 @@ def test_expired_conversation_retains_history_but_cannot_resume(
     client, monkeypatch, tmp_path
 ):
     from datetime import UTC, datetime, timedelta
-    from semantica_dataagent import agent_runner
+
+    from semantica_dataagent import agent_runner, conversation_api
     from semantica_dataagent.db import Conversation, Turn, sessions
-    from semantica_dataagent import conversation_api
 
     c, token = client
     monkeypatch.setenv("DATAAGENT_AGENT_ROOT", str(tmp_path))
