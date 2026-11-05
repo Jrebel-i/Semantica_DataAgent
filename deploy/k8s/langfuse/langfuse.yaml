@@ -1,4 +1,12 @@
 apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: clickhouse-config
+  namespace: semantica-dataagent-langfuse
+data:
+  port.xml: <clickhouse><tcp_port>9001</tcp_port></clickhouse>
+---
+apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: postgres
@@ -91,19 +99,17 @@ spec:
         - name: postgres
           mountPath: /var/lib/postgresql/data
         readinessProbe:
-          exec: &id001
-            command:
-            - sh
-            - -c
-            - pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"
           periodSeconds: 10
           timeoutSeconds: 5
           failureThreshold: 3
+          tcpSocket:
+            port: 5432
         startupProbe:
-          exec: *id001
           periodSeconds: 10
           timeoutSeconds: 5
           failureThreshold: 90
+          tcpSocket:
+            port: 5432
       - name: clickhouse
         image: clickhouse/clickhouse-server:26.3.62.3
         env:
@@ -123,19 +129,22 @@ spec:
             memory: 4Gi
         ports:
         - containerPort: 8123
-        - containerPort: 9000
+        - containerPort: 9001
         volumeMounts:
         - name: clickhouse
           mountPath: /var/lib/clickhouse
+        - name: clickhouse-config
+          mountPath: /etc/clickhouse-server/config.d/port.xml
+          subPath: port.xml
         readinessProbe:
-          httpGet: &id002
+          httpGet: &id001
             path: /ping
             port: 8123
           periodSeconds: 10
           timeoutSeconds: 5
           failureThreshold: 3
         startupProbe:
-          httpGet: *id002
+          httpGet: *id001
           periodSeconds: 10
           timeoutSeconds: 5
           failureThreshold: 90
@@ -164,19 +173,17 @@ spec:
         - -c
         - exec redis-server --requirepass "$REDIS_PASSWORD" --maxmemory-policy noeviction
         readinessProbe:
-          exec: &id003
-            command:
-            - sh
-            - -c
-            - redis-cli -a "$REDIS_PASSWORD" ping | grep -q PONG
           periodSeconds: 10
           timeoutSeconds: 5
           failureThreshold: 3
+          tcpSocket:
+            port: 6379
         startupProbe:
-          exec: *id003
           periodSeconds: 10
           timeoutSeconds: 5
           failureThreshold: 90
+          tcpSocket:
+            port: 6379
       - name: minio
         image: minio/minio:RELEASE.2025-04-22T22-12-26Z
         env:
@@ -195,126 +202,126 @@ spec:
             cpu: '2'
             memory: 2Gi
         ports:
-        - containerPort: 9002
+        - containerPort: 9000
         volumeMounts:
         - name: minio
           mountPath: /data
         command:
         - sh
         - -c
-        - mkdir -p /data/langfuse; exec minio server --address :9002 /data
+        - mkdir -p /data/langfuse; exec minio server --address :9000 /data
         readinessProbe:
-          httpGet: &id004
+          httpGet: &id002
             path: /minio/health/ready
-            port: 9002
+            port: 9000
           periodSeconds: 10
           timeoutSeconds: 5
           failureThreshold: 3
         startupProbe:
-          httpGet: *id004
+          httpGet: *id002
           periodSeconds: 10
           timeoutSeconds: 5
           failureThreshold: 90
       - name: web
         image: docker.langfuse.com/langfuse/langfuse:4.75.0
         env:
-        - &id006
+        - &id004
           name: NEXTAUTH_URL
           value: http://172.16.242.124:31631
-        - &id007
+        - &id005
           name: DATABASE_URL
           valueFrom:
             secretKeyRef:
               name: langfuse-config
               key: database-url
-        - &id008
+        - &id006
           name: SALT
           valueFrom:
             secretKeyRef:
               name: langfuse-config
               key: salt
-        - &id009
+        - &id007
           name: ENCRYPTION_KEY
           valueFrom:
             secretKeyRef:
               name: langfuse-config
               key: encryption-key
-        - &id010
+        - &id008
           name: TELEMETRY_ENABLED
           value: 'false'
-        - &id011
+        - &id009
           name: CLICKHOUSE_MIGRATION_URL
-          value: clickhouse://localhost:9000
-        - &id012
+          value: clickhouse://localhost:9001
+        - &id010
           name: CLICKHOUSE_URL
           value: http://localhost:8123
-        - &id013
+        - &id011
           name: CLICKHOUSE_USER
           value: clickhouse
-        - &id014
+        - &id012
           name: CLICKHOUSE_PASSWORD
           valueFrom:
             secretKeyRef:
               name: langfuse-config
               key: password
-        - &id015
+        - &id013
           name: CLICKHOUSE_CLUSTER_ENABLED
           value: 'false'
-        - &id016
+        - &id014
           name: REDIS_HOST
           value: localhost
-        - &id017
+        - &id015
           name: REDIS_PORT
           value: '6379'
-        - &id018
+        - &id016
           name: REDIS_AUTH
           valueFrom:
             secretKeyRef:
               name: langfuse-config
               key: password
-        - &id019
+        - &id017
           name: LANGFUSE_S3_EVENT_UPLOAD_BUCKET
           value: langfuse
-        - &id020
+        - &id018
           name: LANGFUSE_S3_EVENT_UPLOAD_REGION
           value: auto
-        - &id021
+        - &id019
           name: LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID
           value: langfuse
-        - &id022
+        - &id020
           name: LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT
-          value: http://localhost:9002
-        - &id023
+          value: http://localhost:9000
+        - &id021
           name: LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE
           value: 'true'
-        - &id024
+        - &id022
           name: LANGFUSE_S3_EVENT_UPLOAD_PREFIX
           value: event/
-        - &id025
+        - &id023
           name: LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY
           valueFrom:
             secretKeyRef:
               name: langfuse-config
               key: password
-        - &id026
+        - &id024
           name: LANGFUSE_S3_MEDIA_UPLOAD_BUCKET
           value: langfuse
-        - &id027
+        - &id025
           name: LANGFUSE_S3_MEDIA_UPLOAD_REGION
           value: auto
-        - &id028
+        - &id026
           name: LANGFUSE_S3_MEDIA_UPLOAD_ACCESS_KEY_ID
           value: langfuse
-        - &id029
+        - &id027
           name: LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT
-          value: http://localhost:9002
-        - &id030
+          value: http://localhost:9000
+        - &id028
           name: LANGFUSE_S3_MEDIA_UPLOAD_FORCE_PATH_STYLE
           value: 'true'
-        - &id031
+        - &id029
           name: LANGFUSE_S3_MEDIA_UPLOAD_PREFIX
           value: media/
-        - &id032
+        - &id030
           name: LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY
           valueFrom:
             secretKeyRef:
@@ -362,20 +369,23 @@ spec:
         ports:
         - containerPort: 3000
         readinessProbe:
-          httpGet: &id005
+          httpGet: &id003
             path: /api/public/health
             port: 3000
           periodSeconds: 10
           timeoutSeconds: 5
           failureThreshold: 3
         startupProbe:
-          httpGet: *id005
+          httpGet: *id003
           periodSeconds: 10
           timeoutSeconds: 5
           failureThreshold: 90
+          initialDelaySeconds: 30
       - name: worker
         image: docker.langfuse.com/langfuse/langfuse-worker:4.75.0
         env:
+        - *id004
+        - *id005
         - *id006
         - *id007
         - *id008
@@ -401,8 +411,6 @@ spec:
         - *id028
         - *id029
         - *id030
-        - *id031
-        - *id032
         - name: LANGFUSE_MIGRATION_V4_WRITE_MODE
           value: dual
         resources:
@@ -413,17 +421,18 @@ spec:
             cpu: '2'
             memory: 3Gi
         readinessProbe:
-          httpGet: &id033
+          httpGet: &id031
             path: /
             port: 3030
           periodSeconds: 10
           timeoutSeconds: 5
           failureThreshold: 3
         startupProbe:
-          httpGet: *id033
+          httpGet: *id031
           periodSeconds: 10
           timeoutSeconds: 5
           failureThreshold: 90
+          initialDelaySeconds: 30
       volumes:
       - name: postgres
         persistentVolumeClaim:
@@ -437,6 +446,9 @@ spec:
       - name: minio
         persistentVolumeClaim:
           claimName: minio
+      - name: clickhouse-config
+        configMap:
+          name: clickhouse-config
   strategy:
     type: Recreate
 ---

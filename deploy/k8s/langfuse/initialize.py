@@ -3,7 +3,10 @@
 import json
 import secrets
 import subprocess
+import time
 from pathlib import Path
+from urllib.error import URLError
+from urllib.request import urlopen
 
 import yaml
 
@@ -91,9 +94,19 @@ if __name__ == "__main__":
     remote(
         f"kubectl -n {NS} wait --for=jsonpath='{{.status.phase}}'=Running pod -l app=langfuse --timeout=60s"
     )
-    # The web process can be running before its migrations and initialization finish.
-    remote(
-        f"kubectl -n {NS} exec deployment/langfuse -c web -- sh -c 'until wget -qO- http://localhost:3000/api/public/health >/dev/null; do sleep 2; done'"
-    )
+    # Wait through the externally reachable NodePort without container exec.
+    deadline = time.monotonic() + 600
+    while True:
+        try:
+            with urlopen(
+                "http://172.16.242.124:31631/api/public/health", timeout=5
+            ) as response:
+                if response.status == 200:
+                    break
+        except (OSError, URLError):
+            pass
+        if time.monotonic() >= deadline:
+            raise TimeoutError("Langfuse web health check timed out")
+        time.sleep(2)
     remote("kubectl apply -f -", Path(__file__).with_name("langfuse.yaml").read_text())
     remote(f"kubectl -n {NS} rollout status deployment/langfuse --timeout=600s")
