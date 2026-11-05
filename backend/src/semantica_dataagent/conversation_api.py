@@ -377,6 +377,21 @@ async def _stream(
         "conversation",
         {"conversation_id": conversation_id, "turn_id": turn_id},
     )
+    from .telemetry import submit, trace_id
+
+    observation_id = trace_id(conversation_id, turn_id)
+    secrets = (run_request.mcp_token, run_request.provider.api_key or "")
+    trace = {
+        "id": observation_id,
+        "name": "online-conversation",
+        "metadata": {
+            "agent": runner.agent_id,
+            "provider": run_request.provider.name,
+            "model": run_request.model,
+            "source": "online",
+        },
+    }
+    submit("trace-create", trace, secrets)
     seq = 0
     terminal = False
     try:
@@ -389,6 +404,11 @@ async def _stream(
             payload.update(event.data)
             yield _sse(event.type, payload)
             if event.type == DONE:
+                submit(
+                    "trace-create",
+                    {**trace, "output": event.data.get("text", "")},
+                    secrets,
+                )
                 _finish_turn(turn_id, "completed", event)
                 terminal = True
             elif event.type == ERROR:

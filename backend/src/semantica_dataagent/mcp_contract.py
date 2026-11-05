@@ -121,8 +121,7 @@ def install_contract(server):
         tool.parameters["additionalProperties"] = False
         tool.parameters.setdefault("properties", {})["cursor"] = {"type": "string"}
 
-    @server._mcp_server.call_tool(validate_input=False)
-    async def call(name, arguments):
+    async def call_impl(name, arguments):
         tool = tools.get(name)
         if tool is None:
             return error(
@@ -220,3 +219,83 @@ def install_contract(server):
             )
         except Exception as exc:  # noqa: BLE001 - sanitize failures at the boundary
             return classify_error(exc)
+
+    @server._mcp_server.call_tool(validate_input=False)
+    async def call(name, arguments):
+        import time
+        import uuid
+        from datetime import UTC, datetime
+
+        from .crypto import decrypt
+        from .db import Conversation, Provider, Token, Turn, sessions
+        from .mcp_context import current_conversation_id, current_requester
+        from .telemetry import submit, trace_id
+
+        started = datetime.now(UTC)
+        clock = time.monotonic()
+        result = await call_impl(name, arguments)
+        try:
+            requester = current_requester()
+            conversation_id = current_conversation_id()
+            active_turn = None
+            token_name = ""
+            provider_secret = ""
+            with sessions()() as db:
+                owner = db.query(Token).filter_by(id=requester.id).first()
+                token_name = owner.name if owner else ""
+                if conversation_id:
+                    conversation = db.get(Conversation, conversation_id)
+                    if conversation and conversation.owner_id == requester.id:
+                        provider = db.get(Provider, conversation.provider_id)
+                        if provider and provider.api_key:
+                            provider_secret = decrypt(provider.api_key)
+                        active_turn = (
+                            db.query(Turn)
+                            .filter_by(
+                                conversation_id=conversation_id, status="running"
+                            )
+                            .order_by(Turn.id.desc())
+                            .first()
+                        )
+                        if active_turn:
+                            active_turn = active_turn.id
+            current_trace = (
+                trace_id(conversation_id, active_turn)
+                if active_turn
+                else uuid.uuid4().hex
+            )
+            secrets = (requester.token, provider_secret)
+            if not active_turn:
+                submit(
+                    "trace-create",
+                    {
+                        "id": current_trace,
+                        "name": "local-mcp",
+                        "metadata": {"source": "local", "token_name": token_name},
+                    },
+                    secrets,
+                )
+            data = (
+                result.structuredContent
+                if hasattr(result, "structuredContent")
+                else result
+            )
+            submit(
+                "span-create",
+                {
+                    "id": uuid.uuid4().hex[:16],
+                    "traceId": current_trace,
+                    "name": name,
+                    "startTime": started.isoformat(),
+                    "endTime": datetime.now(UTC).isoformat(),
+                    "input": arguments,
+                    "output": data,
+                    "metadata": {"duration_ms": int((time.monotonic() - clock) * 1000)},
+                },
+                secrets,
+            )
+        except Exception:  # noqa: BLE001 - reporting must never change a tool result
+            import logging
+
+            logging.getLogger(__name__).warning("MCP telemetry failed")
+        return result

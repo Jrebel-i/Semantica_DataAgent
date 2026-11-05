@@ -44,3 +44,19 @@ def test_reporting_failure_does_not_interrupt_caller():
         return "answer"
 
     assert answer() == "answer"
+
+
+def test_filter_removes_nested_fields_and_known_secrets():
+    module = telemetry()
+    filtered = module._filtered(
+        {
+            "input": {
+                "query": "lookup private-credential",
+                "token": "private-credential",
+                "extra": {"sql": "hidden"},
+            },
+            "output": "private-credential",
+        },
+        ("private-credential",),
+    )
+    assert filtered == {"input": {"query": "lookup [REDACTED]"}, "output": "[REDACTED]"}

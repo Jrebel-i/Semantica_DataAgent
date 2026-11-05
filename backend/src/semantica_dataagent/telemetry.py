@@ -1,7 +1,9 @@
 """Fail-open, bounded Langfuse ingestion with an explicit field allowlist."""
 
+import hashlib
 import logging
 import queue
+import re
 import threading
 from datetime import UTC, datetime
 from uuid import uuid4
@@ -51,21 +53,52 @@ ALLOWED_FIELDS = frozenset(
         "is_error",
         "started_at",
         "ended_at",
+        "startTime",
+        "endTime",
         "valid",
         "errors",
         "warnings",
+        "names",
+        "scope",
+        "top_k",
+        "keyword",
+        "field",
+        "doc_id",
+        "section",
+        "task_id",
+        "questions",
+        "question",
+        "options",
+        "label",
+        "conversation_id",
     }
 )
 
 
-def _filtered(value):
+def trace_id(conversation_id, turn_id):
+    return hashlib.sha256(f"{conversation_id}:{turn_id}".encode()).hexdigest()[:32]
+
+
+def _filtered(value, secrets=()):
     if isinstance(value, dict):
         return {
-            key: _filtered(item) for key, item in value.items() if key in ALLOWED_FIELDS
+            key: _filtered(item, secrets)
+            for key, item in value.items()
+            if key in ALLOWED_FIELDS
         }
     if isinstance(value, list):
-        return [_filtered(item) for item in value]
-    if value is None or isinstance(value, (str, int, float, bool)):
+        return [_filtered(item, secrets) for item in value]
+    if isinstance(value, str):
+        for secret in secrets:
+            if secret:
+                value = value.replace(secret, "[REDACTED]")
+        value = re.sub(
+            r"(?i)(bearer\s+|(?:password|api[_-]?key|token|authorization)\s*[:=]\s*)[^\s,;]+",
+            r"\1[REDACTED]",
+            value,
+        )
+        return value[:12000]
+    if value is None or isinstance(value, (int, float, bool)):
         return value
     return None
 
@@ -134,20 +167,22 @@ def _consume():
                 timeout=3.0,
             )
             response.raise_for_status()
+            if response.json().get("errors"):
+                logger.warning("Langfuse rejected an ingestion event")
         except Exception:  # noqa: BLE001 - report errors without leaking credentials
             logger.warning("Langfuse ingestion failed")
         finally:
             _queue.task_done()
 
 
-def submit(kind, event):
+def submit(kind, event, secrets=()):
     """Queue a filtered event; configuration and network errors are non-fatal."""
     global _worker
     try:
         config = configuration()
         if config is None:
             return
-        payload = _filtered(event)
+        payload = _filtered(event, (*secrets, config[1], config[2]))
         with _lock:
             if _worker is None or not _worker.is_alive():
                 _worker = threading.Thread(
