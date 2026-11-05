@@ -578,3 +578,97 @@ def test_concurrent_admin_approvals_only_one_succeeds(client, monkeypatch, tmp_p
     with ThreadPoolExecutor(max_workers=2) as pool:
         statuses = list(pool.map(approve, range(2)))
     assert sorted(statuses) == [200, 409]
+
+
+def test_full_build_applies_field_override_on_reimport(tmp_path, monkeypatch):
+    from contextlib import nullcontext
+
+    from test_build_queue import configure
+
+    from semantica_dataagent import knowledge, relationships, stages
+    from semantica_dataagent.canonical import Record
+    from semantica_dataagent.db import Build, MetadataOverride, sessions
+    from semantica_dataagent.stage_contract import StageResult, StorageHandles
+
+    configure(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        knowledge,
+        "settings",
+        lambda: {
+            "source_directory": str(tmp_path),
+            "knowledge_generation": "old",
+            "embedding_model": "test",
+            "embedding_url": "http://localhost",
+            "neo4j_uri": "bolt://localhost",
+            "neo4j_user": "neo4j",
+            "milvus_uri": "http://localhost",
+        },
+    )
+    monkeypatch.setattr(knowledge, "configured", list)
+    monkeypatch.setattr(
+        knowledge,
+        "get_filters",
+        lambda: {
+            "database_include": [],
+            "database_exclude": [],
+            "task_include": [],
+            "task_exclude": [],
+        },
+    )
+    original = Record(
+        "field",
+        {
+            "database": "shop",
+            "table": "orders",
+            "name": "amount",
+            "comment": "exported",
+        },
+        "fields.json",
+    )
+    monkeypatch.setattr(
+        knowledge,
+        "read_sources",
+        lambda *args: ([original], {"fields.json": "hash"}, None, {}),
+    )
+    monkeypatch.setattr(
+        knowledge, "filter_records", lambda records, filters: (records, 0)
+    )
+    monkeypatch.setattr(knowledge, "validate_records", lambda records: None)
+    monkeypatch.setattr(
+        knowledge,
+        "build_storage",
+        lambda values, stats=None: nullcontext(
+            StorageHandles("new", None, None, values)
+        ),
+    )
+    monkeypatch.setattr(knowledge, "read_graph", lambda values: None)
+    monkeypatch.setattr(knowledge, "read_vectors", lambda values: None)
+    monkeypatch.setattr(knowledge, "prune_generations", lambda values: None)
+    monkeypatch.setattr(knowledge, "delete_generation_data", lambda values: None)
+    monkeypatch.setattr(relationships, "reconcile", lambda *args: None)
+    observed = []
+
+    def stage(records, generation, storage):
+        observed.append(records[0].data["comment"])
+        return StageResult()
+
+    monkeypatch.setattr(stages, "STAGES", [stage])
+    with sessions().begin() as db:
+        db.add(MetadataOverride(target="field:shop.orders.amount", comment="corrected"))
+    for _ in range(2):
+        with sessions().begin() as db:
+            build = Build(
+                status="running",
+                started_at="2026-01-01T00:00:00+00:00",
+                counts="{}",
+                build_type="full",
+            )
+            db.add(build)
+            db.flush()
+            build_id = build.id
+        knowledge.run_build(build_id)
+        with sessions()() as db:
+            build = db.get(Build, build_id)
+            assert build.status == "succeeded", build.error
+    assert observed == ["corrected", "corrected"]
+    assert original.data["comment"] == "exported"
