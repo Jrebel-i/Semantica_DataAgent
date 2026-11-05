@@ -236,3 +236,37 @@ def test_approval_commits_document_and_enqueues_incremental_build(
     assert proposal_id in message
     builds = c.get("/api/v1/builds", headers=headers).json()
     assert any(build["build_type"] == "incremental" for build in builds)
+
+
+def test_metadata_override_survives_reimport_of_same_source(client, tmp_path):
+    import json
+
+    from semantica_dataagent.canonical import CanonicalAdapter
+    from semantica_dataagent.db import MetadataOverride, sessions
+    from semantica_dataagent.table_stage import apply_overrides
+
+    source = tmp_path / "warehouse"
+    source.mkdir()
+    (source / "fields.json").write_text(
+        json.dumps(
+            [
+                {
+                    "database": "shop",
+                    "table": "orders",
+                    "name": "amount",
+                    "type": "decimal",
+                    "comment": "导出注释",
+                    "partition": False,
+                }
+            ]
+        )
+    )
+    with sessions().begin() as db:
+        db.add(
+            MetadataOverride(target="field:shop.orders.amount", comment="人工修正注释")
+        )
+    for _ in range(2):
+        imported = CanonicalAdapter().read(source, {}).records
+        corrected = apply_overrides(imported)
+        assert corrected[0].data["comment"] == "人工修正注释"
+        assert imported[0].data["comment"] == "导出注释"
