@@ -382,6 +382,10 @@ from .document_api import router as document_router
 
 app.include_router(document_router)
 
+from .skill_api import router as skill_router
+
+app.include_router(skill_router)
+
 
 def create_mcp():
     server = FastMCP(
@@ -402,6 +406,10 @@ def create_mcp():
     server.tool()(validate_sql)
     server.tool()(find_join_path)
 
+    from .skill import register_prompt
+
+    register_prompt(server)
+
     def get_capabilities() -> dict:
         from importlib.metadata import version
 
@@ -410,6 +418,9 @@ def create_mcp():
             "schema_version": "v1",
             "ranking_version": knowledge.RANKING_VERSION,
             "tools": sorted(t.name for t in server._tool_manager.list_tools()),
+            "prompts": sorted(
+                prompt.name for prompt in server._prompt_manager.list_prompts()
+            ),
             "current_generation": knowledge.settings()["knowledge_generation"],
         }
 

@@ -9,6 +9,7 @@ import { PluginsPage } from "./PluginsPage";
 import { Login } from "./Login";
 import { StatusPage, type Health } from "./StatusPage";
 import { TokensPage } from "./TokensPage";
+import { McpAccessPage } from "./McpAccessPage";
 
 export function App() {
   const [lang, setLang] = useState<Language>(() =>
@@ -94,6 +95,7 @@ export function App() {
               { path: "/", label: t.statusPage },
               { path: "/knowledge", label: t.knowledge },
               { path: "/search", label: t.searchDebug },
+              { path: "/mcp-access", label: t.mcpAccess },
               { path: "/builds", label: t.builds },
               ...(role === "admin"
                 ? [
@@ -132,6 +134,8 @@ export function App() {
             <BuildsPage token={token} messages={t} />
           ) : path === "/search" ? (
             <SearchPage token={token} messages={t} />
+          ) : path === "/mcp-access" ? (
+            <McpAccessPage token={token} messages={t} />
           ) : path === "/knowledge" ? (
             <KnowledgePage token={token} messages={t} />
           ) : (
