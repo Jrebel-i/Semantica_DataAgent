@@ -1068,7 +1068,7 @@ def search(query, scope, top_k, category=None):
     sources = {"exact": [], "fulltext": [], "vector": vectors, "graph": []}
     for row in rows:
         sources[row["source"]].append(row["item"])
-    seeds = [x["ref"] for x in fuse(sources, 10)]
+    seeds = [x["ref"] for x in fuse(sources, max(10, top_k))]
     if seeds:
         rows = execute(
             read_graph(values),
@@ -1088,7 +1088,11 @@ def search(query, scope, top_k, category=None):
         }
         WITH seed, n
         WHERE ((n:SDATable AND 'tables' IN $scopes) OR (n:SDAField AND 'fields' IN $scopes) OR (n:SDATask AND 'tasks' IN $scopes) OR (n:SDAChunk AND 'docs' IN $scopes)) AND ($category IS NULL OR n.category = $category)
-        RETURN DISTINCT seed.ref AS seed_ref, properties(n) AS item""",
+        WITH DISTINCT seed, n
+        ORDER BY seed.ref, n.ref
+        WITH seed, collect(n)[..$limit] AS neighbors
+        UNWIND neighbors AS n
+        RETURN seed.ref AS seed_ref, properties(n) AS item""",
             {**params, "scopes": scopes, "seeds": seeds},
         )
         seed_order = {ref: i for i, ref in enumerate(seeds)}

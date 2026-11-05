@@ -60,7 +60,7 @@ def reconcile(storage, records, generation):
             continue
         candidates = set(
             re.findall(
-                r"(?<![A-Za-z0-9_])([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)(?![A-Za-z0-9_])",
+                r'(?<![A-Za-z0-9_])(?:[`"]?)([A-Za-z_][A-Za-z0-9_]*)(?:[`"]?)\s*\.\s*(?:[`"]?)([A-Za-z_][A-Za-z0-9_]*)(?:[`"]?)(?![A-Za-z0-9_])',
                 record.data["content"],
             )
         )

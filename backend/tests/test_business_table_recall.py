@@ -40,3 +40,35 @@ def test_document_business_term_recalls_english_table(monkeypatch):
 
     hits = knowledge.search("销售额", "tables", 5)
     assert table["ref"] in [hit["ref"] for hit in hits], "业务词未召回文档关联的数仓表"
+
+
+def test_document_relations_include_quoted_sql_table_names():
+    from semantica_dataagent.canonical import Record
+    from semantica_dataagent.relationships import reconcile
+
+    class Storage:
+        build_id = 1
+
+        def __init__(self):
+            self.links = []
+
+        def execute(self, query, params):
+            if "UNWIND $rows AS row MATCH (d:SDADocument" in query:
+                self.links.extend(params["rows"])
+
+    storage = Storage()
+    records = [
+        Record("table", {"database": "warehouse", "name": "order_metrics"}),
+        Record(
+            "document",
+            {
+                "category": "metrics",
+                "path": "sales.md",
+                "content": '销售额来自 FROM `warehouse`.`order_metrics` JOIN "warehouse"."unknown"',
+            },
+        ),
+    ]
+    reconcile(storage, records, "test")
+    assert [(row["database"], row["name"]) for row in storage.links] == [
+        ("warehouse", "order_metrics")
+    ]
