@@ -146,36 +146,6 @@ export function PluginsPage({
       {failure && <p role="alert">{t.error}</p>}
       <fieldset>
         <label>
-          {t.sessionRetention}
-          <input
-            type="number"
-            min="1"
-            max="36500"
-            value={sessionRetention}
-            onChange={(e) => setSessionRetention(e.target.value)}
-          />
-        </label>
-        <button
-          onClick={() => {
-            void fetch("/api/v1/settings", {
-              method: "PUT",
-              headers,
-              body: JSON.stringify({
-                values: { session_retention_days: sessionRetention },
-              }),
-            })
-              .then((response) => {
-                if (!response.ok) throw new Error();
-                setFailure(false);
-              })
-              .catch(() => setFailure(true));
-          }}
-        >
-          {t.save}
-        </button>
-      </fieldset>
-      <fieldset>
-        <label>
           {t.dimLimit}
           <input
             aria-label={t.dimLimit}
@@ -193,6 +163,36 @@ export function PluginsPage({
               headers,
               body: JSON.stringify({
                 values: { dimension_value_limit: dimLimit },
+              }),
+            })
+              .then((response) => {
+                if (!response.ok) throw new Error();
+                setFailure(false);
+              })
+              .catch(() => setFailure(true));
+          }}
+        >
+          {t.save}
+        </button>
+      </fieldset>
+      <fieldset>
+        <label>
+          {t.sessionRetention}
+          <input
+            type="number"
+            min="1"
+            max="36500"
+            value={sessionRetention}
+            onChange={(e) => setSessionRetention(e.target.value)}
+          />
+        </label>
+        <button
+          onClick={() => {
+            void fetch("/api/v1/settings", {
+              method: "PUT",
+              headers,
+              body: JSON.stringify({
+                values: { session_retention_days: sessionRetention },
               }),
             })
               .then((response) => {

@@ -651,7 +651,7 @@ export function ChatPage({
       if (!response.ok) throw new Error();
       const detail = (await response.json()) as ConversationDetail;
       setCurrentConversationId(detail.id);
-      setResumable(detail.resumable);
+      setResumable(detail.resumable !== false);
       setTurns(detail.turns);
       setLive(null);
       setAgentId(detail.agent);
@@ -852,7 +852,7 @@ export function ChatPage({
                   disabled={sending}
                 >
                   {conversation.title}
-                  {!conversation.resumable && ` (${t.sessionExpired})`}
+                  {conversation.resumable === false && ` (${t.sessionExpired})`}
                 </Button>
                 <span>
                   {" "}
