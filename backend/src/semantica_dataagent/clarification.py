@@ -4,7 +4,7 @@ import json
 import uuid
 from typing import Annotated
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, WithJsonSchema
 
 from . import knowledge
 from .db import Clarification, Conversation, sessions
@@ -21,7 +21,36 @@ class ClarificationQuestion(BaseModel):
     options: list[ClarificationOption] = Field(min_length=2, max_length=5)
 
 
-Questions = Annotated[list[ClarificationQuestion], Field(min_length=1, max_length=3)]
+def _inline_question_schema() -> dict:
+    # Some MCP clients rebuild the root schema without copying its $defs.
+    schema = ClarificationQuestion.model_json_schema()
+    definitions = schema.pop("$defs", {})
+
+    def inline(value):
+        if isinstance(value, list):
+            return [inline(item) for item in value]
+        if isinstance(value, dict):
+            if "$ref" in value:
+                name = value["$ref"].removeprefix("#/$defs/")
+                return inline(definitions[name])
+            return {key: inline(item) for key, item in value.items()}
+        return value
+
+    return inline(schema)
+
+
+Questions = Annotated[
+    list[ClarificationQuestion],
+    Field(min_length=1, max_length=3),
+    WithJsonSchema(
+        {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 3,
+            "items": _inline_question_schema(),
+        }
+    ),
+]
 
 
 def _question(value) -> ClarificationQuestion:

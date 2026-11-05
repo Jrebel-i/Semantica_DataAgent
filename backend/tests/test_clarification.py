@@ -556,3 +556,22 @@ def test_ask_dataagent_uses_configured_default_agent_provider_and_model(
     assert not result.isError, result.structuredContent
     assert runner.requests[0].provider.id == provider["id"]
     assert runner.requests[0].model == "configured-model"
+
+
+def test_clarification_schema_survives_clients_that_rebuild_the_root():
+    from jsonschema import Draft202012Validator
+
+    from semantica_dataagent.app import create_mcp
+
+    tool = next(
+        item
+        for item in create_mcp()._tool_manager.list_tools()
+        if item.name == "request_clarification"
+    )
+    schema = {key: tool.parameters[key] for key in ("type", "properties", "required")}
+    assert "#/$defs/" not in json.dumps(schema), (
+        "tool schema contains dangling references"
+    )
+    validator = Draft202012Validator(schema)
+    assert validator.is_valid({"questions": SYNTHETIC_QUESTIONS})
+    assert not validator.is_valid({"questions": [{"question": "x", "options": []}]})
