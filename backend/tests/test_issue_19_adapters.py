@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 
 import pytest
+
 from semantica_dataagent.agent_runner import get_runner
 
 
@@ -75,9 +76,10 @@ def test_mcp_configuration_passes_the_conversation_header(agent, tmp_path):
         path = config / "config.toml"
         text = path.read_text()
         headers = tomllib.loads(text)["mcp_servers"]["dataagent"]["http_headers"]
-        assert tomllib.loads(text)["mcp_servers"]["dataagent"][
-            "bearer_token_env_var"
-        ] == "DATAAGENT_TOKEN"
+        assert (
+            tomllib.loads(text)["mcp_servers"]["dataagent"]["bearer_token_env_var"]
+            == "DATAAGENT_TOKEN"
+        )
 
     assert headers["x-dataagent-conversation-id"] == "conversation-one"
     assert "user-token-secret-value" not in text

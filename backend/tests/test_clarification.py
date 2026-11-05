@@ -116,11 +116,7 @@ def test_existing_refs_follow_the_switched_generation_not_the_setting(
     def execute(store, query, parameters):
         seen.append(parameters["generation"])
         wanted = set(parameters["refs"])
-        return [
-            {"ref": ref}
-            for ref in refs[parameters["generation"]]
-            if ref in wanted
-        ]
+        return [{"ref": ref} for ref in refs[parameters["generation"]] if ref in wanted]
 
     monkeypatch.setattr(knowledge, "read_graph", lambda values: object())
     monkeypatch.setattr(knowledge, "execute", execute)
