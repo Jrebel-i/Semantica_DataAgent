@@ -196,6 +196,7 @@ def test_explicit_pull_manifest_overrides_legacy_snapshot_name(tmp_path):
     ("flat", "versions", "explicit", "expected"),
     [
         (True, {"pull": "2026-01-01T00:00:00+00:00"}, None, "pull"),
+        (True, {}, None, "."),
         (True, {"legacy": None}, None, "."),
         (
             True,
