@@ -2247,6 +2247,7 @@
             "name": "table",
             "required": true,
             "schema": {
+              "minLength": 1,
               "title": "Table",
               "type": "string"
             }
@@ -2256,6 +2257,7 @@
             "name": "column",
             "required": true,
             "schema": {
+              "minLength": 1,
               "title": "Column",
               "type": "string"
             }
@@ -2266,6 +2268,8 @@
             "required": false,
             "schema": {
               "default": 1,
+              "maximum": 3,
+              "minimum": 1,
               "title": "Depth",
               "type": "integer"
             }

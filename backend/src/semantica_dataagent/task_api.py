@@ -3,7 +3,7 @@
 from typing import Annotated, Literal
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 
 from . import knowledge
@@ -126,7 +126,10 @@ def table_lineage(table: str, _: Annotated[str, Depends(current_user)]):
 
 @router.get("/api/v1/column-lineage")
 def column_lineage(
-    table: str, column: str, _: Annotated[str, Depends(current_user)], depth: int = 1
+    table: Annotated[str, Query(min_length=1)],
+    column: Annotated[str, Query(min_length=1)],
+    _: Annotated[str, Depends(current_user)],
+    depth: Annotated[int, Query(ge=1, le=3)] = 1,
 ):
     return {
         "upstream": get_lineage(table, "up", depth, column),
