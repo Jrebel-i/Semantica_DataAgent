@@ -3,130 +3,39 @@
 from __future__ import annotations
 
 import json
-import os
+import sys
+from pathlib import Path
+
+_CHECKS_DIR = str(Path(__file__).resolve().parent)
+if _CHECKS_DIR not in sys.path:
+    sys.path.append(_CHECKS_DIR)
+
+from _conversation import (
+    ask_stable as _ask_stable,
+)
+from _conversation import (
+    clarifications as _clarifications,
+)
+from _conversation import (
+    create_provider,
+)
+from _conversation import (
+    delegated_answer as _delegated_answer,
+)
+from _conversation import (
+    sql_blocks as _sql_blocks,
+)
 
 PROVIDER_SECRET = "{{SECRET_issue20_e2e_key}}"
-AMBIGUOUS = (
-    "上个月销售额是多少？我还没有决定采用支付销售额还是下单销售额，"
-    "请先检索两种定义，必须调用 request_clarification 工具生成澄清卡片，"
-    "提供有证据引用的口径选项，待我选择后再写 Hive SQL；不要只用普通文字追问，也不要直接写 SQL。"
-    "每次提问都按当前问题独立判断，不要沿用其他对话里的选择。"
-)
+AMBIGUOUS = "上个月销售额是多少？请用 Hive SQL 查询。"
 PAYMENT_REF = "definitions/sales.md"
 ORDER_REF = "sales_order.md"
 
 
-def _parse_sse(text: str) -> list[tuple[str, dict]]:
-    events: list[tuple[str, dict]] = []
-    for block in text.split("\n\n"):
-        name: str | None = None
-        data: list[str] = []
-        for line in block.splitlines():
-            if line.startswith("event: "):
-                name = line[7:]
-            elif line.startswith("data: "):
-                data.append(line[6:])
-        if name is not None and data:
-            events.append((name, json.loads("\n".join(data))))
-    return events
-
-
-def _ask(ctx, body: dict) -> list[tuple[str, dict]]:
-    with ctx.rest.stream(
-        "POST", "/api/v1/conversations/ask", json=body, timeout=600
-    ) as response:
-        ctx.require(
-            response.status_code == 200,
-            f"ask HTTP {response.status_code}: {response.read()[:500]!r}",
-        )
-        ctx.require(
-            response.headers.get("content-type", "").startswith("text/event-stream"),
-            f"ask returned {response.headers.get('content-type')!r}",
-        )
-        text = "".join(response.iter_text())
-    ctx.require(
-        ctx.token not in text, "the personal token appeared in the SSE response"
-    )
-    return _parse_sse(text)
-
-
-def _empty_done(events: list[tuple[str, dict]]) -> bool:
-    if not events or events[-1][0] != "done":
-        return False
-    done = events[-1][1]
-    return not (done.get("text") or done.get("sql") or done.get("citations"))
-
-
-def _ask_stable(
-    ctx, body: dict, *, attempts: int = 3, expect_clarification: bool = False
-) -> tuple[list[tuple[str, dict]], int]:
-    """Retry an empty or undecided final turn, known model gateway flakes."""
-    for attempt in range(attempts):
-        events = _ask(ctx, body)
-        empty = _empty_done(events)
-        undecided = (
-            expect_clarification
-            and bool(events)
-            and events[-1][0] == "done"
-            and not _clarifications(events)
-            and not _sql_blocks(events)
-        )
-        if not (empty or undecided) or attempt == attempts - 1:
-            return events, attempt
-    raise AssertionError("unreachable")
-
-
 def _provider(ctx) -> tuple[str, str]:
-    base_url = os.environ.get("TEST_PI_BASE_URL", "http://127.0.0.1:3425").rstrip("/")
-    model = os.environ.get("TEST_PI_MODEL", "deepseek-v4.1-flash#claude")
-    created = ctx.rest.post(
-        "/api/v1/providers",
-        json={
-            "name": "Issue 20 E2E",
-            "type": "anthropic-messages",
-            "base_url": base_url,
-            "api_key": PROVIDER_SECRET,
-            "models": [model],
-        },
-    )
-    ctx.require(
-        created.status_code == 201,
-        f"provider create HTTP {created.status_code}: {created.text[:500]}",
-    )
-    return created.json()["id"], model
-
-
-def _delegated_answer(ctx, question: str) -> tuple[dict, int]:
-    """Retry a completed turn that stopped before doing any work."""
-    retries = 0
-    for attempt in range(3):
-        answer = ctx.mcp_call("ask_dataagent", {"question": question}, timeout=600)
-        if (
-            answer.get("status") != "completed"
-            or answer.get("sql")
-            or answer.get("citations")
-            or len(answer.get("answer") or "") >= 200
-        ):
-            return answer, retries
-        if attempt < 2:
-            retries += 1
-    return answer, retries
-
-
-def _clarifications(events: list[tuple[str, dict]]) -> list[dict]:
-    questions: list[dict] = []
-    for name, data in events:
-        if name == "clarification":
-            questions.extend(data.get("questions") or [])
-    return questions
-
-
-def _sql_blocks(events: list[tuple[str, dict]]) -> list[str]:
-    blocks: list[str] = []
-    for name, data in events:
-        if name == "done":
-            blocks.extend(item.get("sql", "") for item in data.get("sql") or [])
-    return [block for block in blocks if block]
+    # 默认模型改为 deepseek-v4.1-flash#claude：原来的 codex/gpt-6.1-sol
+    # 网关额度经常 429，e2e 无法稳定运行；需要时仍用 TEST_PI_MODEL 覆盖。
+    return create_provider(ctx, name="Issue 20 E2E", secret=PROVIDER_SECRET)
 
 
 def _selected_definition(questions: list[dict]) -> tuple[dict, dict]:
