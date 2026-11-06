@@ -8,7 +8,8 @@ import os
 PROVIDER_SECRET = "{{SECRET_issue20_e2e_key}}"
 AMBIGUOUS = (
     "上个月销售额是多少？我还没有决定采用支付销售额还是下单销售额，"
-    "请先检索两种定义，向我提供有证据引用的口径选项，待我选择后再写 Hive SQL。"
+    "请先检索两种定义，必须调用 request_clarification 工具生成澄清卡片，"
+    "提供有证据引用的口径选项，待我选择后再写 Hive SQL；不要只用普通文字追问，也不要直接写 SQL。"
 )
 PAYMENT_REF = "definitions/sales.md"
 ORDER_REF = "sales_order.md"
@@ -119,7 +120,9 @@ def check_online_clarification_selection_is_scoped_to_one_conversation(ctx):
     ctx.require(
         questions,
         "the ambiguous question did not raise a clarification event: "
-        f"{[(name, data) for name, data in first if name == 'error']}",
+        f"events={[name for name, _ in first]} "
+        f"errors={[(name, data) for name, data in first if name == 'error']} "
+        f"last={(first[-1:] if first else [])}",
     )
     ctx.require(
         all(len(question.get("options") or []) >= 2 for question in questions),
