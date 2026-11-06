@@ -6,6 +6,7 @@ import sys
 from dataclasses import dataclass
 from importlib.metadata import entry_points
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 
@@ -178,7 +179,7 @@ def test_sandbox_turn_registers_starts_and_always_closes(tmp_path):
     from semantica_dataagent import agent_sandbox
 
     class FakeSandbox:
-        instances = []
+        instances: ClassVar[list] = []
 
         def __init__(self, workspace, model_url, mcp_url):
             self.workspace = workspace
