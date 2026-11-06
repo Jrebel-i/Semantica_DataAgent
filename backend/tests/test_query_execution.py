@@ -85,6 +85,75 @@ def test_expired_query_confirmation_cannot_execute(client, monkeypatch):
     assert response.status_code == 410, response.text
 
 
+def test_mcp_proposes_only_validated_sql_without_executing(client, monkeypatch):
+    import asyncio
+
+    from mcp.types import CallToolRequest, CallToolRequestParams
+
+    from semantica_dataagent import knowledge, query_api, sql_validation
+    from semantica_dataagent.app import create_mcp
+    from semantica_dataagent.auth import Requester
+    from semantica_dataagent.db import Token, sessions
+    from semantica_dataagent.mcp_context import bind_mcp_context
+
+    submissions = []
+
+    class Plugin:
+        def bind(self, config, token):
+            return self
+
+        async def estimate(self, sql):
+            return {"partitions": 3, "rows": 20}
+
+        async def submit(self, sql, limit):
+            submissions.append(sql)
+
+    monkeypatch.setattr(knowledge, "describe", lambda **_: [])
+    monkeypatch.setattr(query_api, "_config", lambda: (Plugin(), {"row_limit": 100}))
+    monkeypatch.setattr(
+        sql_validation, "validate_sql", lambda sql, dialect: {"status": "pass"}
+    )
+    _, headers = client
+    token = headers["Authorization"].removeprefix("Bearer ")
+
+    async def run():
+        server = create_mcp()
+        server.get_context = lambda: None
+        handler = server._mcp_server.request_handlers[CallToolRequest]
+        with sessions()() as db:
+            owner = db.query(Token).first()
+            requester = Requester(id=owner.id, role=owner.role, token=token)
+        with bind_mcp_context(requester):
+            return (
+                await handler(
+                    CallToolRequest(
+                        method="tools/call",
+                        params=CallToolRequestParams(
+                            name="propose_query", arguments={"sql": "SELECT 1"}
+                        ),
+                    )
+                )
+            ).root
+
+    result = asyncio.run(run())
+    assert not result.isError
+    plan = result.structuredContent
+    assert plan["sql"] == "SELECT 1"
+    assert plan["data_source"] == "doris_ai"
+    assert plan["estimated_partitions"] == 3
+    assert plan["estimated_rows"] == 20
+    assert plan["row_limit"] == 100
+    assert plan["id"]
+    assert not submissions
+
+    monkeypatch.setattr(
+        sql_validation, "validate_sql", lambda sql, dialect: {"status": "issues"}
+    )
+    rejected = asyncio.run(run())
+    assert rejected.isError
+    assert not submissions
+
+
 def test_personal_credentials_are_isolated_between_callers(client):
     c, admin = client
     user = c.post(
