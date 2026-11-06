@@ -149,3 +149,50 @@ def test_restart_cleanup_preserves_live_owner(tmp_path):
         assert result.returncode == 0, "cleanup removed a live backend's container"
     finally:
         sandbox.close()
+
+
+@pytest.mark.skipif(not _docker_available(), reason="Docker daemon is required")
+def test_session_relay_reaches_literal_ip_target(tmp_path):
+    from semantica_dataagent.agent_sandbox import IMAGE, SessionSandbox
+
+    gateway = subprocess.run(
+        [
+            "docker",
+            "run",
+            "--rm",
+            "--network",
+            "bridge",
+            "--entrypoint",
+            "node",
+            IMAGE,
+            "-e",
+            "require('dns').lookup('host.docker.internal',(e,a)=>{if(e)process.exit(1);console.log(a)})",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=30,
+    ).stdout.strip()
+    server = ThreadingHTTPServer(("0.0.0.0", 0), _Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    sandbox = SessionSandbox(
+        tmp_path,
+        f"http://{gateway}:{server.server_port}",
+        f"http://127.0.0.1:{server.server_port}",
+    )
+    try:
+        sandbox.start()
+        result = sandbox.exec(
+            [
+                "node",
+                "-e",
+                "fetch(process.env.DATAAGENT_MODEL_URL).then(r=>{console.log(r.status);process.exit(r.ok?0:1)}).catch(()=>process.exit(1))",
+            ]
+        )
+        assert result.strip() == "200"
+    finally:
+        sandbox.close()
+        server.shutdown()
+        server.server_close()
+        thread.join()
