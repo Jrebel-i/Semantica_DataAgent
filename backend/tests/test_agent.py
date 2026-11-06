@@ -566,6 +566,75 @@ def test_deleting_conversation_removes_its_query_results(client, monkeypatch):
     )
 
 
+def test_expired_session_removes_saved_query_rows(client):
+    from datetime import UTC, datetime, timedelta
+
+    from semantica_dataagent.conversation_api import cleanup_expired_sessions
+    from semantica_dataagent.db import (
+        Conversation,
+        QueryExecution,
+        Token,
+        Turn,
+        TurnEvent,
+        sessions,
+    )
+
+    c, token = client
+    headers = {"Authorization": f"Bearer {token}"}
+    with sessions().begin() as db:
+        owner = db.query(Token).first()
+        db.add(
+            Conversation(
+                id="old-session",
+                owner_id=owner.id,
+                title="q",
+                agent="pi",
+                provider_id="p",
+                model="m",
+                updated_at=datetime.now(UTC) - timedelta(days=31),
+            )
+        )
+        turn = Turn(
+            conversation_id="old-session",
+            sequence=1,
+            question="q",
+            status="completed",
+            answer="",
+            sql="[]",
+            citations="[]",
+        )
+        db.add(turn)
+        db.flush()
+        db.add(
+            TurnEvent(
+                turn_id=turn.id,
+                seq=0,
+                type="query_result",
+                data='{"rows":[["private"]]}',
+            )
+        )
+        db.add(
+            QueryExecution(
+                id="expired-result",
+                owner_id=owner.id,
+                conversation_id="old-session",
+                turn_id=turn.id,
+                sql="SELECT 1",
+                status="succeeded",
+                rows='{"columns":["v"],"data":[["private"]]}',
+            )
+        )
+    cleanup_expired_sessions()
+    assert (
+        c.get(
+            "/api/v1/queries/expired-result/download?format=json", headers=headers
+        ).status_code
+        == 404
+    )
+    detail = c.get("/api/v1/conversations/old-session", headers=headers).json()
+    assert "private" not in json.dumps(detail)
+
+
 def test_pi_runner_reads_jsonl_records_past_the_default_stream_limit(tmp_path: Path):
     script = tmp_path / "fake-pi.py"
     script.write_text(
