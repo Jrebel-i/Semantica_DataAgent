@@ -177,3 +177,20 @@ def test_query_download_does_not_download_failed_query():
         puller().query_download(
             client, "http://dtb", "secret", "select 1", "json", poll_interval=0
         )
+
+
+def test_authentication_and_timeout_have_distinct_safe_errors():
+    def unauthorized(request):
+        return httpx.Response(401, text="secret response")
+
+    def timeout(request):
+        raise httpx.ReadTimeout("secret request", request=request)
+
+    for handler, expected in ((unauthorized, "401"), (timeout, "timeout")):
+        with (
+            httpx.Client(transport=httpx.MockTransport(handler)) as client,
+            pytest.raises(ValueError, match=expected) as error,
+        ):
+            puller().list_tables(client, "http://dtb", "private-token", "dimensions")
+        assert "private-token" not in str(error.value)
+        assert "secret" not in str(error.value)

@@ -33,13 +33,19 @@ class DtbPuller:
                     "cookie": f"satoken={token}",
                 },
             )
+            if response.status_code == 401:
+                raise ValueError("DTB authentication failed (401)")
             response.raise_for_status()
             payload = response.json()
+            if str(payload.get("status")) == "401":
+                raise ValueError("DTB authentication failed (401)")
             if str(payload.get("status")) != "200" or not isinstance(
                 payload.get("data"), dict
             ):
                 raise ValueError("DTB request was rejected")
             return payload["data"]
+        except httpx.TimeoutException as exc:
+            raise ValueError("DTB request timeout") from exc
         except (httpx.HTTPError, TypeError, AttributeError) as exc:
             raise ValueError("DTB request failed") from exc
 
@@ -132,8 +138,12 @@ class DtbPuller:
                     "defaultLimit": 0,
                 },
             )
+            if response.status_code == 401:
+                raise ValueError("DTB authentication failed (401)")
             response.raise_for_status()
             payload = response.json()
+            if str(payload.get("status")) == "401":
+                raise ValueError("DTB authentication failed (401)")
             if str(payload.get("status")) != "200":
                 raise ValueError("DTB query submission failed")
             data = payload["data"]
@@ -160,5 +170,7 @@ class DtbPuller:
             )
             response.raise_for_status()
             return response.content
+        except httpx.TimeoutException as exc:
+            raise ValueError("DTB query timeout") from exc
         except (httpx.HTTPError, KeyError, TypeError, AttributeError) as exc:
             raise ValueError("DTB query request failed") from exc
