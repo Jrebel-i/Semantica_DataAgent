@@ -713,7 +713,36 @@ export function ChatPage({
         } | null;
         throw new Error(body?.detail || t.askError);
       }
-      await readSse(response, () => {});
+      await readSse(response, (name, data) => {
+        if (name === "query_result") {
+          setTurns((current) =>
+            current.map((item) => {
+              if (item.id !== turn.id) return item;
+              const events = item.events ?? [];
+              return {
+                ...item,
+                status: "running",
+                events: [...events, { seq: events.length, type: name, data }],
+              };
+            }),
+          );
+        } else if (name === "done") {
+          setTurns((current) =>
+            current.map((item) =>
+              item.id === turn.id
+                ? {
+                    ...item,
+                    status: "completed",
+                    answer:
+                      typeof data.text === "string" ? data.text : item.answer,
+                  }
+                : item,
+            ),
+          );
+        } else if (name === "error") {
+          setError(String(data.message ?? t.answerFailed));
+        }
+      });
       await openConversation(currentConversationId);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : t.askError);
