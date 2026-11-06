@@ -1,5 +1,6 @@
 """DTB metadata puller."""
 
+import time
 from typing import ClassVar
 from urllib.parse import quote
 
@@ -109,3 +110,55 @@ class DtbPuller:
             200,
         )
         return detail, columns
+
+    def query_download(
+        self, client, base_url, token, sql, format, poll_interval=2, max_polls=30
+    ):
+        if format not in {"json", "xlsx", "csv"}:
+            raise ValueError("Invalid DTB query format")
+        headers = {
+            "token": token,
+            "x-requested-with": "XMLHttpRequest",
+            "cookie": f"satoken={token}",
+        }
+        try:
+            response = client.post(
+                base_url.rstrip("/") + "/api/data-query/async-execute",
+                headers=headers,
+                json={
+                    "env": 2,
+                    "dataSource": "presto-emr",
+                    "sql": sql,
+                    "defaultLimit": 0,
+                },
+            )
+            response.raise_for_status()
+            payload = response.json()
+            if str(payload.get("status")) != "200":
+                raise ValueError("DTB query submission failed")
+            data = payload["data"]
+            key = data.get("queryKey") or data.get("queryId")
+            if not isinstance(key, str) or not key:
+                raise ValueError("DTB query missing key")
+            key = quote(key, safe="")
+            for attempt in range(max_polls):
+                result = self._get(
+                    client, base_url, token, "/api/data-query/result/" + key
+                )
+                if result.get("errorMessage"):
+                    raise ValueError("DTB query failed")
+                if result.get("progress") == 1.0:
+                    break
+                if attempt + 1 < max_polls:
+                    time.sleep(poll_interval)
+            else:
+                raise ValueError("DTB query timed out")
+            response = client.get(
+                base_url.rstrip("/") + "/api/data-query/download/" + key,
+                headers=headers,
+                params={"format": format},
+            )
+            response.raise_for_status()
+            return response.content
+        except (httpx.HTTPError, KeyError, TypeError, AttributeError) as exc:
+            raise ValueError("DTB query request failed") from exc

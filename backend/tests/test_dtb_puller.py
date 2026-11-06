@@ -126,3 +126,54 @@ def test_dtb_puller_rejects_incomplete_columns():
         pytest.raises(ValueError, match="pagination"),
     ):
         puller().table_detail(client, "http://dtb", "secret", 12)
+
+
+def test_query_download_waits_for_completion_and_returns_full_result():
+    calls = []
+
+    def reply(request):
+        calls.append((request.method, request.url.path))
+        if request.url.path.endswith("async-execute"):
+            assert request.method == "POST"
+            return httpx.Response(
+                200, json={"status": "200", "data": {"queryKey": "query-1"}}
+            )
+        if "/result/" in request.url.path:
+            progress = 0.5 if calls.count(("GET", request.url.path)) == 1 else 1.0
+            return httpx.Response(
+                200, json={"status": "200", "data": {"progress": progress}}
+            )
+        assert request.url.params["format"] == "json"
+        return httpx.Response(200, content=b'{"columns":[],"data":[]}')
+
+    with httpx.Client(transport=httpx.MockTransport(reply)) as client:
+        content = puller().query_download(
+            client, "http://dtb", "secret", "select 1", "json", poll_interval=0
+        )
+    assert content == b'{"columns":[],"data":[]}'
+    assert calls == [
+        ("POST", "/api/data-query/async-execute"),
+        ("GET", "/api/data-query/result/query-1"),
+        ("GET", "/api/data-query/result/query-1"),
+        ("GET", "/api/data-query/download/query-1"),
+    ]
+
+
+def test_query_download_does_not_download_failed_query():
+    def reply(request):
+        if request.url.path.endswith("async-execute"):
+            return httpx.Response(
+                200, json={"status": "200", "data": {"queryKey": "query-1"}}
+            )
+        assert "/download/" not in request.url.path
+        return httpx.Response(
+            200, json={"status": "200", "data": {"errorMessage": "failed"}}
+        )
+
+    with (
+        httpx.Client(transport=httpx.MockTransport(reply)) as client,
+        pytest.raises(ValueError, match="query"),
+    ):
+        puller().query_download(
+            client, "http://dtb", "secret", "select 1", "json", poll_interval=0
+        )
