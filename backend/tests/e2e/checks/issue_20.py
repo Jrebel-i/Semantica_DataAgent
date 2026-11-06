@@ -202,9 +202,11 @@ def check_online_clarification_selection_is_scoped_to_one_conversation(ctx):
 def check_local_ask_dataagent_answers_and_continues(ctx):
     _provider(ctx)
     question = (
-        "请统计 shop.orders 表每个 dt 分区的订单记录数量，不计算金额，"
-        "不要 JOIN 其他表。请用 Hive SQL 回答。必须先用 describe_tables 确认表字段，写出 SQL "
-        "后必须调用 validate_sql；回答中原样附上工具返回的表引用，例如 table:shop.orders。"
+        "请统计 shop.orders 表每个 dt 分区的行数（COUNT(*)），只数记录，不使用其他字段，"
+        "不计算金额，不要 JOIN 其他表。这是一个明确的记录数请求，不涉及销售额或订单数指标，"
+        "不需要业务口径定义；即使知识库缺少正式指标定义，也请直接用 Hive SQL 回答，不要只"
+        "登记缺口或提交纠错。必须先用 describe_tables 确认表字段，写出 SQL 后必须调用 "
+        "validate_sql；回答中原样附上工具返回的表引用，例如 table:shop.orders。"
     )
     answer = ctx.mcp_call("ask_dataagent", {"question": question}, timeout=600)
     ctx.require(
