@@ -1,0 +1,22 @@
+[
+  {
+    "name": "load",
+    "type": "spark",
+    "sql": "INSERT OVERWRITE TABLE dst.orders SELECT s.id AS order_id, s.amount AS total FROM (SELECT * FROM src.orders) s"
+  },
+  {
+    "name": "broken",
+    "type": "spark",
+    "sql": "INSERT INTO dst.orders SELECT missing FROM src.orders"
+  },
+  {
+    "name": "stage_load",
+    "type": "spark",
+    "sql": "INSERT INTO stage.orders SELECT id FROM src.orders"
+  },
+  {
+    "name": "report_load",
+    "type": "spark",
+    "sql": "INSERT INTO report.orders SELECT order_id AS id FROM dst.orders"
+  }
+]

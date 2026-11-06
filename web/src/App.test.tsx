@@ -157,6 +157,8 @@ test("browse tables and view field details", async () => {
         return Response.json({ path: "sales.md", content: "订单定义" });
       if (url.startsWith("/api/v1/table-lineage"))
         return Response.json({ upstream: [], downstream: [], tasks: [] });
+      if (url.startsWith("/api/v1/column-lineage"))
+        return Response.json({ upstream: [], downstream: [] });
       if (url.startsWith("/api/v1/tables"))
         return new Response(
           JSON.stringify([
@@ -192,6 +194,10 @@ test("browse tables and view field details", async () => {
   fireEvent.click(await screen.findByText("orders"));
   expect(await screen.findByText("日期分区")).toBeTruthy();
   expect(screen.getByText("string")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "dt" }));
+  expect(await screen.findByText(/暂无字段级血缘.*未能解析/)).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "dt" }));
+  expect(screen.queryByText(/暂无字段级血缘/)).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "sales.md" }));
   expect(await screen.findByText("订单定义")).toBeTruthy();
 });

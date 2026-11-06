@@ -1,3 +1,4 @@
+import { ColumnLineage } from "./ColumnLineage";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { Alert, Button, Input, Space, Tag, Tabs } from "antd";
@@ -1168,12 +1169,20 @@ export function ChatPage({
       key: "lineage",
       label: t.contextLineage,
       children: selectedTable ? (
-        <TaskLineage
-          token={token}
-          messages={t}
-          table={`${selectedTable.database}.${selectedTable.name}`}
-          showTasks={false}
-        />
+        citationRef.startsWith("field:") ? (
+          <ColumnLineage
+            token={token}
+            table={`${selectedTable.database}.${selectedTable.name}`}
+            column={citationRef.slice(6).split(".").slice(2).join(".")}
+          />
+        ) : (
+          <TaskLineage
+            token={token}
+            messages={t}
+            table={`${selectedTable.database}.${selectedTable.name}`}
+            showTasks={false}
+          />
+        )
       ) : (
         <div className="empty-state">{t.emptyContext}</div>
       ),

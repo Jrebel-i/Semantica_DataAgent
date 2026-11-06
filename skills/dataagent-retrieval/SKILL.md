@@ -27,7 +27,7 @@ Use this skill when a question needs warehouse knowledge or SQL. Retrieve before
      (falling back to knowledge metadata), and never accepts caller-written
      SQL. It requires the caller's DTB token.
    - `lookup_dim_values` to resolve a business term to an indexed dimension value; give `table`, `keyword`, and `field` when known.
-   - `get_lineage` with `direction` `up` or `down` and `depth` 1-3 to understand dependencies.
+   - `get_lineage` with `direction` `up` or `down` and `depth` 1-3 to understand dependencies. Pass `column` with a field name alongside `table` to inspect field-level dependencies and their task provenance.
    - `find_join_path` for two to four tables when a join is not already supported.
    - `read_task_sql` when the producing task SQL is needed as evidence.
 6. **Before best-effort SQL, check for conflicting definitions.** If two or more metric
