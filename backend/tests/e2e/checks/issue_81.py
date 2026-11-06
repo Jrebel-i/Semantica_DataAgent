@@ -89,7 +89,7 @@ def check_online_query_confirmation(ctx):
             "POST",
             "/api/v1/conversations/ask",
             json={
-                "question": "请计算 shop.orders 在 2025-01-01 的销售总额，请先查询表结构、用 Doris SQL 校验后调用 propose_query 提议执行，等待确认。",
+                "question": "计算 shop.orders 在 dt='2025-01-01' 的订单金额合计，按 amount 求和即可。请先查表结构，用 Doris SQL 校验后调用 propose_query 提议执行，等待确认。",
                 "agent": "pi",
                 "provider_id": provider.json()["id"],
                 "model": model,
