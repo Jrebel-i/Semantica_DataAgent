@@ -99,7 +99,10 @@ def check_online_query_confirmation(ctx):
             ctx.require(response.status_code == 200, str(response.status_code))
             initial = events("".join(response.iter_text()))
         plan_events = [data for name, data in initial if name == "query_plan"]
-        ctx.require(len(plan_events) == 1, f"missing query plan: {initial[-5:]}")
+        ctx.require(
+            len(plan_events) == 1,
+            f"missing query plan; tool events: {[(name, data) for name, data in initial if name in ('tool_start', 'tool_end')]}",
+        )
         ctx.require(not calls, "query ran before confirmation")
         info = next(data for name, data in initial if name == "conversation")
         plan = plan_events[0]

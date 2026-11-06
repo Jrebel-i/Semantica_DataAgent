@@ -181,6 +181,79 @@ def test_pi_event_parser_emits_query_plan_from_tool_result():
     assert events[1].data == plan
 
 
+def test_online_query_plan_uses_persisted_tool_result_when_runner_summary_is_opaque(
+    client, monkeypatch
+):
+    from semantica_dataagent import agent_runner, knowledge, query_api, sql_validation
+    from semantica_dataagent.auth import Requester
+    from semantica_dataagent.db import Token, sessions
+    from semantica_dataagent.mcp_context import bind_mcp_context
+
+    class Executor:
+        def bind(self, config, token):
+            return self
+
+        async def estimate(self, sql):
+            return {"partitions": 3, "rows": 42}
+
+    monkeypatch.setattr(knowledge, "describe", lambda **_: [])
+    monkeypatch.setattr(
+        sql_validation, "validate_sql", lambda *a, **kw: {"status": "pass"}
+    )
+    monkeypatch.setattr(query_api, "_config", lambda: (Executor(), {}))
+    c, token = client
+    with sessions()() as db:
+        owner = db.query(Token).first()
+        requester = Requester(id=owner.id, role=owner.role, token=token)
+
+    class Runner:
+        agent_id = "pi"
+
+        def available(self):
+            return True
+
+        async def run(self, request):
+            with bind_mcp_context(
+                requester, request.conversation_id, str(request.turn_id)
+            ):
+                await query_api.propose_query("SELECT 1")
+            yield AgentEvent(
+                TOOL_END,
+                {
+                    "name": "mcp__dataagent__propose_query",
+                    "is_error": False,
+                    "summary": "opaque",
+                },
+            )
+            yield AgentEvent(TEXT_DELTA, {"text": "must stop"})
+
+    monkeypatch.setitem(agent_runner.RUNNERS, "pi", Runner())
+    headers = {"Authorization": f"Bearer {token}"}
+    provider = c.post(
+        "/api/v1/providers",
+        headers=headers,
+        json={
+            "name": "Local",
+            "base_url": "http://127.0.0.1:3425",
+            "models": ["model"],
+        },
+    ).json()
+    response = c.post(
+        "/api/v1/conversations/ask",
+        headers=headers,
+        json={
+            "question": "统计",
+            "agent": "pi",
+            "provider_id": provider["id"],
+            "model": "model",
+        },
+    )
+    emitted = _sse(response.text)
+    assert [name for name, _ in emitted] == ["conversation", "tool_end", "query_plan"]
+    assert emitted[-1][1]["estimated_rows"] == 42
+    assert emitted[-1][1]["sql"] == "SELECT 1"
+
+
 def test_query_plan_stream_waits_for_confirmation_and_persists(client, monkeypatch):
     from semantica_dataagent import agent_runner
 
