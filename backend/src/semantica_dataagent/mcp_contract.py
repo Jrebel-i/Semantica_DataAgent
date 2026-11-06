@@ -142,6 +142,8 @@ def install_contract(server):
             jsonschema.validate(arguments, tool.parameters)
             args = dict(arguments)
             cursor = args.pop("cursor", None)
+            if name == "execute_query" and cursor is not None:
+                raise ValueError("Query execution does not support cursors")
             fingerprint = hashlib.sha256(
                 json.dumps([name, args], sort_keys=True, ensure_ascii=False).encode()
             ).hexdigest()
@@ -180,6 +182,11 @@ def install_contract(server):
                 structured = json.loads(result[0].text)
             else:
                 structured = result
+            if name == "execute_query" and isinstance(structured, dict):
+                return CallToolResult(
+                    content=result[0] if isinstance(result, tuple) else result,
+                    structuredContent=structured,
+                )
             value = (
                 structured.get("result", structured)
                 if isinstance(structured, dict)

@@ -87,14 +87,16 @@ def agent_root() -> Path:
     return database.parent / "agent-workspaces"
 
 
+def retention_cutoff(db):
+    setting = db.get(Setting, "session_retention_days")
+    return datetime.now(UTC) - timedelta(days=int(setting.value) if setting else 30)
+
+
 def cleanup_expired_sessions() -> None:
     """Serialize cleanup with turn creation so active work cannot be removed."""
     with sessions().begin() as db:
         db.execute(text("BEGIN IMMEDIATE"))
-        setting = db.get(Setting, "session_retention_days")
-        cutoff = datetime.now(UTC) - timedelta(
-            days=int(setting.value) if setting else 30
-        )
+        cutoff = retention_cutoff(db)
         active = db.query(Turn.conversation_id).filter(Turn.status == "running")
         rows = (
             db.query(Conversation)

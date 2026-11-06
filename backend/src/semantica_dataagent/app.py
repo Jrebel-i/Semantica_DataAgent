@@ -629,7 +629,7 @@ def build_detail(build_id: int, _: Annotated[str, Depends(current_user)]):
 
 from .dimension_api import lookup_dim_values
 from .personal_settings import router as personal_settings_router
-from .query_api import propose_query
+from .query_api import execute_query, propose_query
 from .query_api import router as query_router
 from .sample_api import sample_table_data
 from .sql_validation import find_join_path, validate_sql
@@ -696,6 +696,7 @@ def create_mcp():
     server.tool()(ask_dataagent)
     server.tool()(sample_table_data)
     server.tool()(propose_query)
+    server.tool()(execute_query)
 
     from .skill import register_prompt
 

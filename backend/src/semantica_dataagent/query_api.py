@@ -178,6 +178,20 @@ def _cleanup_expired_conversation_results(query_id: str, user: Requester) -> Non
         from .conversation_api import cleanup_expired_sessions
 
         cleanup_expired_sessions()
+    else:
+        from .conversation_api import retention_cutoff
+
+        with sessions().begin() as db:
+            row = db.get(QueryExecution, query_id)
+            cutoff = retention_cutoff(db)
+            if (
+                row is not None
+                and row.owner_id == user.id
+                and row.plan_data
+                and json.loads(row.plan_data).get("source") == "mcp"
+                and row.created_at.replace(tzinfo=UTC) < cutoff
+            ):
+                db.delete(row)
 
 
 @router.post("/api/v1/queries/plan")
@@ -185,7 +199,7 @@ async def plan(body: PlanInput, user: Annotated[Requester, Depends(current_reque
     return await _create_plan(body, user)
 
 
-async def _create_plan(body, user, conversation_id=None, turn_id=None):
+async def _create_plan(body, user, conversation_id=None, turn_id=None, source=None):
     tree = _validate_sql(body.sql)
     tables = _tables_and_partitions(tree)
     plugin, config = _config()
@@ -201,6 +215,8 @@ async def _create_plan(body, user, conversation_id=None, turn_id=None):
         "row_limit": config.get("row_limit", 1000),
         "execution_limit": config.get("download_limit", 100000),
     }
+    if source:
+        plan_data["source"] = source
     with sessions().begin() as db:
         if conversation_id is not None:
             conversation = db.get(Conversation, conversation_id)
@@ -252,6 +268,48 @@ async def propose_query(sql: str) -> dict:
         conversation_id,
         int(supplied_turn) if supplied_turn else None,
     )
+
+
+async def execute_query(
+    sql: str | None = None, confirmation_id: str | None = None
+) -> dict:
+    """Plan SQL, then execute only after the user explicitly confirms the plan.
+
+    First supply only sql. Show the returned plan to the user and wait for their
+    confirmation. Then supply only confirmation_id. Downloads require the same
+    bearer token. Never confirm on behalf of the user.
+    """
+    from .conversation_api import public_base_url
+    from .mcp_context import current_conversation_id, current_requester
+    from .mcp_contract import ToolInvalidInput
+
+    if bool(sql) == bool(confirmation_id):
+        raise ToolInvalidInput("请只提供 SQL 或确认 id")
+    if current_conversation_id():
+        raise ToolInvalidInput("在线查询须在会话中确认")
+    user = current_requester()
+    try:
+        if sql:
+            return await _create_plan(PlanInput(sql=sql), user, source="mcp")
+        _cleanup_expired_conversation_results(confirmation_id, user)
+        with sessions()() as db:
+            row = db.get(QueryExecution, confirmation_id)
+            if (
+                row is None
+                or row.owner_id != user.id
+                or row.conversation_id is not None
+            ):
+                raise HTTPException(404, "查询不存在")
+        result = await _execute_with_audit(
+            confirmation_id, ExecuteInput(), user, kind="mcp"
+        )
+        base = f"{public_base_url()}/api/v1/queries/{confirmation_id}/download"
+        result["download_urls"] = {
+            fmt: f"{base}?format={fmt}" for fmt in ("csv", "xlsx", "json")
+        }
+        return result
+    except HTTPException as exc:
+        raise ToolInvalidInput(str(exc.detail)) from exc
 
 
 async def _execute(
@@ -321,6 +379,7 @@ async def _execute(
             "columns": names,
             "rows": rows[:limit],
             "row_count": len(rows),
+            "possibly_truncated": len(rows) >= min(limit, cap),
         }
     except ExecutorAuthenticationError as exc:
         raise HTTPException(401, str(exc)) from exc
@@ -373,7 +432,9 @@ async def execute_for_turn(
     return await _execute_with_audit(query_id, ExecuteInput(), user)
 
 
-async def _execute_with_audit(query_id: str, body: ExecuteInput, user: Requester):
+async def _execute_with_audit(
+    query_id: str, body: ExecuteInput, user: Requester, kind="query"
+):
     with sessions()() as db:
         row = db.get(QueryExecution, query_id)
         if row is None or row.owner_id != user.id:
@@ -387,6 +448,7 @@ async def _execute_with_audit(query_id: str, body: ExecuteInput, user: Requester
                 id=audit_id,
                 owner_id=user.id,
                 sql=sql,
+                kind=kind,
                 status="running",
                 row_count=None,
                 elapsed_ms=0,
@@ -458,7 +520,10 @@ async def download(
         row = db.get(QueryExecution, query_id)
         if row is None or row.owner_id != user.id or row.status != "succeeded":
             raise HTTPException(404, "查询结果不存在")
-        if row.conversation_id is not None and row.rows:
+        if row.rows and (
+            row.conversation_id is not None
+            or (row.plan_data and json.loads(row.plan_data).get("source") == "mcp")
+        ):
             saved = json.loads(row.rows)
             names = column_names(saved["columns"])
             values = saved["data"]

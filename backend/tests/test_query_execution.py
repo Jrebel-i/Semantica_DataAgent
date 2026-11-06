@@ -458,3 +458,161 @@ def test_interrupted_execution_preserves_audit(tmp_path, monkeypatch):
         server.shutdown()
         server.server_close()
         thread.join()
+
+
+def test_local_mcp_confirmation_and_download(client, monkeypatch):
+    import asyncio
+    from datetime import UTC, datetime, timedelta
+
+    from mcp.types import CallToolRequest, CallToolRequestParams
+
+    from semantica_dataagent import knowledge, query_api
+    from semantica_dataagent.app import create_mcp
+    from semantica_dataagent.auth import Requester
+    from semantica_dataagent.db import QueryAudit, QueryExecution, Token, sessions
+    from semantica_dataagent.mcp_context import bind_mcp_context
+
+    calls = []
+
+    class Plugin:
+        def bind(self, config, token):
+            return self
+
+        async def estimate(self, sql):
+            return {"partitions": 1, "rows": 2}
+
+        async def submit(self, sql, limit):
+            calls.append(sql)
+            return "key"
+
+        async def wait(self, key):
+            return {"columns": ["value"], "data": [[1], [2]]}
+
+    monkeypatch.setattr(knowledge, "describe", lambda **_: [])
+    monkeypatch.setattr(query_api, "_config", lambda: (Plugin(), {"row_limit": 2}))
+    c, headers = client
+    c.put("/api/v1/me/dtb-token", headers=headers, json={"token": "fake"})
+    other_token = c.post(
+        "/api/v1/tokens", headers=headers, json={"name": "other", "role": "user"}
+    ).json()["token"]
+    with sessions()() as db:
+        owners = db.query(Token).all()
+        owner = next(x for x in owners if x.role == "admin")
+        other = next(x for x in owners if x.role == "user")
+        first = Requester(
+            id=owner.id, role=owner.role, token=headers["Authorization"][7:]
+        )
+        second = Requester(id=other.id, role=other.role, token=other_token)
+
+    async def run():
+        server = create_mcp()
+        server.get_context = lambda: None
+        handler = server._mcp_server.request_handlers[CallToolRequest]
+
+        async def call(user, args):
+            with bind_mcp_context(user):
+                return (
+                    await handler(
+                        CallToolRequest(
+                            method="tools/call",
+                            params=CallToolRequestParams(
+                                name="execute_query", arguments=args
+                            ),
+                        )
+                    )
+                ).root
+
+        assert (await call(first, {})).isError
+        plan = await call(first, {"sql": "SELECT 1"})
+        assert not plan.isError
+        query_id = plan.structuredContent["id"]
+        assert not calls
+        assert (await call(second, {"confirmation_id": query_id})).isError
+        assert not calls
+        result = await call(first, {"confirmation_id": query_id})
+        assert not result.isError, result
+        assert result.structuredContent["rows"] == [[1], [2]]
+        assert result.structuredContent["possibly_truncated"] is True
+        assert len(calls) == 1
+        assert (await call(first, {"confirmation_id": query_id})).isError
+        for fmt in ("csv", "xlsx", "json"):
+            path = f"/api/v1/queries/{query_id}/download?format={fmt}"
+            assert c.get(path, headers=headers).status_code == 200
+            assert (
+                c.get(
+                    path, headers={"Authorization": f"Bearer {other_token}"}
+                ).status_code
+                == 404
+            )
+        with sessions().begin() as db:
+            db.get(QueryExecution, query_id).created_at = datetime.now(UTC) - timedelta(
+                days=31
+            )
+        assert c.get(f"/api/v1/queries/{query_id}", headers=headers).status_code == 404
+        assert (
+            c.get(f"/api/v1/queries/{query_id}/download", headers=headers).status_code
+            == 404
+        )
+        expired = await call(first, {"sql": "SELECT 1"})
+        with sessions().begin() as db:
+            db.get(QueryExecution, expired.structuredContent["id"]).created_at = (
+                datetime.now(UTC) - timedelta(minutes=31)
+            )
+        rejected = await call(
+            first, {"confirmation_id": expired.structuredContent["id"]}
+        )
+        assert rejected.isError and "过期" in rejected.structuredContent["message"]
+        assert len(calls) == 1
+        with sessions()() as db:
+            assert (
+                db.query(QueryAudit).filter_by(kind="mcp", status="succeeded").count()
+                == 1
+            )
+
+    asyncio.run(run())
+
+
+def test_mcp_and_online_use_same_execution_service(client, monkeypatch):
+    import asyncio
+
+    from semantica_dataagent import query_api
+    from semantica_dataagent.auth import Requester
+    from semantica_dataagent.db import QueryExecution, Token, sessions
+    from semantica_dataagent.mcp_context import bind_mcp_context
+
+    calls = []
+
+    async def service(query_id, body, user, kind="query"):
+        calls.append((query_id, user.id, kind))
+        return {"row_count": 0}
+
+    monkeypatch.setattr(query_api, "_execute_with_audit", service)
+    c, headers = client
+    with sessions().begin() as db:
+        token = db.query(Token).filter_by(role="admin").first()
+        requester = Requester(
+            id=token.id, role=token.role, token=headers["Authorization"][7:]
+        )
+        db.add_all(
+            [
+                QueryExecution(
+                    id="local", owner_id=token.id, sql="SELECT 1", status="planned"
+                ),
+                QueryExecution(
+                    id="online",
+                    owner_id=token.id,
+                    sql="SELECT 1",
+                    status="planned",
+                    conversation_id="conversation",
+                    turn_id=1,
+                ),
+            ]
+        )
+
+    async def run():
+        with bind_mcp_context(requester):
+            await query_api.execute_query(confirmation_id="local")
+        await query_api.execute_for_turn("online", requester, "conversation", 1)
+
+    asyncio.run(run())
+    assert calls == [("local", requester.id, "mcp"), ("online", requester.id, "query")]
