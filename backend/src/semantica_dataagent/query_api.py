@@ -105,12 +105,20 @@ def _tables_and_partitions(tree):
             if len(matches) != 1:
                 raise HTTPException(422, f"无法确定表的分区元数据: {name}")
             metadata = matches[0]
+            fields = metadata.get("fields")
+            if (
+                not isinstance(fields, list)
+                or not fields
+                or any(
+                    not isinstance(f, dict)
+                    or not isinstance(f.get("name"), str)
+                    or not isinstance(f.get("partition"), bool)
+                    for f in fields
+                )
+            ):
+                raise HTTPException(503, f"无法确定表的分区元数据: {name}")
             names.append(name)
-            partitions = [
-                f["name"].lower()
-                for f in metadata.get("fields", [])
-                if f.get("partition")
-            ]
+            partitions = [f["name"].lower() for f in fields if f.get("partition")]
             for field in partitions:
 
                 def valid(term, field=field, alias=alias, scope=scope):

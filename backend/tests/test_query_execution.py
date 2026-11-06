@@ -155,6 +155,32 @@ def test_partition_safety_and_execution(client, monkeypatch):
                 "/api/v1/queries/plan", headers=headers, json={"sql": sql}
             )
             assert response.status_code == 422, response.text
+        monkeypatch.setattr(
+            knowledge,
+            "describe",
+            lambda **_: [
+                {"database": "shop", "name": "orders", "fields": [{"name": "dt"}]}
+            ],
+        )
+        assert (
+            c.post(
+                "/api/v1/queries/plan",
+                headers=headers,
+                json={"sql": "select * from shop.orders"},
+            ).status_code
+            == 503
+        )
+        monkeypatch.setattr(
+            knowledge,
+            "describe",
+            lambda **_: [
+                {
+                    "database": "shop",
+                    "name": "orders",
+                    "fields": [{"name": "dt", "partition": True}],
+                }
+            ],
+        )
         response = c.post(
             "/api/v1/queries/plan",
             headers=headers,
