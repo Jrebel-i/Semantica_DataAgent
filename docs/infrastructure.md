@@ -79,7 +79,9 @@ The script performs Cypher, creates and deletes a uniquely named Milvus collecti
 
 每轮由应用解析 provider 和 MCP 的主机名，写入会话 Pod 的 hostAliases；init 容器安装 IPv4/IPv6 默认拒绝规则，仅允许解析出的 IP 和端口，不允许 DNS 出站。会话 Pod 默认在 `semantica-dataagent-sessions`，可通过 `DATAAGENT_SESSION_NAMESPACE` 配置；对应命名空间需要部署 Role 和 RoleBinding。会话目录通过应用与 Pod 之间的归档传递，Pod 使用临时卷；应用 ServiceAccount 仅在会话命名空间具有 Pod 权限。agent 容器非 root、只读根文件系统、丢弃全部 capability。集群 flannel 不执行 NetworkPolicy，实际限制由 iptables 执行。
 
-升级先推送新镜像并更新清单中的镜像引用，再 `kubectl apply -k deploy/k8s/app`，验证首页、MCP 和会话出站；单副本 Recreate 会短暂中断服务。回滚使用上一版镜像引用重新 apply，保留 PVC 和加密 Secret；不可删除 PVC 来回滚。全量知识构建和当前代切换按现有构建 API 执行，回滚知识使用保留代切换，镜像回滚不会自动切换知识代。
+升级先推送新镜像并更新清单中的镜像引用，再 `kubectl apply -k deploy/k8s/app`，验证首页、MCP 和会话出站；单副本 Recreate 会短暂中断服务。`serve` 启动前会对 `DATAAGENT_DB_PATH`（集群内为 `/data/dataagent.db`）自动执行 `alembic upgrade head`，并在日志中打印数据库路径、迁移前后版本和备份路径；已是 head 时不备份也不迁移。迁移前如果版本不是 head，应用先把 SQLite 备份到同目录的 `/data/dataagent.db.bak-<UTC 时间戳>`，只保留最近 3 份。不要删除这些备份。也可以先在 `DATAAGENT_DB_PATH` 上手动运行 `semantica-dataagent migrate` 预览和升级。迁移失败时 `serve` 以非 0 退出且不监听端口，日志会写明数据库路径、当前版本和失败原因；排障后需要修复数据库或恢复迁移前备份再启动。
+
+回滚到旧镜像前必须恢复迁移前的数据库备份：旧代码不认识新的 alembic 版本号，直接把镜像引用改回上一版会让旧应用读到新 schema 并启动失败。回滚时先让应用停止（把 Deployment 缩到 0，或保持已经因迁移失败而退出的 Pod），把本次升级前的 `/data/dataagent.db.bak-<UTC 时间戳>` 复制回 `/data/dataagent.db`，删除同目录残留的 `dataagent.db-wal`、`dataagent.db-shm`，再 apply 旧镜像引用；保留 PVC 和加密 Secret。全量知识构建和当前代切换按现有构建 API 执行，回滚知识使用保留代切换，镜像回滚不会自动切换知识代。
 
 2026-11-05 的部署验收使用 `samples/demo` 初始化 `/data/source`，首次全量构建 56.5 秒（20 张表、15 篇文档）；这只是示例知识，接入实际业务前由管理员上传并全量构建真实源目录。验收脚本 `backend/tests/e2e/k8s/verify.py` 从 `DATAAGENT_TOKEN` 环境变量取令牌，检查内网首页、pi 问答的 SQL 和引用、轮次后 Pod 清理以及本地 MCP 检索；出站限制使用票专属 harness 检查复验。不要把令牌写进命令历史或日志。
 

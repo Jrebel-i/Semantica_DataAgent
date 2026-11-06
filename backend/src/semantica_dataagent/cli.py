@@ -2,18 +2,36 @@ import argparse
 import asyncio
 import os
 import secrets
+import sqlite3
+import sys
 import tempfile
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
 from alembic import command
 from alembic.config import Config
+from alembic.runtime.migration import MigrationContext
+from alembic.script import ScriptDirectory
 from cryptography.fernet import Fernet
+from sqlalchemy import create_engine
 
 from .db import Token, digest, sessions
 
 
-def initialize() -> str:
-    Fernet(os.environ["DATAAGENT_ENCRYPTION_KEY"].encode())
+class MigrationError(RuntimeError):
+    """A database migration could not be completed safely."""
+
+
+@dataclass(frozen=True)
+class MigrationResult:
+    path: Path
+    before: str | None
+    after: str
+    backup: Path | None
+
+
+def _migration_config() -> Config:
     config = Config()
     config.set_main_option(
         "script_location", os.path.join(os.path.dirname(__file__), "migrations")
@@ -22,6 +40,84 @@ def initialize() -> str:
         "sqlalchemy.url",
         "sqlite:///" + os.environ["DATAAGENT_DB_PATH"].replace("%", "%%"),
     )
+    return config
+
+
+def _schema_version(config: Config) -> str | None:
+    engine = create_engine(config.get_main_option("sqlalchemy.url"))
+    try:
+        with engine.connect() as connection:
+            return MigrationContext.configure(connection).get_current_revision()
+    finally:
+        engine.dispose()
+
+
+def _migration_failure(
+    path: Path, current: str | None, target: str | None, reason: Exception
+) -> MigrationError:
+    return MigrationError(
+        f"database migration failed for {path}: "
+        f"current version: {current or 'unknown'}, "
+        f"target version: {target or 'unknown'}, reason: {reason}"
+    )
+
+
+def _backup_database(path: Path) -> Path:
+    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S.%fZ")
+    destination = path.with_name(f"{path.name}.bak-{timestamp}")
+    temporary = path.with_name(f".{destination.name}.tmp")
+    try:
+        with sqlite3.connect(path) as source, sqlite3.connect(temporary) as target:
+            source.backup(target)
+        os.replace(temporary, destination)
+    finally:
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+    backups = sorted(path.parent.glob(f"{path.name}.bak-*"))
+    for old in backups[:-3]:
+        old.unlink()
+    return destination
+
+
+def migrate_database() -> MigrationResult:
+    path = Path(os.environ["DATAAGENT_DB_PATH"])
+    config = _migration_config()
+    target = ScriptDirectory.from_config(config).get_current_head()
+    try:
+        before = _schema_version(config)
+    except Exception as exc:
+        raise _migration_failure(path, None, target, exc) from exc
+
+    print(f"database: {path}", flush=True)
+    print(f"version before: {before or '<empty>'}", flush=True)
+    if before == target:
+        print(f"version after: {target}", flush=True)
+        return MigrationResult(path, before, target, None)
+
+    try:
+        backup = _backup_database(path)
+    except Exception as exc:
+        raise _migration_failure(path, before, target, exc) from exc
+    print(f"backup: {backup}", flush=True)
+
+    try:
+        command.upgrade(config, "head")
+        after = _schema_version(config)
+    except Exception as exc:
+        try:
+            failed_at = _schema_version(config)
+        except Exception:  # noqa: BLE001 - preserve the migration error
+            failed_at = before
+        raise _migration_failure(path, failed_at, target, exc) from exc
+    print(f"version after: {after or '<empty>'}", flush=True)
+    return MigrationResult(path, before, after or "", backup)
+
+
+def initialize() -> str:
+    Fernet(os.environ["DATAAGENT_ENCRYPTION_KEY"].encode())
+    config = _migration_config()
     command.upgrade(config, "head")
     with sessions().begin() as db:
         if db.query(Token).first():
@@ -42,6 +138,9 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="semantica-dataagent")
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("init", help="create the database and initial admin token")
+    commands.add_parser(
+        "migrate", help="upgrade the database schema and print before/after versions"
+    )
     commands.add_parser("serve", help="serve the REST and MCP application")
     evaluate = commands.add_parser(
         "eval", help="evaluate a YAML question set in retrieval or agent mode"
@@ -210,7 +309,19 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "init":
         print(initialize())
         return 0
+    if args.command == "migrate":
+        try:
+            migrate_database()
+        except MigrationError as exc:
+            print(f"migrate aborted: {exc}", file=sys.stderr)
+            return 1
+        return 0
     if args.command == "serve":
+        try:
+            migrate_database()
+        except MigrationError as exc:
+            print(f"serve aborted: {exc}", file=sys.stderr)
+            return 1
         _serve()
         return 0
     return _run_eval(args)
