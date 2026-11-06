@@ -1,6 +1,8 @@
 """Query plans, execution limits and audit for caller-owned queries."""
 
 import asyncio
+import csv
+import io
 import json
 import time
 import uuid
@@ -432,15 +434,59 @@ async def download(
     user: Annotated[Requester, Depends(current_requester)],
     format: Literal["csv", "xlsx", "json"] = "csv",
 ):
-    plugin, config = _config()
     with sessions()() as db:
         row = db.get(QueryExecution, query_id)
-        secret = db.get(PersonalDtbToken, user.id)
         if row is None or row.owner_id != user.id or row.status != "succeeded":
             raise HTTPException(404, "查询结果不存在")
+        if row.conversation_id is not None and row.rows:
+            saved = json.loads(row.rows)
+            names = column_names(saved["columns"])
+            values = saved["data"]
+            if format == "json":
+                content = json.dumps(
+                    {"columns": names, "rows": values}, ensure_ascii=False
+                ).encode()
+                content_type = "application/json"
+            elif format == "csv":
+                buffer = io.StringIO(newline="")
+                writer = csv.writer(buffer, lineterminator="\n")
+                writer.writerow(names)
+                writer.writerows(values)
+                content, content_type = buffer.getvalue().encode("utf-8"), "text/csv"
+            else:
+                from openpyxl import Workbook
+                from openpyxl.cell import WriteOnlyCell
+
+                workbook = Workbook(write_only=True)
+                sheet = workbook.create_sheet()
+                for values_row in [names, *values]:
+                    cells = []
+                    for value in values_row:
+                        if isinstance(value, (dict, list)):
+                            value = json.dumps(value, ensure_ascii=False)
+                        cell = WriteOnlyCell(sheet, value=value)
+                        if isinstance(value, str):
+                            cell.data_type = "s"
+                        cells.append(cell)
+                    sheet.append(cells)
+                buffer = io.BytesIO()
+                workbook.save(buffer)
+                content = buffer.getvalue()
+                content_type = (
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+            return Response(
+                content,
+                media_type=content_type,
+                headers={
+                    "Content-Disposition": f'attachment; filename="query.{format}"'
+                },
+            )
+        secret = db.get(PersonalDtbToken, user.id)
         if secret is None:
             raise HTTPException(400, "请先在个人设置中保存 DTB token")
         key, token = row.query_key, decrypt(secret.encrypted_token)
+    plugin, config = _config()
     try:
         async with asyncio.timeout(config.get("timeout_seconds", 300)):
             content, content_type = await plugin.bind(config, token).download(
