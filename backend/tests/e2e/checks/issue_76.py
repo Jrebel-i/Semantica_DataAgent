@@ -15,13 +15,13 @@ def check_dtb_pull(ctx):
     book.active.append(
         ["database_name", "table_name", "column_name", "column_type", "comment"]
     )
-    book.active.append(["issue76", "new_orders", "id", "string", "issue76 新订单"])
+    book.active.append(["dimensions", "new_orders", "id", "string", "issue76 新订单"])
     output = io.BytesIO()
     book.save(output)
     tasks = json.dumps(
         {"columns": [{"name": "task_name"}, {"name": "task_src"}], "data": []}
     ).encode()
-    state = {"failure": False, "queries": {}}
+    state = {"failure": False, "queries": {}, "paths": []}
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *_args):
@@ -38,21 +38,73 @@ def check_dtb_pull(ctx):
         def do_POST(self):
             size = int(self.headers["Content-Length"])
             request = json.loads(self.rfile.read(size))
-            key = "task" if "task_version" in request["sql"] else "table"
-            state["queries"][key] = True
+            sql = request["sql"]
+            key = (
+                "task"
+                if "task_version" in sql
+                else "stats"
+                if "metadata_partition" in sql
+                else "dimension"
+                if "hive.dimensions" in sql
+                else "table"
+            )
+            state["queries"][key] = sql
+            if (
+                request.get("defaultLimit") != 100
+                or request.get("dataSource") != "doris_ai"
+            ):
+                self.send({}, status=400)
+                return
             self.send({"status": "200", "data": {"queryKey": key}})
 
         def do_GET(self):
+            state["paths"].append(self.path)
             if state["failure"]:
                 self.send({}, status=401)
             elif self.path.startswith("/api/data-map/table"):
                 self.send(
-                    {"status": "200", "data": {"tableList": [], "totalElements": 0}}
+                    {
+                        "status": "200",
+                        "data": {
+                            "tableList": [
+                                {
+                                    "tableId": 1,
+                                    "tableName": "new_orders",
+                                    "catalogType": "HIVE",
+                                }
+                            ],
+                            "totalElements": 2,
+                        },
+                    }
+                )
+            elif self.path.startswith("/api/data-map/detail/1/column"):
+                self.send(
+                    {
+                        "status": "200",
+                        "data": {
+                            "columnList": [
+                                {"columnName": "id", "columnType": "string"},
+                                {"columnName": "day_num", "columnType": "string"},
+                            ],
+                            "totalElements": 2,
+                        },
+                    }
+                )
+            elif self.path == "/api/data-map/detail/1":
+                self.send(
+                    {"status": "200", "data": {"tableId": 1, "tableName": "new_orders"}}
                 )
             elif self.path.startswith("/api/data-query/result/"):
                 self.send({"status": "200", "data": {"progress": 1.0}})
             elif self.path.startswith("/api/data-query/download/task"):
                 self.send(tasks)
+            elif self.path.startswith("/api/data-query/download/stats"):
+                self.send(
+                    b"table_name,database_name,partition_name,records,rk\nnew_orders,dimensions,day_num=20261105,1,1\n",
+                    "text/csv",
+                )
+            elif self.path.startswith("/api/data-query/download/dimension"):
+                self.send(b"id,day_num\n1,20261105\n", "text/csv")
             elif self.path.startswith("/api/data-query/download/table"):
                 self.send(
                     output.getvalue(),
@@ -79,6 +131,8 @@ def check_dtb_pull(ctx):
                     "url": f"http://127.0.0.1:{server.server_port}",
                     "token": "fake-dtb-token",
                     "interval_seconds": 0,
+                    "layer": "dimensions",
+                    "max_tables": 1,
                 },
             },
         )
@@ -92,7 +146,23 @@ def check_dtb_pull(ctx):
             git("rev-parse", "HEAD") == record["commit"] != before,
             "pull did not commit source",
         )
-        ctx.require(record["tables"] >= 1, "pull did not record table count")
+        ctx.require(record["tables"] == 1, "pull did not record selected table")
+        queries = state["queries"]
+        ctx.require(
+            set(queries) == {"task", "table", "stats", "dimension"},
+            f"missing scoped queries: {list(queries)}",
+        )
+        for key in ("task", "table", "stats"):
+            ctx.require("new_orders" in queries[key], f"{key} query is not scoped")
+        ctx.require(
+            "WHERE day_num = '20261105'" in queries["dimension"]
+            and "LIMIT 100" in queries["dimension"],
+            "dimension query must restrict latest partition and rows",
+        )
+        ctx.require(
+            not any("/detail/2" in path for path in state["paths"]),
+            "unselected table was fetched",
+        )
         deadline = time.monotonic() + 300
         while time.monotonic() < deadline:
             result = ctx.rest.get(f"/api/v1/builds/{record['build_id']}")
