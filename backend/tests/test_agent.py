@@ -157,6 +157,73 @@ def test_pi_event_parser_emits_clarification_placeholder():
     assert events[1].data["questions"][0]["question"] == "按支付日还是下单日？"
 
 
+def test_pi_event_parser_emits_query_plan_from_tool_result():
+    parser = PiEventParser()
+    plan = {
+        "id": "plan-1",
+        "sql": "SELECT 1",
+        "data_source": "doris_ai",
+        "tables": [],
+        "estimated_partitions": None,
+        "estimated_rows": None,
+        "row_limit": 1000,
+    }
+    events = parser.feed(
+        {
+            "type": "tool_execution_end",
+            "toolCallId": "call-1",
+            "toolName": "mcp__dataagent__propose_query",
+            "isError": False,
+            "result": {"content": [{"type": "text", "text": json.dumps(plan)}]},
+        }
+    )
+    assert [event.type for event in events] == [TOOL_END, "query_plan"]
+    assert events[1].data == plan
+
+
+def test_query_plan_stream_waits_for_confirmation_and_persists(client, monkeypatch):
+    from semantica_dataagent import agent_runner
+
+    class PlanRunner:
+        agent_id = "pi"
+
+        def available(self):
+            return True
+
+        async def run(self, request):
+            yield AgentEvent("query_plan", {"id": "plan-1", "sql": "SELECT 1"})
+            yield AgentEvent(TEXT_DELTA, {"text": "should not run"})
+
+    monkeypatch.setitem(agent_runner.RUNNERS, "pi", PlanRunner())
+    c, token = client
+    headers = {"Authorization": f"Bearer {token}"}
+    provider = c.post(
+        "/api/v1/providers",
+        headers=headers,
+        json={
+            "name": "Local",
+            "base_url": "http://127.0.0.1:3425",
+            "models": ["model"],
+        },
+    ).json()
+    response = c.post(
+        "/api/v1/conversations/ask",
+        headers=headers,
+        json={
+            "question": "查询",
+            "agent": "pi",
+            "provider_id": provider["id"],
+            "model": "model",
+        },
+    )
+    events = _sse(response.text)
+    assert [kind for kind, _ in events] == ["conversation", "query_plan"]
+    conversation_id = events[0][1]["conversation_id"]
+    detail = c.get(f"/api/v1/conversations/{conversation_id}", headers=headers).json()
+    assert detail["turns"][0]["status"] == "awaiting_confirmation"
+    assert detail["turns"][0]["events"][0]["data"]["id"] == "plan-1"
+
+
 def test_pi_runner_reads_jsonl_records_past_the_default_stream_limit(tmp_path: Path):
     script = tmp_path / "fake-pi.py"
     script.write_text(
