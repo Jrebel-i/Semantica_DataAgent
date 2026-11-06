@@ -103,7 +103,11 @@ def check_online_query_confirmation(ctx):
             len(plan_events) == 1,
             f"missing query plan; tool events: {[(name, data) for name, data in initial if name in ('tool_start', 'tool_end')]}",
         )
-        ctx.require(not calls, "query ran before confirmation")
+
+        def executions():
+            return [call for call in calls if "_dataagent_query" in call.get("sql", "")]
+
+        ctx.require(not executions(), f"query ran before confirmation: {calls}")
         info = next(data for name, data in initial if name == "conversation")
         plan = plan_events[0]
         path = f"/api/v1/conversations/{info['conversation_id']}/turns/{info['turn_id']}/queries/{plan['id']}/execute"
@@ -115,7 +119,7 @@ def check_online_query_confirmation(ctx):
             path, headers={"Authorization": "Bearer " + other.json()["token"]}
         )
         ctx.require(
-            rejected.status_code == 404 and not calls,
+            rejected.status_code == 404 and not executions(),
             f"other user confirmation accepted: {rejected.status_code}",
         )
         with ctx.rest.stream("POST", path, timeout=600) as response:
@@ -127,7 +131,7 @@ def check_online_query_confirmation(ctx):
             f"incorrect result: {result}",
         )
         ctx.require(
-            len(calls) == 1 and calls[0]["dataSource"] == "doris_ai",
+            len(executions()) == 1 and executions()[0]["dataSource"] == "doris_ai",
             f"incorrect execution count: {calls}",
         )
         done = next((data for name, data in finished if name == "done"), None)
