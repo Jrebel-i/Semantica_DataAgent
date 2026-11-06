@@ -242,6 +242,10 @@ def test_deletions_are_limited_and_keep_filter_parameters(monkeypatch):
 
     def execute(query, params):
         assert params["files"] == ["changed.json"]
+        if "DELETE batch_relationship" in query:
+            batches.append("relationships")
+            return [{"deleted": 0}]
+        assert batches and batches[0] == "relationships"
         assert "WITH n LIMIT $batch_size DETACH DELETE n" in query
         removed = remaining[: params["batch_size"]]
         del remaining[: params["batch_size"]]
@@ -256,4 +260,4 @@ def test_deletions_are_limited_and_keep_filter_parameters(monkeypatch):
         {"files": ["changed.json"]},
         detach=True,
     )
-    assert batches == [[0, 1], [2, 3], [4], []]
+    assert batches == ["relationships", [0, 1], [2, 3], [4], []]

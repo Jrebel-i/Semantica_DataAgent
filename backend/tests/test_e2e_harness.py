@@ -288,6 +288,7 @@ def test_cleanup_neo4j_deletes_large_generations_in_batches(
 
     class Driver:
         remaining = 5
+        relationships_cleared = False
 
         def __enter__(self):
             return self
@@ -297,7 +298,11 @@ def test_cleanup_neo4j_deletes_large_generations_in_batches(
 
         def execute_query(self, query, **params):
             assert params["generations"] == ["e2e_owned"]
+            if "DELETE batch_relationship" in query:
+                self.relationships_cleared = True
+                return ([{"n": 0}], None, None)
             if "DETACH DELETE" in query:
+                assert self.relationships_cleared
                 assert "LIMIT $batch_size" in query
                 removed = min(self.remaining, params["batch_size"])
                 self.remaining -= removed

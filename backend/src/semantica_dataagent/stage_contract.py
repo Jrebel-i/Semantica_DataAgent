@@ -7,14 +7,24 @@ DELETE_BATCH_SIZE = 2000
 
 
 def delete_batches(execute, match_query, variable, parameters, *, detach=False):
+    queries = []
+    if detach:
+        queries.append(
+            f"{match_query} MATCH ({variable})-[batch_relationship]-() "
+            "WITH DISTINCT batch_relationship LIMIT $batch_size "
+            "DELETE batch_relationship RETURN count(*) AS deleted"
+        )
     clause = "DETACH DELETE" if detach else "DELETE"
-    query = f"{match_query} WITH {variable} LIMIT $batch_size {clause} {variable} RETURN count(*) AS deleted"
-    while True:
-        rows = execute(query, {**parameters, "batch_size": DELETE_BATCH_SIZE})
-        if not rows:
-            raise RuntimeError("Batch deletion returned no count")
-        if not rows[0]["deleted"]:
-            break
+    queries.append(
+        f"{match_query} WITH {variable} LIMIT $batch_size {clause} {variable} RETURN count(*) AS deleted"
+    )
+    for query in queries:
+        while True:
+            rows = execute(query, {**parameters, "batch_size": DELETE_BATCH_SIZE})
+            if not rows:
+                raise RuntimeError("Batch deletion returned no count")
+            if not rows[0]["deleted"]:
+                break
 
 
 @dataclass

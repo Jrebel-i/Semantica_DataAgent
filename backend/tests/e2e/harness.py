@@ -1076,15 +1076,18 @@ def _cleanup_neo4j(runtime: Runtime) -> dict[str, Any]:
                 generations=list(_owned_generations(runtime)),
             )
             count = before[0]["n"] if before else 0
-            while True:
-                deleted, _, _ = driver.execute_query(
-                    query
-                    + " WITH n LIMIT $batch_size DETACH DELETE n RETURN count(*) AS n",
-                    generations=list(_owned_generations(runtime)),
-                    batch_size=CLEANUP_BATCH_SIZE,
-                )
-                if not deleted[0]["n"]:
-                    break
+            for deletion in (
+                " MATCH (n)-[batch_relationship]-() WITH DISTINCT batch_relationship LIMIT $batch_size DELETE batch_relationship RETURN count(*) AS n",
+                " WITH n LIMIT $batch_size DETACH DELETE n RETURN count(*) AS n",
+            ):
+                while True:
+                    deleted, _, _ = driver.execute_query(
+                        query + deletion,
+                        generations=list(_owned_generations(runtime)),
+                        batch_size=CLEANUP_BATCH_SIZE,
+                    )
+                    if not deleted[0]["n"]:
+                        break
             after, _, _ = driver.execute_query(
                 query + " RETURN count(n) AS n",
                 generations=list(_owned_generations(runtime)),
