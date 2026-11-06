@@ -157,7 +157,9 @@ class FakeDtb:
         if "metadata_partition" in sql:
             return "stats"
         if "SELECT MAX(" in sql:
-            return "max_" + re.search(r"hive\.dimensions\.([A-Za-z_][A-Za-z0-9_]*)", sql).group(1)
+            return "max_" + re.search(
+                r"hive\.dimensions\.([A-Za-z_][A-Za-z0-9_]*)", sql
+            ).group(1)
         match = re.search(r"hive\.dimensions\.([A-Za-z_][A-Za-z0-9_]*)", sql)
         if match:
             return "dim_" + match.group(1)
@@ -218,7 +220,9 @@ class FakeDtb:
         if key.startswith("max_"):
             name = key.removeprefix("max_")
             value = self.dimension_rows.get(name, [["day_num"], [None]])[1][0]
-            return json.dumps({"columns": [{"name": "__partition"}], "data": [[value]]}).encode(), "application/json"
+            return json.dumps(
+                {"columns": [{"name": "__partition"}], "data": [[value]]}
+            ).encode(), "application/json"
         if key.startswith("dim_"):
             name = key.removeprefix("dim_")
             rows = self.dimension_rows.get(name, [["id"], ["1"]])
@@ -226,8 +230,19 @@ class FakeDtb:
             if limit:
                 data = data[:limit]
             if format == "json":
-                return json.dumps({"columns": [{"name": col, "type": "VARCHAR"} for col in header], "data": data}).encode(), "application/json"
-            content = "\n".join(",".join("" if v is None else v for v in row) for row in [header, *data]) + "\n"
+                return json.dumps(
+                    {
+                        "columns": [{"name": col, "type": "VARCHAR"} for col in header],
+                        "data": data,
+                    }
+                ).encode(), "application/json"
+            content = (
+                "\n".join(
+                    ",".join("" if v is None else v for v in row)
+                    for row in [header, *data]
+                )
+                + "\n"
+            )
             return content.encode(), "text/csv"
         sql = self.sqls["table"][-1]
         rows = self.table_rows
@@ -741,19 +756,27 @@ def test_fetch_rejects_malformed_dimensions_metadata(payload):
 
 
 def test_dimension_json_preserves_special_values():
-    values = ['say "hello",\nworld', '', None]
-    fake = FakeDtb(metadata_rows=[metadata_row(1, "dim_special", "value", 1, "string")],
-                   stats=PARTITION_HEADER + "\n",
-                   dimension_rows={"dim_special": [["value"], *[[v] for v in values]]})
+    values = ['say "hello",\nworld', "", None]
+    fake = FakeDtb(
+        metadata_rows=[metadata_row(1, "dim_special", "value", 1, "string")],
+        stats=PARTITION_HEADER + "\n",
+        dimension_rows={"dim_special": [["value"], *[[v] for v in values]]},
+    )
     files, counts = run_fetch(fake, {"layer": "dimensions", "max_tables": 1})
     assert counts["failures"] == []
-    rows = [json.loads(line) for line in files["dimensions/dim_special/current/rows.jsonl"].splitlines()]
+    rows = [
+        json.loads(line)
+        for line in files["dimensions/dim_special/current/rows.jsonl"].splitlines()
+    ]
     assert rows == [{"value": v} for v in values]
 
 
 def test_missing_statistics_falls_back_to_latest_partition():
-    fake = FakeDtb(metadata_rows=[metadata_row(1, "dim_a", "day_num", 10001, "string")],
-                   stats=PARTITION_HEADER + "\n", dimension_rows={"dim_a": [["day_num"], ["20261105"]]})
+    fake = FakeDtb(
+        metadata_rows=[metadata_row(1, "dim_a", "day_num", 10001, "string")],
+        stats=PARTITION_HEADER + "\n",
+        dimension_rows={"dim_a": [["day_num"], ["20261105"]]},
+    )
     files, counts = run_fetch(fake, {"layer": "dimensions", "max_tables": 1})
     assert counts["failures"] == []
     meta = json.loads(files["dimensions/dim_a/meta.json"])
@@ -764,10 +787,49 @@ def test_missing_statistics_falls_back_to_latest_partition():
 
 
 def test_stale_partition_count_is_reported_without_failing():
-    fake = FakeDtb(metadata_rows=[metadata_row(1, "dim_a", "day_num", 10001, "string")],
-                   stats=PARTITION_HEADER + "\n" + partition_row(1, "dim_a", "day_num=20261105", "4") + "\n",
-                   dimension_rows={"dim_a": [["day_num"], ["20261105"]]})
+    fake = FakeDtb(
+        metadata_rows=[metadata_row(1, "dim_a", "day_num", 10001, "string")],
+        stats=PARTITION_HEADER
+        + "\n"
+        + partition_row(1, "dim_a", "day_num=20261105", "4")
+        + "\n",
+        dimension_rows={"dim_a": [["day_num"], ["20261105"]]},
+    )
     files, counts = run_fetch(fake, {"layer": "dimensions", "max_tables": 1})
     assert counts["failures"] == []
     meta = json.loads(files["dimensions/dim_a/meta.json"])
-    assert (meta["estimated_rows"], meta["record_count"], meta["row_count_differs"]) == (4, 1, True)
+    assert (
+        meta["estimated_rows"],
+        meta["record_count"],
+        meta["row_count_differs"],
+    ) == (4, 1, True)
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"columns": [{"name": "id"}], "data": [["a", "b"]]},
+        {"columns": [{"type": "VARCHAR"}], "data": [["a"]]},
+        {"columns": [{"name": "id"}], "data": {}},
+    ],
+)
+def test_invalid_dimension_json_fails_the_table(bad):
+    fake = FakeDtb(
+        metadata_rows=[
+            metadata_row(1, "dim_bad", "id", 1, "string"),
+            metadata_row(2, "dim_good", "id", 1, "string"),
+        ],
+        stats=PARTITION_HEADER + "\n",
+    )
+    original = fake._download
+
+    def download(key, format, limit):
+        if key == "dim_dim_bad":
+            return json.dumps(bad).encode(), "application/json"
+        return original(key, format, limit)
+
+    fake._download = download
+    _, counts = run_fetch(fake, {"layer": "dimensions", "max_tables": 2})
+    assert counts["failures"] == [
+        {"table": "dim_bad", "reason": "invalid_dimension_rows"}
+    ]

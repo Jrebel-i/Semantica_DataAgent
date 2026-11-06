@@ -515,9 +515,14 @@ class DtbPuller:
                 raise TableFailure("invalid_partition_field")
             if stat is None:
                 raw = self.query_download(
-                    client, base_url, token,
+                    client,
+                    base_url,
+                    token,
                     f"SELECT MAX({field}) AS __partition FROM hive.dimensions.{name}",
-                    "json", data_source="doris_query", row_limit=1, allow_truncation=True,
+                    "json",
+                    data_source="doris_query",
+                    row_limit=1,
+                    allow_truncation=True,
                 )
                 try:
                     payload = json.loads(raw)
@@ -550,12 +555,25 @@ class DtbPuller:
             payload = json.loads(content)
             descriptors = payload["columns"]
             data = payload["data"]
-            if not isinstance(descriptors, list) or not descriptors or not isinstance(data, list):
+            if (
+                not isinstance(descriptors, list)
+                or not descriptors
+                or not isinstance(data, list)
+            ):
                 raise ValueError("Invalid dimension result")
             names = [column["name"] for column in descriptors]
-            if any(not isinstance(name, str) or not name for name in names) or len(set(names)) != len(names):
+            if any(not isinstance(name, str) or not name for name in names) or len(
+                set(names)
+            ) != len(names):
                 raise ValueError("Invalid dimension columns")
-            if any(not isinstance(row, list) or len(row) != len(names) or any(value is not None and not isinstance(value, str) for value in row) for row in data):
+            if any(
+                not isinstance(row, list)
+                or len(row) != len(names)
+                or any(
+                    value is not None and not isinstance(value, str) for value in row
+                )
+                for row in data
+            ):
                 raise ValueError("Invalid dimension rows")
             rows = [dict(zip(names, row, strict=True)) for row in data]
         except (ValueError, TypeError, KeyError, UnicodeError) as exc:
@@ -580,7 +598,7 @@ class DtbPuller:
             "estimated_rows": estimated,
             "truncated": len(rows) >= dimension_limit,
         }
-        if estimated is not None and len(rows) != min(estimated, dimension_limit):
+        if estimated is not None and len(rows) != estimated:
             meta["row_count_differs"] = True
         return {
             f"dimensions/{name}/meta.json": json.dumps(
