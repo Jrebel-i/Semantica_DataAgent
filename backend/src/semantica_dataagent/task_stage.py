@@ -281,11 +281,15 @@ def write_column_lineage(records, tasks, parsed_tasks, schema, generation, stora
         result = parsed_tasks[name]
         parsed = set(result.column_edges or [])
         declared_for_task = declared.pop(name, {})
-        if result.status == "success" and result.column_status != "success":
+        if result.status == "unsupported" or (
+            result.status == "success" and result.column_status != "success"
+        ):
             failures.append(
                 {
                     "task_id": name,
-                    "reason": result.column_reason or "Column lineage unavailable",
+                    "reason": result.column_reason
+                    or result.reason
+                    or "Column lineage unavailable",
                 }
             )
         for edge in sorted(parsed | declared_for_task.keys()):

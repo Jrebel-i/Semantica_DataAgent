@@ -293,11 +293,24 @@ class DtbTaskParser:
             else:
                 parsed = _parse_sql(_normalize_sql(sql), name, parameters, views)
                 if parsed.status == "success":
+                    column_edges.update(parsed.column_edges or [])
+                    if parsed.column_status == "failed":
+                        column_reasons.append(
+                            parsed.column_reason or "Column parse failed"
+                        )
                     if _add_sql(parsed, reads, writes, edges, views):
                         parsed_reasons.add("beeline")
                 else:
                     failed_sql += 1
 
+        if failed_sql:
+            column_reasons.append(
+                f"{failed_sql} submitted SQL statement(s) could not be parsed"
+            )
+        if unresolved:
+            column_reasons.append(
+                "Unresolved shell variables: " + ", ".join(sorted(unresolved))
+            )
         reads.update(basic_sources)
         writes.update(basic_targets)
         if jdbc_sources:

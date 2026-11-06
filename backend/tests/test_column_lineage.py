@@ -86,3 +86,22 @@ submit_sql_and_wait "$query"
         ("src.orders", "id", "dst.orders", "order_id"),
         ("src.orders", "amount", "dst.orders", "total"),
     }
+
+
+def test_sql_temporary_view_retains_field_lineage():
+    task = Record(
+        "task",
+        {
+            "name": "view",
+            "type": "spark",
+            "sql": """
+        CREATE TEMPORARY VIEW v AS SELECT id, amount FROM src.orders;
+        INSERT INTO dst.orders SELECT id AS order_id, amount AS total FROM v
+    """,
+        },
+    )
+    result = SQLTaskParser().parse(task, {"schema": SCHEMA})
+    assert edges(result) == {
+        ("src.orders", "id", "dst.orders", "order_id"),
+        ("src.orders", "amount", "dst.orders", "total"),
+    }

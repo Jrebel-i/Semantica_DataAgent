@@ -18,6 +18,17 @@ def resolve_columns(sql, dialect, tables):
         node[parts[-1]] = {column: "UNKNOWN" for column in columns}
     edges = set()
     found = False
+    views = {}
+
+    def expand_view(node):
+        if isinstance(node, exp.Table) and table_name(node) in views:
+            return exp.Subquery(
+                this=views[table_name(node)].copy(),
+                alias=node.args.get("alias")
+                or exp.TableAlias(this=exp.to_identifier(node.name)),
+            )
+        return node
+
     for statement in sqlglot.parse(
         sql, read=dialect, error_level=sqlglot.ErrorLevel.RAISE
     ):
@@ -31,11 +42,14 @@ def resolve_columns(sql, dialect, tables):
         if not isinstance(target, exp.Table) or not statement.expression:
             continue
         if isinstance(statement, exp.Create) and statement.find(exp.TemporaryProperty):
+            views[table_name(target)] = statement.expression.copy().transform(
+                expand_view
+            )
             continue
         found = True
         destination = table_name(target)
         query = qualify(
-            statement.expression.copy(),
+            statement.expression.copy().transform(expand_view),
             dialect=dialect,
             schema=schema,
             validate_qualify_columns=True,
