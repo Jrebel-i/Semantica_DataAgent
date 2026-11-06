@@ -408,6 +408,8 @@ async def sample_table_data(
         runtime_error = exc
     partitions, partition_error = await _latest_partitions(metadata, fields, runtime)
     if partitions is None:
+        if isinstance(runtime_error, ToolInvalidInput):
+            raise runtime_error
         raise ToolUnavailable(partition_error)
     sql = _build_sql(metadata, selected, partitions, limit)
     try:
