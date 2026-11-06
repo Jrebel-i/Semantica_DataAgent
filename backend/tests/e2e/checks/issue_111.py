@@ -7,9 +7,9 @@ import json
 import sys
 from pathlib import Path
 
-TABLES = 120
-FIELDS = 12
-VALUES = 105
+TABLES = 16
+FIELDS = 10
+VALUES = 1000
 
 
 def generate(directory):
@@ -80,10 +80,10 @@ def check_large_dimensions(ctx):
         ctx.require(linked == TABLES * FIELDS * VALUES, f"维度值关系数量错误：{linked}")
         hits = ctx.mcp_call(
             "lookup_dim_values",
-            {"table": "issue111.dim_119", "field": "field_11", "keyword": "value_0104"},
+            {"table": "issue111.dim_015", "field": "field_09", "keyword": "value_0999"},
         )
         ctx.require(
-            any(hit["value"] == "value_0104" for hit in hits),
+            any(hit["value"] == "value_0999" for hit in hits),
             f"MCP 未检索到维度值：{hits}",
         )
         ctx.require(count == TABLES * FIELDS * VALUES, f"维度值数量错误：{count}")
