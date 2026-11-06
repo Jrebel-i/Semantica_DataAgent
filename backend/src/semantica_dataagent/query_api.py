@@ -4,6 +4,7 @@ import asyncio
 import json
 import time
 import uuid
+from datetime import UTC, datetime, timedelta
 from typing import Annotated, Literal
 from urllib.parse import urlsplit
 
@@ -195,6 +196,11 @@ async def _execute(
         row = db.get(QueryExecution, query_id)
         if row is None or row.owner_id != user.id:
             raise HTTPException(404, "查询不存在")
+        cutoff = datetime.now(UTC) - timedelta(
+            seconds=config.get("confirmation_ttl_seconds", 1800)
+        )
+        if row.created_at.replace(tzinfo=UTC) <= cutoff:
+            raise HTTPException(410, "查询确认已过期")
         secret = db.get(PersonalDtbToken, user.id)
         if secret is None:
             raise HTTPException(400, "请先在个人设置中保存 DTB token")
@@ -202,8 +208,13 @@ async def _execute(
         sql = row.sql
         claimed = db.execute(
             update(QueryExecution)
-            .where(QueryExecution.id == query_id, QueryExecution.status == "planned")
+            .where(
+                QueryExecution.id == query_id,
+                QueryExecution.status == "planned",
+                QueryExecution.created_at > cutoff,
+            )
             .values(status="running")
+            .execution_options(synchronize_session=False)
         ).rowcount
         if not claimed:
             raise HTTPException(409, "查询已执行")

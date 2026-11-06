@@ -65,6 +65,12 @@ class DtbExecutor:
                 "default": 300,
                 "title": "超时秒数",
             },
+            "confirmation_ttl_seconds": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 1800,
+                "title": "查询确认有效期（秒）",
+            },
         },
         "required": ["base_url"],
         "additionalProperties": False,
