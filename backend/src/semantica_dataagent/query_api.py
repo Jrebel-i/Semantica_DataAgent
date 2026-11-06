@@ -167,6 +167,19 @@ def _tables_and_partitions(tree):
     return names
 
 
+def _cleanup_expired_conversation_results(query_id: str, user: Requester) -> None:
+    """Retention ends access to conversation results, not just listing them."""
+    with sessions()() as db:
+        row = db.get(QueryExecution, query_id)
+        conversation_id = (
+            row.conversation_id if row is not None and row.owner_id == user.id else None
+        )
+    if conversation_id:
+        from .conversation_api import cleanup_expired_sessions
+
+        cleanup_expired_sessions()
+
+
 @router.post("/api/v1/queries/plan")
 async def plan(body: PlanInput, user: Annotated[Requester, Depends(current_requester)]):
     return await _create_plan(body, user)
@@ -417,6 +430,7 @@ def audit(_: Annotated[str, Depends(admin)]):
 
 @router.get("/api/v1/queries/{query_id}")
 def get_result(query_id: str, user: Annotated[Requester, Depends(current_requester)]):
+    _cleanup_expired_conversation_results(query_id, user)
     with sessions()() as db:
         row = db.get(QueryExecution, query_id)
         if row is None or row.owner_id != user.id:
@@ -439,6 +453,7 @@ async def download(
     user: Annotated[Requester, Depends(current_requester)],
     format: Literal["csv", "xlsx", "json"] = "csv",
 ):
+    _cleanup_expired_conversation_results(query_id, user)
     with sessions()() as db:
         row = db.get(QueryExecution, query_id)
         if row is None or row.owner_id != user.id or row.status != "succeeded":

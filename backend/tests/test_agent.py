@@ -385,7 +385,10 @@ def test_confirmed_query_resumes_agent_and_respects_interpretation_setting(
             return "fake-key"
 
         async def wait(self, key):
-            return {"columns": ["sales"], "data": [["private-value-81"]]}
+            return {
+                "columns": ["sales"],
+                "data": [[f"private-value-{index}"] for index in range(60)],
+            }
 
     monkeypatch.setattr(knowledge, "describe", lambda **_: [])
     monkeypatch.setattr(
@@ -447,6 +450,14 @@ def test_confirmed_query_resumes_agent_and_respects_interpretation_setting(
     conversation_id = initial[0][1]["conversation_id"]
     turn_id = initial[0][1]["turn_id"]
     path = f"/api/v1/conversations/{conversation_id}/turns/{turn_id}/queries/{plan['id']}/execute"
+    agent_token = runner.requests[0].mcp_token
+    assert (
+        c.post(
+            f"/api/v1/queries/{plan['id']}/execute",
+            headers={"Authorization": f"Bearer {agent_token}"},
+        ).status_code
+        == 401
+    )
     other_token = c.post(
         "/api/v1/tokens", headers=headers, json={"name": "other", "role": "user"}
     ).json()["token"]
@@ -459,13 +470,29 @@ def test_confirmed_query_resumes_agent_and_respects_interpretation_setting(
     assert response.status_code == 200, response.text
     events = _sse(response.text)
     assert events[0][0] == "query_result"
-    assert events[0][1]["rows"] == [["private-value-81"]]
+    assert len(events[0][1]["rows"]) == 60
+    assert events[0][1]["rows"][0] == ["private-value-0"]
     assert events[-1][0] == "done"
     assert len(executions) == 1
     assert "sales" in runner.requests[1].prompt
-    assert ("private-value-81" in runner.requests[1].prompt) is interpret
-    assert all("private-value-81" not in json.dumps(trace) for trace in traces)
+    if interpret:
+        assert "private-value-49" in runner.requests[1].prompt
+        assert "private-value-50" not in runner.requests[1].prompt
+    else:
+        assert "private-value" not in runner.requests[1].prompt
+    assert all("private-value" not in json.dumps(trace) for trace in traces)
     assert c.post(path, headers=headers).status_code == 409
+    other_headers = {"Authorization": f"Bearer {other_token}"}
+    assert (
+        c.get(f"/api/v1/queries/{plan['id']}", headers=other_headers).status_code == 404
+    )
+    assert (
+        c.get(
+            f"/api/v1/queries/{plan['id']}/download?format=json",
+            headers=other_headers,
+        ).status_code
+        == 404
+    )
     detail = c.get(f"/api/v1/conversations/{conversation_id}", headers=headers).json()
     assert detail["turns"][0]["answer"] == "结论"
     assert any(
@@ -566,6 +593,97 @@ def test_deleting_conversation_removes_its_query_results(client, monkeypatch):
     )
 
 
+def test_expired_online_confirmation_cannot_execute(client, monkeypatch):
+    from datetime import UTC, datetime, timedelta
+
+    from semantica_dataagent import agent_runner, knowledge, query_api, sql_validation
+    from semantica_dataagent.auth import Requester
+    from semantica_dataagent.db import QueryExecution, Token, sessions
+    from semantica_dataagent.mcp_context import bind_mcp_context
+
+    executions = []
+
+    class Executor:
+        def bind(self, config, token):
+            return self
+
+        async def estimate(self, sql):
+            return {"partitions": None, "rows": None}
+
+        async def submit(self, sql, limit):
+            executions.append(sql)
+            return "key"
+
+        async def wait(self, key):
+            return {"columns": ["value"], "data": [[123]]}
+
+    monkeypatch.setattr(knowledge, "describe", lambda **_: [])
+    monkeypatch.setattr(
+        sql_validation, "validate_sql", lambda *a, **kw: {"status": "pass"}
+    )
+    monkeypatch.setattr(
+        query_api,
+        "_config",
+        lambda: (Executor(), {"confirmation_ttl_seconds": 1800}),
+    )
+    c, token = client
+    headers = {"Authorization": f"Bearer {token}"}
+    c.put("/api/v1/me/dtb-token", headers=headers, json={"token": "fake"})
+    with sessions()() as db:
+        owner = db.query(Token).first()
+        requester = Requester(id=owner.id, role=owner.role, token=token)
+
+    class Runner:
+        agent_id = "pi"
+
+        def available(self):
+            return True
+
+        async def run(self, request):
+            with bind_mcp_context(
+                requester, request.conversation_id, str(request.turn_id)
+            ):
+                plan = await query_api.propose_query("SELECT 1")
+            yield AgentEvent("query_plan", plan)
+
+    monkeypatch.setitem(agent_runner.RUNNERS, "pi", Runner())
+    provider = c.post(
+        "/api/v1/providers",
+        headers=headers,
+        json={
+            "name": "Local",
+            "base_url": "http://127.0.0.1:3425",
+            "models": ["model"],
+        },
+    ).json()
+    response = c.post(
+        "/api/v1/conversations/ask",
+        headers=headers,
+        json={
+            "question": "查询",
+            "agent": "pi",
+            "provider_id": provider["id"],
+            "model": "model",
+        },
+    )
+    initial = _sse(response.text)
+    plan = next(data for name, data in initial if name == "query_plan")
+    conversation_id = initial[0][1]["conversation_id"]
+    turn_id = initial[0][1]["turn_id"]
+    with sessions().begin() as db:
+        db.get(QueryExecution, plan["id"]).created_at = datetime.now(UTC) - timedelta(
+            minutes=31
+        )
+    response = c.post(
+        f"/api/v1/conversations/{conversation_id}/turns/{turn_id}/queries/{plan['id']}/execute",
+        headers=headers,
+    )
+    assert response.status_code == 410, response.text
+    assert executions == []
+    detail = c.get(f"/api/v1/conversations/{conversation_id}", headers=headers).json()
+    assert detail["turns"][0]["status"] == "awaiting_confirmation"
+
+
 def test_expired_session_removes_saved_query_rows(client):
     from datetime import UTC, datetime, timedelta
 
@@ -633,6 +751,59 @@ def test_expired_session_removes_saved_query_rows(client):
     )
     detail = c.get("/api/v1/conversations/old-session", headers=headers).json()
     assert "private" not in json.dumps(detail)
+
+
+def test_expired_conversation_result_is_not_visible_or_downloadable(
+    client, monkeypatch
+):
+    from datetime import UTC, datetime, timedelta
+
+    from semantica_dataagent import query_api
+    from semantica_dataagent.db import (
+        Conversation,
+        QueryExecution,
+        Token,
+        sessions,
+    )
+
+    monkeypatch.setattr(query_api, "_config", lambda: (object(), {"row_limit": 1000}))
+    c, token = client
+    headers = {"Authorization": f"Bearer {token}"}
+    with sessions().begin() as db:
+        owner = db.query(Token).first()
+        db.add(
+            Conversation(
+                id="expired-read",
+                owner_id=owner.id,
+                title="q",
+                agent="pi",
+                provider_id="p",
+                model="m",
+                updated_at=datetime.now(UTC) - timedelta(days=31),
+            )
+        )
+        db.add(
+            QueryExecution(
+                id="expired-read-query",
+                owner_id=owner.id,
+                conversation_id="expired-read",
+                turn_id=None,
+                sql="SELECT 1",
+                status="succeeded",
+                rows='{"columns":["v"],"data":[["private"]]}',
+                row_count=1,
+            )
+        )
+    assert (
+        c.get("/api/v1/queries/expired-read-query", headers=headers).status_code == 404
+    )
+    assert (
+        c.get(
+            "/api/v1/queries/expired-read-query/download?format=json",
+            headers=headers,
+        ).status_code
+        == 404
+    )
 
 
 def test_pi_runner_reads_jsonl_records_past_the_default_stream_limit(tmp_path: Path):
