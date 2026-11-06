@@ -339,3 +339,32 @@ def test_session_download_handles_files_replaced_by_directories_and_reverse(tmp_
     runtime._download()
     assert (tmp_path / "work" / "directory_now" / "new").read_text() == "nested"
     assert (tmp_path / "work" / "file_now").read_text() == "file"
+
+
+def test_session_download_rejects_incomplete_archive_before_changing_workspace(
+    tmp_path,
+):
+    import io
+    import tarfile
+
+    import pytest
+
+    from semantica_dataagent.k8s_sandbox import KubernetesSessionSandbox
+
+    (tmp_path / "work").mkdir()
+    (tmp_path / "sessions").mkdir()
+    (tmp_path / "work" / "existing").write_text("original")
+    payload = io.BytesIO()
+    with tarfile.open(fileobj=payload, mode="w") as archive:
+        entry = tarfile.TarInfo("workspace")
+        entry.type = tarfile.DIRTYPE
+        archive.addfile(entry)
+        entry = tarfile.TarInfo("workspace/existing")
+        entry.size = len(b"replacement")
+        archive.addfile(entry, io.BytesIO(b"replacement"))
+    runtime = object.__new__(KubernetesSessionSandbox)
+    runtime.workspace = tmp_path
+    runtime._transfer = lambda direction: payload.getvalue()
+    with pytest.raises((ValueError, OSError)):
+        runtime._download()
+    assert (tmp_path / "work" / "existing").read_text() == "original"

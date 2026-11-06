@@ -294,7 +294,15 @@ class KubernetesSessionSandbox:
         data = self._transfer("download")
         with tempfile.TemporaryDirectory(dir=self.workspace) as directory:
             with tarfile.open(fileobj=io.BytesIO(data), mode="r:") as archive:
-                if any(not (item.isfile() or item.isdir()) for item in archive):
+                members = archive.getmembers()
+                roots = {item.name.rstrip("/") for item in members if item.isdir()}
+                if not {"workspace", "sessions"} <= roots:
+                    raise ValueError("incomplete session archive")
+                if any(
+                    not (item.isfile() or item.isdir())
+                    or item.name.split("/", 1)[0] not in {"workspace", "sessions"}
+                    for item in members
+                ):
                     raise ValueError("unsupported session archive entry")
                 archive.extractall(directory, filter="data")
             for source, target in (("workspace", "work"), ("sessions", "sessions")):
