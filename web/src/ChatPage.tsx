@@ -47,6 +47,7 @@ type QueryPlan = {
   estimated_partitions: number | null;
   estimated_rows: number | null;
   row_limit: number;
+  execution_limit?: number;
 };
 type QueryResult = {
   id: string;
@@ -1353,7 +1354,7 @@ export function ChatPage({
             {t.planPartitions}: {latestPlan.estimated_partitions ?? "—"} ·{" "}
             {t.planRows}: {latestPlan.estimated_rows ?? "—"}
           </p>
-          <p>行数上限: {latestPlan.row_limit}</p>
+          <p>行数上限: {latestPlan.execution_limit ?? latestPlan.row_limit}</p>
         </div>
       ) : (
         <div className="empty-state">

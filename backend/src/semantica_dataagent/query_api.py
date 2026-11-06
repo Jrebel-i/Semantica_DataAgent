@@ -186,6 +186,7 @@ async def _create_plan(body, user, conversation_id=None, turn_id=None):
         "estimated_partitions": estimate.get("partitions"),
         "estimated_rows": estimate.get("rows"),
         "row_limit": config.get("row_limit", 1000),
+        "execution_limit": config.get("download_limit", 100000),
     }
     with sessions().begin() as db:
         if conversation_id is not None:
@@ -264,6 +265,7 @@ async def _execute(
             raise HTTPException(400, "请先在个人设置中保存 DTB token")
         token = decrypt(secret.encrypted_token)
         sql = row.sql
+        saved_plan = json.loads(row.plan_data) if row.plan_data else {}
         claimed = db.execute(
             update(QueryExecution)
             .where(
@@ -281,7 +283,10 @@ async def _execute(
     try:
         tree = _validate_sql(sql)
         _tables_and_partitions(tree)
-        cap = config.get("download_limit", 100000)
+        cap = min(
+            config.get("download_limit", 100000),
+            saved_plan.get("execution_limit", config.get("download_limit", 100000)),
+        )
         bounded = f"SELECT * FROM ({tree.sql(dialect='doris')}) AS _dataagent_query LIMIT {cap}"
         executor = plugin.bind(config, token)
         async with asyncio.timeout(config.get("timeout_seconds", 300)):
