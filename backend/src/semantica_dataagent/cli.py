@@ -90,24 +90,28 @@ def migrate_database() -> MigrationResult:
     except Exception as exc:
         raise _migration_failure(path, None, target, exc) from exc
 
-    print(f"database: {path}")
-    print(f"version before: {before or '<empty>'}")
+    print(f"database: {path}", flush=True)
+    print(f"version before: {before or '<empty>'}", flush=True)
     if before == target:
-        print(f"version after: {target}")
+        print(f"version after: {target}", flush=True)
         return MigrationResult(path, before, target, None)
 
     try:
         backup = _backup_database(path)
     except Exception as exc:
         raise _migration_failure(path, before, target, exc) from exc
-    print(f"backup: {backup}")
+    print(f"backup: {backup}", flush=True)
 
     try:
         command.upgrade(config, "head")
         after = _schema_version(config)
     except Exception as exc:
-        raise _migration_failure(path, before, target, exc) from exc
-    print(f"version after: {after or '<empty>'}")
+        try:
+            failed_at = _schema_version(config)
+        except Exception:  # noqa: BLE001 - preserve the migration error
+            failed_at = before
+        raise _migration_failure(path, failed_at, target, exc) from exc
+    print(f"version after: {after or '<empty>'}", flush=True)
     return MigrationResult(path, before, after or "", backup)
 
 
