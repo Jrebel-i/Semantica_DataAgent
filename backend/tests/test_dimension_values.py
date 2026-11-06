@@ -56,11 +56,11 @@ def test_write_batches_preserve_values_and_field_statuses(monkeypatch):
     from semantica_dataagent import dimension_stage
 
     class Storage:
-        _settings = {}
         is_incremental = False
         build_id = 7
 
         def __init__(self):
+            self._settings = {}
             self.rows = {"statuses": [], "values": []}
 
         def execute(self, query, params):

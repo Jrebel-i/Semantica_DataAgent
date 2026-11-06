@@ -1,5 +1,7 @@
 """Reconcile relationships after writing or removing source-owned nodes."""
 
+from .stage_contract import delete_batches
+
 RELATIONSHIP_BATCH_SIZE = 2000
 
 
@@ -22,13 +24,19 @@ def reconcile(storage, records, generation):
                 "source_files": list(owner.source_files),
             }
         )
-    storage.execute(
-        "MATCH (c:SDACategory {generation:$generation}) WHERE c.name IN $categories WITH c ORDER BY elementId(c) WITH c.name AS name, collect(c) AS nodes UNWIND nodes[1..] AS duplicate DETACH DELETE duplicate",
+    delete_batches(
+        storage.execute,
+        "MATCH (c:SDACategory {generation:$generation}) WHERE c.name IN $categories WITH c ORDER BY elementId(c) WITH c.name AS name, collect(c) AS nodes UNWIND nodes[1..] AS duplicate",
+        "duplicate",
         {"generation": generation, "categories": list(categories)},
+        detach=True,
     )
-    storage.execute(
-        "MATCH (c:SDACategory {generation:$generation}) WHERE NOT c.name IN $categories DETACH DELETE c",
+    delete_batches(
+        storage.execute,
+        "MATCH (c:SDACategory {generation:$generation}) WHERE NOT c.name IN $categories",
+        "c",
         {"generation": generation, "categories": list(categories)},
+        detach=True,
     )
     storage.execute(
         "UNWIND $rows AS row MERGE (c:SDAEntity:SDACategory {generation:$generation, name:row.name}) ON CREATE SET c.ref = row.ref, c.source_file = row.source_file, c.source_key = row.source_key, c.source_files = row.source_files, c.build_id = $build_id WITH c, row WHERE c.source_file <> row.source_file OR c.source_key <> row.source_key OR c.source_files <> row.source_files SET c.source_file = row.source_file, c.source_key = row.source_key, c.source_files = row.source_files, c.build_id = $build_id",

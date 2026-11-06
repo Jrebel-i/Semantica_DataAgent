@@ -36,6 +36,7 @@ from .embedding_client import EmbeddingStats
 from .embedding_client import embed as embedding_embed
 from .filters import filter_records, get_filters
 from .plugins import configured
+from .stage_contract import WRITE_BATCH_SIZE, delete_batches
 from .storage_errors import StorageUnavailable
 
 
@@ -358,10 +359,12 @@ def build_storage(values, embedding_stats=None):
                     db.get(Build, values["_build_id"]).affected_files = json.dumps(
                         {"full_started": True}
                     )
-            execute(
-                graph_store,
-                "MATCH (n:SDAEntity {generation:$generation}) DETACH DELETE n",
+            delete_batches(
+                lambda query, params: execute(graph_store, query, params),
+                "MATCH (n:SDAEntity {generation:$generation})",
+                "n",
                 {"generation": generation},
+                detach=True,
             )
             name = collection_name(values)
             if utility.has_collection(name):
@@ -708,20 +711,28 @@ def run_build(build_id):
                             "dimension_tables": sorted(dirty_tables),
                         }
                     )
-                storage.execute(
-                    "MATCH (:SDATable {generation:$generation})-[r:DEPENDS_ON]->(:SDATable {generation:$generation}) WHERE r.source_file IN $files DELETE r",
+                delete_batches(
+                    storage.execute,
+                    "MATCH (:SDATable {generation:$generation})-[r:DEPENDS_ON]->(:SDATable {generation:$generation}) WHERE r.source_file IN $files",
+                    "r",
                     {"generation": generation, "files": sorted(touched)},
                 )
-                storage.execute(
-                    "MATCH (n:SDAEntity {generation:$generation}) WHERE n.source_file IN $files OR n.source_key IN $files OR any(s IN coalesce(n.source_files, []) WHERE s IN $files) OR (n:SDADimensionValue AND any(t IN $tables WHERE t.database = n.database AND t.table = n.table)) DETACH DELETE n",
+                delete_batches(
+                    storage.execute,
+                    "MATCH (n:SDAEntity {generation:$generation}) WHERE n.source_file IN $files OR n.source_key IN $files OR any(s IN coalesce(n.source_files, []) WHERE s IN $files) OR (n:SDADimensionValue AND any(t IN $tables WHERE t.database = n.database AND t.table = n.table))",
+                    "n",
                     params,
+                    detach=True,
                 )
-                if old_ids:
-                    storage._vectors.delete_vectors(sorted(old_ids))
+                vector_ids = sorted(old_ids)
+                for offset in range(0, len(vector_ids), WRITE_BATCH_SIZE):
+                    storage._vectors.delete_vectors(
+                        vector_ids[offset : offset + WRITE_BATCH_SIZE]
+                    )
                 if dirty_tables:
                     storage.execute(
-                        "UNWIND $tables AS row MATCH (f:SDAField {generation:$generation, database:row.database, table:row.table}) REMOVE f.dimension_count, f.dimension_too_many, f.dimension_samples",
-                        params,
+                        "UNWIND $rows AS row MATCH (f:SDAField {generation:$generation, database:row.database, table:row.table}) REMOVE f.dimension_count, f.dimension_too_many, f.dimension_samples",
+                        {"generation": generation, "rows": params["tables"]},
                     )
             for stage in STAGES:
                 if (
@@ -893,10 +904,12 @@ def cleanup_interrupted_generations():
 def delete_generation_data(values):
     store = graph(values)
     try:
-        execute(
-            store,
-            "MATCH (n:SDAEntity {generation:$generation}) DETACH DELETE n",
+        delete_batches(
+            lambda query, params: execute(store, query, params),
+            "MATCH (n:SDAEntity {generation:$generation})",
+            "n",
             {"generation": values["knowledge_generation"]},
+            detach=True,
         )
     finally:
         store.close()

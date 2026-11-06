@@ -215,6 +215,8 @@ def test_reconcile_limits_relationship_writes(monkeypatch):
             self.linked = []
 
         def execute(self, query, params):
+            if "RETURN count(*) AS deleted" in query:
+                return [{"deleted": 0}]
             if "RETURN elementId(n) AS id" in query:
                 return (
                     [{"id": str(i)} for i in range(5)]
@@ -230,3 +232,28 @@ def test_reconcile_limits_relationship_writes(monkeypatch):
     storage = Storage()
     relationships.reconcile(storage, [], "generation")
     assert storage.linked == ["0", "1", "2", "3", "4"]
+
+
+def test_deletions_are_limited_and_keep_filter_parameters(monkeypatch):
+    from semantica_dataagent import stage_contract
+
+    remaining = list(range(5))
+    batches = []
+
+    def execute(query, params):
+        assert params["files"] == ["changed.json"]
+        assert "WITH n LIMIT $batch_size DETACH DELETE n" in query
+        removed = remaining[: params["batch_size"]]
+        del remaining[: params["batch_size"]]
+        batches.append(removed)
+        return [{"deleted": len(removed)}]
+
+    monkeypatch.setattr(stage_contract, "DELETE_BATCH_SIZE", 2, raising=False)
+    stage_contract.delete_batches(
+        execute,
+        "MATCH (n:SDAEntity) WHERE n.source_file IN $files",
+        "n",
+        {"files": ["changed.json"]},
+        detach=True,
+    )
+    assert batches == [[0, 1], [2, 3], [4], []]

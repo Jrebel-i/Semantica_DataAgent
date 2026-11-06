@@ -3,6 +3,18 @@
 from dataclasses import dataclass, field
 
 WRITE_BATCH_SIZE = 2000
+DELETE_BATCH_SIZE = 2000
+
+
+def delete_batches(execute, match_query, variable, parameters, *, detach=False):
+    clause = "DETACH DELETE" if detach else "DELETE"
+    query = f"{match_query} WITH {variable} LIMIT $batch_size {clause} {variable} RETURN count(*) AS deleted"
+    while True:
+        rows = execute(query, {**parameters, "batch_size": DELETE_BATCH_SIZE})
+        if not rows:
+            raise RuntimeError("Batch deletion returned no count")
+        if not rows[0]["deleted"]:
+            break
 
 
 @dataclass
