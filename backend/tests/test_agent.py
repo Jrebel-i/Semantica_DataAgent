@@ -301,7 +301,10 @@ def test_query_plan_stream_waits_for_confirmation_and_persists(client, monkeypat
 def test_confirmed_query_resumes_agent_and_respects_interpretation_setting(
     client, monkeypatch, interpret
 ):
-    from semantica_dataagent import agent_runner, knowledge, query_api
+    from semantica_dataagent import agent_runner, knowledge, query_api, sql_validation
+    from semantica_dataagent.auth import Requester
+    from semantica_dataagent.db import Token, sessions
+    from semantica_dataagent.mcp_context import bind_mcp_context
 
     executions = []
 
@@ -321,14 +324,17 @@ def test_confirmed_query_resumes_agent_and_respects_interpretation_setting(
 
     monkeypatch.setattr(knowledge, "describe", lambda **_: [])
     monkeypatch.setattr(
+        sql_validation, "validate_sql", lambda *a, **kw: {"status": "pass"}
+    )
+    monkeypatch.setattr(
         query_api, "_config", lambda: (Executor(), {"interpret_results": interpret})
     )
     c, token = client
     headers = {"Authorization": f"Bearer {token}"}
     c.put("/api/v1/me/dtb-token", headers=headers, json={"token": "fake"})
-    plan = c.post(
-        "/api/v1/queries/plan", headers=headers, json={"sql": "SELECT 1"}
-    ).json()
+    with sessions()() as db:
+        owner = db.query(Token).first()
+        requester = Requester(id=owner.id, role=owner.role, token=token)
 
     class Runner:
         agent_id = "pi"
@@ -340,6 +346,10 @@ def test_confirmed_query_resumes_agent_and_respects_interpretation_setting(
         async def run(self, request):
             self.requests.append(request)
             if len(self.requests) == 1:
+                with bind_mcp_context(
+                    requester, request.conversation_id, str(request.turn_id)
+                ):
+                    plan = await query_api.propose_query("SELECT 1")
                 yield AgentEvent("query_plan", plan)
             else:
                 yield AgentEvent(DONE, {"text": "结论", "sql": [], "citations": []})
@@ -366,6 +376,7 @@ def test_confirmed_query_resumes_agent_and_respects_interpretation_setting(
         },
     )
     initial = _sse(response.text)
+    plan = next(data for name, data in initial if name == "query_plan")
     conversation_id = initial[0][1]["conversation_id"]
     turn_id = initial[0][1]["turn_id"]
     path = f"/api/v1/conversations/{conversation_id}/turns/{turn_id}/queries/{plan['id']}/execute"

@@ -333,6 +333,31 @@ async def execute(
         row = db.get(QueryExecution, query_id)
         if row is None or row.owner_id != user.id:
             raise HTTPException(404, "查询不存在")
+        if row.conversation_id is not None:
+            raise HTTPException(403, "在线查询需要在会话中确认")
+    return await _execute_with_audit(query_id, body, user)
+
+
+async def execute_for_turn(
+    query_id: str, user: Requester, conversation_id: str, turn_id: int
+):
+    with sessions()() as db:
+        row = db.get(QueryExecution, query_id)
+        if (
+            row is None
+            or row.owner_id != user.id
+            or row.conversation_id != conversation_id
+            or row.turn_id != turn_id
+        ):
+            raise HTTPException(404, "查询不存在")
+    return await _execute_with_audit(query_id, ExecuteInput(), user)
+
+
+async def _execute_with_audit(query_id: str, body: ExecuteInput, user: Requester):
+    with sessions()() as db:
+        row = db.get(QueryExecution, query_id)
+        if row is None or row.owner_id != user.id:
+            raise HTTPException(404, "查询不存在")
         sql = row.sql
     started = time.monotonic()
     audit_id = uuid.uuid4().hex
