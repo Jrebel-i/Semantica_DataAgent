@@ -11,14 +11,24 @@ ROOT = Path(__file__).resolve().parents[2]
 def pod_spec():
     module = importlib.util.find_spec("semantica_dataagent.k8s_sandbox")
     assert module is not None, "Kubernetes session sandbox must be implemented"
+    from unittest.mock import patch
+
     from semantica_dataagent.k8s_sandbox import build_pod_spec
 
-    return build_pod_spec(
-        name="sda-agent-example",
-        workspace_subpath="conversations/example",
-        model_url="https://gateway.example:443/v1",
-        mcp_url="http://dataagent.semantica-dataagent.svc:8000/mcp/",
-    )
+    def resolve(host, *args, **kwargs):
+        ips = {
+            "gateway.example": "203.0.113.10",
+            "dataagent.semantica-dataagent.svc": "10.96.0.25",
+        }
+        return [(2, 1, 6, "", (ips[host], 0))]
+
+    with patch("socket.getaddrinfo", side_effect=resolve):
+        return build_pod_spec(
+            name="sda-agent-example",
+            workspace_subpath="conversations/example",
+            model_url="https://gateway.example:443/v1",
+            mcp_url="http://dataagent.semantica-dataagent.svc:8000/mcp/",
+        )
 
 
 def manifests():
@@ -46,9 +56,8 @@ def test_session_pod_is_labeled_and_limits_its_workspace():
     assert "ALL" in security["capabilities"]["drop"]
     assert not security["capabilities"].get("add")
     mounts = [m for m in container["volumeMounts"] if m.get("subPath")]
-    assert mounts and all(
-        m["subPath"].startswith("conversations/example/") for m in mounts
-    )
+    assert not mounts
+    assert all(volume.get("emptyDir") == {} for volume in spec["volumes"])
 
 
 def test_session_firewall_denies_ipv4_and_ipv6_by_default():
@@ -59,8 +68,8 @@ def test_session_firewall_denies_ipv4_and_ipv6_by_default():
     for command in ("iptables", "ip6tables"):
         assert command in script
         assert f"{command} -P OUTPUT DROP" in script
-    assert "gateway.example" in script
-    assert "dataagent.semantica-dataagent.svc" in script
+    assert "203.0.113.10" in script
+    assert "10.96.0.25" in script
 
 
 def test_application_rbac_is_namespace_scoped_and_minimal():
@@ -69,7 +78,7 @@ def test_application_rbac_is_namespace_scoped_and_minimal():
     assert roles, "application Role is required"
     assert not any(d.get("kind") in ("ClusterRole", "ClusterRoleBinding") for d in docs)
     for role in roles:
-        assert role["metadata"]["namespace"] == "semantica-dataagent"
+        assert role["metadata"]["namespace"] == "semantica-dataagent-sessions"
         for rule in role["rules"]:
             assert set(rule["resources"]) <= {"pods", "pods/log", "pods/exec"}
             assert set(rule["verbs"]) <= {"get", "list", "watch", "create", "delete"}
@@ -157,10 +166,6 @@ esac
     assert set(destinations) == {
         "iptables -A OUTPUT -p tcp -m conntrack --ctorigdst 203.0.113.10 --dport 443 -j ACCEPT",
         "iptables -A OUTPUT -p tcp -m conntrack --ctorigdst 10.96.0.25 --dport 8000 -j ACCEPT",
-        "ip6tables -A OUTPUT -p tcp -m conntrack --ctorigdst 2001:db8::10 --dport 443 -j ACCEPT",
-        "ip6tables -A OUTPUT -p tcp -m conntrack --ctorigdst 2001:db8::25 --dport 8000 -j ACCEPT",
-        "iptables -A OUTPUT -p udp -m conntrack --ctorigdst 10.96.0.10 --dport 53 -j ACCEPT",
-        "iptables -A OUTPUT -p tcp -m conntrack --ctorigdst 10.96.0.10 --dport 53 -j ACCEPT",
     }
     assert not any(
         "-A OUTPUT" in line
@@ -183,7 +188,7 @@ def test_orphan_cleanup_selects_only_labeled_session_pods(tmp_path, monkeypatch)
     monkeypatch.setenv("CLEANUP_LOG", str(log))
     cleanup_orphans()
     args = log.read_text().splitlines()
-    assert args[:5] == ["-n", "semantica-dataagent", "delete", "pods", "-l"]
+    assert args[:5] == ["-n", "semantica-dataagent-sessions", "delete", "pods", "-l"]
     assert args[5] == "app.kubernetes.io/component=agent-session"
 
 
@@ -203,3 +208,163 @@ def test_pod_rejects_workspace_traversal_and_credentialed_urls():
             build_pod_spec(**(base | {"workspace_subpath": path}))
     with pytest.raises(ValueError):
         build_pod_spec(**(base | {"model_url": "https://user:secret@gateway.example/"}))
+
+
+def test_session_upload_extracts_into_existing_root_owned_mounts(tmp_path):
+    import subprocess
+
+    import pytest
+
+    from semantica_dataagent.k8s_sandbox import KubernetesSessionSandbox
+
+    if subprocess.run(["docker", "info"], capture_output=True, check=False).returncode:
+        pytest.skip("Docker daemon is required")
+    (tmp_path / "work" / "config").mkdir(parents=True)
+    (tmp_path / "sessions").mkdir()
+    (tmp_path / "work" / "config" / "models.json").write_text("{}")
+    (tmp_path / "sessions" / "saved.jsonl").write_text("saved")
+    runtime = object.__new__(KubernetesSessionSandbox)
+    runtime.workspace = tmp_path
+
+    def extract(direction, payload):
+        assert direction == "upload"
+        result = subprocess.run(
+            [
+                "docker",
+                "run",
+                "--rm",
+                "-i",
+                "--network",
+                "none",
+                "--user",
+                "65534:65534",
+                "--tmpfs",
+                "/workspace:rw,mode=1777",
+                "--tmpfs",
+                "/sessions:rw,mode=1777",
+                "--entrypoint",
+                "tar",
+                "semantica-dataagent-agent-runner:1.2.0",
+                "--no-overwrite-dir",
+                "--no-same-owner",
+                "-xf",
+                "-",
+                "-C",
+                "/",
+            ],
+            input=payload,
+            capture_output=True,
+            check=False,
+            timeout=30,
+        )
+        assert result.returncode == 0, result.stderr.decode()
+
+    runtime._transfer = extract
+    runtime._upload()
+
+
+def test_session_upload_preserves_mount_root_and_nested_files(tmp_path):
+    import io
+    import tarfile
+
+    from semantica_dataagent.k8s_sandbox import KubernetesSessionSandbox
+
+    (tmp_path / "work").mkdir()
+    (tmp_path / "sessions").mkdir()
+    (tmp_path / "work" / "file").write_text("one")
+    (tmp_path / "sessions" / "file").write_text("two")
+    runtime = object.__new__(KubernetesSessionSandbox)
+    runtime.workspace = tmp_path
+    contents = []
+
+    def capture(direction, payload):
+        with tarfile.open(fileobj=io.BytesIO(payload)) as archive:
+            contents.extend(archive.getnames())
+
+    runtime._transfer = capture
+    runtime._upload()
+    assert set(contents) == {"workspace/file", "sessions/file"}
+
+
+def test_session_download_keeps_deletions_from_agent(tmp_path):
+    import io
+    import tarfile
+
+    from semantica_dataagent.k8s_sandbox import KubernetesSessionSandbox
+
+    for directory in ("work", "sessions"):
+        (tmp_path / directory).mkdir()
+        (tmp_path / directory / "deleted").write_text("old")
+    archive_data = io.BytesIO()
+    with tarfile.open(fileobj=archive_data, mode="w") as archive:
+        for directory in ("workspace", "sessions"):
+            item = tarfile.TarInfo(directory)
+            item.type = tarfile.DIRTYPE
+            archive.addfile(item)
+    runtime = object.__new__(KubernetesSessionSandbox)
+    runtime.workspace = tmp_path
+    runtime._transfer = lambda direction: archive_data.getvalue()
+    runtime._download()
+    assert not (tmp_path / "work" / "deleted").exists()
+    assert not (tmp_path / "sessions" / "deleted").exists()
+
+
+def test_session_download_handles_files_replaced_by_directories_and_reverse(tmp_path):
+    import io
+    import tarfile
+
+    from semantica_dataagent.k8s_sandbox import KubernetesSessionSandbox
+
+    (tmp_path / "work").mkdir()
+    (tmp_path / "sessions").mkdir()
+    (tmp_path / "work" / "directory_now").write_text("old file")
+    (tmp_path / "work" / "file_now").mkdir()
+    (tmp_path / "work" / "file_now" / "old").write_text("old")
+    data = io.BytesIO()
+    with tarfile.open(fileobj=data, mode="w") as archive:
+        for name in ("workspace", "sessions", "workspace/directory_now"):
+            item = tarfile.TarInfo(name)
+            item.type = tarfile.DIRTYPE
+            archive.addfile(item)
+        for name, value in (
+            ("workspace/directory_now/new", b"nested"),
+            ("workspace/file_now", b"file"),
+        ):
+            item = tarfile.TarInfo(name)
+            item.size = len(value)
+            archive.addfile(item, io.BytesIO(value))
+    runtime = object.__new__(KubernetesSessionSandbox)
+    runtime.workspace = tmp_path
+    runtime._transfer = lambda direction: data.getvalue()
+    runtime._download()
+    assert (tmp_path / "work" / "directory_now" / "new").read_text() == "nested"
+    assert (tmp_path / "work" / "file_now").read_text() == "file"
+
+
+def test_session_download_rejects_incomplete_archive_before_changing_workspace(
+    tmp_path,
+):
+    import io
+    import tarfile
+
+    import pytest
+
+    from semantica_dataagent.k8s_sandbox import KubernetesSessionSandbox
+
+    (tmp_path / "work").mkdir()
+    (tmp_path / "sessions").mkdir()
+    (tmp_path / "work" / "existing").write_text("original")
+    payload = io.BytesIO()
+    with tarfile.open(fileobj=payload, mode="w") as archive:
+        entry = tarfile.TarInfo("workspace")
+        entry.type = tarfile.DIRTYPE
+        archive.addfile(entry)
+        entry = tarfile.TarInfo("workspace/existing")
+        entry.size = len(b"replacement")
+        archive.addfile(entry, io.BytesIO(b"replacement"))
+    runtime = object.__new__(KubernetesSessionSandbox)
+    runtime.workspace = tmp_path
+    runtime._transfer = lambda direction: payload.getvalue()
+    with pytest.raises((ValueError, OSError)):
+        runtime._download()
+    assert (tmp_path / "work" / "existing").read_text() == "original"

@@ -1,8 +1,10 @@
 """Disposable Docker session and strictly scoped TCP egress relay."""
 
+import ipaddress
 import json
 import os
 import shutil
+import socket
 import subprocess
 import threading
 import uuid
@@ -61,9 +63,21 @@ class SessionSandbox:
         target = (
             "host.docker.internal"
             if host in ("127.0.0.1", "localhost", "::1")
-            else host
+            else min(
+                socket.getaddrinfo(
+                    host,
+                    url.port or (443 if url.scheme == "https" else 80),
+                    type=socket.SOCK_STREAM,
+                ),
+                key=lambda entry: entry[0] != socket.AF_INET,
+            )[4][0]
         )
-        alias = "sda-relay" if target == "host.docker.internal" else host
+        try:
+            ipaddress.ip_address(host)
+            literal = True
+        except ValueError:
+            literal = False
+        alias = "sda-relay" if target == "host.docker.internal" or literal else host
         self.aliases.add(alias)
         self.targets.append(
             [
@@ -92,7 +106,25 @@ class SessionSandbox:
     def _start(self):
         (self.workspace / "work").mkdir(parents=True, exist_ok=True)
         (self.workspace / "sessions").mkdir(parents=True, exist_ok=True)
+        resolv = self.workspace / "agent-resolv.conf"
+        resolv.write_text("nameserver 127.0.0.1\n", encoding="ascii")
         try:
+            if any(target[1] == "host.docker.internal" for target in self.targets):
+                resolved = self._run(
+                    "run",
+                    "--rm",
+                    "--network",
+                    "bridge",
+                    "--entrypoint",
+                    "node",
+                    IMAGE,
+                    "-e",
+                    "require('dns').lookup('host.docker.internal', (err, address) => { if (err) process.exit(1); console.log(address); })",
+                ).stdout.strip()
+                ipaddress.ip_address(resolved)
+                for target in self.targets:
+                    if target[1] == "host.docker.internal":
+                        target[1] = resolved
             self._run(
                 "network",
                 "create",
@@ -132,6 +164,23 @@ class SessionSandbox:
             )
             self._run("network", "connect", "bridge", self.proxy)
             self._run("start", self.proxy)
+            relay_ip = self._run(
+                "inspect",
+                "--format",
+                '{{range .NetworkSettings.Networks}}{{if eq .NetworkID "'
+                + self._run(
+                    "network", "inspect", "--format", "{{.Id}}", self.network
+                ).stdout.strip()
+                + '"}}{{.IPAddress}}{{end}}{{end}}',
+                self.proxy,
+            ).stdout.strip()
+            if not relay_ip:
+                raise RuntimeError("cannot determine relay address")
+            hosts = [
+                arg
+                for alias in self.aliases
+                for arg in ("--add-host", f"{alias}:{relay_ip}")
+            ]
             self._run(
                 "run",
                 "-d",
@@ -143,6 +192,11 @@ class SessionSandbox:
                 f"{OWNER}={self.owner}",
                 "--network",
                 self.network,
+                "--dns",
+                "127.0.0.1",
+                *hosts,
+                "--mount",
+                f"type=bind,src={resolv},dst=/etc/resolv.conf,readonly",
                 "--read-only",
                 "--tmpfs",
                 "/tmp:rw,nosuid,nodev",
@@ -171,6 +225,13 @@ class SessionSandbox:
         except BaseException:
             self.close()
             raise
+
+    def wrap_command(self, command, env, keys):
+        docker = ["docker", "exec", "-i"]
+        for key in keys:
+            if key in env:
+                docker.extend(["--env", key])
+        return [*docker, self.name, *command], None
 
     def exec(self, command):
         return self._run(

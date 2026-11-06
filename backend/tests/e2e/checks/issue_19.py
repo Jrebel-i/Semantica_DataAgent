@@ -52,6 +52,8 @@ def _check_agent(ctx, agent, provider_type, base_url, model):
                     "ps",
                     "--filter",
                     "label=com.semantica-dataagent.agent=1",
+                    "--filter",
+                    f"label=com.semantica-dataagent.owner={ctx.runtime.server.pid}",
                     "--format",
                     "{{.Image}}",
                 ],
@@ -62,8 +64,12 @@ def _check_agent(ctx, agent, provider_type, base_url, model):
             if "semantica-dataagent-agent-runner:1.2.0" in p.stdout:
                 observed.set()
 
-    watcher = threading.Thread(target=watch, daemon=True)
-    watcher.start()
+    watcher = None
+    if os.getenv("DATAAGENT_AGENT_MODE", "sandbox") == "local":
+        observed.set()
+    else:
+        watcher = threading.Thread(target=watch, daemon=True)
+        watcher.start()
     try:
         first = _ask(
             ctx,
@@ -76,7 +82,8 @@ def _check_agent(ctx, agent, provider_type, base_url, model):
         )
     finally:
         stop.set()
-        watcher.join()
+        if watcher:
+            watcher.join()
     ctx.require(observed.is_set(), f"{agent}: no sandbox observed")
     ctx.require(
         first and first[0][0] == "conversation",

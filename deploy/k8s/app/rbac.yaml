@@ -8,7 +8,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: dataagent-sessions
-  namespace: semantica-dataagent
+  namespace: semantica-dataagent-sessions
 rules:
   - apiGroups: [""]
     resources: ["pods"]
@@ -24,7 +24,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: dataagent-sessions
-  namespace: semantica-dataagent
+  namespace: semantica-dataagent-sessions
 subjects:
   - kind: ServiceAccount
     name: dataagent

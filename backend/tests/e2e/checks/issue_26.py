@@ -2,8 +2,10 @@
 
 import json
 import shlex
+import socket
 import subprocess
 import uuid
+from unittest.mock import patch
 
 import httpx
 
@@ -14,8 +16,8 @@ HOST = "baize@172.16.242.124"
 BASE = "http://172.16.242.124:31630"
 
 
-def _kubectl(*args, input_data=None, check=True, timeout=180):
-    command = shlex.join(["kubectl", "-n", NAMESPACE, *args])
+def _kubectl(*args, input_data=None, check=True, timeout=180, namespace=NAMESPACE):
+    command = shlex.join(["kubectl", "-n", namespace, *args])
     result = subprocess.run(
         ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", HOST, command],
         input=input_data,
@@ -52,42 +54,73 @@ def check_session_egress(ctx):
     suffix = uuid.uuid4().hex[:12]
     name = "sda-agent-e2e26-" + suffix
     session = "issue26_" + suffix
-    directory = "/data/conversations/" + session
     pods = json.loads(
         _kubectl("get", "pods", "-l", "app=dataagent", "-o", "json").stdout
     )["items"]
     ready = [p for p in pods if p["status"].get("phase") == "Running"]
     ctx.require(len(ready) == 1, "expected exactly one running application Pod")
     node = ready[0]["spec"]["nodeName"]
-    created_workspace = False
     created_pod = False
     try:
-        _kubectl(
-            "exec",
-            "deploy/dataagent",
-            "--",
-            "mkdir",
-            "-p",
-            directory + "/work",
-            directory + "/sessions",
-        )
-        created_workspace = True
-        pod = build_pod_spec(
-            name=name,
-            workspace_subpath="conversations/" + session,
-            model_url="https://llm-cn.pkfare-inc.com",
-            mcp_url="http://dataagent.semantica-dataagent.svc:8000/mcp/",
-        )
+        service_ip = _kubectl(
+            "get", "svc", "dataagent", "-o", "jsonpath={.spec.clusterIP}"
+        ).stdout.strip()
+        storage_ip = _kubectl(
+            "get", "svc", "neo4j", "-o", "jsonpath={.spec.clusterIP}"
+        ).stdout.strip()
+        original_resolve = socket.getaddrinfo
+
+        def resolve(host, *args, **kwargs):
+            if host == "dataagent.semantica-dataagent.svc":
+                host = service_ip
+            return original_resolve(host, *args, **kwargs)
+
+        with patch("socket.getaddrinfo", side_effect=resolve):
+            pod = build_pod_spec(
+                name=name,
+                workspace_subpath="conversations/" + session,
+                model_url="https://llm-cn.pkfare-inc.com",
+                mcp_url="http://dataagent.semantica-dataagent.svc:8000/mcp/",
+            )
         pod["spec"]["nodeSelector"] = {"kubernetes.io/hostname": node}
-        _kubectl("create", "-f", "-", input_data=json.dumps(pod))
+        _kubectl(
+            "create",
+            "-f",
+            "-",
+            input_data=json.dumps(pod),
+            namespace="semantica-dataagent-sessions",
+        )
         created_pod = True
-        _kubectl("wait", "--for=condition=Ready", "pod/" + name, "--timeout=120s")
+        _kubectl(
+            "wait",
+            "--for=condition=Ready",
+            "pod/" + name,
+            "--timeout=120s",
+            namespace="semantica-dataagent-sessions",
+        )
         script = r"""const http=require('http'), https=require('https'), net=require('net');
 function req(url){return new Promise(resolve=>{const r=(url.startsWith('https:')?https:http).get(url,{timeout:4000},s=>{s.resume();resolve('HTTP '+s.statusCode)});r.on('timeout',()=>r.destroy());r.on('error',e=>resolve('ERROR '+e.code));});}
 function conn(host,port){return new Promise(resolve=>{const s=net.connect({host,port,timeout:4000});s.on('connect',()=>{s.destroy();resolve('CONNECTED')});s.on('timeout',()=>s.destroy());s.on('error',e=>resolve('ERROR '+e.code));s.on('close',()=>resolve('CLOSED'));});}
-(async()=>{const result={mcp:await req('http://dataagent.semantica-dataagent.svc:8000/mcp/'),model:await req('https://llm-cn.pkfare-inc.com/'),external:await req('https://example.com/'),neo4j:await conn('neo4j.semantica-dataagent.svc',7687),api:await conn('kubernetes.default.svc',443),node:await conn('172.16.242.124',31640)};console.log(JSON.stringify(result));})();"""
+(async()=>{const result={mcp:await req('http://dataagent.semantica-dataagent.svc:8000/mcp/'),model:await req('https://llm-cn.pkfare-inc.com/'),external:await conn('1.1.1.1',443),neo4j:await conn('STORAGE_IP',7687),api:await conn('API_IP',443),node:await conn('172.16.242.124',31640)};console.log(JSON.stringify(result));})();"""
+        api_ip = _kubectl(
+            "get",
+            "svc",
+            "kubernetes",
+            "-o",
+            "jsonpath={.spec.clusterIP}",
+            namespace="default",
+        ).stdout.strip()
+        script = script.replace("STORAGE_IP", storage_ip).replace("API_IP", api_ip)
         result = _kubectl(
-            "exec", "-i", name, "-c", "agent", "--", "node", input_data=script
+            "exec",
+            "-i",
+            name,
+            "-c",
+            "agent",
+            "--",
+            "node",
+            input_data=script,
+            namespace="semantica-dataagent-sessions",
         )
         traffic = json.loads(result.stdout.strip())
         ctx.require(traffic["mcp"].startswith("HTTP "), f"MCP unreachable: {traffic}")
@@ -96,7 +129,7 @@ function conn(host,port){return new Promise(resolve=>{const s=net.connect({host,
             f"model gateway unreachable: {traffic}",
         )
         ctx.require(
-            not traffic["external"].startswith("HTTP "),
+            traffic["external"] != "CONNECTED",
             f"external egress allowed: {traffic}",
         )
         for target in ("neo4j", "api", "node"):
@@ -104,7 +137,15 @@ function conn(host,port){return new Promise(resolve=>{const s=net.connect({host,
                 traffic[target] != "CONNECTED", f"{target} egress allowed: {traffic}"
             )
         flush = _kubectl(
-            "exec", name, "-c", "agent", "--", "iptables", "-F", check=False
+            "exec",
+            name,
+            "-c",
+            "agent",
+            "--",
+            "iptables",
+            "-F",
+            check=False,
+            namespace="semantica-dataagent-sessions",
         )
         ctx.require(
             flush.returncode != 0 and "ermission denied" in flush.stderr,
@@ -112,24 +153,13 @@ function conn(host,port){return new Promise(resolve=>{const s=net.connect({host,
         )
         return traffic
     finally:
-        try:
-            if created_pod:
-                _kubectl(
-                    "delete",
-                    "pod",
-                    name,
-                    "--ignore-not-found",
-                    "--wait=true",
-                    "--timeout=120s",
-                )
-        finally:
-            if created_workspace:
-                _kubectl(
-                    "exec",
-                    "deploy/dataagent",
-                    "--",
-                    "python",
-                    "-c",
-                    "import shutil,sys; shutil.rmtree(sys.argv[1])",
-                    directory,
-                )
+        if created_pod:
+            _kubectl(
+                "delete",
+                "pod",
+                name,
+                "--ignore-not-found",
+                "--wait=true",
+                "--timeout=120s",
+                namespace="semantica-dataagent-sessions",
+            )
