@@ -425,11 +425,13 @@ class DtbPuller:
         tables = self.list_tables(client, base_url, token, maximum)
         names = ",".join("'" + self._dimension_name(table) + "'" for table in tables)
         names = names or "''"
-        task_sql = TASK_SQL + f" AND output_table_name IN ({names})"
-        table_sql = (
-            TABLE_SQL
-            + f" WHERE a.database_name='dimensions' AND a.table_name IN ({names})"
-        )
+        task_sql = TASK_SQL
+        table_sql = TABLE_SQL
+        if maximum is not None:
+            task_sql += f" AND output_table_name IN ({names})"
+            table_sql += (
+                f" WHERE a.database_name='dimensions' AND a.table_name IN ({names})"
+            )
         files = {
             "任务信息.json": self.query_download(
                 client,

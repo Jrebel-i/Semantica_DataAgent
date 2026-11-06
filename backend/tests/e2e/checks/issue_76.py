@@ -325,6 +325,63 @@ def check_dtb_pull(ctx):
             "new_orders" in result.text, f"new table absent from search: {result.text}"
         )
 
+        state["queries"].clear()
+        state["default_limits"].clear()
+        response = ctx.rest.put(
+            "/api/v1/plugins/puller/dtb",
+            json={
+                "enabled": True,
+                "parameters": {
+                    "url": f"http://127.0.0.1:{server.server_port}",
+                    "token": "fake-dtb-token",
+                    "interval_seconds": 0,
+                    "layer": "dimensions",
+                },
+            },
+        )
+        response.raise_for_status()
+        response = ctx.rest.post("/api/v1/pulls/dtb")
+        response.raise_for_status()
+        full = response.json()
+        ctx.require(full["status"] == "succeeded", f"full pull failed: {full}")
+        ctx.require(
+            full["tables"] == 2, "full pull did not cover all dimensions tables"
+        )
+        ctx.require(
+            git("rev-parse", "HEAD") == full["commit"] != record["commit"],
+            "full pull did not commit source",
+        )
+        queries = state["queries"]
+        limits = state["default_limits"]
+        ctx.require(
+            "LIMIT" not in queries["tables"][-1],
+            "full table list must not be bounded",
+        )
+        ctx.require(
+            "output_table_name IN" not in queries["task"][-1],
+            "full task query must not filter by dimensions tables",
+        )
+        ctx.require(
+            "a.table_name IN" not in queries["table"][-1]
+            and "database_name='dimensions'" not in queries["table"][-1],
+            "full table query must not filter by dimensions tables",
+        )
+        ctx.require(
+            all("z_orders" in sql and "new_orders" in sql for sql in queries["stats"]),
+            "partition query must stay scoped to every dimensions table",
+        )
+        ctx.require(
+            all(
+                limit == 500000
+                for key in ("tables", "task", "table", "stats")
+                for limit in limits[key]
+            )
+            and limits["dimension"] == [50000, 50000],
+            f"full defaultLimit does not match query limits: {limits}",
+        )
+        build = wait_build(full)
+        ctx.require(build["status"] == "succeeded", f"full build failed: {build}")
+
         state["truncate"] = True
         truncated = ctx.rest.post("/api/v1/pulls/dtb").json()
         ctx.require(
@@ -333,7 +390,7 @@ def check_dtb_pull(ctx):
             f"truncated result was not rejected: {truncated}",
         )
         ctx.require(
-            git("rev-parse", "HEAD") == record["commit"],
+            git("rev-parse", "HEAD") == full["commit"],
             "truncated pull changed source commit",
         )
         state["truncate"] = False
@@ -346,15 +403,15 @@ def check_dtb_pull(ctx):
             f"authentication failure not recorded: {failed}",
         )
         ctx.require(
-            git("rev-parse", "HEAD") == record["commit"],
+            git("rev-parse", "HEAD") == full["commit"],
             "failed pull changed source commit",
         )
         listing = ctx.rest.get("/api/v1/pulls").json()
         ctx.require(
-            len(listing) >= 3 and listing[0]["status"] == "failed",
+            len(listing) >= 4 and listing[0]["status"] == "failed",
             "pull history missing",
         )
-        return {"commit": record["commit"], "build": record["build_id"]}
+        return {"commit": full["commit"], "build": full["build_id"]}
     finally:
         server.shutdown()
         server.server_close()

@@ -547,7 +547,7 @@ def test_bounded_pull_selects_sorted_dimensions_tables_only():
     )
 
 
-def test_unscoped_fetch_uses_metadata_sql_without_limit():
+def test_unscoped_fetch_uses_all_tasks_and_all_hive_tables():
     import io
 
     from openpyxl import Workbook
@@ -566,9 +566,11 @@ def test_unscoped_fetch_uses_metadata_sql_without_limit():
         [{"columnName": "id", "columnType": "string"}],
     )
     sqls = []
+    row_limits = []
 
     def query(client, base, token, sql, format, **kwargs):
         sqls.append(sql)
+        row_limits.append(kwargs.get("row_limit"))
         if "ORDER BY table_name" in sql:
             assert "LIMIT" not in sql
             return _metadata_payload([["504", "dim_a"]])
@@ -585,7 +587,12 @@ def test_unscoped_fetch_uses_metadata_sql_without_limit():
         obj.fetch(client, "http://dtb", "secret")
 
     assert len(sqls) == 5
-    assert all("dim_a" in sql for sql in sqls[1:])
+    assert "output_table_name IN" not in sqls[1]
+    assert "a.table_name IN" not in sqls[2]
+    assert "database_name='dimensions'" not in sqls[2]
+    assert "LIMIT 50000" in sqls[4]
+    assert row_limits == [500000, 500000, 500000, 500000, 50000]
+    assert all("dim_a" in sql for sql in sqls[3:])
 
 
 @pytest.mark.parametrize("status_code", [401, 415, 503])
