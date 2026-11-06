@@ -261,3 +261,26 @@ def test_session_upload_extracts_into_existing_root_owned_mounts(tmp_path):
 
     runtime._transfer = extract
     runtime._upload()
+
+
+def test_session_upload_preserves_mount_root_and_nested_files(tmp_path):
+    import io
+    import tarfile
+
+    from semantica_dataagent.k8s_sandbox import KubernetesSessionSandbox
+
+    (tmp_path / "work").mkdir()
+    (tmp_path / "sessions").mkdir()
+    (tmp_path / "work" / "file").write_text("one")
+    (tmp_path / "sessions" / "file").write_text("two")
+    runtime = object.__new__(KubernetesSessionSandbox)
+    runtime.workspace = tmp_path
+    contents = []
+
+    def capture(direction, payload):
+        with tarfile.open(fileobj=io.BytesIO(payload)) as archive:
+            contents.extend(archive.getnames())
+
+    runtime._transfer = capture
+    runtime._upload()
+    assert set(contents) == {"workspace/file", "sessions/file"}
