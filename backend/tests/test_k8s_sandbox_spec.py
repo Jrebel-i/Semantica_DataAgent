@@ -307,3 +307,35 @@ def test_session_download_keeps_deletions_from_agent(tmp_path):
     runtime._download()
     assert not (tmp_path / "work" / "deleted").exists()
     assert not (tmp_path / "sessions" / "deleted").exists()
+
+
+def test_session_download_handles_files_replaced_by_directories_and_reverse(tmp_path):
+    import io
+    import tarfile
+
+    from semantica_dataagent.k8s_sandbox import KubernetesSessionSandbox
+
+    (tmp_path / "work").mkdir()
+    (tmp_path / "sessions").mkdir()
+    (tmp_path / "work" / "directory_now").write_text("old file")
+    (tmp_path / "work" / "file_now").mkdir()
+    (tmp_path / "work" / "file_now" / "old").write_text("old")
+    data = io.BytesIO()
+    with tarfile.open(fileobj=data, mode="w") as archive:
+        for name in ("workspace", "sessions", "workspace/directory_now"):
+            item = tarfile.TarInfo(name)
+            item.type = tarfile.DIRTYPE
+            archive.addfile(item)
+        for name, value in (
+            ("workspace/directory_now/new", b"nested"),
+            ("workspace/file_now", b"file"),
+        ):
+            item = tarfile.TarInfo(name)
+            item.size = len(value)
+            archive.addfile(item, io.BytesIO(value))
+    runtime = object.__new__(KubernetesSessionSandbox)
+    runtime.workspace = tmp_path
+    runtime._transfer = lambda direction: data.getvalue()
+    runtime._download()
+    assert (tmp_path / "work" / "directory_now" / "new").read_text() == "nested"
+    assert (tmp_path / "work" / "file_now").read_text() == "file"

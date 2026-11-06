@@ -300,6 +300,20 @@ class KubernetesSessionSandbox:
             for source, target in (("workspace", "work"), ("sessions", "sessions")):
                 source_path = Path(directory) / source
                 target_path = self.workspace / target
+                for current, dirs, files in os.walk(source_path):
+                    relative = Path(current).relative_to(source_path)
+                    for name in dirs:
+                        existing = target_path / relative / name
+                        if existing.is_symlink() or (
+                            existing.exists() and not existing.is_dir()
+                        ):
+                            existing.unlink()
+                    for name in files:
+                        existing = target_path / relative / name
+                        if existing.is_symlink():
+                            existing.unlink()
+                        elif existing.is_dir():
+                            shutil.rmtree(existing)
                 shutil.copytree(
                     source_path, target_path, dirs_exist_ok=True, symlinks=False
                 )
