@@ -30,9 +30,15 @@ Use this skill when a question needs warehouse knowledge or SQL. Retrieve before
    - `get_lineage` with `direction` `up` or `down` and `depth` 1-3 to understand dependencies.
    - `find_join_path` for two to four tables when a join is not already supported.
    - `read_task_sql` when the producing task SQL is needed as evidence.
-6. Write one SQL statement in the requested dialect, then **always** call
-   `validate_sql` with that SQL and dialect. Do not present SQL as final before validation.
-7. Answer with the SQL and citations. Attach the exact `ref` values returned by the tools to each material claim. Do not invent, shorten, or rewrite reference ids.
+6. When a relevant table exists, write one SQL statement in the requested dialect even
+   if some fields or definitions are missing. Use only known fields, state the assumptions,
+   and explain how the result differs from the requested metric. Then call
+   `report_knowledge_gap` for the missing knowledge and call `propose_correction` when
+   evidence shows existing content is wrong. Skip SQL only when no relevant table exists.
+   Conflicting metric definitions still require clarification before writing SQL.
+7. **Always** call `validate_sql` with the SQL and dialect. Do not present SQL as final
+   before validation. If validation fails, correct the SQL and validate again.
+8. Answer with the SQL and citations. Attach the exact `ref` values returned by the tools to each material claim. Do not invent, shorten, or rewrite reference ids.
 
 ## Evidence and safety
 
