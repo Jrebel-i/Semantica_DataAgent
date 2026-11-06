@@ -1,6 +1,7 @@
 """System-generated table samples through the configured query executor."""
 
 import asyncio
+import re
 import time
 import uuid
 from datetime import datetime
@@ -22,6 +23,15 @@ from .query_api import _config, _tables_and_partitions, _validate_sql
 MAX_COLUMNS = 30
 MAX_LIMIT = 20
 DEFAULT_LIMIT = 20
+PARTITION_METADATA_LIMIT = 5
+
+_METADATA_TABLES = frozenset(
+    {
+        "mysql.data_tool_box_emr.metadata_table",
+        "mysql.data_tool_box_emr.metadata_partition",
+    }
+)
+_IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
 
 
 def _partition_sort_key(value):
@@ -84,7 +94,138 @@ def _select_columns(metadata, fields, columns):
     return selected, False
 
 
-def _latest_partitions(metadata, fields):
+def _metadata_identifier(value, label):
+    if not isinstance(value, str) or _IDENTIFIER.fullmatch(value) is None:
+        raise ToolInvalidInput(f"表元数据中的{label}不合法: {value!r}")
+    return value
+
+
+def _metadata_partition_sql(database, table):
+    """Build the fixed, read-only partition metadata query for one table."""
+    database = _metadata_identifier(database, "库名")
+    table = _metadata_identifier(table, "表名")
+    database_literal = exp.Literal.string(database).sql(dialect="doris")
+    table_literal = exp.Literal.string(table).sql(dialect="doris")
+    return (
+        "SELECT partition_name FROM ("
+        "SELECT partition_name, ROW_NUMBER() OVER ("
+        "PARTITION BY database_name, table_name "
+        "ORDER BY split_part(partition_name, '=', 2) DESC) AS rk "
+        "FROM mysql.data_tool_box_emr.metadata_table AS t "
+        "LEFT JOIN mysql.data_tool_box_emr.metadata_partition AS p "
+        "ON t.table_id = p.table_id "
+        f"WHERE t.database_name = {database_literal} "
+        f"AND t.table_name = {table_literal} "
+        "AND t.catalog_type = 'HIVE' AND t.status = '在用'"
+        ") ranked WHERE rk = 1"
+    )
+
+
+def _validate_metadata_sql(sql, database, table):
+    """Validate the generated metadata query independently from business tables."""
+    try:
+        tree = _validate_sql(sql)
+    except HTTPException as exc:
+        raise ToolUnavailable(f"分区元数据查询未通过安全检查: {exc.detail}") from exc
+    tables = {
+        ".".join(part for part in (node.catalog, node.db, node.name) if part).lower()
+        for node in tree.find_all(exp.Table)
+    }
+    if tables != _METADATA_TABLES:
+        raise ToolUnavailable("分区元数据查询只能访问两张元数据表")
+    for node in tree.walk():
+        if isinstance(node, (exp.Or, exp.Not)):
+            raise ToolUnavailable("分区元数据查询只能使用等值过滤")
+        if isinstance(node, exp.Predicate) and not isinstance(node, exp.EQ):
+            raise ToolUnavailable("分区元数据查询只能使用等值过滤")
+    filters = {}
+    for node in tree.find_all(exp.EQ):
+        left, right = node.this, node.expression
+        if isinstance(left, exp.Column) and isinstance(right, exp.Literal):
+            filters.setdefault(left.name.lower(), []).append(str(right.this))
+        elif (
+            isinstance(left, exp.Column)
+            and isinstance(right, exp.Column)
+            and left.name.lower() == right.name.lower() == "table_id"
+        ):
+            continue
+        else:
+            raise ToolUnavailable("分区元数据查询只能按库名和表名过滤")
+    if filters.get("database_name") != [database]:
+        raise ToolUnavailable("分区元数据查询缺少库名过滤")
+    if filters.get("table_name") != [table]:
+        raise ToolUnavailable("分区元数据查询缺少表名过滤")
+    for name, values in filters.items():
+        if name in {"database_name", "table_name"}:
+            continue
+        if name == "catalog_type" and values == ["HIVE"]:
+            continue
+        if name == "status" and values == ["在用"]:
+            continue
+        if name == "rk" and values == ["1"]:
+            continue
+        raise ToolUnavailable("分区元数据查询只能按库名和表名过滤")
+    return tree
+
+
+def _parse_partition_name(value):
+    if not isinstance(value, str) or not value.strip():
+        return None
+    parts = {}
+    for segment in value.split("/"):
+        if "=" not in segment:
+            return None
+        name, _, raw = segment.partition("=")
+        name, raw = name.strip(), raw.strip()
+        if not name or not raw:
+            return None
+        parts[name.lower()] = raw
+    return parts
+
+
+def _partitions_from_metadata(fields, columns, rows):
+    if (
+        not isinstance(columns, list)
+        or not columns
+        or not all(isinstance(column, str) for column in columns)
+        or not isinstance(rows, list)
+        or not all(isinstance(row, list) and len(row) == len(columns) for row in rows)
+    ):
+        return None, "分区元数据返回格式无效"
+    lowered = [column.lower() for column in columns]
+    if "partition_name" not in lowered:
+        return None, "分区元数据缺少 partition_name"
+    index = lowered.index("partition_name")
+    partition_fields = [
+        field["name"] for field in fields if field.get("partition") is True
+    ]
+    if not rows:
+        return None, "分区元数据为空"
+    candidates = []
+    for row in rows:
+        parts = _parse_partition_name(row[index])
+        if parts is None:
+            continue
+        if any(name.lower() not in parts for name in partition_fields):
+            continue
+        key = tuple(
+            _partition_sort_key(parts[name.lower()]) for name in partition_fields
+        )
+        candidates.append(
+            (
+                key,
+                [
+                    {"field": name, "value": parts[name.lower()]}
+                    for name in partition_fields
+                ],
+            )
+        )
+    if not candidates:
+        return None, "分区元数据中的 partition_name 格式无效或与分区字段不匹配"
+    return max(candidates, key=lambda item: item[0])[1], None
+
+
+def _knowledge_partitions(metadata, fields):
     latest = []
     for field in fields:
         if field.get("partition") is not True:
@@ -96,13 +237,49 @@ def _latest_partitions(metadata, fields):
             value for value in values if isinstance(value, str) and value.strip()
         ]
         if not candidates:
-            raise ToolUnavailable(
-                f"无法从知识库确定表 {_qualified(metadata)} 的最新分区: {field['name']}"
-            )
+            return None, f"知识库缺少分区值: {field['name']}"
         latest.append(
             {"field": field["name"], "value": max(candidates, key=_partition_sort_key)}
         )
-    return latest
+    return latest, None
+
+
+async def _latest_partitions(metadata, fields, runtime):
+    if not any(field.get("partition") is True for field in fields):
+        return [], None
+    reason = None
+    if runtime is not None:
+        plugin, config, token = runtime
+        sql = _metadata_partition_sql(metadata["database"], metadata["name"])
+        _validate_metadata_sql(sql, metadata["database"], metadata["name"])
+        try:
+            columns, rows, _total, _key = await _run_sql(
+                plugin,
+                config,
+                token,
+                sql,
+                PARTITION_METADATA_LIMIT,
+                timeout_message="读取 DTB 分区元数据超时",
+                failure_message="读取 DTB 分区元数据失败",
+            )
+        except ToolInvalidInput:
+            raise
+        except ToolUnavailable as exc:
+            reason = str(exc)
+        else:
+            partitions, malformed = _partitions_from_metadata(fields, columns, rows)
+            if partitions is not None:
+                return partitions, None
+            reason = malformed
+    fallback, knowledge_reason = _knowledge_partitions(metadata, fields)
+    if fallback is not None:
+        return fallback, None
+    details = reason or knowledge_reason
+    if reason and knowledge_reason:
+        details = f"{reason}；知识库：{knowledge_reason}"
+    return None, (
+        f"无法从 DTB 分区元数据或知识库确定表 {_qualified(metadata)} 的最新分区: {details}"
+    )
 
 
 def _build_sql(metadata, selected, partitions, limit):
@@ -149,7 +326,7 @@ def _finish_audit(audit_id, status, row_count, elapsed_ms):
             record.elapsed_ms = elapsed_ms
 
 
-async def _execute(sql, limit, user: Requester):
+def _runtime(user: Requester):
     try:
         plugin, config = _config()
     except HTTPException as exc:
@@ -158,7 +335,19 @@ async def _execute(sql, limit, user: Requester):
         secret = db.get(PersonalDtbToken, user.id)
     if secret is None:
         raise ToolInvalidInput("请先在个人设置中保存 DTB token")
-    token = decrypt(secret.encrypted_token)
+    return plugin, config, decrypt(secret.encrypted_token)
+
+
+async def _run_sql(
+    plugin,
+    config,
+    token,
+    sql,
+    limit,
+    *,
+    timeout_message,
+    failure_message,
+):
     executor = plugin.bind(config, token)
     try:
         async with asyncio.timeout(float(config.get("timeout_seconds", 300))):
@@ -167,9 +356,9 @@ async def _execute(sql, limit, user: Requester):
     except ExecutorAuthenticationError as exc:
         raise ToolInvalidInput("DTB token 无效，请在个人设置中更新") from exc
     except TimeoutError as exc:
-        raise ToolUnavailable("DTB 取样超时") from exc
+        raise ToolUnavailable(timeout_message) from exc
     except ExecutorError as exc:
-        raise ToolUnavailable("DTB 取样失败") from exc
+        raise ToolUnavailable(failure_message) from exc
     columns, rows = result.get("columns"), result.get("data")
     cap = int(config.get("download_limit", 100000))
     if (
@@ -192,10 +381,11 @@ async def sample_table_data(
     """Return a few real rows from one table without accepting caller SQL.
 
     The server selects only the requested columns (all fields by default, at
-    most 30), reads the latest partition values from knowledge metadata for
-    partitioned tables, and applies a row limit of at most 20. It uses the
-    caller's saved DTB token and the configured DTB executor. No confirmation
-    is required, but every attempt is audited as a sample.
+    most 30), asks the DTB partition metadata for the latest partition of
+    partitioned tables (falling back to knowledge metadata), and applies a row
+    limit of at most 20. It uses the caller's saved DTB token and the configured
+    DTB executor. No confirmation is required, but every attempt that reaches
+    execution is audited as a sample.
     """
     user = current_requester()
     if not isinstance(table, str) or not table.strip():
@@ -210,7 +400,15 @@ async def sample_table_data(
     metadata = _table_metadata(table)
     fields = _field_metadata(metadata)
     selected, truncated = _select_columns(metadata, fields, columns)
-    partitions = _latest_partitions(metadata, fields)
+    runtime = None
+    runtime_error = None
+    try:
+        runtime = _runtime(user)
+    except (ToolInvalidInput, ToolUnavailable) as exc:
+        runtime_error = exc
+    partitions, partition_error = await _latest_partitions(metadata, fields, runtime)
+    if partitions is None:
+        raise ToolUnavailable(partition_error)
     sql = _build_sql(metadata, selected, partitions, limit)
     try:
         tree = _validate_sql(sql)
@@ -222,7 +420,18 @@ async def sample_table_data(
     audit_id = _start_audit(user, sql)
     status, row_count = "failed", None
     try:
-        result_columns, rows, _total, _ = await _execute(sql, limit, user)
+        if runtime is None:
+            raise runtime_error
+        plugin, config, token = runtime
+        result_columns, rows, _total, _ = await _run_sql(
+            plugin,
+            config,
+            token,
+            sql,
+            limit,
+            timeout_message="DTB 取样超时",
+            failure_message="DTB 取样失败",
+        )
         status, row_count = "succeeded", len(rows)
         return {
             "table": _qualified(metadata),
