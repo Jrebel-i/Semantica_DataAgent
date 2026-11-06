@@ -22,14 +22,22 @@ def _failure(status):
 
 def _execute(client, sql):
     started = time.monotonic()
+
+    def failure(reason):
+        return {
+            "status": "failed",
+            "reason": reason,
+            "elapsed_ms": round((time.monotonic() - started) * 1000),
+        }
+
     try:
         plan = client.post("/api/v1/queries/plan", json={"sql": sql})
         if not plan.is_success:
-            return {"status": "failed", "reason": _failure(plan.status_code)}
+            return failure(_failure(plan.status_code))
         data = plan.json()
         response = client.post(f"/api/v1/queries/{data['id']}/execute", json={})
         if not response.is_success:
-            return {"status": "failed", "reason": _failure(response.status_code)}
+            return failure(_failure(response.status_code))
         result = response.json()
         rows = result["rows"]
         return {
@@ -45,9 +53,9 @@ def _execute(client, sql):
             },
         }
     except httpx.TimeoutException:
-        return {"status": "failed", "reason": "超时"}
+        return failure("超时")
     except (httpx.HTTPError, ValueError, KeyError, TypeError):
-        return {"status": "failed", "reason": "DTB 或服务错误"}
+        return failure("DTB 或服务错误")
 
 
 def _answer(client, question, args):
@@ -110,6 +118,15 @@ def run_cli(args):
             comparison = "uncomparable"
             if agent["status"] == reference["status"] == "succeeded":
                 comparison = compare_results(agent["result"], reference["result"])
+            truncated = any(
+                item.get("result", {}).get("truncated", False)
+                for item in (agent, reference)
+            )
+            summary = None
+            if comparison == "equal":
+                summary = "行数、列数及结果一致"
+            elif comparison == "different":
+                summary = "行数、列数或结果不同"
             agent.pop("result", None)
             reference.pop("result", None)
             entries.append(
@@ -119,6 +136,8 @@ def run_cli(args):
                     "agent": agent,
                     "reference": reference,
                     "comparison": comparison,
+                    "truncated": truncated,
+                    "summary": summary,
                 }
             )
     with_sql = sum(e["agent_sql"] for e in entries)
@@ -135,6 +154,7 @@ def run_cli(args):
         "comparable": comparable,
         "consistency_rate": equal / comparable if comparable else None,
         "uncomparable": len(entries) - comparable,
+        "truncated": sum(e["truncated"] for e in entries),
         "reference_failures": sum(
             e["reference"]["status"] == "failed" for e in entries
         ),
