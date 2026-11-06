@@ -52,3 +52,8 @@ def test_exec_cli_is_available():
         ]
     )
     assert args.max_queries == 40
+
+
+def test_comparison_handles_large_duplicate_multiset():
+    result = {"columns": ["x"], "rows": [[1]] * 1100}
+    assert evaluation.compare_results(result, result) == "equal"
