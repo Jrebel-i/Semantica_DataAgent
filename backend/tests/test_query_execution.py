@@ -50,6 +50,110 @@ def test_query_endpoints_require_authentication(client):
     assert c.get("/api/v1/me/dtb-token").status_code == 401
 
 
+def test_expired_query_confirmation_cannot_execute(client, monkeypatch):
+    from datetime import UTC, datetime, timedelta
+
+    from semantica_dataagent import knowledge, query_api
+    from semantica_dataagent.db import QueryExecution, sessions
+
+    class Executor:
+        async def estimate(self, sql):
+            return {"partitions": None, "rows": None}
+
+        async def submit(self, sql, limit):
+            return "fake-query"
+
+        async def wait(self, key):
+            return {"columns": ["value"], "data": [[1]]}
+
+    class Plugin:
+        def bind(self, config, token):
+            return Executor()
+
+    monkeypatch.setattr(knowledge, "describe", lambda **_: [])
+    monkeypatch.setattr(query_api, "_config", lambda: (Plugin(), {}))
+    c, headers = client
+    c.put("/api/v1/me/dtb-token", headers=headers, json={"token": "test-token"})
+    plan = c.post("/api/v1/queries/plan", headers=headers, json={"sql": "SELECT 1"})
+    assert plan.status_code == 200, plan.text
+    query_id = plan.json()["id"]
+    with sessions().begin() as db:
+        db.get(QueryExecution, query_id).created_at = datetime.now(UTC) - timedelta(
+            minutes=31
+        )
+    response = c.post(f"/api/v1/queries/{query_id}/execute", headers=headers, json={})
+    assert response.status_code == 410, response.text
+
+
+def test_mcp_proposes_only_validated_sql_without_executing(client, monkeypatch):
+    import asyncio
+
+    from mcp.types import CallToolRequest, CallToolRequestParams
+
+    from semantica_dataagent import knowledge, query_api, sql_validation
+    from semantica_dataagent.app import create_mcp
+    from semantica_dataagent.auth import Requester
+    from semantica_dataagent.db import Token, sessions
+    from semantica_dataagent.mcp_context import bind_mcp_context
+
+    submissions = []
+
+    class Plugin:
+        def bind(self, config, token):
+            return self
+
+        async def estimate(self, sql):
+            return {"partitions": 3, "rows": 20}
+
+        async def submit(self, sql, limit):
+            submissions.append(sql)
+
+    monkeypatch.setattr(knowledge, "describe", lambda **_: [])
+    monkeypatch.setattr(query_api, "_config", lambda: (Plugin(), {"row_limit": 100}))
+    monkeypatch.setattr(
+        sql_validation, "validate_sql", lambda sql, dialect: {"status": "pass"}
+    )
+    _, headers = client
+    token = headers["Authorization"].removeprefix("Bearer ")
+
+    async def run():
+        server = create_mcp()
+        server.get_context = lambda: None
+        handler = server._mcp_server.request_handlers[CallToolRequest]
+        with sessions()() as db:
+            owner = db.query(Token).first()
+            requester = Requester(id=owner.id, role=owner.role, token=token)
+        with bind_mcp_context(requester):
+            return (
+                await handler(
+                    CallToolRequest(
+                        method="tools/call",
+                        params=CallToolRequestParams(
+                            name="propose_query", arguments={"sql": "SELECT 1"}
+                        ),
+                    )
+                )
+            ).root
+
+    result = asyncio.run(run())
+    assert not result.isError
+    plan = result.structuredContent
+    assert plan["sql"] == "SELECT 1"
+    assert plan["data_source"] == "doris_ai"
+    assert plan["estimated_partitions"] == 3
+    assert plan["estimated_rows"] == 20
+    assert plan["row_limit"] == 100
+    assert plan["id"]
+    assert not submissions
+
+    monkeypatch.setattr(
+        sql_validation, "validate_sql", lambda sql, dialect: {"status": "issues"}
+    )
+    rejected = asyncio.run(run())
+    assert rejected.isError
+    assert not submissions
+
+
 def test_personal_credentials_are_isolated_between_callers(client):
     c, admin = client
     user = c.post(
@@ -193,6 +297,22 @@ def test_partition_safety_and_execution(client, monkeypatch):
         assert response.status_code == 200, response.text
         plan = response.json()
         assert plan["estimated_rows"] is None
+        assert plan["execution_limit"] == 5
+        assert (
+            c.put(
+                "/api/v1/plugins/executor/dtb",
+                headers=headers,
+                json={
+                    "enabled": True,
+                    "parameters": {
+                        "base_url": base_url,
+                        "row_limit": 1,
+                        "download_limit": 50,
+                    },
+                },
+            ).status_code
+            == 200
+        )
         path = "/api/v1/queries/" + plan["id"]
         assert (
             c.post(path + "/execute", headers=headers, json={"limit": 1}).status_code

@@ -23,6 +23,14 @@ class Token(Base):
     revoked: Mapped[bool] = mapped_column(default=False)
 
 
+class AgentCredential(Base):
+    __tablename__ = "agent_credentials"
+    digest: Mapped[str] = mapped_column(primary_key=True)
+    owner_id: Mapped[str]
+    conversation_id: Mapped[str]
+    turn_id: Mapped[int]
+
+
 class Setting(Base):
     __tablename__ = "settings"
     key: Mapped[str] = mapped_column(primary_key=True)
@@ -197,6 +205,9 @@ class QueryExecution(Base):
     __tablename__ = "query_executions"
     id: Mapped[str] = mapped_column(primary_key=True, default=lambda: uuid.uuid4().hex)
     owner_id: Mapped[str]
+    conversation_id: Mapped[str | None]
+    turn_id: Mapped[int | None]
+    plan_data: Mapped[str | None]
     sql: Mapped[str]
     status: Mapped[str]
     rows: Mapped[str | None]

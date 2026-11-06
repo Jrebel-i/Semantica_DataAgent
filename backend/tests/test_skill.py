@@ -88,6 +88,7 @@ def test_skill_source_is_a_valid_agent_skill():
         "read_document",
         "describe_tables",
         "sample_table_data",
+        "propose_query",
         "lookup_dim_values",
         "validate_sql",
         "next_cursor",

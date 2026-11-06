@@ -1,9 +1,12 @@
 """Query plans, execution limits and audit for caller-owned queries."""
 
 import asyncio
+import csv
+import io
 import json
 import time
 import uuid
+from datetime import UTC, datetime, timedelta
 from typing import Annotated, Literal
 from urllib.parse import urlsplit
 
@@ -18,7 +21,14 @@ from sqlglot.optimizer.scope import traverse_scope
 from . import knowledge
 from .auth import Requester, admin, current_requester
 from .crypto import decrypt
-from .db import PersonalDtbToken, QueryAudit, QueryExecution, sessions
+from .db import (
+    Conversation,
+    PersonalDtbToken,
+    QueryAudit,
+    QueryExecution,
+    Turn,
+    sessions,
+)
 from .dtb_executor import column_names
 from .plugins import ExecutorAuthenticationError, ExecutorError, configured
 
@@ -157,20 +167,31 @@ def _tables_and_partitions(tree):
     return names
 
 
+def _cleanup_expired_conversation_results(query_id: str, user: Requester) -> None:
+    """Retention ends access to conversation results, not just listing them."""
+    with sessions()() as db:
+        row = db.get(QueryExecution, query_id)
+        conversation_id = (
+            row.conversation_id if row is not None and row.owner_id == user.id else None
+        )
+    if conversation_id:
+        from .conversation_api import cleanup_expired_sessions
+
+        cleanup_expired_sessions()
+
+
 @router.post("/api/v1/queries/plan")
 async def plan(body: PlanInput, user: Annotated[Requester, Depends(current_requester)]):
+    return await _create_plan(body, user)
+
+
+async def _create_plan(body, user, conversation_id=None, turn_id=None):
     tree = _validate_sql(body.sql)
     tables = _tables_and_partitions(tree)
     plugin, config = _config()
     estimate = await plugin.bind(config, "").estimate(body.sql)
     query_id = uuid.uuid4().hex
-    with sessions().begin() as db:
-        db.add(
-            QueryExecution(
-                id=query_id, owner_id=user.id, sql=body.sql, status="planned"
-            )
-        )
-    return {
+    plan_data = {
         "id": query_id,
         "sql": body.sql,
         "data_source": "doris_ai",
@@ -178,7 +199,59 @@ async def plan(body: PlanInput, user: Annotated[Requester, Depends(current_reque
         "estimated_partitions": estimate.get("partitions"),
         "estimated_rows": estimate.get("rows"),
         "row_limit": config.get("row_limit", 1000),
+        "execution_limit": config.get("download_limit", 100000),
     }
+    with sessions().begin() as db:
+        if conversation_id is not None:
+            conversation = db.get(Conversation, conversation_id)
+            turn = db.get(Turn, turn_id) if turn_id else None
+            if (
+                conversation is None
+                or conversation.owner_id != user.id
+                or turn is None
+                or turn.conversation_id != conversation_id
+                or turn.status != "running"
+            ):
+                raise ValueError("Active conversation turn not found")
+        db.add(
+            QueryExecution(
+                id=query_id,
+                owner_id=user.id,
+                sql=body.sql,
+                status="planned",
+                conversation_id=conversation_id,
+                turn_id=turn_id,
+                plan_data=json.dumps(plan_data, ensure_ascii=False),
+            )
+        )
+    return plan_data
+
+
+async def propose_query(sql: str) -> dict:
+    """Propose a validated Doris SQL query for the questioner to confirm.
+
+    This creates a plan only; it does not execute the query. After proposing,
+    stop and wait for the questioner to confirm execution.
+    """
+    from . import sql_validation
+    from .mcp_context import current_conversation_id, current_requester, current_turn_id
+
+    if sql_validation.validate_sql(sql, dialect="doris").get("status") != "pass":
+        raise ValueError("SQL validation did not pass")
+    conversation_id = current_conversation_id()
+    supplied_turn = current_turn_id()
+    if conversation_id and (
+        not supplied_turn
+        or not supplied_turn.isascii()
+        or not supplied_turn.isdecimal()
+    ):
+        raise ValueError("Active conversation turn not found")
+    return await _create_plan(
+        PlanInput(sql=sql),
+        current_requester(),
+        conversation_id,
+        int(supplied_turn) if supplied_turn else None,
+    )
 
 
 async def _execute(
@@ -195,15 +268,26 @@ async def _execute(
         row = db.get(QueryExecution, query_id)
         if row is None or row.owner_id != user.id:
             raise HTTPException(404, "查询不存在")
+        cutoff = datetime.now(UTC) - timedelta(
+            seconds=config.get("confirmation_ttl_seconds", 1800)
+        )
+        if row.created_at.replace(tzinfo=UTC) <= cutoff:
+            raise HTTPException(410, "查询确认已过期")
         secret = db.get(PersonalDtbToken, user.id)
         if secret is None:
             raise HTTPException(400, "请先在个人设置中保存 DTB token")
         token = decrypt(secret.encrypted_token)
         sql = row.sql
+        saved_plan = json.loads(row.plan_data) if row.plan_data else {}
         claimed = db.execute(
             update(QueryExecution)
-            .where(QueryExecution.id == query_id, QueryExecution.status == "planned")
+            .where(
+                QueryExecution.id == query_id,
+                QueryExecution.status == "planned",
+                QueryExecution.created_at > cutoff,
+            )
             .values(status="running")
+            .execution_options(synchronize_session=False)
         ).rowcount
         if not claimed:
             raise HTTPException(409, "查询已执行")
@@ -212,7 +296,10 @@ async def _execute(
     try:
         tree = _validate_sql(sql)
         _tables_and_partitions(tree)
-        cap = config.get("download_limit", 100000)
+        cap = min(
+            config.get("download_limit", 100000),
+            saved_plan.get("execution_limit", config.get("download_limit", 100000)),
+        )
         bounded = f"SELECT * FROM ({tree.sql(dialect='doris')}) AS _dataagent_query LIMIT {cap}"
         executor = plugin.bind(config, token)
         async with asyncio.timeout(config.get("timeout_seconds", 300)):
@@ -262,6 +349,31 @@ async def execute(
     body: ExecuteInput,
     user: Annotated[Requester, Depends(current_requester)],
 ):
+    with sessions()() as db:
+        row = db.get(QueryExecution, query_id)
+        if row is None or row.owner_id != user.id:
+            raise HTTPException(404, "查询不存在")
+        if row.conversation_id is not None:
+            raise HTTPException(403, "在线查询需要在会话中确认")
+    return await _execute_with_audit(query_id, body, user)
+
+
+async def execute_for_turn(
+    query_id: str, user: Requester, conversation_id: str, turn_id: int
+):
+    with sessions()() as db:
+        row = db.get(QueryExecution, query_id)
+        if (
+            row is None
+            or row.owner_id != user.id
+            or row.conversation_id != conversation_id
+            or row.turn_id != turn_id
+        ):
+            raise HTTPException(404, "查询不存在")
+    return await _execute_with_audit(query_id, ExecuteInput(), user)
+
+
+async def _execute_with_audit(query_id: str, body: ExecuteInput, user: Requester):
     with sessions()() as db:
         row = db.get(QueryExecution, query_id)
         if row is None or row.owner_id != user.id:
@@ -318,6 +430,7 @@ def audit(_: Annotated[str, Depends(admin)]):
 
 @router.get("/api/v1/queries/{query_id}")
 def get_result(query_id: str, user: Annotated[Requester, Depends(current_requester)]):
+    _cleanup_expired_conversation_results(query_id, user)
     with sessions()() as db:
         row = db.get(QueryExecution, query_id)
         if row is None or row.owner_id != user.id:
@@ -340,15 +453,60 @@ async def download(
     user: Annotated[Requester, Depends(current_requester)],
     format: Literal["csv", "xlsx", "json"] = "csv",
 ):
-    plugin, config = _config()
+    _cleanup_expired_conversation_results(query_id, user)
     with sessions()() as db:
         row = db.get(QueryExecution, query_id)
-        secret = db.get(PersonalDtbToken, user.id)
         if row is None or row.owner_id != user.id or row.status != "succeeded":
             raise HTTPException(404, "查询结果不存在")
+        if row.conversation_id is not None and row.rows:
+            saved = json.loads(row.rows)
+            names = column_names(saved["columns"])
+            values = saved["data"]
+            if format == "json":
+                content = json.dumps(
+                    {"columns": names, "rows": values}, ensure_ascii=False
+                ).encode()
+                content_type = "application/json"
+            elif format == "csv":
+                buffer = io.StringIO(newline="")
+                writer = csv.writer(buffer, lineterminator="\n")
+                writer.writerow(names)
+                writer.writerows(values)
+                content, content_type = buffer.getvalue().encode("utf-8"), "text/csv"
+            else:
+                from openpyxl import Workbook
+                from openpyxl.cell import WriteOnlyCell
+
+                workbook = Workbook(write_only=True)
+                sheet = workbook.create_sheet()
+                for values_row in [names, *values]:
+                    cells = []
+                    for value in values_row:
+                        if isinstance(value, (dict, list)):
+                            value = json.dumps(value, ensure_ascii=False)
+                        cell = WriteOnlyCell(sheet, value=value)
+                        if isinstance(value, str):
+                            cell.data_type = "s"
+                        cells.append(cell)
+                    sheet.append(cells)
+                buffer = io.BytesIO()
+                workbook.save(buffer)
+                content = buffer.getvalue()
+                content_type = (
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+            return Response(
+                content,
+                media_type=content_type,
+                headers={
+                    "Content-Disposition": f'attachment; filename="query.{format}"'
+                },
+            )
+        secret = db.get(PersonalDtbToken, user.id)
         if secret is None:
             raise HTTPException(400, "请先在个人设置中保存 DTB token")
         key, token = row.query_key, decrypt(secret.encrypted_token)
+    plugin, config = _config()
     try:
         async with asyncio.timeout(config.get("timeout_seconds", 300)):
             content, content_type = await plugin.bind(config, token).download(

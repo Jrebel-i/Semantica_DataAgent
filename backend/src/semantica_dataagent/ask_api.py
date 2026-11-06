@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from sqlalchemy import func, text
 
 from .agent_runner import DONE, ERROR, AgentEvent, AgentTurnRequest, get_runner
+from .auth import issue_agent_credential
 from .conversation_api import (
     _finish_turn,
     _record_event,
@@ -148,7 +149,9 @@ async def _run_turn(context: dict, question: str, timeout: float) -> dict:
         provider=context["provider"],
         model=context["model"],
         mcp_url=public_base_url() + "/mcp/",
-        mcp_token=current_requester().token,
+        mcp_token=issue_agent_credential(
+            current_requester().id, context["conversation_id"], context["turn_id"]
+        ),
         turn_id=context["turn_id"],
     )
     seq = 0

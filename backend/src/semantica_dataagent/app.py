@@ -23,7 +23,7 @@ from sqlalchemy import text, update
 
 from . import knowledge
 from .api_time import UtcDatetime
-from .auth import _authenticated, admin, bearer, current_user
+from .auth import admin, authenticate_mcp, bearer, current_user
 from .build_queue import build_queue, enqueue_build
 from .db import (
     Build,
@@ -629,6 +629,7 @@ def build_detail(build_id: int, _: Annotated[str, Depends(current_user)]):
 
 from .dimension_api import lookup_dim_values
 from .personal_settings import router as personal_settings_router
+from .query_api import propose_query
 from .query_api import router as query_router
 from .sample_api import sample_table_data
 from .sql_validation import find_join_path, validate_sql
@@ -694,6 +695,7 @@ def create_mcp():
     server.tool()(propose_correction)
     server.tool()(ask_dataagent)
     server.tool()(sample_table_data)
+    server.tool()(propose_query)
 
     from .skill import register_prompt
 
@@ -734,7 +736,11 @@ class MCPAuthentication:
             request = Request(scope, receive)
             try:
                 credentials = await bearer(request)
-                requester = _authenticated(credentials)
+                requester = authenticate_mcp(
+                    credentials,
+                    request.headers.get("x-dataagent-conversation-id"),
+                    request.headers.get("x-dataagent-turn-id"),
+                )
             except HTTPException as exc:
                 await JSONResponse(
                     {"detail": exc.detail},

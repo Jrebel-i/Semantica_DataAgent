@@ -157,6 +157,655 @@ def test_pi_event_parser_emits_clarification_placeholder():
     assert events[1].data["questions"][0]["question"] == "按支付日还是下单日？"
 
 
+def test_pi_event_parser_emits_query_plan_from_tool_result():
+    parser = PiEventParser()
+    plan = {
+        "id": "plan-1",
+        "sql": "SELECT 1",
+        "data_source": "doris_ai",
+        "tables": [],
+        "estimated_partitions": None,
+        "estimated_rows": None,
+        "row_limit": 1000,
+    }
+    events = parser.feed(
+        {
+            "type": "tool_execution_end",
+            "toolCallId": "call-1",
+            "toolName": "mcp__dataagent__propose_query",
+            "isError": False,
+            "result": {"content": [{"type": "text", "text": json.dumps(plan)}]},
+        }
+    )
+    assert [event.type for event in events] == [TOOL_END, "query_plan"]
+    assert events[1].data == plan
+
+
+def test_online_query_plan_uses_persisted_tool_result_when_runner_summary_is_opaque(
+    client, monkeypatch
+):
+    from semantica_dataagent import agent_runner, knowledge, query_api, sql_validation
+    from semantica_dataagent.auth import Requester
+    from semantica_dataagent.db import Token, sessions
+    from semantica_dataagent.mcp_context import bind_mcp_context
+
+    class Executor:
+        def bind(self, config, token):
+            return self
+
+        async def estimate(self, sql):
+            return {"partitions": 3, "rows": 42}
+
+    monkeypatch.setattr(knowledge, "describe", lambda **_: [])
+    monkeypatch.setattr(
+        sql_validation, "validate_sql", lambda *a, **kw: {"status": "pass"}
+    )
+    monkeypatch.setattr(query_api, "_config", lambda: (Executor(), {}))
+    c, token = client
+    with sessions()() as db:
+        owner = db.query(Token).first()
+        requester = Requester(id=owner.id, role=owner.role, token=token)
+
+    class Runner:
+        agent_id = "pi"
+
+        def available(self):
+            return True
+
+        async def run(self, request):
+            with bind_mcp_context(
+                requester, request.conversation_id, str(request.turn_id)
+            ):
+                await query_api.propose_query("SELECT 1")
+            yield AgentEvent(
+                TOOL_END,
+                {
+                    "name": "mcp__dataagent__propose_query",
+                    "is_error": False,
+                    "summary": "opaque",
+                },
+            )
+            yield AgentEvent(TEXT_DELTA, {"text": "must stop"})
+
+    monkeypatch.setitem(agent_runner.RUNNERS, "pi", Runner())
+    headers = {"Authorization": f"Bearer {token}"}
+    provider = c.post(
+        "/api/v1/providers",
+        headers=headers,
+        json={
+            "name": "Local",
+            "base_url": "http://127.0.0.1:3425",
+            "models": ["model"],
+        },
+    ).json()
+    response = c.post(
+        "/api/v1/conversations/ask",
+        headers=headers,
+        json={
+            "question": "统计",
+            "agent": "pi",
+            "provider_id": provider["id"],
+            "model": "model",
+        },
+    )
+    emitted = _sse(response.text)
+    assert [name for name, _ in emitted] == ["conversation", "tool_end", "query_plan"]
+    assert emitted[-1][1]["estimated_rows"] == 42
+    assert emitted[-1][1]["sql"] == "SELECT 1"
+
+
+def test_query_plan_stream_waits_for_confirmation_and_persists(client, monkeypatch):
+    from semantica_dataagent import agent_runner
+
+    class PlanRunner:
+        agent_id = "pi"
+
+        def available(self):
+            return True
+
+        async def run(self, request):
+            yield AgentEvent("query_plan", {"id": "plan-1", "sql": "SELECT 1"})
+            yield AgentEvent(TEXT_DELTA, {"text": "should not run"})
+
+    monkeypatch.setitem(agent_runner.RUNNERS, "pi", PlanRunner())
+    c, token = client
+    headers = {"Authorization": f"Bearer {token}"}
+    provider = c.post(
+        "/api/v1/providers",
+        headers=headers,
+        json={
+            "name": "Local",
+            "base_url": "http://127.0.0.1:3425",
+            "models": ["model"],
+        },
+    ).json()
+    response = c.post(
+        "/api/v1/conversations/ask",
+        headers=headers,
+        json={
+            "question": "查询",
+            "agent": "pi",
+            "provider_id": provider["id"],
+            "model": "model",
+        },
+    )
+    events = _sse(response.text)
+    assert [kind for kind, _ in events] == ["conversation", "query_plan"]
+    conversation_id = events[0][1]["conversation_id"]
+    detail = c.get(f"/api/v1/conversations/{conversation_id}", headers=headers).json()
+    assert detail["turns"][0]["status"] == "awaiting_confirmation"
+    assert detail["turns"][0]["events"][0]["data"]["id"] == "plan-1"
+
+
+def test_agent_mcp_credential_is_bound_to_running_turn(client, monkeypatch):
+    from fastapi import HTTPException
+    from fastapi.security import HTTPAuthorizationCredentials
+
+    from semantica_dataagent import agent_runner
+    from semantica_dataagent.auth import authenticate_mcp
+
+    seen = []
+
+    class Runner:
+        agent_id = "pi"
+
+        def available(self):
+            return True
+
+        async def run(self, request):
+            credentials = HTTPAuthorizationCredentials(
+                scheme="Bearer", credentials=request.mcp_token
+            )
+            identity = authenticate_mcp(
+                credentials, request.conversation_id, str(request.turn_id)
+            )
+            seen.append(identity.id)
+            with pytest.raises(HTTPException):
+                authenticate_mcp(
+                    credentials, request.conversation_id, str(request.turn_id + 1)
+                )
+            yield AgentEvent(DONE, {"text": "ok", "sql": [], "citations": []})
+
+    monkeypatch.setitem(agent_runner.RUNNERS, "pi", Runner())
+    c, token = client
+    headers = {"Authorization": f"Bearer {token}"}
+    provider = c.post(
+        "/api/v1/providers",
+        headers=headers,
+        json={
+            "name": "Local",
+            "base_url": "http://127.0.0.1:3425",
+            "models": ["model"],
+        },
+    ).json()
+    response = c.post(
+        "/api/v1/conversations/ask",
+        headers=headers,
+        json={
+            "question": "问题",
+            "agent": "pi",
+            "provider_id": provider["id"],
+            "model": "model",
+        },
+    )
+    assert _sse(response.text)[-1][0] == "done"
+    assert seen
+
+
+@pytest.mark.parametrize("interpret", [True, False])
+def test_confirmed_query_resumes_agent_and_respects_interpretation_setting(
+    client, monkeypatch, interpret
+):
+    from semantica_dataagent import (
+        agent_runner,
+        knowledge,
+        query_api,
+        sql_validation,
+        telemetry,
+    )
+    from semantica_dataagent.auth import Requester
+    from semantica_dataagent.db import Token, sessions
+    from semantica_dataagent.mcp_context import bind_mcp_context
+
+    executions = []
+    traces = []
+    monkeypatch.setattr(
+        telemetry, "submit", lambda kind, payload, secrets: traces.append(payload)
+    )
+
+    class Executor:
+        def bind(self, config, token):
+            return self
+
+        async def estimate(self, sql):
+            return {"partitions": None, "rows": None}
+
+        async def submit(self, sql, limit):
+            executions.append(sql)
+            return "fake-key"
+
+        async def wait(self, key):
+            return {
+                "columns": ["sales"],
+                "data": [[f"private-value-{index}"] for index in range(60)],
+            }
+
+    monkeypatch.setattr(knowledge, "describe", lambda **_: [])
+    monkeypatch.setattr(
+        sql_validation, "validate_sql", lambda *a, **kw: {"status": "pass"}
+    )
+    monkeypatch.setattr(
+        query_api, "_config", lambda: (Executor(), {"interpret_results": interpret})
+    )
+    c, token = client
+    headers = {"Authorization": f"Bearer {token}"}
+    c.put("/api/v1/me/dtb-token", headers=headers, json={"token": "fake"})
+    with sessions()() as db:
+        owner = db.query(Token).first()
+        requester = Requester(id=owner.id, role=owner.role, token=token)
+
+    class Runner:
+        agent_id = "pi"
+
+        def __init__(self):
+            self.requests = []
+
+        def available(self):
+            return True
+
+        async def run(self, request):
+            self.requests.append(request)
+            if len(self.requests) == 1:
+                with bind_mcp_context(
+                    requester, request.conversation_id, str(request.turn_id)
+                ):
+                    plan = await query_api.propose_query("SELECT 1")
+                yield AgentEvent("query_plan", plan)
+            else:
+                yield AgentEvent(DONE, {"text": "结论", "sql": [], "citations": []})
+
+    runner = Runner()
+    monkeypatch.setitem(agent_runner.RUNNERS, "pi", runner)
+    provider = c.post(
+        "/api/v1/providers",
+        headers=headers,
+        json={
+            "name": "Local",
+            "base_url": "http://127.0.0.1:3425",
+            "models": ["model"],
+        },
+    ).json()
+    response = c.post(
+        "/api/v1/conversations/ask",
+        headers=headers,
+        json={
+            "question": "销售额",
+            "agent": "pi",
+            "provider_id": provider["id"],
+            "model": "model",
+        },
+    )
+    initial = _sse(response.text)
+    plan = next(data for name, data in initial if name == "query_plan")
+    conversation_id = initial[0][1]["conversation_id"]
+    turn_id = initial[0][1]["turn_id"]
+    path = f"/api/v1/conversations/{conversation_id}/turns/{turn_id}/queries/{plan['id']}/execute"
+    agent_token = runner.requests[0].mcp_token
+    assert (
+        c.post(
+            f"/api/v1/queries/{plan['id']}/execute",
+            headers={"Authorization": f"Bearer {agent_token}"},
+        ).status_code
+        == 401
+    )
+    other_token = c.post(
+        "/api/v1/tokens", headers=headers, json={"name": "other", "role": "user"}
+    ).json()["token"]
+    assert (
+        c.post(path, headers={"Authorization": f"Bearer {other_token}"}).status_code
+        == 404
+    )
+    assert executions == []
+    response = c.post(path, headers=headers)
+    assert response.status_code == 200, response.text
+    events = _sse(response.text)
+    assert events[0][0] == "query_result"
+    assert len(events[0][1]["rows"]) == 60
+    assert events[0][1]["rows"][0] == ["private-value-0"]
+    assert events[-1][0] == "done"
+    assert len(executions) == 1
+    assert "sales" in runner.requests[1].prompt
+    if interpret:
+        assert "private-value-49" in runner.requests[1].prompt
+        assert "private-value-50" not in runner.requests[1].prompt
+    else:
+        assert "private-value" not in runner.requests[1].prompt
+    assert all("private-value" not in json.dumps(trace) for trace in traces)
+    assert c.post(path, headers=headers).status_code == 409
+    other_headers = {"Authorization": f"Bearer {other_token}"}
+    assert (
+        c.get(f"/api/v1/queries/{plan['id']}", headers=other_headers).status_code == 404
+    )
+    assert (
+        c.get(
+            f"/api/v1/queries/{plan['id']}/download?format=json",
+            headers=other_headers,
+        ).status_code
+        == 404
+    )
+    detail = c.get(f"/api/v1/conversations/{conversation_id}", headers=headers).json()
+    assert detail["turns"][0]["answer"] == "结论"
+    assert any(
+        event["type"] == "query_result" for event in detail["turns"][0]["events"]
+    )
+
+
+def test_deleting_conversation_removes_its_query_results(client, monkeypatch):
+    from semantica_dataagent import agent_runner, knowledge, query_api, sql_validation
+    from semantica_dataagent.auth import Requester
+    from semantica_dataagent.db import Conversation, Token, Turn, sessions
+    from semantica_dataagent.mcp_context import bind_mcp_context
+
+    class Executor:
+        def bind(self, config, token):
+            return self
+
+        async def estimate(self, sql):
+            return {"partitions": None, "rows": None}
+
+        async def submit(self, sql, limit):
+            return "key"
+
+        async def wait(self, key):
+            return {"columns": ["value"], "data": [[123]]}
+
+    monkeypatch.setattr(knowledge, "describe", lambda **_: [])
+    monkeypatch.setattr(
+        sql_validation, "validate_sql", lambda *a, **kw: {"status": "pass"}
+    )
+    monkeypatch.setattr(query_api, "_config", lambda: (Executor(), {}))
+    runner = FakeRunner()
+    monkeypatch.setitem(agent_runner.RUNNERS, "pi", runner)
+    c, token = client
+    headers = {"Authorization": f"Bearer {token}"}
+    c.put("/api/v1/me/dtb-token", headers=headers, json={"token": "fake"})
+    with sessions().begin() as db:
+        owner = db.query(Token).first()
+        requester = Requester(id=owner.id, role=owner.role, token=token)
+        db.add(
+            Conversation(
+                id="conv-delete",
+                owner_id=owner.id,
+                title="q",
+                agent="pi",
+                provider_id="p",
+                model="m",
+            )
+        )
+        turn = Turn(
+            conversation_id="conv-delete",
+            sequence=1,
+            question="q",
+            status="running",
+            answer="",
+            sql="[]",
+            citations="[]",
+        )
+        db.add(turn)
+        db.flush()
+        turn_id = turn.id
+    with bind_mcp_context(requester, "conv-delete", str(turn_id)):
+        plan = asyncio.run(query_api.propose_query("SELECT 1"))
+    assert (
+        c.post(
+            f"/api/v1/queries/{plan['id']}/execute", headers=headers, json={}
+        ).status_code
+        == 403
+    )
+    assert asyncio.run(
+        query_api.execute_for_turn(plan["id"], requester, "conv-delete", turn_id)
+    )["rows"] == [[123]]
+    with sessions().begin() as db:
+        db.get(Turn, turn_id).status = "completed"
+    assert c.get(f"/api/v1/queries/{plan['id']}", headers=headers).status_code == 200
+    c.put("/api/v1/me/dtb-token", headers=headers, json={"token": ""})
+    download = f"/api/v1/queries/{plan['id']}/download"
+    assert c.get(download + "?format=csv", headers=headers).text == "value\n123\n"
+    assert c.get(download + "?format=json", headers=headers).json() == {
+        "columns": ["value"],
+        "rows": [[123]],
+    }
+    from io import BytesIO
+
+    from openpyxl import load_workbook
+
+    workbook = load_workbook(
+        BytesIO(c.get(download + "?format=xlsx", headers=headers).content)
+    )
+    assert list(workbook.active.values) == [("value",), (123,)]
+    assert (
+        c.delete("/api/v1/conversations/conv-delete", headers=headers).status_code
+        == 204
+    )
+    assert c.get(f"/api/v1/queries/{plan['id']}", headers=headers).status_code == 404
+    assert (
+        c.get("/api/v1/conversations/conv-delete", headers=headers).status_code == 404
+    )
+
+
+def test_expired_online_confirmation_cannot_execute(client, monkeypatch):
+    from datetime import UTC, datetime, timedelta
+
+    from semantica_dataagent import agent_runner, knowledge, query_api, sql_validation
+    from semantica_dataagent.auth import Requester
+    from semantica_dataagent.db import QueryExecution, Token, sessions
+    from semantica_dataagent.mcp_context import bind_mcp_context
+
+    executions = []
+
+    class Executor:
+        def bind(self, config, token):
+            return self
+
+        async def estimate(self, sql):
+            return {"partitions": None, "rows": None}
+
+        async def submit(self, sql, limit):
+            executions.append(sql)
+            return "key"
+
+        async def wait(self, key):
+            return {"columns": ["value"], "data": [[123]]}
+
+    monkeypatch.setattr(knowledge, "describe", lambda **_: [])
+    monkeypatch.setattr(
+        sql_validation, "validate_sql", lambda *a, **kw: {"status": "pass"}
+    )
+    monkeypatch.setattr(
+        query_api,
+        "_config",
+        lambda: (Executor(), {"confirmation_ttl_seconds": 1800}),
+    )
+    c, token = client
+    headers = {"Authorization": f"Bearer {token}"}
+    c.put("/api/v1/me/dtb-token", headers=headers, json={"token": "fake"})
+    with sessions()() as db:
+        owner = db.query(Token).first()
+        requester = Requester(id=owner.id, role=owner.role, token=token)
+
+    class Runner:
+        agent_id = "pi"
+
+        def available(self):
+            return True
+
+        async def run(self, request):
+            with bind_mcp_context(
+                requester, request.conversation_id, str(request.turn_id)
+            ):
+                plan = await query_api.propose_query("SELECT 1")
+            yield AgentEvent("query_plan", plan)
+
+    monkeypatch.setitem(agent_runner.RUNNERS, "pi", Runner())
+    provider = c.post(
+        "/api/v1/providers",
+        headers=headers,
+        json={
+            "name": "Local",
+            "base_url": "http://127.0.0.1:3425",
+            "models": ["model"],
+        },
+    ).json()
+    response = c.post(
+        "/api/v1/conversations/ask",
+        headers=headers,
+        json={
+            "question": "查询",
+            "agent": "pi",
+            "provider_id": provider["id"],
+            "model": "model",
+        },
+    )
+    initial = _sse(response.text)
+    plan = next(data for name, data in initial if name == "query_plan")
+    conversation_id = initial[0][1]["conversation_id"]
+    turn_id = initial[0][1]["turn_id"]
+    with sessions().begin() as db:
+        db.get(QueryExecution, plan["id"]).created_at = datetime.now(UTC) - timedelta(
+            minutes=31
+        )
+    response = c.post(
+        f"/api/v1/conversations/{conversation_id}/turns/{turn_id}/queries/{plan['id']}/execute",
+        headers=headers,
+    )
+    assert response.status_code == 410, response.text
+    assert executions == []
+    detail = c.get(f"/api/v1/conversations/{conversation_id}", headers=headers).json()
+    assert detail["turns"][0]["status"] == "awaiting_confirmation"
+
+
+def test_expired_session_removes_saved_query_rows(client):
+    from datetime import UTC, datetime, timedelta
+
+    from semantica_dataagent.conversation_api import cleanup_expired_sessions
+    from semantica_dataagent.db import (
+        Conversation,
+        QueryExecution,
+        Token,
+        Turn,
+        TurnEvent,
+        sessions,
+    )
+
+    c, token = client
+    headers = {"Authorization": f"Bearer {token}"}
+    with sessions().begin() as db:
+        owner = db.query(Token).first()
+        db.add(
+            Conversation(
+                id="old-session",
+                owner_id=owner.id,
+                title="q",
+                agent="pi",
+                provider_id="p",
+                model="m",
+                updated_at=datetime.now(UTC) - timedelta(days=31),
+            )
+        )
+        turn = Turn(
+            conversation_id="old-session",
+            sequence=1,
+            question="q",
+            status="completed",
+            answer="",
+            sql="[]",
+            citations="[]",
+        )
+        db.add(turn)
+        db.flush()
+        db.add(
+            TurnEvent(
+                turn_id=turn.id,
+                seq=0,
+                type="query_result",
+                data='{"rows":[["private"]]}',
+            )
+        )
+        db.add(
+            QueryExecution(
+                id="expired-result",
+                owner_id=owner.id,
+                conversation_id="old-session",
+                turn_id=turn.id,
+                sql="SELECT 1",
+                status="succeeded",
+                rows='{"columns":["v"],"data":[["private"]]}',
+            )
+        )
+    cleanup_expired_sessions()
+    assert (
+        c.get(
+            "/api/v1/queries/expired-result/download?format=json", headers=headers
+        ).status_code
+        == 404
+    )
+    detail = c.get("/api/v1/conversations/old-session", headers=headers).json()
+    assert "private" not in json.dumps(detail)
+
+
+def test_expired_conversation_result_is_not_visible_or_downloadable(
+    client, monkeypatch
+):
+    from datetime import UTC, datetime, timedelta
+
+    from semantica_dataagent import query_api
+    from semantica_dataagent.db import (
+        Conversation,
+        QueryExecution,
+        Token,
+        sessions,
+    )
+
+    monkeypatch.setattr(query_api, "_config", lambda: (object(), {"row_limit": 1000}))
+    c, token = client
+    headers = {"Authorization": f"Bearer {token}"}
+    with sessions().begin() as db:
+        owner = db.query(Token).first()
+        db.add(
+            Conversation(
+                id="expired-read",
+                owner_id=owner.id,
+                title="q",
+                agent="pi",
+                provider_id="p",
+                model="m",
+                updated_at=datetime.now(UTC) - timedelta(days=31),
+            )
+        )
+        db.add(
+            QueryExecution(
+                id="expired-read-query",
+                owner_id=owner.id,
+                conversation_id="expired-read",
+                turn_id=None,
+                sql="SELECT 1",
+                status="succeeded",
+                rows='{"columns":["v"],"data":[["private"]]}',
+                row_count=1,
+            )
+        )
+    assert (
+        c.get("/api/v1/queries/expired-read-query", headers=headers).status_code == 404
+    )
+    assert (
+        c.get(
+            "/api/v1/queries/expired-read-query/download?format=json",
+            headers=headers,
+        ).status_code
+        == 404
+    )
+
+
 def test_pi_runner_reads_jsonl_records_past_the_default_stream_limit(tmp_path: Path):
     script = tmp_path / "fake-pi.py"
     script.write_text(
@@ -550,7 +1199,23 @@ def test_ask_streams_events_persists_history_and_reuses_session(client, monkeypa
     assert done["sql"] == [{"sql": "SELECT 1", "dialect": "hive"}]
     assert done["citations"] == [{"ref": "table:shop.orders", "type": "table"}]
     assert runner.requests[0].session_id == conversation_id
-    assert runner.requests[0].mcp_token == admin_token
+    agent_token = runner.requests[0].mcp_token
+    assert agent_token != admin_token
+    assert (
+        c.post(
+            "/api/v1/queries/plan",
+            headers={"Authorization": f"Bearer {agent_token}"},
+            json={"sql": "SELECT 1"},
+        ).status_code
+        == 401
+    )
+    assert (
+        c.get(
+            f"/api/v1/conversations/{conversation_id}",
+            headers={"Authorization": f"Bearer {agent_token}"},
+        ).status_code
+        == 401
+    )
     assert runner.requests[0].mcp_url.endswith("/mcp/")
 
     detail = c.get(f"/api/v1/conversations/{conversation_id}", headers=headers)

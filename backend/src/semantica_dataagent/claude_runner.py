@@ -19,6 +19,7 @@ from .agent_plugin import (
     is_sandboxed,
     mcp_server_config,
     passthrough_environment,
+    query_plan_event,
     redact_event,
     request_secrets,
     result_summary,
@@ -76,6 +77,10 @@ class ClaudeEventParser(EventParser):
                     clarification = clarification_event(name, result)
                     if clarification is not None:
                         events.append(clarification)
+                    if not block.get("is_error"):
+                        plan = query_plan_event(name, result)
+                        if plan is not None:
+                            events.append(plan)
         elif kind == "result":
             if record.get("is_error"):
                 self.error = record.get("result") or "Claude failed"

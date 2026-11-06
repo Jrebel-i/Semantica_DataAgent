@@ -39,6 +39,22 @@ type Clarification = {
   question?: string;
   options?: { id?: string; label?: string; ref?: string }[];
 };
+type QueryPlan = {
+  id: string;
+  sql: string;
+  data_source: string;
+  tables: string[];
+  estimated_partitions: number | null;
+  estimated_rows: number | null;
+  row_limit: number;
+  execution_limit?: number;
+};
+type QueryResult = {
+  id: string;
+  columns: string[];
+  rows: unknown[][];
+  row_count: number;
+};
 type LiveTurn = {
   question: string;
   text: string;
@@ -159,6 +175,43 @@ function clarificationsOfTurn(events: EventView[]): Clarification[][] {
     if (questions.length > 0) groups.push(questions);
   }
   return groups;
+}
+
+function queryEvent<T>(events: EventView[], type: string): T | undefined {
+  return [...events].reverse().find((event) => event.type === type)?.data as
+    | T
+    | undefined;
+}
+
+function ResultTable({
+  result,
+  limit,
+}: {
+  result: QueryResult;
+  limit?: number;
+}) {
+  return (
+    <div style={{ overflowX: "auto" }}>
+      <table>
+        <thead>
+          <tr>
+            {result.columns.map((column, index) => (
+              <th key={index}>{column}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {result.rows.slice(0, limit).map((row, index) => (
+            <tr key={index}>
+              {row.map((value, column) => (
+                <td key={column}>{value == null ? "" : String(value)}</td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
 }
 
 async function copyText(value: string) {
@@ -424,6 +477,9 @@ function TurnBlock({
   onCopy,
   onOpen,
   onClarify,
+  onExecute,
+  onShowResult,
+  executing,
 }: {
   turn: Turn;
   messages: Messages;
@@ -434,11 +490,16 @@ function TurnBlock({
     question: Clarification,
     option: NonNullable<Clarification["options"]>[number],
   ) => void;
+  onExecute: (turn: Turn, plan: QueryPlan) => void;
+  onShowResult: (id: string) => void;
+  executing: boolean;
 }) {
   const sql = sqlBlocks(turn.sql);
   const citations = citationsOf(turn.citations);
   const tools = toolsOfTurn(turn.events ?? []);
   const clarifications = clarificationsOfTurn(turn.events ?? []);
+  const plan = queryEvent<QueryPlan>(turn.events ?? [], "query_plan");
+  const result = queryEvent<QueryResult>(turn.events ?? [], "query_result");
   return (
     <article className="turn">
       <div className="message">
@@ -455,6 +516,33 @@ function TurnBlock({
         </span>
         <div className="message-body">
           <ToolList tools={tools} messages={messages} />
+          {plan && (
+            <div className="card query-plan-card">
+              <h3>{messages.queryPlan}</h3>
+              <pre>{plan.sql}</pre>
+              <p>
+                {messages.planPartitions}: {plan.estimated_partitions ?? "—"} ·{" "}
+                {messages.planRows}: {plan.estimated_rows ?? "—"}
+              </p>
+              {turn.status === "awaiting_confirmation" && (
+                <Button
+                  size="small"
+                  disabled={executing}
+                  onClick={() => onExecute(turn, plan)}
+                >
+                  {messages.executePlan}
+                </Button>
+              )}
+            </div>
+          )}
+          {result && (
+            <div className="card query-result-preview">
+              <ResultTable result={result} limit={5} />
+              <Button type="link" onClick={() => onShowResult(result.id)}>
+                查看完整结果
+              </Button>
+            </div>
+          )}
           <div className="answer">
             <Markdown text={turn.answer} />
           </div>
@@ -550,6 +638,8 @@ export function ChatPage({
   });
   const [contextOpen, setContextOpen] = useState(true);
   const [contextTab, setContextTab] = useState("plan");
+  const contextTouched = useRef(false);
+  const [selectedQueryId, setSelectedQueryId] = useState("");
   const [providers, setProviders] = useState<Provider[]>([]);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [agentId, setAgentId] = useState("pi");
@@ -582,9 +672,110 @@ export function ChatPage({
   const [providerError, setProviderError] = useState("");
   const [providerNotice, setProviderNotice] = useState("");
 
+  const queryTurns = [...turns]
+    .reverse()
+    .filter((turn) =>
+      (turn.events ?? []).some((event) => event.type === "query_plan"),
+    );
+  const latestTurn =
+    queryTurns.find(
+      (turn) =>
+        queryEvent<QueryPlan>(turn.events ?? [], "query_plan")?.id ===
+        selectedQueryId,
+    ) ?? queryTurns[0];
+  const latestPlan = queryEvent<QueryPlan>(
+    latestTurn?.events ?? [],
+    "query_plan",
+  );
+  const latestResult = queryEvent<QueryResult>(
+    latestTurn?.events ?? [],
+    "query_result",
+  );
   useEffect(() => {
-    if (citationDetail) setContextTab("schema");
-  }, [citationDetail]);
+    if (!contextTouched.current && latestPlan)
+      setContextTab(latestResult ? "results" : "plan");
+  }, [latestPlan?.id, latestResult?.id]);
+
+  async function executePlan(turn: Turn, plan: QueryPlan) {
+    if (sending || !currentConversationId) return;
+    setSending(true);
+    setError("");
+    try {
+      const response = await fetch(
+        `/api/v1/conversations/${encodeURIComponent(currentConversationId)}/turns/${turn.id}/queries/${encodeURIComponent(plan.id)}/execute`,
+        {
+          method: "POST",
+          headers: { Authorization: `Bearer ${token}` },
+        },
+      );
+      if (!response.ok) {
+        const body = (await response.json().catch(() => null)) as {
+          detail?: string;
+        } | null;
+        throw new Error(body?.detail || t.askError);
+      }
+      await readSse(response, (name, data) => {
+        if (name === "query_result") {
+          setTurns((current) =>
+            current.map((item) => {
+              if (item.id !== turn.id) return item;
+              const events = item.events ?? [];
+              return {
+                ...item,
+                status: "running",
+                events: [...events, { seq: events.length, type: name, data }],
+              };
+            }),
+          );
+        } else if (name === "done") {
+          setTurns((current) =>
+            current.map((item) =>
+              item.id === turn.id
+                ? {
+                    ...item,
+                    status: "completed",
+                    answer:
+                      typeof data.text === "string" ? data.text : item.answer,
+                  }
+                : item,
+            ),
+          );
+        } else if (name === "error") {
+          setError(String(data.message ?? t.answerFailed));
+        }
+      });
+      await openConversation(currentConversationId);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : t.askError);
+    } finally {
+      setSending(false);
+    }
+  }
+
+  async function downloadQuery(id: string, format: string) {
+    try {
+      const response = await fetch(
+        `/api/v1/queries/${encodeURIComponent(id)}/download?format=${format}`,
+        {
+          headers: { Authorization: `Bearer ${token}` },
+        },
+      );
+      if (!response.ok) throw new Error(t.askError);
+      const url = URL.createObjectURL(await response.blob());
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `query.${format}`;
+      anchor.click();
+      URL.revokeObjectURL(url);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : t.askError);
+    }
+  }
+
+  useEffect(() => {
+    if (citationDetail && !latestPlan && !contextTouched.current)
+      setContextTab("schema");
+  }, [citationDetail, latestPlan]);
 
   const refreshConversations = useCallback(async () => {
     try {
@@ -896,6 +1087,10 @@ export function ChatPage({
 
   function applyConversation(detail: ConversationDetail) {
     selectionTouched.current = true;
+    if (detail.id !== currentConversationId) {
+      setSelectedQueryId("");
+      contextTouched.current = false;
+    }
     setCurrentConversationId(detail.id);
     setResumable(detail.resumable !== false);
     setTurns(detail.turns);
@@ -932,6 +1127,8 @@ export function ChatPage({
   }
 
   function newConversation() {
+    contextTouched.current = false;
+    setSelectedQueryId("");
     selectionTouched.current = true;
     setCurrentConversationId("");
     setAgentId(defaults.agent);
@@ -1148,7 +1345,18 @@ export function ChatPage({
     {
       key: "plan",
       label: t.queryPlan,
-      children: (
+      children: latestPlan ? (
+        <div className="context-section">
+          <pre>{latestPlan.sql}</pre>
+          <p>{latestPlan.data_source}</p>
+          <p>{latestPlan.tables?.join(", ")}</p>
+          <p>
+            {t.planPartitions}: {latestPlan.estimated_partitions ?? "—"} ·{" "}
+            {t.planRows}: {latestPlan.estimated_rows ?? "—"}
+          </p>
+          <p>行数上限: {latestPlan.execution_limit ?? latestPlan.row_limit}</p>
+        </div>
+      ) : (
         <div className="empty-state">
           <strong>{t.noPlan}</strong>
           <span>
@@ -1163,7 +1371,33 @@ export function ChatPage({
     {
       key: "results",
       label: t.queryResults,
-      children: <div className="empty-state">{t.emptyContext}</div>,
+      children: latestResult ? (
+        <div className="context-section">
+          <ResultTable result={latestResult} />
+          {latestPlan &&
+            latestResult.row_count >=
+              Math.min(
+                latestPlan.row_limit,
+                latestPlan.execution_limit ?? latestPlan.row_limit,
+              ) && <p>结果可能被截断</p>}
+          <Space>
+            {[
+              ["csv", "CSV"],
+              ["xlsx", "Excel"],
+              ["json", "JSON"],
+            ].map(([format, label]) => (
+              <Button
+                key={format}
+                onClick={() => void downloadQuery(latestResult.id, format)}
+              >
+                {label}
+              </Button>
+            ))}
+          </Space>
+        </div>
+      ) : (
+        <div className="empty-state">{t.emptyContext}</div>
+      ),
     },
     {
       key: "lineage",
@@ -1406,18 +1640,6 @@ export function ChatPage({
                       </Button>
                     ))}
                   </div>
-                  <div className="card plan-placeholder">
-                    <div className="card-title-row">
-                      <h3 className="card-title">{t.queryPlan}</h3>
-                      <span className="subtle">
-                        {t.planPartitions} — · {t.planRows} —
-                      </span>
-                    </div>
-                    <p className="muted">{t.noPlan}</p>
-                    <Button size="small" disabled>
-                      {t.executePlan}
-                    </Button>
-                  </div>
                 </div>
               )}
               {turns.map((turn) => (
@@ -1427,8 +1649,20 @@ export function ChatPage({
                   messages={t}
                   copied={copied}
                   onCopy={(sql) => void copySql(sql)}
-                  onOpen={(ref) => void openCitation(ref)}
+                  onOpen={(ref) => {
+                    contextTouched.current = true;
+                    setContextTab("schema");
+                    void openCitation(ref);
+                  }}
                   onClarify={chooseClarification}
+                  onExecute={(turn, plan) => void executePlan(turn, plan)}
+                  onShowResult={(id) => {
+                    contextTouched.current = true;
+                    setSelectedQueryId(id);
+                    setContextTab("results");
+                    setContextOpen(true);
+                  }}
+                  executing={sending}
                 />
               ))}
               {live && (
@@ -1465,7 +1699,11 @@ export function ChatPage({
                       <CitationList
                         citations={live.citations}
                         messages={t}
-                        onOpen={(ref) => void openCitation(ref)}
+                        onOpen={(ref) => {
+                          contextTouched.current = true;
+                          setContextTab("schema");
+                          void openCitation(ref);
+                        }}
                       />
                       <ClarificationList
                         groups={live.clarifications}
@@ -1504,7 +1742,10 @@ export function ChatPage({
                 <div className="context-tabs">
                   <Tabs
                     activeKey={contextTab}
-                    onChange={setContextTab}
+                    onChange={(tab) => {
+                      contextTouched.current = true;
+                      setContextTab(tab);
+                    }}
                     items={contextTabs}
                     tabBarExtraContent={
                       <Button

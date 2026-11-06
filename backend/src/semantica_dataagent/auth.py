@@ -1,3 +1,4 @@
+import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Annotated
@@ -5,7 +6,7 @@ from typing import Annotated
 from fastapi import Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from .db import Token, digest, sessions
+from .db import AgentCredential, Conversation, Token, Turn, digest, sessions
 
 bearer = HTTPBearer(auto_error=False)
 
@@ -40,6 +41,58 @@ def _authenticated(
         ):
             token.last_used_at = now
         return Requester(id=token.id, role=token.role, token=credentials.credentials)
+
+
+def issue_agent_credential(owner_id: str, conversation_id: str, turn_id: int) -> str:
+    token = secrets.token_urlsafe(32)
+    with sessions().begin() as db:
+        conversation = db.get(Conversation, conversation_id)
+        turn = db.get(Turn, turn_id)
+        if (
+            conversation is None
+            or conversation.owner_id != owner_id
+            or turn is None
+            or turn.conversation_id != conversation_id
+            or turn.status != "running"
+        ):
+            raise HTTPException(409, "Agent turn is not running")
+        db.query(AgentCredential).filter_by(turn_id=turn_id).delete()
+        db.add(
+            AgentCredential(
+                digest=digest(token),
+                owner_id=owner_id,
+                conversation_id=conversation_id,
+                turn_id=turn_id,
+            )
+        )
+    return token
+
+
+def authenticate_mcp(credentials, conversation_id, turn_id) -> Requester:
+    try:
+        return _authenticated(credentials)
+    except HTTPException:
+        pass
+    if credentials is None or credentials.scheme.lower() != "bearer":
+        raise HTTPException(401, "Invalid token")
+    with sessions()() as db:
+        scoped = db.get(AgentCredential, digest(credentials.credentials))
+        if (
+            scoped is None
+            or scoped.conversation_id != conversation_id
+            or str(scoped.turn_id) != turn_id
+        ):
+            raise HTTPException(401, "Invalid token")
+        turn = db.get(Turn, scoped.turn_id)
+        owner = db.query(Token).filter_by(id=scoped.owner_id, revoked=False).first()
+        if (
+            turn is None
+            or turn.status != "running"
+            or turn.conversation_id != conversation_id
+            or owner is None
+        ):
+            raise HTTPException(401, "Invalid token")
+        return Requester(id=owner.id, role=owner.role, token=credentials.credentials)
 
 
 def current_user(
