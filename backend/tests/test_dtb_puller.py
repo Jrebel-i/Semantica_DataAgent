@@ -24,6 +24,7 @@ def test_dtb_puller_fetches_all_pages():
                         {
                             "tableId": page,
                             "tableName": f"dim_{page}",
+                            "databaseName": "dimensions",
                             "catalogType": "HIVE",
                         }
                     ],
@@ -33,7 +34,7 @@ def test_dtb_puller_fetches_all_pages():
         )
 
     with httpx.Client(transport=httpx.MockTransport(reply)) as client:
-        tables = puller().list_tables(client, "http://dtb", "secret", "dimensions")
+        tables = puller().list_tables(client, "http://dtb", "secret")
     assert [row["tableId"] for row in tables] == [1, 2]
 
 
@@ -59,7 +60,7 @@ def test_dtb_puller_rejects_failed_or_incomplete_response(failure):
         httpx.Client(transport=httpx.MockTransport(reply)) as client,
         pytest.raises(ValueError),
     ):
-        puller().list_tables(client, "http://dtb", "secret", "dimensions")
+        puller().list_tables(client, "http://dtb", "secret")
 
 
 def test_dtb_puller_reads_table_detail_and_all_columns():
@@ -191,7 +192,7 @@ def test_authentication_and_timeout_have_distinct_safe_errors():
             httpx.Client(transport=httpx.MockTransport(handler)) as client,
             pytest.raises(ValueError, match=expected) as error,
         ):
-            puller().list_tables(client, "http://dtb", "private-token", "dimensions")
+            puller().list_tables(client, "http://dtb", "private-token")
         assert "private-token" not in str(error.value)
         assert "secret" not in str(error.value)
 
@@ -246,7 +247,12 @@ def test_partitioned_dimension_reads_only_latest_and_checks_count():
     ).encode()
     obj = puller()
     obj.list_tables = lambda *args: [
-        {"tableId": 1, "tableName": "dim_a", "catalogType": "HIVE"}
+        {
+            "tableId": 1,
+            "tableName": "dim_a",
+            "databaseName": "dimensions",
+            "catalogType": "HIVE",
+        }
     ]
     obj.table_detail = lambda *args: (
         {},
@@ -318,28 +324,105 @@ def test_dtb_request_allowlist_blocks_network_before_sending():
     assert calls == []
 
 
-def test_bounded_pull_limits_queries_to_selected_tables():
-    obj = puller()
-    calls = []
-    obj._get = lambda client, base, token, endpoint, params=None: {
-        "tableList": [
-            {"tableId": 1, "tableName": "dim_a", "catalogType": "HIVE"},
-            {"tableId": 2, "tableName": "dim_b", "catalogType": "HIVE"},
-        ],
-        "totalElements": 20,
+def _table(identity, database, name):
+    return {
+        "tableId": identity,
+        "databaseName": database,
+        "tableName": name,
+        "catalogType": "HIVE",
     }
 
-    def query(client, base, token, sql, fmt, **kwargs):
-        calls.append(sql)
-        raise RuntimeError("stop after observing scoped task query")
+
+def _table_page_reply(pages, total, seen=None):
+    def reply(request):
+        assert request.url.path == "/api/data-map/table"
+        assert request.url.params["limit"] == "500"
+        page = int(request.url.params["page"])
+        if seen is not None:
+            seen.append(page)
+        return httpx.Response(
+            200,
+            json={
+                "status": "200",
+                "data": {"tableList": pages.get(page, []), "total": total},
+            },
+        )
+
+    return reply
+
+
+def test_dimension_tables_are_found_after_non_dimension_pages():
+    pages = {
+        1: [_table(identity, "ods", f"ods_{identity}") for identity in range(1, 501)],
+        2: [
+            _table(501, "dimensions", "dimensions.dim_b"),
+            _table(502, "dimensions", "dim_a"),
+        ],
+    }
+    seen = []
+    reply = _table_page_reply(pages, 502, seen)
+
+    with httpx.Client(transport=httpx.MockTransport(reply)) as client:
+        tables = puller().list_tables(client, "http://dtb", "secret")
+
+    assert [table["tableId"] for table in tables] == [501, 502]
+    assert seen == [1, 2]
+
+
+def test_bounded_pull_selects_sorted_dimensions_tables_only():
+    import io
+    import json
+
+    from openpyxl import Workbook
+
+    book = Workbook()
+    book.active.append(["database_name", "table_name", "column_name", "column_type"])
+    book.active.append(["dimensions", "dim_a", "id", "string"])
+    xlsx = io.BytesIO()
+    book.save(xlsx)
+    tasks = json.dumps(
+        {"columns": [{"name": "task_name"}, {"name": "task_src"}], "data": []}
+    ).encode()
+    pages = {
+        1: [_table(identity, "ods", f"ods_{identity}") for identity in range(1, 501)],
+        2: [
+            _table(501, "dm", "dm_orders"),
+            _table(502, "dimensions", "dimensions.z_orders"),
+            _table(503, "dimensions", "dim_a"),
+        ],
+    }
+    seen = []
+    reply = _table_page_reply(pages, 503, seen)
+    obj = puller()
+    obj.table_detail = lambda *args: (
+        {},
+        [{"columnName": "id", "columnType": "string"}],
+    )
+    sqls = []
+
+    def query(client, base, token, sql, format, **kwargs):
+        sqls.append(sql)
+        if format == "json":
+            return tasks
+        if format == "xlsx":
+            return xlsx.getvalue()
+        if "metadata_partition" in sql:
+            return b"table_name,database_name,partition_name,records,rk\ndim_a,dimensions,,0,1\n"
+        return b"id\n1\n"
 
     obj.query_download = query
-    with httpx.Client() as client, pytest.raises(RuntimeError):
+    with httpx.Client(transport=httpx.MockTransport(reply)) as client:
         obj.fetch(
-            client, "http://dtb", "secret", {"layer": "dimensions", "max_tables": 2}
+            client, "http://dtb", "secret", {"layer": "dimensions", "max_tables": 1}
         )
-    assert "dim_a" in calls[0] and "dim_b" in calls[0]
-    assert "dim_c" not in calls[0]
+
+    assert seen == [1, 2]
+    assert len(sqls) == 4
+    assert all("dim_a" in sql for sql in sqls)
+    assert all(
+        "ods_" not in sql and "dm_orders" not in sql and "z_orders" not in sql
+        for sql in sqls
+    )
 
 
 def _bounded_pull_with_table_page(total_field, table_list, maximum=2):
@@ -349,7 +432,7 @@ def _bounded_pull_with_table_page(total_field, table_list, maximum=2):
     def reply(request):
         assert request.url.path == "/api/data-map/table"
         assert request.url.params["page"] == "1"
-        assert request.url.params["limit"] == str(maximum)
+        assert request.url.params["limit"] == "500"
         data = {"tableList": table_list}
         if total_field is not None:
             data["total"] = total_field
@@ -375,11 +458,12 @@ def _bounded_pull_with_table_page(total_field, table_list, maximum=2):
 
 def test_bounded_pull_accepts_real_total_field_from_table_endpoint():
     calls = _bounded_pull_with_table_page(
-        8718,
+        2,
         [
-            {"tableId": 1, "tableName": "dim_a", "catalogType": "HIVE"},
-            {"tableId": 2, "tableName": "dim_b", "catalogType": "HIVE"},
+            _table(1, "dimensions", "dim_b"),
+            _table(2, "dimensions", "dim_a"),
         ],
+        maximum=2,
     )
     assert "dim_a" in calls[0] and "dim_b" in calls[0]
 
@@ -391,7 +475,13 @@ def test_pagination_falls_back_to_total_when_total_elements_is_null():
             json={
                 "status": "200",
                 "data": {
-                    "tableList": [{"tableId": 1, "tableName": "dim_a"}],
+                    "tableList": [
+                        {
+                            "tableId": 1,
+                            "tableName": "dim_a",
+                            "databaseName": "dimensions",
+                        }
+                    ],
                     "totalElements": None,
                     "total": 1,
                 },
@@ -399,18 +489,15 @@ def test_pagination_falls_back_to_total_when_total_elements_is_null():
         )
 
     with httpx.Client(transport=httpx.MockTransport(reply)) as client:
-        tables = puller().list_tables(client, "http://dtb", "secret", "dimensions")
+        tables = puller().list_tables(client, "http://dtb", "secret")
     assert [row["tableId"] for row in tables] == [1]
 
 
 @pytest.mark.parametrize(
     "table_list",
     [
-        [
-            {"tableId": 1, "tableName": "dim_a", "catalogType": "HIVE"},
-            {"tableId": 2, "tableName": "dim_b", "catalogType": "HIVE"},
-        ],
-        [{"tableId": 1, "tableName": "dim_a", "catalogType": "HIVE"}],
+        [_table(1, "dimensions", "dim_a"), _table(2, "dimensions", "dim_b")],
+        [_table(1, "dimensions", "dim_a")],
     ],
 )
 def test_bounded_pull_without_total_uses_page_size_as_end(table_list):
@@ -427,7 +514,7 @@ def test_dtb_puller_recognizes_http_authentication_failure(status_code):
         httpx.Client(transport=httpx.MockTransport(reply)) as client,
         pytest.raises(ValueError, match="authentication") as error,
     ):
-        puller().list_tables(client, "http://dtb", "secret", "dimensions")
+        puller().list_tables(client, "http://dtb", "secret")
     assert str(status_code) in str(error.value)
 
 
@@ -447,7 +534,7 @@ def test_dtb_puller_recognizes_body_authentication_failure(body_status):
         httpx.Client(transport=httpx.MockTransport(reply)) as client,
         pytest.raises(ValueError, match="authentication") as error,
     ):
-        puller().list_tables(client, "http://dtb", "secret", "dimensions")
+        puller().list_tables(client, "http://dtb", "secret")
     assert body_status in str(error.value)
 
 

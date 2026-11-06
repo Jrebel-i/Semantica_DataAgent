@@ -6,6 +6,7 @@ import subprocess
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, urlsplit
 
 from openpyxl import Workbook
 
@@ -59,6 +60,7 @@ def check_dtb_pull(ctx):
 
         def do_GET(self):
             state["paths"].append(self.path)
+            parsed = urlsplit(self.path)
             if state["failure"]:
                 self.send(
                     {
@@ -67,23 +69,42 @@ def check_dtb_pull(ctx):
                         "data": None,
                     }
                 )
-            elif self.path.startswith("/api/data-map/table"):
+            elif parsed.path == "/api/data-map/table":
+                page = int(parse_qs(parsed.query).get("page", ["1"])[0])
+                if page == 1:
+                    tables = [
+                        {
+                            "tableId": identity,
+                            "tableName": f"ods_{identity}",
+                            "databaseName": "ods",
+                            "catalogType": "HIVE",
+                        }
+                        for identity in range(1, 501)
+                    ]
+                elif page == 2:
+                    tables = [
+                        {
+                            "tableId": 501,
+                            "tableName": "z_orders",
+                            "databaseName": "dimensions",
+                            "catalogType": "HIVE",
+                        },
+                        {
+                            "tableId": 502,
+                            "tableName": "new_orders",
+                            "databaseName": "dimensions",
+                            "catalogType": "HIVE",
+                        },
+                    ]
+                else:
+                    tables = []
                 self.send(
                     {
                         "status": "200",
-                        "data": {
-                            "tableList": [
-                                {
-                                    "tableId": 1,
-                                    "tableName": "new_orders",
-                                    "catalogType": "HIVE",
-                                }
-                            ],
-                            "total": 2,
-                        },
+                        "data": {"tableList": tables, "total": 502},
                     }
                 )
-            elif self.path.startswith("/api/data-map/detail/1/column"):
+            elif parsed.path == "/api/data-map/detail/502/column":
                 self.send(
                     {
                         "status": "200",
@@ -96,9 +117,16 @@ def check_dtb_pull(ctx):
                         },
                     }
                 )
-            elif self.path == "/api/data-map/detail/1":
+            elif parsed.path == "/api/data-map/detail/502":
                 self.send(
-                    {"status": "200", "data": {"tableId": 1, "tableName": "new_orders"}}
+                    {
+                        "status": "200",
+                        "data": {
+                            "tableId": 502,
+                            "tableName": "new_orders",
+                            "databaseName": "dimensions",
+                        },
+                    }
                 )
             elif self.path.startswith("/api/data-query/result/"):
                 self.send({"status": "200", "data": {"progress": 1.0}})
@@ -159,14 +187,24 @@ def check_dtb_pull(ctx):
             f"missing scoped queries: {list(queries)}",
         )
         for key in ("task", "table", "stats"):
-            ctx.require("new_orders" in queries[key], f"{key} query is not scoped")
+            ctx.require(
+                "new_orders" in queries[key]
+                and "ods_" not in queries[key]
+                and "z_orders" not in queries[key],
+                f"{key} query is not scoped to dimensions tables",
+            )
+        ctx.require(
+            "ods_" not in queries["dimension"]
+            and "z_orders" not in queries["dimension"],
+            "dimension query uses a table outside the selected dimensions table",
+        )
         ctx.require(
             "WHERE day_num = '20261105'" in queries["dimension"]
             and "LIMIT 100" in queries["dimension"],
             "dimension query must restrict latest partition and rows",
         )
         ctx.require(
-            not any("/detail/2" in path for path in state["paths"]),
+            not any("/detail/501" in path for path in state["paths"]),
             "unselected table was fetched",
         )
         deadline = time.monotonic() + 300

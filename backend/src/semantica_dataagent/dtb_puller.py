@@ -3,6 +3,7 @@
 import csv
 import io
 import json
+import math
 import re
 import tempfile
 import time
@@ -144,6 +145,8 @@ class DtbPuller:
                 total = _total_count(data)
                 if not isinstance(batch, list):
                     raise ValueError("Invalid DTB pagination")  # noqa: TRY004
+                if total is not None and page > math.ceil(total / limit) + 1:
+                    raise ValueError("Invalid DTB pagination")
                 if expected is not None and total is not None and total != expected:
                     raise ValueError("Inconsistent DTB pagination")
                 expected = total
@@ -168,17 +171,32 @@ class DtbPuller:
             except (KeyError, TypeError) as exc:
                 raise ValueError("Invalid DTB pagination") from exc
 
-    def list_tables(self, client, base_url, token, layer):
-        return self._pages(
+    @staticmethod
+    def _dimension_name(table):
+        if table.get("databaseName") != "dimensions":
+            return None
+        name = table.get("tableName")
+        if not isinstance(name, str):
+            raise ValueError(  # noqa: TRY004 - response contents, not an argument
+                "Invalid DTB dimension table name"
+            )
+        name = name.removeprefix("dimensions.")
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
+            raise ValueError("Invalid DTB dimension table name")
+        return name
+
+    def list_tables(self, client, base_url, token):
+        rows = self._pages(
             client,
             base_url,
             token,
             "/api/data-map/table",
             "tableList",
             "tableId",
-            {"layer": layer},
+            {},
             500,
         )
+        return [row for row in rows if self._dimension_name(row) is not None]
 
     def table_detail(self, client, base_url, token, table_id):
         endpoint = "/api/data-map/detail/" + quote(str(table_id), safe="")
@@ -292,35 +310,16 @@ class DtbPuller:
             )
         ):
             raise ValueError("Invalid pull scope")
-        if maximum is None:
-            tables = self.list_tables(client, base_url, token, layer)
-        else:
-            data = self._get(
-                client,
-                base_url,
-                token,
-                "/api/data-map/table",
-                {"layer": layer, "page": 1, "limit": maximum},
-            )
-            tables = data.get("tableList")
-            total = _total_count(data)
-            if not isinstance(tables, list) or len(tables) > maximum:
-                raise ValueError("Incomplete DTB pagination")
-            if total is not None and len(tables) < min(maximum, total):
-                raise ValueError("Incomplete DTB pagination")
-        task_sql, table_sql = TASK_SQL, TABLE_SQL
-        scope_names = []
+        tables = self.list_tables(client, base_url, token)
         if maximum is not None:
-            for table in tables:
-                name = str(table.get("tableName", "")).removeprefix("dimensions.")
-                if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
-                    raise ValueError("Invalid DTB table name")
-                scope_names.append(name)
-            names = ",".join("'" + name + "'" for name in scope_names) or "''"
-            task_sql += f" AND output_table_name IN ({names})"
-            table_sql += (
-                f" WHERE a.database_name='dimensions' AND a.table_name IN ({names})"
-            )
+            tables = sorted(tables, key=self._dimension_name)[:maximum]
+        names = ",".join("'" + self._dimension_name(table) + "'" for table in tables)
+        names = names or "''"
+        task_sql = TASK_SQL + f" AND output_table_name IN ({names})"
+        table_sql = (
+            TABLE_SQL
+            + f" WHERE a.database_name='dimensions' AND a.table_name IN ({names})"
+        )
         files = {
             "任务信息.json": self.query_download(
                 client, base_url, token, task_sql, "json"
@@ -337,13 +336,9 @@ class DtbPuller:
                 "SELECT a.table_name, a.database_name, b.partition_name, b.records "
                 "FROM mysql.data_tool_box_emr.metadata_table a LEFT JOIN "
                 "mysql.data_tool_box_emr.metadata_partition b ON a.table_id=b.table_id "
-                "WHERE a.catalog_type='HIVE' AND a.status='在用' AND a.database_name='dimensions') tt) kk WHERE rk=1"
+                "WHERE a.catalog_type='HIVE' AND a.status='在用' AND a.database_name='dimensions' "
+                f"AND a.table_name IN ({names})) tt) kk WHERE rk=1"
             )
-            if maximum is not None:
-                sql = sql.replace(
-                    "a.database_name='dimensions'",
-                    "a.database_name='dimensions' AND a.table_name IN (" + names + ")",
-                )
             raw = self.query_download(client, base_url, token, sql, "csv")
             try:
                 reader = csv.DictReader(
@@ -381,9 +376,7 @@ class DtbPuller:
         for table in tables:
             if str(table.get("catalogType", "")).upper() != "HIVE":
                 continue
-            name = str(table.get("tableName", "")).removeprefix("dimensions.")
-            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
-                raise ValueError("Invalid DTB dimension table name")
+            name = self._dimension_name(table)
             _detail, columns = self.table_detail(
                 client, base_url, token, table["tableId"]
             )
