@@ -10,13 +10,6 @@ from .sql_tasks import table_name
 
 
 def resolve_columns(sql, dialect, tables):
-    schema = {}
-    for name, columns in tables.items():
-        node = schema
-        parts = name.split(".")
-        for part in parts[:-1]:
-            node = node.setdefault(part, {})
-        node[parts[-1]] = {column: "UNKNOWN" for column in columns}
     edges = set()
     found = False
     views = {}
@@ -49,8 +42,19 @@ def resolve_columns(sql, dialect, tables):
             continue
         found = True
         destination = table_name(target)
+        query = statement.expression.copy().transform(expand_view)
+        referenced = {table.name.lower() for table in query.find_all(exp.Table)}
+        schema = {}
+        for name, columns in tables.items():
+            if name.rsplit(".", 1)[-1].lower() not in referenced:
+                continue
+            node = schema
+            parts = name.split(".")
+            for part in parts[:-1]:
+                node = node.setdefault(part, {})
+            node[parts[-1]] = {column: "UNKNOWN" for column in columns}
         query = qualify(
-            statement.expression.copy().transform(expand_view),
+            query,
             dialect=dialect,
             schema=schema,
             validate_qualify_columns=True,

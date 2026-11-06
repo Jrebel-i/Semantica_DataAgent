@@ -126,3 +126,19 @@ def test_installed_entry_points_register_dtb_plugins():
     found = discover()
     assert ("source", "dtb") in found
     assert ("parser", "dtb") in found
+
+
+def test_shell_with_large_catalog_finishes_promptly():
+    import time
+
+    schema = {f"db.table_{i}": [f"column_{j}" for j in range(25)] for i in range(1800)}
+    schema.update({"src.items": ["id"], "dst.items": ["id"]})
+    source = ('# filler line with no shell command\n' * 100) + (
+        'query="INSERT INTO dst.items SELECT id FROM src.items"\n'
+        'submit_sql_and_wait "$query"\n'
+    )
+    started = time.monotonic()
+    result = DtbTaskParser().parse(task("shell", source), {"schema": schema})
+    elapsed = time.monotonic() - started
+    assert result.column_edges == [("src.items", "id", "dst.items", "id")]
+    assert elapsed < 0.5, f"shell parsing took {elapsed:.3f}s"
