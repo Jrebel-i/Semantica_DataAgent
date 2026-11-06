@@ -10,6 +10,26 @@ import httpx
 from .plugins import ExecutorAuthenticationError, ExecutorError
 
 
+def column_names(columns):
+    """Return result column names, or None when the structure is invalid.
+
+    The DTB result endpoint returns ``{"name": ..., "type": ...}`` objects;
+    plain strings are accepted for compatibility with other executors and
+    older fixtures.
+    """
+    if not isinstance(columns, list):
+        return None
+    names = []
+    for column in columns:
+        if isinstance(column, str):
+            names.append(column)
+        elif isinstance(column, dict) and isinstance(column.get("name"), str):
+            names.append(column["name"])
+        else:
+            return None
+    return names
+
+
 class DtbError(ExecutorError):
     pass
 

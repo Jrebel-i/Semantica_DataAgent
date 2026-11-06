@@ -15,6 +15,7 @@ from . import knowledge
 from .auth import Requester
 from .crypto import decrypt
 from .db import PersonalDtbToken, QueryAudit, sessions
+from .dtb_executor import column_names
 from .mcp_context import current_requester
 from .mcp_contract import ToolInvalidInput, ToolUnavailable
 from .plugins import ExecutorAuthenticationError, ExecutorError
@@ -184,15 +185,15 @@ def _parse_partition_name(value):
 
 
 def _partitions_from_metadata(fields, columns, rows):
+    names = column_names(columns)
     if (
-        not isinstance(columns, list)
-        or not columns
-        or not all(isinstance(column, str) for column in columns)
+        names is None
+        or not names
         or not isinstance(rows, list)
-        or not all(isinstance(row, list) and len(row) == len(columns) for row in rows)
+        or not all(isinstance(row, list) and len(row) == len(names) for row in rows)
     ):
         return None, "分区元数据返回格式无效"
-    lowered = [column.lower() for column in columns]
+    lowered = [name.lower() for name in names]
     if "partition_name" not in lowered:
         return None, "分区元数据缺少 partition_name"
     index = lowered.index("partition_name")
@@ -360,15 +361,17 @@ async def _run_sql(
     except ExecutorError as exc:
         raise ToolUnavailable(failure_message) from exc
     columns, rows = result.get("columns"), result.get("data")
+    names = column_names(columns)
     cap = int(config.get("download_limit", 100000))
+    if names is None:
+        raise ToolUnavailable("执行器返回结果格式无效")
     if (
-        not isinstance(columns, list)
-        or not isinstance(rows, list)
+        not isinstance(rows, list)
         or len(rows) > cap
-        or not all(isinstance(row, list) and len(row) == len(columns) for row in rows)
+        or not all(isinstance(row, list) and len(row) == len(names) for row in rows)
     ):
         raise ToolUnavailable("执行器返回无效结果或超过下载上限")
-    return columns, rows[:limit], len(rows), key
+    return names, rows[:limit], len(rows), key
 
 
 async def sample_table_data(
