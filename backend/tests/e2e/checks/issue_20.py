@@ -149,7 +149,8 @@ def check_online_clarification_selection_is_scoped_to_one_conversation(ctx):
             f"证据：{ref}",
             (
                 "请继续完成：用该口径对应的表写一个按 dt 统计记录数的 Hive SQL"
-                "（单表查询，不要执行 SQL）。"
+                "（单表查询，不要执行 SQL）。最终回答请包含完整的 SQL 代码块，"
+                "不要仅摘要已验证的 SQL。"
             ),
         ]
     )
@@ -203,7 +204,7 @@ def check_local_ask_dataagent_answers_and_continues(ctx):
     question = (
         "请统计 shop.orders 表每个 dt 分区的订单记录数量，不计算金额，"
         "不要 JOIN 其他表。请用 Hive SQL 回答。必须先用 describe_tables 确认表字段，写出 SQL "
-        "后必须调用 validate_sql，并在回答里附引用 id。"
+        "后必须调用 validate_sql；回答中原样附上工具返回的表引用，例如 table:shop.orders。"
     )
     answer = ctx.mcp_call("ask_dataagent", {"question": question}, timeout=600)
     ctx.require(
@@ -217,7 +218,9 @@ def check_local_ask_dataagent_answers_and_continues(ctx):
     )
     ctx.require(first_turn, f"ask_dataagent returned no turn_id: {answer!r}")
     ctx.require(answer.get("answer"), "ask_dataagent returned an empty answer")
-    ctx.require(answer.get("citations"), "ask_dataagent returned no citations")
+    ctx.require(
+        answer.get("citations"), f"ask_dataagent returned no citations: {answer!r}"
+    )
     sql = [item.get("sql", "") for item in answer.get("sql") or []]
     ctx.require(sql, f"ask_dataagent returned no SQL: {answer!r}")
 

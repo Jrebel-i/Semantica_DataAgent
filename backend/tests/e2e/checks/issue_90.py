@@ -43,6 +43,10 @@ def check_missing_field_produces_sql_and_gap(ctx):
     done = next((data for name, data in reversed(events) if name == "done"), {})
     sql = done.get("sql") or []
     ctx.require(sql, f"missing best-effort SQL: {done}")
+    ctx.require(
+        any("shop.payments" in item.get("sql", "").lower() for item in sql),
+        f"SQL does not use the relevant table: {sql}",
+    )
     for item in sql:
         result = ctx.mcp_call(
             "validate_sql", {"sql": item["sql"], "dialect": item["dialect"]}
@@ -56,11 +60,20 @@ def check_missing_field_produces_sql_and_gap(ctx):
         f"missing assumption: {answer}",
     )
     ctx.require(
+        "金额" in answer, f"answer does not explain the missing amount: {answer}"
+    )
+    ctx.require(
         any(
             name == "tool_start"
             and str(data.get("name", "")).endswith("report_knowledge_gap")
             for name, data in events
         ),
         "agent did not report the knowledge gap",
+    )
+    gaps = ctx.rest.get("/api/v1/knowledge-gaps")
+    ctx.require(
+        gaps.status_code == 200
+        and any("金额" in str(gap.get("missing", "")) for gap in gaps.json()),
+        f"missing amount gap was not recorded: {gaps.text}",
     )
     return {"sql_blocks": len(sql)}
