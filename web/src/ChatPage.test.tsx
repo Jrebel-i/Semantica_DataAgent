@@ -122,6 +122,7 @@ test("查询计划可确认执行，结果和下载显示在右侧面板", async
     row_count: 6,
   };
   let executed = false;
+  let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
   const conversation = {
     id: "conv-81",
     title: "销售额",
@@ -175,7 +176,16 @@ test("查询计划可确认执行，结果和下载显示在右侧面板", async
         });
         executed = true;
         return new Response(
-          `event: query_result\ndata: ${JSON.stringify(result)}\n\nevent: done\ndata: {"text":"销售结论"}\n\n`,
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              streamController = controller;
+              controller.enqueue(
+                new TextEncoder().encode(
+                  `event: query_result\ndata: ${JSON.stringify(result)}\n\n`,
+                ),
+              );
+            },
+          }),
           {
             status: 200,
             headers: { "Content-Type": "text/event-stream" },
@@ -202,6 +212,12 @@ test("查询计划可确认执行，结果和下载显示在右侧面板", async
   ).toBeGreaterThan(0);
   expect(executed).toBe(false);
   fireEvent.click(screen.getByRole("button", { name: /执\s*行/ }));
+  expect(await screen.findByText("结果可能被截断")).toBeTruthy();
+  expect(screen.queryByText("销售结论")).toBeNull();
+  streamController?.enqueue(
+    new TextEncoder().encode('event: done\ndata: {"text":"销售结论"}\n\n'),
+  );
+  streamController?.close();
   expect(await screen.findByText("销售结论")).toBeTruthy();
   await waitFor(() =>
     expect(
