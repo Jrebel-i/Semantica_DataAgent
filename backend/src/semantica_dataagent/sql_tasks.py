@@ -61,8 +61,23 @@ class SQLTaskParser:
                         destination = table_name(target)
                         writes.add(destination)
                         edges.update((source, destination) for source in sources)
+            from .column_lineage import resolve_columns
+
+            try:
+                column_edges = resolve_columns(
+                    task.data["sql"], dialect, parameters.get("schema", {})
+                )
+                column_status, column_reason = "success", None
+            except (sqlglot.errors.SqlglotError, ValueError) as exc:
+                column_edges, column_status, column_reason = [], "failed", str(exc)
             return ParseResult(
-                sorted(reads), sorted(writes), "success", edges=sorted(edges)
+                sorted(reads),
+                sorted(writes),
+                "success",
+                edges=sorted(edges),
+                column_edges=column_edges,
+                column_status=column_status,
+                column_reason=column_reason,
             )
         except (sqlglot.errors.SqlglotError, ValueError) as exc:
             return ParseResult([], [], "failed", str(exc))

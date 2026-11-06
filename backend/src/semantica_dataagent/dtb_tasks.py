@@ -4,6 +4,9 @@ import json
 import re
 from typing import ClassVar
 
+import sqlglot
+from sqlglot import exp
+
 from .canonical import Record
 from .plugins import ParseResult
 from .sql_tasks import SQLTaskParser
@@ -91,12 +94,30 @@ def _expand(text, assignments, cache):
     return _VARIABLE.sub(replace, text)
 
 
-def _parse_sql(sql, name):
+def _parse_sql(sql, name, parameters, views):
+    if views:
+        try:
+            statements = sqlglot.parse(sql, read="spark")
+            for statement in statements:
+                if statement is None:
+                    continue
+                for table in statement.find_all(exp.Table):
+                    if table_name := views.get(table.name):
+                        replacement = sqlglot.to_table(table_name)
+                        replacement.set(
+                            "alias",
+                            table.args.get("alias")
+                            or exp.TableAlias(this=exp.to_identifier(table.name)),
+                        )
+                        table.replace(replacement)
+            sql = "; ".join(s.sql(dialect="spark") for s in statements if s is not None)
+        except sqlglot.errors.SqlglotError:
+            pass
     task = Record(
         "task",
         {"name": name, "type": "spark", "dialect": "spark", "sql": sql},
     )
-    return _SQL.parse(task, {})
+    return _SQL.parse(task, parameters)
 
 
 def _normalize_sql(sql):
@@ -184,13 +205,13 @@ class DtbTaskParser:
     def parse(self, task, parameters):
         task_type = _text(task.data.get("type")).strip().lower()
         if task_type == "merge_onself":
-            return self._merge_onself(task)
+            return self._merge_onself(task, parameters)
         if task_type == "shell":
-            return self._shell(task)
+            return self._shell(task, parameters)
         return ParseResult([], [], "unsupported", f"Unsupported task type: {task_type}")
 
     @staticmethod
-    def _merge_onself(task):
+    def _merge_onself(task, options):
         parameters = task.data.get("parameters")
         if isinstance(parameters, str):
             try:
@@ -206,9 +227,19 @@ class DtbTaskParser:
                 table = _clean_table(_text(parameters.get("table")))
         if not table:
             return ParseResult([], [], "failed", "merge_onself target is unknown")
-        return ParseResult([table], [table], "success", "merge_onself", [])
+        columns = options.get("schema", {}).get(table, [])
+        return ParseResult(
+            [table],
+            [table],
+            "success",
+            "merge_onself",
+            [],
+            [(table, column, table, column) for column in columns],
+            "success" if columns else "failed",
+            None if columns else "merge_onself field metadata unavailable",
+        )
 
-    def _shell(self, task):
+    def _shell(self, task, parameters):
         source = _text(task.data.get("sql"))
         name = _text(task.data.get("name")) or "shell"
         assignments = _assignments(source)
@@ -222,6 +253,7 @@ class DtbTaskParser:
         unresolved = set()
         parsed_reasons = set()
         failed_sql = 0
+        column_edges, column_reasons = set(), []
 
         for match in _LIVY_CALL.finditer(source):
             sql = _submission_sql(match, assignments, cache, unresolved)
@@ -229,13 +261,19 @@ class DtbTaskParser:
                 continue
             if _TEMP_VIEW.search(sql) and not _WRITE.search(sql) and _dbtables(sql):
                 continue
-            parsed = _parse_sql(sql, name)
+            parsed = _parse_sql(sql, name, parameters, views)
             if parsed.status == "success":
+                column_edges.update(parsed.column_edges or [])
+                if parsed.column_status == "failed":
+                    column_reasons.append(parsed.column_reason or "Column parse failed")
                 if _add_sql(parsed, reads, writes, edges, views):
                     parsed_reasons.add("livy")
                 continue
-            parsed = _parse_sql(_normalize_sql(sql), name)
+            parsed = _parse_sql(_normalize_sql(sql), name, parameters, views)
             if parsed.status == "success":
+                column_edges.update(parsed.column_edges or [])
+                if parsed.column_status == "failed":
+                    column_reasons.append(parsed.column_reason or "Column parse failed")
                 if _add_sql(parsed, reads, writes, edges, views):
                     parsed_reasons.add("livy")
             elif not (_TEMP_VIEW.search(sql) and not _WRITE.search(sql)):
@@ -245,18 +283,34 @@ class DtbTaskParser:
             sql = _submission_sql(match, assignments, cache, unresolved)
             if not sql or _SKIP_SQL.match(_normalize_sql(sql)):
                 continue
-            parsed = _parse_sql(sql, name)
+            parsed = _parse_sql(sql, name, parameters, views)
             if parsed.status == "success":
+                column_edges.update(parsed.column_edges or [])
+                if parsed.column_status == "failed":
+                    column_reasons.append(parsed.column_reason or "Column parse failed")
                 if _add_sql(parsed, reads, writes, edges, views):
                     parsed_reasons.add("beeline")
             else:
-                parsed = _parse_sql(_normalize_sql(sql), name)
+                parsed = _parse_sql(_normalize_sql(sql), name, parameters, views)
                 if parsed.status == "success":
+                    column_edges.update(parsed.column_edges or [])
+                    if parsed.column_status == "failed":
+                        column_reasons.append(
+                            parsed.column_reason or "Column parse failed"
+                        )
                     if _add_sql(parsed, reads, writes, edges, views):
                         parsed_reasons.add("beeline")
                 else:
                     failed_sql += 1
 
+        if failed_sql:
+            column_reasons.append(
+                f"{failed_sql} submitted SQL statement(s) could not be parsed"
+            )
+        if unresolved:
+            column_reasons.append(
+                "Unresolved shell variables: " + ", ".join(sorted(unresolved))
+            )
         reads.update(basic_sources)
         writes.update(basic_targets)
         if jdbc_sources:
@@ -280,5 +334,14 @@ class DtbTaskParser:
         if not reads and not writes:
             return ParseResult([], [], "failed", "No tables recognized in shell script")
         return ParseResult(
-            sorted(reads), sorted(writes), "success", reason, sorted(edges)
+            sorted(reads),
+            sorted(writes),
+            "success",
+            reason,
+            sorted(edges),
+            sorted(column_edges),
+            "failed" if column_reasons or not column_edges else "success",
+            "; ".join(column_reasons)
+            if column_reasons
+            else (None if column_edges else "No column lineage recognized"),
         )

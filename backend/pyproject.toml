@@ -37,4 +37,5 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel.force-include]
 "../schemas/v1" = "semantica_dataagent/schemas/v1"
+"../schemas/v2" = "semantica_dataagent/schemas/v2"
 "../skills/dataagent-retrieval/SKILL.md" = "semantica_dataagent/skills/dataagent-retrieval/SKILL.md"

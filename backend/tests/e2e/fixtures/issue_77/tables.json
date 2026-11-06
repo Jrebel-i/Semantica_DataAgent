@@ -1,0 +1,12 @@
+[
+  {
+    "database": "src",
+    "name": "orders",
+    "comment": "orders"
+  },
+  {
+    "database": "dst",
+    "name": "orders",
+    "comment": "orders"
+  }
+]

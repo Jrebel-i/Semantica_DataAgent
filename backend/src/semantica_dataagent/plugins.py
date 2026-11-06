@@ -23,6 +23,9 @@ class ParseResult:
     status: Literal["success", "failed", "unsupported"]
     reason: str | None = None
     edges: list[tuple[str, str]] | None = None
+    column_edges: list[tuple[str, str, str, str]] | None = None
+    column_status: str = "unsupported"
+    column_reason: str | None = None
 
 
 class TaskParser(Protocol):
@@ -68,7 +71,7 @@ def configured():
     ]
 
 
-def parse_task(task, parameters_by_id=None):
+def parse_task(task, parameters_by_id=None, *, schema=None):
     parameters_by_id = parameters_by_id or {}
     for category, plugin, enabled, parameters in configured():
         if (
@@ -76,5 +79,8 @@ def parse_task(task, parameters_by_id=None):
             and enabled
             and task.data.get("type") in plugin.task_types
         ):
-            return plugin.parse(task, parameters_by_id.get(plugin.id, parameters))
+            options = parameters_by_id.get(plugin.id, parameters)
+            if schema is not None and plugin.id in {"sql", "dtb"}:
+                options = {**options, "schema": schema}
+            return plugin.parse(task, options)
     return ParseResult([], [], "unsupported", "No matching parser")

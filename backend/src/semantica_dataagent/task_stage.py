@@ -58,6 +58,16 @@ def write(records, generation, storage):
     all_records = storage.all_records if storage.all_records is not None else records
     all_tasks = [r for r in all_records if r.kind == "task"]
     all_declarations = [r for r in all_records if r.kind == "lineage"]
+    schema = {}
+    for record in all_records:
+        if record.kind == "field":
+            field = record.data
+            schema.setdefault(f"{field['database']}.{field['table']}", []).append(
+                field["name"]
+            )
+    parsed_tasks = {
+        task.data["name"]: parse_task(task, schema=schema) for task in all_tasks
+    }
     rebuild_all = not storage.is_incremental or any(
         record.kind == "lineage" for record in records
     )
@@ -100,7 +110,7 @@ def write(records, generation, storage):
         name = task.data["name"]
         ref = "task:" + quote(name, safe="")
         declared = list(declarations.get(name, {}))
-        result, resolved = resolve_task(task, declared, parse_task(task))
+        result, resolved = resolve_task(task, declared, parsed_tasks[name])
         reads = sorted(set(result.reads) | {u for u, _ in declared})
         writes = sorted(set(result.writes) | {d for _, d in declared})
         rows.append(
@@ -237,6 +247,101 @@ def write(records, generation, storage):
                 for r in rows
             ],
         )
-    return StageResult(
-        counts={"task": len(rows), "lineage": len(edges)}, failures=failures
+    column_count, column_failures = write_column_lineage(
+        all_records, all_tasks, parsed_tasks, schema, generation, storage
     )
+    failures.extend(column_failures)
+    return StageResult(
+        counts={
+            "task": len(rows),
+            "lineage": len(edges),
+            "column_lineage": column_count,
+        },
+        failures=failures,
+    )
+
+
+def write_column_lineage(records, tasks, parsed_tasks, schema, generation, storage):
+    """Reconcile field edges against the complete source snapshot on every build."""
+    declared = {}
+    for record in records:
+        if record.kind != "column_lineage":
+            continue
+        data = record.data
+        key = (
+            data["upstream_table"],
+            data["upstream_field"],
+            data["downstream_table"],
+            data["downstream_field"],
+        )
+        declared.setdefault(data["task_id"], {})[key] = record
+    rows, failures = [], []
+    for task in tasks:
+        name = task.data["name"]
+        result = parsed_tasks[name]
+        parsed = set(result.column_edges or [])
+        declared_for_task = declared.pop(name, {})
+        if result.status == "unsupported" or (
+            result.status == "success" and result.column_status != "success"
+        ):
+            failures.append(
+                {
+                    "task_id": name,
+                    "reason": result.column_reason
+                    or result.reason
+                    or "Column lineage unavailable",
+                }
+            )
+        for edge in sorted(parsed | declared_for_task.keys()):
+            upstream, source, downstream, target = edge
+            if source not in schema.get(upstream, []) or target not in schema.get(
+                downstream, []
+            ):
+                failures.append(
+                    {
+                        "task_id": name,
+                        "reason": f"Field metadata missing for {upstream}.{source} or {downstream}.{target}",
+                    }
+                )
+                continue
+            declaration = declared_for_task.get(edge)
+            rows.append(
+                {
+                    "upstream_table": upstream,
+                    "upstream_field": source,
+                    "downstream_table": downstream,
+                    "downstream_field": target,
+                    "task_id": name,
+                    "evidence": "both"
+                    if declaration and edge in parsed
+                    else "declared"
+                    if declaration
+                    else "parsed",
+                    "parse_status": result.column_status,
+                    **_edge_provenance(
+                        task, [declaration] if declaration else [], storage.build_id
+                    ),
+                }
+            )
+    # Orphan declarations are retained if both fields exist.
+    for items in declared.values():
+        for edge, record in items.items():
+            upstream, source, downstream, target = edge
+            if source in schema.get(upstream, []) and target in schema.get(
+                downstream, []
+            ):
+                rows.append({**record.data, **_provenance(record, storage.build_id)})
+    storage.execute(
+        "MATCH (:SDAField {generation:$generation})-[r:FIELD_DEPENDS_ON]->(:SDAField {generation:$generation}) DELETE r",
+        {"generation": generation},
+    )
+    storage.execute(
+        """UNWIND $rows AS row
+        MATCH (a:SDAField {generation:$generation, name:row.upstream_field}),
+              (b:SDAField {generation:$generation, name:row.downstream_field})
+        WHERE a.database + '.' + a.table = row.upstream_table
+          AND b.database + '.' + b.table = row.downstream_table
+        CREATE (a)-[r:FIELD_DEPENDS_ON]->(b) SET r = row""",
+        {"rows": rows, "generation": generation},
+    )
+    return len(rows), failures
