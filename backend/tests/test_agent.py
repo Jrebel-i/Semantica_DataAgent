@@ -75,6 +75,51 @@ def test_pi_event_parser_extracts_sql_and_citations_from_real_output():
     assert "table:shop.orders" in final.data["text"]
 
 
+def test_pi_event_parser_keeps_sql_validated_before_a_summary_only_answer():
+    sql = "SELECT dt, COUNT(*) FROM shop.orders GROUP BY dt"
+    _, final = _parse(
+        [
+            {
+                "type": "message_end",
+                "message": {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": f"```sql\n{sql}\n```"}],
+                    "stopReason": "toolUse",
+                },
+            },
+            {
+                "type": "tool_execution_start",
+                "toolCallId": "call-validate",
+                "toolName": "mcp__dataagent__validate_sql",
+                "args": {"sql": sql, "dialect": "hive"},
+            },
+            {
+                "type": "tool_execution_end",
+                "toolCallId": "call-validate",
+                "toolName": "mcp__dataagent__validate_sql",
+                "isError": False,
+                "result": {"content": [{"type": "text", "text": '{"status": "pass"}'}]},
+            },
+            {
+                "type": "message_end",
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "SQL 已校验通过，引用 table:shop.orders",
+                        }
+                    ],
+                    "stopReason": "stop",
+                },
+            },
+        ]
+    )
+    assert final.type == DONE
+    assert final.data["text"] == "SQL 已校验通过，引用 table:shop.orders"
+    assert final.data["sql"] == [{"sql": sql, "dialect": "hive"}]
+
+
 def test_pi_event_parser_emits_clarification_placeholder():
     parser = PiEventParser()
     events = parser.feed(

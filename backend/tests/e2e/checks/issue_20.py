@@ -3,7 +3,28 @@
 from __future__ import annotations
 
 import json
-import os
+import sys
+from pathlib import Path
+
+_CHECKS_DIR = str(Path(__file__).resolve().parent)
+if _CHECKS_DIR not in sys.path:
+    sys.path.append(_CHECKS_DIR)
+
+from _conversation import (
+    ask_stable as _ask_stable,
+)
+from _conversation import (
+    clarifications as _clarifications,
+)
+from _conversation import (
+    create_provider,
+)
+from _conversation import (
+    delegated_answer as _delegated_answer,
+)
+from _conversation import (
+    sql_blocks as _sql_blocks,
+)
 
 PROVIDER_SECRET = "{{SECRET_issue20_e2e_key}}"
 AMBIGUOUS = "上个月销售额是多少？请用 Hive SQL 查询。"
@@ -11,74 +32,10 @@ PAYMENT_REF = "definitions/sales.md"
 ORDER_REF = "sales_order.md"
 
 
-def _parse_sse(text: str) -> list[tuple[str, dict]]:
-    events: list[tuple[str, dict]] = []
-    for block in text.split("\n\n"):
-        name: str | None = None
-        data: list[str] = []
-        for line in block.splitlines():
-            if line.startswith("event: "):
-                name = line[7:]
-            elif line.startswith("data: "):
-                data.append(line[6:])
-        if name is not None and data:
-            events.append((name, json.loads("\n".join(data))))
-    return events
-
-
-def _ask(ctx, body: dict) -> list[tuple[str, dict]]:
-    with ctx.rest.stream(
-        "POST", "/api/v1/conversations/ask", json=body, timeout=600
-    ) as response:
-        ctx.require(
-            response.status_code == 200,
-            f"ask HTTP {response.status_code}: {response.read()[:500]!r}",
-        )
-        ctx.require(
-            response.headers.get("content-type", "").startswith("text/event-stream"),
-            f"ask returned {response.headers.get('content-type')!r}",
-        )
-        text = "".join(response.iter_text())
-    ctx.require(
-        ctx.token not in text, "the personal token appeared in the SSE response"
-    )
-    return _parse_sse(text)
-
-
 def _provider(ctx) -> tuple[str, str]:
-    base_url = os.environ.get("TEST_PI_BASE_URL", "http://127.0.0.1:3425").rstrip("/")
-    model = os.environ.get("TEST_PI_MODEL", "codex/gpt-6.1-sol")
-    created = ctx.rest.post(
-        "/api/v1/providers",
-        json={
-            "name": "Issue 20 E2E",
-            "type": "anthropic-messages",
-            "base_url": base_url,
-            "api_key": PROVIDER_SECRET,
-            "models": [model],
-        },
-    )
-    ctx.require(
-        created.status_code == 201,
-        f"provider create HTTP {created.status_code}: {created.text[:500]}",
-    )
-    return created.json()["id"], model
-
-
-def _clarifications(events: list[tuple[str, dict]]) -> list[dict]:
-    questions: list[dict] = []
-    for name, data in events:
-        if name == "clarification":
-            questions.extend(data.get("questions") or [])
-    return questions
-
-
-def _sql_blocks(events: list[tuple[str, dict]]) -> list[str]:
-    blocks: list[str] = []
-    for name, data in events:
-        if name == "done":
-            blocks.extend(item.get("sql", "") for item in data.get("sql") or [])
-    return [block for block in blocks if block]
+    # 默认模型改为 deepseek-v4.1-flash#claude：原来的 codex/gpt-6.1-sol
+    # 网关额度经常 429，e2e 无法稳定运行；需要时仍用 TEST_PI_MODEL 覆盖。
+    return create_provider(ctx, name="Issue 20 E2E", secret=PROVIDER_SECRET)
 
 
 def _selected_definition(questions: list[dict]) -> tuple[dict, dict]:
@@ -101,7 +58,7 @@ def _selected_definition(questions: list[dict]) -> tuple[dict, dict]:
 
 def check_online_clarification_selection_is_scoped_to_one_conversation(ctx):
     provider_id, model = _provider(ctx)
-    first = _ask(
+    first, first_retries = _ask_stable(
         ctx,
         {
             "question": AMBIGUOUS,
@@ -109,6 +66,7 @@ def check_online_clarification_selection_is_scoped_to_one_conversation(ctx):
             "provider_id": provider_id,
             "model": model,
         },
+        expect_clarification=True,
     )
     ctx.require(first and first[0][0] == "conversation", f"first events: {first[:1]}")
     conversation_id = first[0][1]["conversation_id"]
@@ -116,7 +74,9 @@ def check_online_clarification_selection_is_scoped_to_one_conversation(ctx):
     ctx.require(
         questions,
         "the ambiguous question did not raise a clarification event: "
-        f"{[(name, data) for name, data in first if name == 'error']}",
+        f"events={[name for name, _ in first]} "
+        f"errors={[(name, data) for name, data in first if name == 'error']} "
+        f"last={(first[-1:] if first else [])}",
     )
     ctx.require(
         all(len(question.get("options") or []) >= 2 for question in questions),
@@ -145,12 +105,18 @@ def check_online_clarification_selection_is_scoped_to_one_conversation(ctx):
             f"选项：{option.get('label') or ''}",
             f"证据：{ref}",
             (
-                "请继续完成：用该口径对应的表写一个按 dt 统计记录数的 Hive SQL"
-                "（单表查询，不要执行 SQL）。"
+                "请继续完成：用该口径对应的表只统计每个 dt 的记录数（COUNT(*)），"
+                "不计算金额、不使用金额或状态字段、不要 JOIN，也不要执行 SQL。"
+                "即使该表缺少金额字段或指标定义，也必须先给出可验证的 Hive SQL，"
+                "并在文字中说明这只是部分结果；不要只登记缺口或提交纠错。"
+                "最终回答必须以 ```hive 开头的完整 SQL 代码块给出 SQL；"
+                "不要只写“已交付/已校验 SQL”，也不要只摘要。"
             ),
         ]
     )
-    second = _ask(ctx, {"question": prompt, "conversation_id": conversation_id})
+    second, second_retries = _ask_stable(
+        ctx, {"question": prompt, "conversation_id": conversation_id}
+    )
     ctx.require(second[-1][0] == "done", f"clarification follow-up: {second[-1]}")
     done = second[-1][1]
     sql = [item.get("sql", "") for item in done.get("sql") or []]
@@ -162,13 +128,16 @@ def check_online_clarification_selection_is_scoped_to_one_conversation(ctx):
     detail = ctx.rest.get(f"/api/v1/conversations/{conversation_id}")
     ctx.require(detail.status_code == 200, detail.text)
     stored = detail.json()
-    ctx.require(len(stored["turns"]) == 2, f"turns: {len(stored['turns'])}")
+    ctx.require(
+        len(stored["turns"]) == 2 + second_retries,
+        f"turns: {len(stored['turns'])} with {second_retries} empty retries",
+    )
     ctx.require(
         any(event["type"] == "clarification" for event in stored["turns"][0]["events"]),
         "the clarification event was not persisted",
     )
 
-    other = _ask(
+    other, other_retries = _ask_stable(
         ctx,
         {
             "question": AMBIGUOUS,
@@ -176,11 +145,15 @@ def check_online_clarification_selection_is_scoped_to_one_conversation(ctx):
             "provider_id": provider_id,
             "model": model,
         },
+        expect_clarification=True,
     )
     other_questions = _clarifications(other)
     ctx.require(
         other_questions,
-        "the previous selection leaked into a new conversation; no clarification was raised",
+        "the previous selection leaked into a new conversation; no clarification was raised: "
+        f"events={[name for name, _ in other]} "
+        f"errors={[(name, data) for name, data in other if name == 'error']} "
+        f"last={(other[-1:] if other else [])}",
     )
     ctx.require(
         not _sql_blocks(other),
@@ -192,17 +165,20 @@ def check_online_clarification_selection_is_scoped_to_one_conversation(ctx):
         "expected_table": expected_table,
         "options": sum(len(item.get("options") or []) for item in questions),
         "new_conversation_id": other[0][1]["conversation_id"],
+        "empty_retries": first_retries + second_retries + other_retries,
     }
 
 
 def check_local_ask_dataagent_answers_and_continues(ctx):
     _provider(ctx)
     question = (
-        "请用 shop.orders 表写一个按 dt 统计记录数的 Hive SQL（单表查询，"
-        "不要 JOIN 其他表）。必须先用 describe_tables 确认表字段，写出 SQL "
-        "后必须调用 validate_sql，并在回答里附引用 id。"
+        "请统计 shop.orders 表每个 dt 分区的行数（COUNT(*)），只数记录，不使用其他字段，"
+        "不计算金额，不要 JOIN 其他表。这是一个明确的记录数请求，不涉及销售额或订单数指标，"
+        "不需要业务口径定义；即使知识库缺少正式指标定义，也请直接用 Hive SQL 回答，不要只"
+        "登记缺口或提交纠错。必须先用 describe_tables 确认表字段，写出 SQL 后必须调用 "
+        "validate_sql；回答中原样附上工具返回的表引用，例如 table:shop.orders。"
     )
-    answer = ctx.mcp_call("ask_dataagent", {"question": question}, timeout=600)
+    answer, delegated_retries = _delegated_answer(ctx, question)
     ctx.require(
         answer.get("status") == "completed",
         f"ask_dataagent status: {answer.get('status')!r} {answer.get('message')!r}",
@@ -214,7 +190,9 @@ def check_local_ask_dataagent_answers_and_continues(ctx):
     )
     ctx.require(first_turn, f"ask_dataagent returned no turn_id: {answer!r}")
     ctx.require(answer.get("answer"), "ask_dataagent returned an empty answer")
-    ctx.require(answer.get("citations"), "ask_dataagent returned no citations")
+    ctx.require(
+        answer.get("citations"), f"ask_dataagent returned no citations: {answer!r}"
+    )
     sql = [item.get("sql", "") for item in answer.get("sql") or []]
     ctx.require(sql, f"ask_dataagent returned no SQL: {answer!r}")
 
@@ -259,4 +237,5 @@ def check_local_ask_dataagent_answers_and_continues(ctx):
         "turns": len(stored["turns"]),
         "sql_blocks": len(sql),
         "citations": len(answer["citations"]),
+        "delegated_retries": delegated_retries,
     }

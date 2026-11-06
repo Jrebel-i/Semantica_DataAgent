@@ -22,8 +22,6 @@ from .agent_plugin import (
     redact_event,
     request_secrets,
     result_summary,
-    tool_end_event,
-    tool_start_event,
     write_json,
 )
 from .skill import read_skill
@@ -58,7 +56,7 @@ class ClaudeEventParser(EventParser):
                     ident, name = block.get("id"), block.get("name", "tool")
                     args = block.get("input")
                     self.tools[ident] = name
-                    events.append(tool_start_event(ident, name, args))
+                    events.append(self.start_tool(ident, name, args))
         elif kind == "user":
             for block in record.get("message", {}).get("content", []):
                 if isinstance(block, dict) and block.get("type") == "tool_result":
@@ -68,7 +66,7 @@ class ClaudeEventParser(EventParser):
                         result = {"content": result}
                     name = self.tools.get(ident, "tool")
                     events.append(
-                        tool_end_event(
+                        self.end_tool(
                             ident,
                             name,
                             is_error=bool(block.get("is_error")),

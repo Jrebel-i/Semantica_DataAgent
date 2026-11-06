@@ -263,6 +263,8 @@ class EventParser:
     error: str | None = None
     stop_reason: str | None = None
     error_overrides_text: bool = True
+    tool_args: dict = field(default_factory=dict)
+    validated_sql: list[dict] = field(default_factory=list)
 
     def emit_text(self, text: str, *, emit_empty: bool = False) -> list[AgentEvent]:
         if not text and not emit_empty:
@@ -275,6 +277,38 @@ class EventParser:
             if ref not in self.refs:
                 self.refs.append(ref)
 
+    def start_tool(self, ident, name: str, args) -> AgentEvent:
+        self.tool_args[ident] = (name, args)
+        return tool_start_event(ident, name, args)
+
+    def end_tool(
+        self,
+        ident,
+        name: str,
+        *,
+        is_error: bool,
+        summary: str,
+        duration_ms=_MISSING,
+    ) -> AgentEvent:
+        _, args = self.tool_args.pop(ident, (name, None))
+        if (
+            not is_error
+            and name.split("__")[-1] == "validate_sql"
+            and isinstance(args, dict)
+            and isinstance(args.get("sql"), str)
+            and args["sql"].strip()
+            and "status=pass" in summary
+        ):
+            block = {
+                "sql": args["sql"].strip(),
+                "dialect": str(args.get("dialect") or "hive"),
+            }
+            if block not in self.validated_sql:
+                self.validated_sql.append(block)
+        return tool_end_event(
+            ident, name, is_error=is_error, summary=summary, duration_ms=duration_ms
+        )
+
     def finish(self) -> AgentEvent:
         if self.error and (
             self.error_overrides_text or not (self.final_text or self.text_parts)
@@ -284,7 +318,10 @@ class EventParser:
             self.final_text if self.final_text is not None else "".join(self.text_parts)
         )
         self.add_refs(text)
-        return done_event(text, self.stop_reason)
+        event = done_event(text, self.stop_reason)
+        if not event.data["sql"] and self.validated_sql:
+            event.data["sql"] = [dict(block) for block in self.validated_sql]
+        return event
 
 
 def write_json(path: Path, value: dict) -> None:

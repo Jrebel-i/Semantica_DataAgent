@@ -23,8 +23,6 @@ from .agent_plugin import (
     redact_event,
     request_secrets,
     result_summary,
-    tool_end_event,
-    tool_start_event,
     write_json,
 )
 from .mcp_context import CONVERSATION_HEADER, TURN_HEADER
@@ -55,10 +53,10 @@ class CodexEventParser(EventParser):
             name = item.get("tool") or typ
             if kind == "item.started":
                 args = item.get("arguments") or {"command": item.get("command")}
-                return [tool_start_event(ident, name, args)]
+                return [self.start_tool(ident, name, args)]
             if kind == "item.completed":
                 events = [
-                    tool_end_event(
+                    self.end_tool(
                         ident,
                         name,
                         is_error=item.get("status") == "failed"
