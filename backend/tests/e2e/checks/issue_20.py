@@ -148,9 +148,11 @@ def check_online_clarification_selection_is_scoped_to_one_conversation(ctx):
             f"选项：{option.get('label') or ''}",
             f"证据：{ref}",
             (
-                "请继续完成：用该口径对应的表写一个按 dt 统计记录数的 Hive SQL"
-                "（单表查询，不要执行 SQL）。最终回答请包含完整的 SQL 代码块，"
-                "不要仅摘要已验证的 SQL。"
+                "请继续完成：用该口径对应的表只统计每个 dt 的记录数（COUNT(*)），"
+                "不计算金额、不使用金额或状态字段、不要 JOIN，也不要执行 SQL。"
+                "即使该表缺少金额字段或指标定义，也必须先给出可验证的 Hive SQL，"
+                "并在文字中说明这只是部分结果；不要只登记缺口或提交纠错。"
+                "最终回答请包含完整的 SQL 代码块，不要仅摘要已验证的 SQL。"
             ),
         ]
     )
