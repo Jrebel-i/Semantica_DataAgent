@@ -1120,3 +1120,14 @@ def test_sigkill_between_source_commit_and_build_finalization(
             == 1
         )
         assert db.query(Build).count() == 1
+
+
+def test_column_lineage_rejects_invalid_depth(client):
+    c, token = client
+    c._transport.raise_server_exceptions = False
+    response = c.get(
+        "/api/v1/column-lineage",
+        params={"table": "shop.orders", "column": "id", "depth": 4},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 422
