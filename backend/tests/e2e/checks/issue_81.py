@@ -23,6 +23,12 @@ def screenshot(ctx, result=False):
             page.locator(
                 ".query-result-preview" if result else ".query-plan-card"
             ).wait_for(timeout=15000)
+            if result:
+                ctx.require(
+                    page.get_by_role("tab", name="结果").get_attribute("aria-selected")
+                    == "true",
+                    "result panel did not follow the completed query",
+                )
             output = Path(os.environ["ISSUE81_SCREENSHOTS"])
             output.mkdir(parents=True, exist_ok=True)
             page.screenshot(
