@@ -560,8 +560,6 @@ class DtbPuller:
             rows = [dict(zip(names, row, strict=True)) for row in data]
         except (ValueError, TypeError, KeyError, UnicodeError) as exc:
             raise TableFailure("invalid_dimension_rows") from exc
-        if stat and len(rows) != min(stat["records"], dimension_limit):
-            raise TableFailure("dimension_row_count_mismatch")
         meta = {
             "database": "dimensions",
             "table": name,
@@ -582,6 +580,8 @@ class DtbPuller:
             "estimated_rows": estimated,
             "truncated": len(rows) >= dimension_limit,
         }
+        if estimated is not None and len(rows) != min(estimated, dimension_limit):
+            meta["row_count_differs"] = True
         return {
             f"dimensions/{name}/meta.json": json.dumps(
                 meta, ensure_ascii=False

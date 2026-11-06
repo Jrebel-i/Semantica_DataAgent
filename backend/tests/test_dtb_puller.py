@@ -761,3 +761,13 @@ def test_missing_statistics_falls_back_to_latest_partition():
     assert meta["estimated_rows"] is None
     assert "WHERE day_num = '20261105'" in fake.sqls["dim_dim_a"][-1]
     assert fake.limits["max_dim_a"] == [1]
+
+
+def test_stale_partition_count_is_reported_without_failing():
+    fake = FakeDtb(metadata_rows=[metadata_row(1, "dim_a", "day_num", 10001, "string")],
+                   stats=PARTITION_HEADER + "\n" + partition_row(1, "dim_a", "day_num=20261105", "4") + "\n",
+                   dimension_rows={"dim_a": [["day_num"], ["20261105"]]})
+    files, counts = run_fetch(fake, {"layer": "dimensions", "max_tables": 1})
+    assert counts["failures"] == []
+    meta = json.loads(files["dimensions/dim_a/meta.json"])
+    assert (meta["estimated_rows"], meta["record_count"], meta["row_count_differs"]) == (4, 1, True)
