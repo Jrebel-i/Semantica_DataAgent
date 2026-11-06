@@ -490,7 +490,7 @@ function TurnBlock({
     option: NonNullable<Clarification["options"]>[number],
   ) => void;
   onExecute: (turn: Turn, plan: QueryPlan) => void;
-  onShowResult: () => void;
+  onShowResult: (id: string) => void;
   executing: boolean;
 }) {
   const sql = sqlBlocks(turn.sql);
@@ -537,7 +537,7 @@ function TurnBlock({
           {result && (
             <div className="card query-result-preview">
               <ResultTable result={result} limit={5} />
-              <Button type="link" onClick={onShowResult}>
+              <Button type="link" onClick={() => onShowResult(result.id)}>
                 查看完整结果
               </Button>
             </div>
@@ -638,6 +638,7 @@ export function ChatPage({
   const [contextOpen, setContextOpen] = useState(true);
   const [contextTab, setContextTab] = useState("plan");
   const contextTouched = useRef(false);
+  const [selectedQueryId, setSelectedQueryId] = useState("");
   const [providers, setProviders] = useState<Provider[]>([]);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [agentId, setAgentId] = useState("pi");
@@ -670,11 +671,17 @@ export function ChatPage({
   const [providerError, setProviderError] = useState("");
   const [providerNotice, setProviderNotice] = useState("");
 
-  const latestTurn = [...turns]
+  const queryTurns = [...turns]
     .reverse()
-    .find((turn) =>
+    .filter((turn) =>
       (turn.events ?? []).some((event) => event.type === "query_plan"),
     );
+  const latestTurn =
+    queryTurns.find(
+      (turn) =>
+        queryEvent<QueryPlan>(turn.events ?? [], "query_plan")?.id ===
+        selectedQueryId,
+    ) ?? queryTurns[0];
   const latestPlan = queryEvent<QueryPlan>(
     latestTurn?.events ?? [],
     "query_plan",
@@ -1050,6 +1057,10 @@ export function ChatPage({
 
   function applyConversation(detail: ConversationDetail) {
     selectionTouched.current = true;
+    if (detail.id !== currentConversationId) {
+      setSelectedQueryId("");
+      contextTouched.current = false;
+    }
     setCurrentConversationId(detail.id);
     setResumable(detail.resumable !== false);
     setTurns(detail.turns);
@@ -1087,6 +1098,7 @@ export function ChatPage({
 
   function newConversation() {
     contextTouched.current = false;
+    setSelectedQueryId("");
     selectionTouched.current = true;
     setCurrentConversationId("");
     setAgentId(defaults.agent);
@@ -1611,8 +1623,9 @@ export function ChatPage({
                   }}
                   onClarify={chooseClarification}
                   onExecute={(turn, plan) => void executePlan(turn, plan)}
-                  onShowResult={() => {
+                  onShowResult={(id) => {
                     contextTouched.current = true;
+                    setSelectedQueryId(id);
                     setContextTab("results");
                     setContextOpen(true);
                   }}
