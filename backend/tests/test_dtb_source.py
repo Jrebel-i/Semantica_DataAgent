@@ -190,3 +190,48 @@ def test_explicit_pull_manifest_overrides_legacy_snapshot_name(tmp_path):
     result = DtbAdapter().read(tmp_path, {})
     assert any("20261101-new" in path for path in result.hashes)
     assert not any("zzzz-old" in path for path in result.hashes)
+
+
+@pytest.mark.parametrize(
+    ("flat", "versions", "explicit", "expected"),
+    [
+        (True, {"pull": "2026-01-01T00:00:00+00:00"}, None, "pull"),
+        (True, {}, None, "."),
+        (True, {"legacy": None}, None, "."),
+        (
+            True,
+            {
+                "z-old": "2026-01-01T00:00:00+00:00",
+                "a-new": "2026-02-01T00:00:00+00:00",
+            },
+            None,
+            "a-new",
+        ),
+        (False, {"a": None, "z": None}, None, "z"),
+        (
+            True,
+            {"chosen": None, "pull": "2026-01-01T00:00:00+00:00"},
+            "chosen",
+            "chosen",
+        ),
+    ],
+)
+def test_snapshot_priority(tmp_path, flat, versions, explicit, expected):
+    import shutil
+
+    root = tmp_path / "dtb"
+    root.mkdir()
+    fixture = FIXTURES / "dtb" / LATEST
+    if flat:
+        shutil.copytree(fixture, root, dirs_exist_ok=True)
+    for name, published in versions.items():
+        shutil.copytree(fixture, root / name)
+        if published:
+            (root / name / "pull-manifest.json").write_text(
+                json.dumps({"published_at": published}), encoding="utf-8"
+            )
+    result = DtbAdapter().read(tmp_path, {"snapshot": explicit} if explicit else {})
+    expected_path = (root / expected / "任务信息.json").relative_to(tmp_path).as_posix()
+    assert expected_path in result.hashes
+    if not explicit:
+        assert result.stats.get("snapshot_directories", 0) == len(versions)
