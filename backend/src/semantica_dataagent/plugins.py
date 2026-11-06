@@ -16,6 +16,10 @@ GROUPS = {
     "executor": "semantica_dataagent.executors",
 }
 
+# Agent runners are plugins too, but they are not persisted or enabled per
+# build like source/parser plugins, so they have their own discovery path.
+AGENT_RUNNER_GROUP = "semantica_dataagent.agent_runners"
+
 
 @dataclass(frozen=True)
 class ParseResult:

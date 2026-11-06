@@ -1,48 +1,37 @@
 """Claude Code adapter for the online agent protocol."""
 
-import asyncio
-import contextlib
 import json
-import os
 import shutil
 import uuid
-from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .agent_sandbox import SessionSandbox, register_session, unregister_session
-from .agent_types import (
-    CLARIFICATION,
-    DONE,
-    ERROR,
-    TEXT_DELTA,
-    TOOL_END,
-    TOOL_START,
-    AgentEvent,
-)
-from .k8s_sandbox import KubernetesSessionSandbox
-from .mcp_context import CONVERSATION_HEADER, TURN_HEADER
-from .pi_runner import (
-    STREAM_LIMIT,
-    _clarification_questions,
-    _drain,
-    _redact_event,
-    _result_summary,
-    _stop,
-    _tool_args_summary,
-    _write_json,
-    extract_refs,
-    extract_sql,
+from .agent_plugin import (
+    MCP_SERVER,
+    TOKEN_ENV,
+    EventParser,
+    SandboxTurn,
+    agent_process,
+    available_in_runtime,
+    clarification_event,
+    default_sandbox_class,
+    has_session_file,
+    is_sandboxed,
+    mcp_server_config,
+    passthrough_environment,
+    redact_event,
+    request_secrets,
+    result_summary,
+    tool_end_event,
+    tool_start_event,
+    write_json,
 )
 from .skill import read_skill
 
 
 @dataclass
-class ClaudeEventParser:
-    text_parts: list[str] = field(default_factory=list)
+class ClaudeEventParser(EventParser):
     streamed: bool = False
-    final_text: str = ""
-    error: str | None = None
     tools: dict = field(default_factory=dict)
 
     def feed(self, record):
@@ -57,32 +46,19 @@ class ClaudeEventParser:
                 event.get("type") == "content_block_delta"
                 and delta.get("type") == "text_delta"
             ):
-                text = delta.get("text", "")
                 self.streamed = True
-                self.text_parts.append(text)
-                return [AgentEvent(TEXT_DELTA, {"text": text})]
+                return self.emit_text(delta.get("text", ""), emit_empty=True)
         if kind == "assistant":
             for block in record.get("message", {}).get("content", []):
                 if block.get("type") == "text":
                     text = block.get("text", "")
                     if not self.streamed:
-                        self.text_parts.append(text)
-                        events.append(AgentEvent(TEXT_DELTA, {"text": text}))
+                        events.extend(self.emit_text(text, emit_empty=True))
                 elif block.get("type") == "tool_use":
                     ident, name = block.get("id"), block.get("name", "tool")
                     args = block.get("input")
                     self.tools[ident] = name
-                    events.append(
-                        AgentEvent(
-                            TOOL_START,
-                            {
-                                "id": ident,
-                                "name": name,
-                                "args": args,
-                                "summary": _tool_args_summary(name, args),
-                            },
-                        )
-                    )
+                    events.append(tool_start_event(ident, name, args))
         elif kind == "user":
             for block in record.get("message", {}).get("content", []):
                 if isinstance(block, dict) and block.get("type") == "tool_result":
@@ -90,48 +66,24 @@ class ClaudeEventParser:
                     result = block.get("content")
                     if isinstance(result, list):
                         result = {"content": result}
+                    name = self.tools.get(ident, "tool")
                     events.append(
-                        AgentEvent(
-                            TOOL_END,
-                            {
-                                "id": ident,
-                                "name": self.tools.get(ident, "tool"),
-                                "is_error": bool(block.get("is_error")),
-                                "summary": _result_summary(result),
-                            },
+                        tool_end_event(
+                            ident,
+                            name,
+                            is_error=bool(block.get("is_error")),
+                            summary=result_summary(result),
                         )
                     )
-                    if (
-                        self.tools.get(ident, "").split("__")[-1]
-                        == "request_clarification"
-                    ):
-                        questions = _clarification_questions(result)
-                        if questions:
-                            events.append(
-                                AgentEvent(CLARIFICATION, {"questions": questions})
-                            )
+                    clarification = clarification_event(name, result)
+                    if clarification is not None:
+                        events.append(clarification)
         elif kind == "result":
             if record.get("is_error"):
                 self.error = record.get("result") or "Claude failed"
             else:
                 self.final_text = record.get("result") or "".join(self.text_parts)
         return events
-
-    def finish(self):
-        if self.error:
-            return AgentEvent(ERROR, {"message": self.error})
-        text = self.final_text or "".join(self.text_parts)
-        return AgentEvent(
-            DONE,
-            {
-                "text": text,
-                "stop_reason": None,
-                "sql": extract_sql(text),
-                "citations": [
-                    {"ref": r, "type": r.split(":", 1)[0]} for r in extract_refs(text)
-                ],
-            },
-        )
 
 
 class ClaudeRunner:
@@ -141,74 +93,39 @@ class ClaudeRunner:
         self.binary = binary
 
     def _sandboxed(self):
-        return (
-            not self.binary
-            and os.environ.get("DATAAGENT_AGENT_MODE", "sandbox") != "local"
-        )
+        return is_sandboxed(self.binary)
 
     def available(self):
-        return bool(
-            shutil.which(
-                "kubectl"
-                if os.environ.get("DATAAGENT_AGENT_MODE") == "k8s"
-                else "docker"
-            )
-            if self._sandboxed()
-            else self.binary or shutil.which("claude")
-        )
+        return available_in_runtime("claude", self.binary)
 
     def write_config(self, request, mcp_url=None) -> Path:
         config = request.workspace / "sessions" / "claude"
         config.mkdir(parents=True, exist_ok=True)
-        _write_json(
-            config / "mcp.json",
-            {
-                "mcpServers": {
-                    "dataagent": {
-                        "type": "http",
-                        "url": mcp_url or request.mcp_url,
-                        "headers": {
-                            "Authorization": "Bearer ${DATAAGENT_TOKEN}",
-                            CONVERSATION_HEADER: request.conversation_id,
-                            TURN_HEADER: str(request.turn_id or ""),
-                        },
-                    }
-                }
-            },
-        )
+        server = {"type": "http", **mcp_server_config(request)}
+        server["url"] = mcp_url or request.mcp_url
+        write_json(config / "mcp.json", {"mcpServers": {MCP_SERVER: server}})
         return config
 
     async def run(self, request):
         sandboxed = self._sandboxed()
         work = request.workspace / "work"
         work.mkdir(parents=True, exist_ok=True)
-        sandbox = None
-        exec_header = None
-        model_url, mcp_url = request.provider.base_url, request.mcp_url
-        if sandboxed:
-            sandbox_class = (
-                KubernetesSessionSandbox
-                if os.environ.get("DATAAGENT_AGENT_MODE") == "k8s"
-                else SessionSandbox
-            )
-            sandbox = sandbox_class(request.workspace, model_url, mcp_url)
-            model_url, mcp_url = sandbox.model_url, sandbox.mcp_url
-        config = self.write_config(request, mcp_url)
+        turn = SandboxTurn(
+            request,
+            sandbox_class=default_sandbox_class() if sandboxed else None,
+        )
+        config = self.write_config(request, turn.mcp_url)
         mcp = config / "mcp.json"
         session = str(uuid.UUID(request.session_id))
-        existing = any(config.glob(f"projects/*/{session}.jsonl"))
-        env = {
-            k: os.environ[k]
-            for k in ("PATH", "LANG", "LC_ALL", "SYSTEMROOT")
-            if k in os.environ
-        }
+        existing = has_session_file(config, session)
+        env = passthrough_environment("PATH", "LANG", "LC_ALL", "SYSTEMROOT")
         env.update(
             {
                 "HOME": "/tmp" if sandboxed else str(work),
                 "CLAUDE_CONFIG_DIR": "/sessions/claude" if sandboxed else str(config),
-                "ANTHROPIC_BASE_URL": model_url,
+                "ANTHROPIC_BASE_URL": turn.model_url,
                 "ANTHROPIC_API_KEY": request.provider.api_key or "unused",
-                "DATAAGENT_TOKEN": request.mcp_token,
+                TOKEN_ENV: request.mcp_token,
             }
         )
         command = [
@@ -232,18 +149,9 @@ class ClaudeRunner:
             session,
             request.prompt,
         ]
-        if sandboxed:
-            docker = ["docker", "exec", "-i"]
-            for key in (
-                "HOME",
-                "CLAUDE_CONFIG_DIR",
-                "ANTHROPIC_BASE_URL",
-                "ANTHROPIC_API_KEY",
-                "DATAAGENT_TOKEN",
-            ):
-                docker.extend(["--env", key])
-            if isinstance(sandbox, KubernetesSessionSandbox):
-                command, exec_header = sandbox.wrap_command(
+        async with turn:
+            if sandboxed:
+                command, exec_header = turn.wrap_command(
                     command,
                     env,
                     (
@@ -251,60 +159,31 @@ class ClaudeRunner:
                         "CLAUDE_CONFIG_DIR",
                         "ANTHROPIC_BASE_URL",
                         "ANTHROPIC_API_KEY",
-                        "DATAAGENT_TOKEN",
+                        TOKEN_ENV,
                     ),
                 )
             else:
-                command = docker + [sandbox.name, *command]
-        process = None
-        drain = None
-        registered = False
-        try:
-            if sandbox is not None:
-                register_session(request.conversation_id, sandbox)
-                registered = True
-                await asyncio.to_thread(sandbox.start)
-            process = await asyncio.create_subprocess_exec(
-                *command,
+                exec_header = None
+            async with agent_process(
+                command,
                 cwd=str(work),
-                stdin=asyncio.subprocess.PIPE
-                if exec_header is not None
-                else asyncio.subprocess.DEVNULL,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
                 env=env,
-                limit=STREAM_LIMIT,
-            )
-            if exec_header is not None:
-                assert process.stdin is not None
-                process.stdin.write(exec_header)
-                await process.stdin.drain()
-                process.stdin.close()
-            stderr = deque(maxlen=80)
-            drain = asyncio.create_task(_drain(process.stderr, stderr))
-            parser = ClaudeEventParser()
-            secrets = (request.mcp_token, request.provider.api_key or "")
-            async for line in process.stdout:
-                try:
-                    record = json.loads(line)
-                except (ValueError, UnicodeDecodeError):
-                    continue
-                for event in parser.feed(record):
-                    yield _redact_event(event, secrets)
-            code = await process.wait()
-            await drain
-            if code and not parser.error:
-                parser.error = (
-                    "\n".join(stderr)[-4000:] or f"claude exited with status {code}"
-                )
-            yield _redact_event(parser.finish(), secrets)
-        finally:
-            if process is not None:
-                await _stop(process)
-            if drain:
-                drain.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await drain
-            if registered:
-                unregister_session(request.conversation_id, sandbox)
-                await asyncio.to_thread(sandbox.close)
+                header=exec_header,
+            ) as process:
+                parser = ClaudeEventParser()
+                secrets = request_secrets(request)
+                async for line in process.lines():
+                    try:
+                        record = json.loads(line)
+                    except (ValueError, UnicodeDecodeError):
+                        continue
+                    for event in parser.feed(record):
+                        yield redact_event(event, secrets)
+                code = await process.wait()
+                await process.wait_for_stderr()
+                if code and not parser.error:
+                    parser.error = (
+                        process.stderr_text()[-4000:]
+                        or f"claude exited with status {code}"
+                    )
+                yield redact_event(parser.finish(), secrets)

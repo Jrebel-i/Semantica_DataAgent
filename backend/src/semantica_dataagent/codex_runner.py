@@ -1,45 +1,38 @@
 """Codex CLI adapter for the online agent protocol."""
 
-import asyncio
-import contextlib
 import json
 import os
 import shutil
-from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
-from .agent_sandbox import SessionSandbox, register_session, unregister_session
-from .agent_types import (
-    CLARIFICATION,
-    DONE,
-    ERROR,
-    TEXT_DELTA,
-    TOOL_END,
-    TOOL_START,
-    AgentEvent,
+from .agent_plugin import (
+    KEY_ENV,
+    MCP_SERVER,
+    TOKEN_ENV,
+    EventParser,
+    SandboxTurn,
+    agent_process,
+    available_in_runtime,
+    clarification_event,
+    default_sandbox_class,
+    is_sandboxed,
+    mcp_headers,
+    passthrough_environment,
+    read_marker,
+    redact_event,
+    request_secrets,
+    result_summary,
+    tool_end_event,
+    tool_start_event,
+    write_json,
 )
-from .k8s_sandbox import KubernetesSessionSandbox
 from .mcp_context import CONVERSATION_HEADER, TURN_HEADER
-from .pi_runner import (
-    STREAM_LIMIT,
-    _clarification_questions,
-    _drain,
-    _redact_event,
-    _result_summary,
-    _stop,
-    _tool_args_summary,
-    _write_json,
-    extract_refs,
-    extract_sql,
-)
 from .skill import read_skill
 
 
 @dataclass
-class CodexEventParser:
-    text_parts: list[str] = field(default_factory=list)
-    error: str | None = None
+class CodexEventParser(EventParser):
     thread_id: str | None = None
 
     def feed(self, record):
@@ -56,66 +49,32 @@ class CodexEventParser:
         item = record.get("item") or {}
         typ = item.get("type")
         if kind == "item.completed" and typ == "agent_message":
-            text = item.get("text", "")
-            self.text_parts.append(text)
-            return [AgentEvent(TEXT_DELTA, {"text": text})]
+            return self.emit_text(item.get("text", ""), emit_empty=True)
         if typ in ("mcp_tool_call", "command_execution", "file_change"):
             ident = item.get("id")
             name = item.get("tool") or typ
             if kind == "item.started":
                 args = item.get("arguments") or {"command": item.get("command")}
-                return [
-                    AgentEvent(
-                        TOOL_START,
-                        {
-                            "id": ident,
-                            "name": name,
-                            "args": args,
-                            "summary": _tool_args_summary(name, args),
-                        },
-                    )
-                ]
+                return [tool_start_event(ident, name, args)]
             if kind == "item.completed":
                 events = [
-                    AgentEvent(
-                        TOOL_END,
-                        {
-                            "id": ident,
-                            "name": name,
-                            "is_error": item.get("status") == "failed"
-                            or bool(item.get("error")),
-                            "summary": _result_summary(
-                                item.get("result")
-                                or item.get("aggregated_output")
-                                or item.get("error")
-                            ),
-                        },
+                    tool_end_event(
+                        ident,
+                        name,
+                        is_error=item.get("status") == "failed"
+                        or bool(item.get("error")),
+                        summary=result_summary(
+                            item.get("result")
+                            or item.get("aggregated_output")
+                            or item.get("error")
+                        ),
                     )
                 ]
-                if name.split("__")[-1] == "request_clarification":
-                    questions = _clarification_questions(item.get("result"))
-                    if questions:
-                        events.append(
-                            AgentEvent(CLARIFICATION, {"questions": questions})
-                        )
+                clarification = clarification_event(name, item.get("result"))
+                if clarification is not None:
+                    events.append(clarification)
                 return events
         return []
-
-    def finish(self):
-        if self.error:
-            return AgentEvent(ERROR, {"message": self.error})
-        text = "".join(self.text_parts)
-        return AgentEvent(
-            DONE,
-            {
-                "text": text,
-                "stop_reason": None,
-                "sql": extract_sql(text),
-                "citations": [
-                    {"ref": r, "type": r.split(":", 1)[0]} for r in extract_refs(text)
-                ],
-            },
-        )
 
 
 class CodexRunner:
@@ -125,30 +84,20 @@ class CodexRunner:
         self.binary = binary
 
     def _sandboxed(self):
-        return (
-            not self.binary
-            and os.environ.get("DATAAGENT_AGENT_MODE", "sandbox") != "local"
-        )
+        return is_sandboxed(self.binary)
 
     def available(self):
-        return bool(
-            shutil.which(
-                "kubectl"
-                if os.environ.get("DATAAGENT_AGENT_MODE") == "k8s"
-                else "docker"
-            )
-            if self._sandboxed()
-            else self.binary or shutil.which("codex")
-        )
+        return available_in_runtime("codex", self.binary)
 
     def write_config(self, request, model_url=None, mcp_url=None) -> Path:
         config = request.workspace / "sessions" / "codex"
         config.mkdir(parents=True, exist_ok=True)
         auth = (
-            'env_key = "DATAAGENT_PROVIDER_KEY"\n'
+            f'env_key = "{KEY_ENV}"\n'
             if request.provider.api_key
             else "requires_openai_auth = false\n"
         )
+        headers = mcp_headers(request)
         cfg = (
             'model_provider = "dataagent"\n'
             + "developer_instructions = "
@@ -161,17 +110,17 @@ class CodexRunner:
             + json.dumps(model_url or request.provider.base_url)
             + '\nwire_api = "responses"\n'
             + auth
-            + "[mcp_servers.dataagent]\nurl = "
+            + f"[mcp_servers.{MCP_SERVER}]\nurl = "
             + json.dumps(mcp_url or request.mcp_url)
-            + '\nbearer_token_env_var = "DATAAGENT_TOKEN"\n'
+            + f'\nbearer_token_env_var = "{TOKEN_ENV}"\n'
             + "http_headers = { "
             + json.dumps(CONVERSATION_HEADER)
             + " = "
-            + json.dumps(request.conversation_id)
+            + json.dumps(headers[CONVERSATION_HEADER])
             + ", "
             + json.dumps(TURN_HEADER)
             + " = "
-            + json.dumps(str(request.turn_id or ""))
+            + json.dumps(headers[TURN_HEADER])
             + " }\n"
         )
         (config / "config.toml").write_text(cfg, encoding="utf-8")
@@ -182,36 +131,23 @@ class CodexRunner:
         sandboxed = self._sandboxed()
         work = request.workspace / "work"
         work.mkdir(parents=True, exist_ok=True)
-        sandbox = None
-        exec_header = None
-        model_url, mcp_url = request.provider.base_url, request.mcp_url
-        if sandboxed:
-            sandbox_class = (
-                KubernetesSessionSandbox
-                if os.environ.get("DATAAGENT_AGENT_MODE") == "k8s"
-                else SessionSandbox
-            )
-            sandbox = sandbox_class(request.workspace, model_url, mcp_url)
-            model_url, mcp_url = sandbox.model_url, sandbox.mcp_url
-        config = self.write_config(request, model_url, mcp_url)
-        marker = config / "thread-id.json"
-        thread = (
-            json.loads(marker.read_text())["thread_id"] if marker.exists() else None
+        turn = SandboxTurn(
+            request,
+            sandbox_class=default_sandbox_class() if sandboxed else None,
         )
-        env = {
-            k: os.environ[k]
-            for k in ("PATH", "LANG", "LC_ALL", "SYSTEMROOT")
-            if k in os.environ
-        }
+        config = self.write_config(request, turn.model_url, turn.mcp_url)
+        marker = config / "thread-id.json"
+        thread = read_marker(marker, "thread_id") if marker.exists() else None
+        env = passthrough_environment("PATH", "LANG", "LC_ALL", "SYSTEMROOT")
         env.update(
             {
                 "HOME": "/tmp" if sandboxed else str(work),
                 "CODEX_HOME": "/sessions/codex" if sandboxed else str(config),
-                "DATAAGENT_TOKEN": request.mcp_token,
+                TOKEN_ENV: request.mcp_token,
             }
         )
         if request.provider.api_key:
-            env["DATAAGENT_PROVIDER_KEY"] = request.provider.api_key
+            env[KEY_ENV] = request.provider.api_key
         command = [
             "codex" if sandboxed else self.binary or shutil.which("codex"),
             "exec",
@@ -224,76 +160,38 @@ class CodexRunner:
         if thread:
             command += ["resume", thread]
         command.append(request.prompt)
-        if sandboxed:
-            docker = ["docker", "exec", "-i"]
-            for key in (
-                "HOME",
-                "CODEX_HOME",
-                "DATAAGENT_TOKEN",
-                "DATAAGENT_PROVIDER_KEY",
-            ):
-                if key in env:
-                    docker.extend(["--env", key])
-            if isinstance(sandbox, KubernetesSessionSandbox):
-                command, exec_header = sandbox.wrap_command(
+        async with turn:
+            if sandboxed:
+                command, exec_header = turn.wrap_command(
                     command,
                     env,
-                    ("HOME", "CODEX_HOME", "DATAAGENT_TOKEN", "DATAAGENT_PROVIDER_KEY"),
+                    ("HOME", "CODEX_HOME", TOKEN_ENV, KEY_ENV),
                 )
             else:
-                command = docker + [sandbox.name, *command]
-        process = None
-        drain = None
-        registered = False
-        try:
-            if sandbox is not None:
-                register_session(request.conversation_id, sandbox)
-                registered = True
-                await asyncio.to_thread(sandbox.start)
-            process = await asyncio.create_subprocess_exec(
-                *command,
+                exec_header = None
+            async with agent_process(
+                command,
                 cwd=str(work),
-                stdin=asyncio.subprocess.PIPE
-                if exec_header is not None
-                else asyncio.subprocess.DEVNULL,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
                 env=env,
-                limit=STREAM_LIMIT,
-            )
-            if exec_header is not None:
-                assert process.stdin is not None
-                process.stdin.write(exec_header)
-                await process.stdin.drain()
-                process.stdin.close()
-            stderr = deque(maxlen=80)
-            drain = asyncio.create_task(_drain(process.stderr, stderr))
-            parser = CodexEventParser()
-            secrets = (request.mcp_token, request.provider.api_key or "")
-            async for line in process.stdout:
-                try:
-                    record = json.loads(line)
-                except (ValueError, UnicodeDecodeError):
-                    continue
-                for event in parser.feed(record):
-                    yield _redact_event(event, secrets)
-                if parser.thread_id and not thread:
-                    _write_json(marker, {"thread_id": parser.thread_id})
-                    thread = parser.thread_id
-            code = await process.wait()
-            await drain
-            if code and not parser.error:
-                parser.error = (
-                    "\n".join(stderr)[-4000:] or f"codex exited with status {code}"
-                )
-            yield _redact_event(parser.finish(), secrets)
-        finally:
-            if process is not None:
-                await _stop(process)
-            if drain:
-                drain.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await drain
-            if registered:
-                unregister_session(request.conversation_id, sandbox)
-                await asyncio.to_thread(sandbox.close)
+                header=exec_header,
+            ) as process:
+                parser = CodexEventParser()
+                secrets = request_secrets(request)
+                async for line in process.lines():
+                    try:
+                        record = json.loads(line)
+                    except (ValueError, UnicodeDecodeError):
+                        continue
+                    for event in parser.feed(record):
+                        yield redact_event(event, secrets)
+                    if parser.thread_id and not thread:
+                        write_json(marker, {"thread_id": parser.thread_id})
+                        thread = parser.thread_id
+                code = await process.wait()
+                await process.wait_for_stderr()
+                if code and not parser.error:
+                    parser.error = (
+                        process.stderr_text()[-4000:]
+                        or f"codex exited with status {code}"
+                    )
+                yield redact_event(parser.finish(), secrets)
