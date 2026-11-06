@@ -13,6 +13,7 @@ from .db import PluginConfig, sessions
 GROUPS = {
     "source": "semantica_dataagent.source_adapters",
     "parser": "semantica_dataagent.task_parsers",
+    "executor": "semantica_dataagent.executors",
 }
 
 
@@ -26,6 +27,30 @@ class ParseResult:
     column_edges: list[tuple[str, str, str, str]] | None = None
     column_status: str = "unsupported"
     column_reason: str | None = None
+
+
+class ExecutorError(RuntimeError):
+    """The configured execution platform failed."""
+
+
+class ExecutorAuthenticationError(ExecutorError):
+    """The caller credential was rejected."""
+
+
+class QueryExecutor(Protocol):
+    async def submit(self, sql: str, limit: int) -> str: ...
+
+    async def poll(self, key: str) -> dict: ...
+
+    async def wait(self, key: str) -> dict: ...
+
+    async def download(self, key: str, format: str) -> tuple[bytes, str | None]: ...
+
+    async def estimate(self, sql: str) -> dict: ...
+
+
+class ExecutorPlugin(Protocol):
+    def bind(self, parameters: dict, token: str) -> QueryExecutor: ...
 
 
 class TaskParser(Protocol):
