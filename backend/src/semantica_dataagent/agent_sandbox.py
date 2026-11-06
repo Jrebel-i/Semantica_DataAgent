@@ -1,5 +1,6 @@
 """Disposable Docker session and strictly scoped TCP egress relay."""
 
+import ipaddress
 import json
 import os
 import shutil
@@ -68,7 +69,12 @@ class SessionSandbox:
                 type=socket.SOCK_STREAM,
             )[0][4][0]
         )
-        alias = "sda-relay" if target == "host.docker.internal" else host
+        try:
+            ipaddress.ip_address(host)
+            literal = True
+        except ValueError:
+            literal = False
+        alias = "sda-relay" if target == "host.docker.internal" or literal else host
         self.aliases.add(alias)
         self.targets.append(
             [

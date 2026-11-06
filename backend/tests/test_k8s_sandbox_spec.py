@@ -284,3 +284,26 @@ def test_session_upload_preserves_mount_root_and_nested_files(tmp_path):
     runtime._transfer = capture
     runtime._upload()
     assert set(contents) == {"workspace/file", "sessions/file"}
+
+
+def test_session_download_keeps_deletions_from_agent(tmp_path):
+    import io
+    import tarfile
+
+    from semantica_dataagent.k8s_sandbox import KubernetesSessionSandbox
+
+    for directory in ("work", "sessions"):
+        (tmp_path / directory).mkdir()
+        (tmp_path / directory / "deleted").write_text("old")
+    archive_data = io.BytesIO()
+    with tarfile.open(fileobj=archive_data, mode="w") as archive:
+        for directory in ("workspace", "sessions"):
+            item = tarfile.TarInfo(directory)
+            item.type = tarfile.DIRTYPE
+            archive.addfile(item)
+    runtime = object.__new__(KubernetesSessionSandbox)
+    runtime.workspace = tmp_path
+    runtime._transfer = lambda direction: archive_data.getvalue()
+    runtime._download()
+    assert not (tmp_path / "work" / "deleted").exists()
+    assert not (tmp_path / "sessions" / "deleted").exists()

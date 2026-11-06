@@ -90,3 +90,25 @@ def test_session_firewall_covers_ipv6_and_custom_namespace(monkeypatch):
     assert "--ctorigdst 2001:db8::10 --dport 443" in script
     assert "--ctorigdst 2001:db8::20 --dport 8000" in script
     assert "--dport 53" not in script
+
+
+def test_docker_literal_ip_endpoints_route_through_relay(tmp_path):
+    from semantica_dataagent.agent_sandbox import SessionSandbox
+
+    runtime = SessionSandbox(
+        tmp_path, "http://192.0.2.20:9000/v1", "http://[2001:db8::20]:8000/mcp"
+    )
+    assert runtime.model_url == "http://sda-relay:18080/v1"
+    assert runtime.mcp_url == "http://sda-relay:18081/mcp"
+
+
+def test_kubernetes_ip_literals_do_not_enter_host_aliases():
+    from semantica_dataagent.k8s_sandbox import build_pod_spec
+
+    pod = build_pod_spec(
+        name="example",
+        workspace_subpath="conversations/example",
+        model_url="http://192.0.2.20:9000",
+        mcp_url="http://[2001:db8::20]:8000/mcp",
+    )
+    assert pod["spec"]["hostAliases"] == []

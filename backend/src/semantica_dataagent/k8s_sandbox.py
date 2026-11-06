@@ -3,7 +3,7 @@
 import ipaddress
 import os
 import socket
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from urllib.parse import urlsplit
 
 RUNNER_IMAGE = "172.16.242.124:31640/dataagent-agent-runner:1.2.1"
@@ -71,8 +71,11 @@ def build_pod_spec(
     endpoints = [_resolve(model_url), _resolve(mcp_url)]
     aliases = {}
     for host, _, addresses in endpoints:
-        for address in addresses:
-            aliases.setdefault(address, []).append(host)
+        try:
+            ipaddress.ip_address(host)
+        except ValueError:
+            for address in addresses:
+                aliases.setdefault(address, []).append(host)
     spec = {
         "hostAliases": [
             {"ip": ip, "hostnames": sorted(set(hosts))} for ip, hosts in aliases.items()
@@ -295,12 +298,20 @@ class KubernetesSessionSandbox:
                     raise ValueError("unsupported session archive entry")
                 archive.extractall(directory, filter="data")
             for source, target in (("workspace", "work"), ("sessions", "sessions")):
+                source_path = Path(directory) / source
+                target_path = self.workspace / target
                 shutil.copytree(
-                    os.path.join(directory, source),
-                    self.workspace / target,
-                    dirs_exist_ok=True,
-                    symlinks=False,
+                    source_path, target_path, dirs_exist_ok=True, symlinks=False
                 )
+                for current, dirs, files in os.walk(target_path, topdown=False):
+                    current_path = Path(current)
+                    relative = current_path.relative_to(target_path)
+                    for name in files:
+                        if not (source_path / relative / name).exists():
+                            (current_path / name).unlink()
+                    for name in dirs:
+                        if not (source_path / relative / name).exists():
+                            shutil.rmtree(current_path / name)
 
     def wrap_command(self, command, env, keys):
         import json
