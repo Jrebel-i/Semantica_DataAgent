@@ -151,7 +151,9 @@ test("查询计划可确认执行，结果和下载显示在右侧面板", async
               status: executed ? "completed" : "awaiting_confirmation",
               answer: executed ? "销售结论" : "",
               sql: [],
-              citations: [],
+              citations: executed
+                ? [{ ref: "table:shop.payments", type: "table" }]
+                : [],
               error: null,
               started_at: conversation.created_at,
               finished_at: null,
@@ -180,6 +182,7 @@ test("查询计划可确认执行，结果和下载显示在右侧面板", async
           },
         );
       }
+      if (url.startsWith("/api/v1/tables?")) return json([table]);
       return new Response("", { status: 404 });
     },
   );
@@ -197,6 +200,13 @@ test("查询计划可确认执行，结果和下载显示在右侧面板", async
   expect(executed).toBe(false);
   fireEvent.click(screen.getByRole("button", { name: /执\s*行/ }));
   expect(await screen.findByText("销售结论")).toBeTruthy();
+  await waitFor(() =>
+    expect(
+      fetcher.mock.calls.some(([input]) =>
+        String(input).startsWith("/api/v1/tables?"),
+      ),
+    ).toBe(true),
+  );
   expect(await screen.findByText("结果可能被截断")).toBeTruthy();
   expect(
     screen.getByRole("tab", { name: "结果" }).getAttribute("aria-selected"),
