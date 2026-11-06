@@ -13,6 +13,7 @@ from .db import PluginConfig, sessions
 GROUPS = {
     "source": "semantica_dataagent.source_adapters",
     "parser": "semantica_dataagent.task_parsers",
+    "executor": "semantica_dataagent.executors",
 }
 
 

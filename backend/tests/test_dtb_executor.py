@@ -1,0 +1,75 @@
+import asyncio
+
+import httpx
+import pytest
+
+from semantica_dataagent.dtb_executor import (
+    DtbExecutor,
+    DtbError,
+    DtbAuthenticationError,
+)
+
+
+def test_dtb_query_protocol_and_caller_token():
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        if request.url.path.endswith("async-execute"):
+            return httpx.Response(200, json={"status": 200, "data": {"queryKey": "q1"}})
+        if "/result/" in request.url.path:
+            return httpx.Response(
+                200,
+                json={
+                    "status": 200,
+                    "data": {"progress": 1.0, "columns": ["n"], "data": [[1]]},
+                },
+            )
+        return httpx.Response(200, content=b"n\n1\n")
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            executor = DtbExecutor("http://dtb.test", "my-token", client=client)
+            key = await executor.submit("select 1", 1000)
+            result = await executor.poll(key)
+            content, _ = await executor.download(key, "csv")
+            assert result["data"] == [[1]]
+            assert content == b"n\n1\n"
+
+    asyncio.run(run())
+    import json
+
+    assert json.loads(calls[0].content) == {
+        "env": 2,
+        "dataSource": "doris_ai",
+        "sql": "select 1",
+        "defaultLimit": 1000,
+    }
+    assert all(call.headers["token"] == "my-token" for call in calls)
+
+
+def test_dtb_recognizes_auth_and_query_errors():
+    async def run():
+        for response, expected in [
+            (httpx.Response(401), DtbAuthenticationError),
+            (
+                httpx.Response(
+                    200,
+                    json={
+                        "status": 200,
+                        "data": {"progress": 1, "errorMessage": "bad sql"},
+                    },
+                ),
+                DtbError,
+            ),
+        ]:
+            async with httpx.AsyncClient(
+                transport=httpx.MockTransport(lambda _: response)
+            ) as client:
+                executor = DtbExecutor(
+                    "http://dtb.test", "token", client=client, retry_delays=()
+                )
+                with pytest.raises(expected):
+                    await executor.poll("q")
+
+    asyncio.run(run())
