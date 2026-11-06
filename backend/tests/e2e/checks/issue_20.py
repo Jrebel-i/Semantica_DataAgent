@@ -10,6 +10,7 @@ AMBIGUOUS = (
     "上个月销售额是多少？我还没有决定采用支付销售额还是下单销售额，"
     "请先检索两种定义，必须调用 request_clarification 工具生成澄清卡片，"
     "提供有证据引用的口径选项，待我选择后再写 Hive SQL；不要只用普通文字追问，也不要直接写 SQL。"
+    "每次提问都按当前问题独立判断，不要沿用其他对话里的选择。"
 )
 PAYMENT_REF = "definitions/sales.md"
 ORDER_REF = "sales_order.md"
@@ -47,6 +48,24 @@ def _ask(ctx, body: dict) -> list[tuple[str, dict]]:
         ctx.token not in text, "the personal token appeared in the SSE response"
     )
     return _parse_sse(text)
+
+
+def _empty_done(events: list[tuple[str, dict]]) -> bool:
+    if not events or events[-1][0] != "done":
+        return False
+    done = events[-1][1]
+    return not (done.get("text") or done.get("sql") or done.get("citations"))
+
+
+def _ask_stable(
+    ctx, body: dict, *, attempts: int = 3
+) -> tuple[list[tuple[str, dict]], int]:
+    """Retry only a completely empty final turn, a known model gateway flake."""
+    for attempt in range(attempts):
+        events = _ask(ctx, body)
+        if not _empty_done(events) or attempt == attempts - 1:
+            return events, attempt
+    raise AssertionError("unreachable")
 
 
 def _provider(ctx) -> tuple[str, str]:
@@ -105,7 +124,7 @@ def _selected_definition(questions: list[dict]) -> tuple[dict, dict]:
 
 def check_online_clarification_selection_is_scoped_to_one_conversation(ctx):
     provider_id, model = _provider(ctx)
-    first = _ask(
+    first, first_retries = _ask_stable(
         ctx,
         {
             "question": AMBIGUOUS,
@@ -160,7 +179,9 @@ def check_online_clarification_selection_is_scoped_to_one_conversation(ctx):
             ),
         ]
     )
-    second = _ask(ctx, {"question": prompt, "conversation_id": conversation_id})
+    second, second_retries = _ask_stable(
+        ctx, {"question": prompt, "conversation_id": conversation_id}
+    )
     ctx.require(second[-1][0] == "done", f"clarification follow-up: {second[-1]}")
     done = second[-1][1]
     sql = [item.get("sql", "") for item in done.get("sql") or []]
@@ -172,13 +193,16 @@ def check_online_clarification_selection_is_scoped_to_one_conversation(ctx):
     detail = ctx.rest.get(f"/api/v1/conversations/{conversation_id}")
     ctx.require(detail.status_code == 200, detail.text)
     stored = detail.json()
-    ctx.require(len(stored["turns"]) == 2, f"turns: {len(stored['turns'])}")
+    ctx.require(
+        len(stored["turns"]) == 2 + second_retries,
+        f"turns: {len(stored['turns'])} with {second_retries} empty retries",
+    )
     ctx.require(
         any(event["type"] == "clarification" for event in stored["turns"][0]["events"]),
         "the clarification event was not persisted",
     )
 
-    other = _ask(
+    other, other_retries = _ask_stable(
         ctx,
         {
             "question": AMBIGUOUS,
@@ -190,7 +214,10 @@ def check_online_clarification_selection_is_scoped_to_one_conversation(ctx):
     other_questions = _clarifications(other)
     ctx.require(
         other_questions,
-        "the previous selection leaked into a new conversation; no clarification was raised",
+        "the previous selection leaked into a new conversation; no clarification was raised: "
+        f"events={[name for name, _ in other]} "
+        f"errors={[(name, data) for name, data in other if name == 'error']} "
+        f"last={(other[-1:] if other else [])}",
     )
     ctx.require(
         not _sql_blocks(other),
@@ -202,6 +229,7 @@ def check_online_clarification_selection_is_scoped_to_one_conversation(ctx):
         "expected_table": expected_table,
         "options": sum(len(item.get("options") or []) for item in questions),
         "new_conversation_id": other[0][1]["conversation_id"],
+        "empty_retries": first_retries + second_retries + other_retries,
     }
 
 
