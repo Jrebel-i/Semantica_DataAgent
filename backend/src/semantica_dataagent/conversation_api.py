@@ -18,8 +18,9 @@ from sqlalchemy import func, text
 
 from .agent_runner import DONE, ERROR, AgentEvent, AgentTurnRequest, get_runner
 from .api_time import UtcDatetime
-from .auth import Requester, current_requester
+from .auth import Requester, current_requester, issue_agent_credential
 from .db import (
+    AgentCredential,
     Conversation,
     Provider,
     QueryExecution,
@@ -194,6 +195,7 @@ def _finish_turn(turn_id: int, status: str, event: AgentEvent | None, error=None
         row = db.get(Turn, turn_id)
         if row is None:
             return
+        db.query(AgentCredential).filter_by(turn_id=turn_id).delete()
         row.status = status
         row.finished_at = datetime.now(UTC)
         if error is not None:
@@ -408,7 +410,7 @@ async def ask(
         provider=provider_settings,
         model=model,
         mcp_url=public_base_url() + "/mcp/",
-        mcp_token=requester.token,
+        mcp_token=issue_agent_credential(requester.id, conversation_id, turn_id),
         turn_id=turn_id,
     )
     return StreamingResponse(
@@ -497,7 +499,7 @@ async def confirm_query(
         provider=provider_settings,
         model=model,
         mcp_url=public_base_url() + "/mcp/",
-        mcp_token=requester.token,
+        mcp_token=issue_agent_credential(requester.id, conversation_id, turn_id),
         turn_id=turn_id,
     )
 

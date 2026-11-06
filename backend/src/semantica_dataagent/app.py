@@ -23,7 +23,7 @@ from sqlalchemy import text, update
 
 from . import knowledge
 from .api_time import UtcDatetime
-from .auth import _authenticated, admin, bearer, current_user
+from .auth import admin, authenticate_mcp, bearer, current_user
 from .build_queue import build_queue, enqueue_build
 from .db import (
     Build,
@@ -736,7 +736,11 @@ class MCPAuthentication:
             request = Request(scope, receive)
             try:
                 credentials = await bearer(request)
-                requester = _authenticated(credentials)
+                requester = authenticate_mcp(
+                    credentials,
+                    request.headers.get("x-dataagent-conversation-id"),
+                    request.headers.get("x-dataagent-turn-id"),
+                )
             except HTTPException as exc:
                 await JSONResponse(
                     {"detail": exc.detail},
