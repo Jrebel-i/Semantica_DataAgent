@@ -11,7 +11,6 @@ import contextlib
 import json
 import os
 import re
-import shutil
 from collections import deque
 from collections.abc import AsyncIterator, Iterable
 from contextlib import asynccontextmanager
@@ -19,7 +18,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Self
 
-from .agent_sandbox import SessionSandbox, register_session, unregister_session
+from .agent_sandbox import register_session, unregister_session
 from .agent_types import (
     CLARIFICATION,
     DONE,
@@ -30,8 +29,8 @@ from .agent_types import (
     AgentEvent,
     AgentTurnRequest,
 )
-from .k8s_sandbox import KubernetesSessionSandbox
 from .mcp_context import CONVERSATION_HEADER, TURN_HEADER
+from .session_runtime import runtime_available, runtime_class
 
 TOKEN_ENV = "DATAAGENT_TOKEN"
 KEY_ENV = "DATAAGENT_PROVIDER_KEY"
@@ -313,18 +312,11 @@ def is_sandboxed(binary: str | None = None) -> bool:
 
 
 def available_in_runtime(name: str, binary: str | None = None) -> bool:
-    if is_sandboxed(binary):
-        tool = (
-            "kubectl" if os.environ.get("DATAAGENT_AGENT_MODE") == "k8s" else "docker"
-        )
-        return bool(shutil.which(tool))
-    return bool(binary or shutil.which(name))
+    return runtime_available(name, binary)
 
 
 def default_sandbox_class():
-    if os.environ.get("DATAAGENT_AGENT_MODE") == "k8s":
-        return KubernetesSessionSandbox
-    return SessionSandbox
+    return runtime_class()
 
 
 def mcp_headers(request: AgentTurnRequest) -> dict[str, str]:
@@ -378,13 +370,7 @@ class SandboxTurn:
     def wrap_command(self, command, env: dict[str, str], keys: Iterable[str]):
         if self.sandbox is None:
             return command, None
-        if hasattr(self.sandbox, "wrap_command"):
-            return self.sandbox.wrap_command(command, env, tuple(keys))
-        docker = ["docker", "exec", "-i"]
-        for key in keys:
-            if key in env:
-                docker.extend(["--env", key])
-        return [*docker, self.sandbox.name, *command], None
+        return self.sandbox.wrap_command(command, env, tuple(keys))
 
 
 class AgentProcess:

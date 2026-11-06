@@ -172,6 +172,13 @@ class SessionSandbox:
             self.close()
             raise
 
+    def wrap_command(self, command, env, keys):
+        docker = ["docker", "exec", "-i"]
+        for key in keys:
+            if key in env:
+                docker.extend(["--env", key])
+        return [*docker, self.name, *command], None
+
     def exec(self, command):
         return self._run(
             "exec",
