@@ -78,9 +78,15 @@ def table_metadata(monkeypatch):
 
 
 class FakeDtb:
-    def __init__(self, status=200):
+    def __init__(self, status=200, metadata=None):
         self.calls = []
         self.status = status
+        self.metadata = (
+            metadata
+            if metadata is not None
+            else {"columns": ["partition_name"], "data": [["dt=2025-01-03"]]}
+        )
+        self.queries = {}
 
     def start(self):
         fake = self
@@ -92,28 +98,31 @@ class FakeDtb:
             def do_POST(self):
                 body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
                 fake.calls.append((self.headers.get("token"), body))
+                key = f"sample-{len(fake.calls)}"
+                fake.queries[key] = body.get("sql", "")
                 if fake.status == 401:
                     self.send_response(401)
                     self.end_headers()
                     return
                 payload = json.dumps(
-                    {"status": 200, "data": {"queryKey": "sample-key"}}
+                    {"status": 200, "data": {"queryKey": key}}
                 ).encode()
                 self.send_response(200)
                 self.end_headers()
                 self.wfile.write(payload)
 
             def do_GET(self):
-                payload = json.dumps(
-                    {
-                        "status": 200,
-                        "data": {
-                            "progress": 1,
-                            "columns": ["id", "dt"],
-                            "data": [[1, "2025-01-03"], [2, "2025-01-03"]],
-                        },
+                key = self.path.rstrip("/").rsplit("/", 1)[-1]
+                sql = fake.queries.get(key, "")
+                if "metadata_table" in sql:
+                    data = {"progress": 1, **fake.metadata}
+                else:
+                    data = {
+                        "progress": 1,
+                        "columns": ["id", "dt"],
+                        "data": [[1, "2025-01-03"], [2, "2025-01-03"]],
                     }
-                ).encode()
+                payload = json.dumps({"status": 200, "data": data}).encode()
                 self.send_response(200)
                 self.end_headers()
                 self.wfile.write(payload)
@@ -367,3 +376,306 @@ def test_sample_schema_is_self_contained_and_caps_limit(client):
     assert columns_schema.get("type") == "array" or any(
         option.get("type") == "array" for option in columns_schema.get("anyOf", [])
     )
+
+
+FACT_FIELDS = [
+    {
+        "database": "dm",
+        "table": "sales_fact",
+        "name": "id",
+        "type": "string",
+        "comment": "",
+        "partition": False,
+    },
+    {
+        "database": "dm",
+        "table": "sales_fact",
+        "name": "dt",
+        "type": "string",
+        "comment": "",
+        "partition": True,
+    },
+    {
+        "database": "dm",
+        "table": "sales_fact",
+        "name": "amount",
+        "type": "decimal",
+        "comment": "",
+        "partition": False,
+    },
+]
+
+
+@pytest.fixture
+def fact_metadata(monkeypatch):
+    from semantica_dataagent import knowledge
+
+    def describe(names=None, **kwargs):
+        if names and "dm.sales_fact" not in names and "sales_fact" not in names:
+            return []
+        return [
+            {
+                "database": "dm",
+                "name": "sales_fact",
+                "comment": "sales fact",
+                "fields": FACT_FIELDS,
+            }
+        ]
+
+    monkeypatch.setattr(knowledge, "describe", describe)
+    monkeypatch.setattr(knowledge, "dimension_values", lambda *args: [], raising=False)
+
+
+def test_sample_uses_dtb_partition_metadata_for_fact_table(client, fact_metadata):
+    fake = FakeDtb(
+        metadata={"columns": ["partition_name"], "data": [["dt=2026-08-31"]]}
+    ).start()
+    try:
+        configure_executor(client, fake.url)
+        set_token(client, "caller-token")
+        result = call(
+            client,
+            "sample_table_data",
+            {"table": "dm.sales_fact", "columns": ["id"], "limit": 2},
+        )
+        assert not result.isError, result.model_dump()
+        data = result.structuredContent
+        assert data["partition"] == [{"field": "dt", "value": "2026-08-31"}]
+        assert data["row_count"] == 2
+        assert data["sql"].endswith("LIMIT 2")
+        assert "`dt` = '2026-08-31'" in " ".join(data["sql"].split())
+
+        metadata_calls = [
+            (token, body)
+            for token, body in fake.calls
+            if "metadata_table" in body["sql"]
+        ]
+        assert len(metadata_calls) == 1
+        token, request = metadata_calls[0]
+        assert token == "caller-token"
+        assert request["dataSource"] == "doris_ai"
+        assert 1 <= request["defaultLimit"] <= 5
+        metadata_sql = " ".join(request["sql"].split())
+        assert "mysql.data_tool_box_emr.metadata_table" in metadata_sql
+        assert "mysql.data_tool_box_emr.metadata_partition" in metadata_sql
+        assert "database_name = 'dm'" in metadata_sql
+        assert "table_name = 'sales_fact'" in metadata_sql
+        assert "split_part(partition_name, '=', 2)" in metadata_sql
+        assert metadata_sql.upper().startswith("SELECT ")
+    finally:
+        fake.close()
+
+
+def test_metadata_latest_partition_wins_over_knowledge(client, table_metadata):
+    fake = FakeDtb(
+        metadata={"columns": ["partition_name"], "data": [["dt=2026-08-31"]]}
+    ).start()
+    try:
+        configure_executor(client, fake.url)
+        set_token(client, "caller-token")
+        result = call(
+            client,
+            "sample_table_data",
+            {"table": "shop.orders", "columns": ["id"], "limit": 1},
+        )
+        assert not result.isError, result.model_dump()
+        assert result.structuredContent["partition"] == [
+            {"field": "dt", "value": "2026-08-31"}
+        ]
+        sample_sql = " ".join(result.structuredContent["sql"].split())
+        assert "`dt` = '2026-08-31'" in sample_sql
+        assert "2025-01-03" not in sample_sql
+    finally:
+        fake.close()
+
+
+def test_metadata_multiple_rows_uses_latest_partition(client, fact_metadata):
+    fake = FakeDtb(
+        metadata={
+            "columns": ["partition_name"],
+            "data": [["dt=2026-08-01"], ["dt=2026-08-31"], ["dt=2026-08-15"]],
+        }
+    ).start()
+    try:
+        configure_executor(client, fake.url)
+        set_token(client, "caller-token")
+        result = call(client, "sample_table_data", {"table": "dm.sales_fact"})
+        assert not result.isError, result.model_dump()
+        assert result.structuredContent["partition"] == [
+            {"field": "dt", "value": "2026-08-31"}
+        ]
+    finally:
+        fake.close()
+
+
+def test_metadata_empty_falls_back_to_knowledge(client, table_metadata):
+    fake = FakeDtb(metadata={"columns": ["partition_name"], "data": []}).start()
+    try:
+        configure_executor(client, fake.url)
+        set_token(client, "caller-token")
+        result = call(
+            client,
+            "sample_table_data",
+            {"table": "shop.orders", "columns": ["id"]},
+        )
+        assert not result.isError, result.model_dump()
+        assert result.structuredContent["partition"] == [
+            {"field": "dt", "value": "2025-01-03"}
+        ]
+        assert any("metadata_table" in body["sql"] for _, body in fake.calls)
+    finally:
+        fake.close()
+
+
+def test_metadata_empty_without_knowledge_is_unavailable(client, fact_metadata):
+    fake = FakeDtb(metadata={"columns": ["partition_name"], "data": []}).start()
+    try:
+        configure_executor(client, fake.url)
+        set_token(client, "caller-token")
+        result = call(client, "sample_table_data", {"table": "dm.sales_fact"})
+        assert result.isError
+        assert result.structuredContent["code"] == "unavailable"
+        assert "最新分区" in result.structuredContent["message"]
+        assert "元数据" in result.structuredContent["message"]
+    finally:
+        fake.close()
+
+
+def test_metadata_malformed_falls_back_to_knowledge(client, table_metadata):
+    fake = FakeDtb(
+        metadata={
+            "columns": ["partition_name"],
+            "data": [["not-a-partition"], [123], [None]],
+        }
+    ).start()
+    try:
+        configure_executor(client, fake.url)
+        set_token(client, "caller-token")
+        result = call(
+            client,
+            "sample_table_data",
+            {"table": "shop.orders", "columns": ["id"]},
+        )
+        assert not result.isError, result.model_dump()
+        assert result.structuredContent["partition"] == [
+            {"field": "dt", "value": "2025-01-03"}
+        ]
+    finally:
+        fake.close()
+
+
+def test_metadata_malformed_without_knowledge_is_unavailable(client, fact_metadata):
+    fake = FakeDtb(
+        metadata={
+            "columns": ["partition_name"],
+            "data": [["amount=9"], ["dt="], ["dt"]],
+        }
+    ).start()
+    try:
+        configure_executor(client, fake.url)
+        set_token(client, "caller-token")
+        result = call(client, "sample_table_data", {"table": "dm.sales_fact"})
+        assert result.isError
+        assert result.structuredContent["code"] == "unavailable"
+        assert "最新分区" in result.structuredContent["message"]
+        assert "partition_name" in result.structuredContent["message"]
+    finally:
+        fake.close()
+
+
+@pytest.mark.parametrize(
+    "database,table",
+    [
+        ("shop'; DROP TABLE x; --", "orders"),
+        ("shop", 'orders"; DROP TABLE x; --'),
+        ("shop`", "orders"),
+        ("shop\n", "orders"),
+        ("shop", "orders;--"),
+        ("shop", "orders`"),
+    ],
+)
+def test_metadata_partition_sql_rejects_injection(database, table):
+    from semantica_dataagent.mcp_contract import ToolInvalidInput
+    from semantica_dataagent.sample_api import _metadata_partition_sql
+
+    with pytest.raises(ToolInvalidInput):
+        _metadata_partition_sql(database, table)
+
+
+def test_metadata_query_validator_accepts_generated_query():
+    from semantica_dataagent.sample_api import (
+        _metadata_partition_sql,
+        _validate_metadata_sql,
+    )
+
+    sql = _metadata_partition_sql("shop", "orders")
+    _validate_metadata_sql(sql, "shop", "orders")
+
+
+def test_metadata_query_validator_rejects_other_tables_and_filters():
+    from semantica_dataagent.mcp_contract import ToolUnavailable
+    from semantica_dataagent.sample_api import (
+        _metadata_partition_sql,
+        _validate_metadata_sql,
+    )
+
+    sql = _metadata_partition_sql("shop", "orders")
+    with pytest.raises(ToolUnavailable):
+        _validate_metadata_sql(
+            sql.replace("metadata_partition", "other_partition"), "shop", "orders"
+        )
+    with pytest.raises(ToolUnavailable):
+        _validate_metadata_sql(
+            sql.replace(
+                "WHERE t.database_name", "WHERE t.owner_id = 'x' AND t.database_name"
+            ),
+            "shop",
+            "orders",
+        )
+    with pytest.raises(ToolUnavailable):
+        _validate_metadata_sql(
+            sql.replace("AND t.status = '在用'", "OR t.status = '在用'"),
+            "shop",
+            "orders",
+        )
+
+
+def test_sample_rejects_injection_in_knowledge_table_metadata(client, monkeypatch):
+    from semantica_dataagent import knowledge
+
+    fields = [
+        {
+            "database": "shop'; DROP TABLE x; --",
+            "table": "orders",
+            "name": "dt",
+            "type": "string",
+            "comment": "",
+            "partition": True,
+        }
+    ]
+    monkeypatch.setattr(
+        knowledge,
+        "describe",
+        lambda names=None, **kwargs: [
+            {
+                "database": "shop'; DROP TABLE x; --",
+                "name": "orders",
+                "comment": "",
+                "fields": fields,
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        knowledge, "dimension_values", lambda *args: ["2025-01-03"], raising=False
+    )
+    fake = FakeDtb().start()
+    try:
+        configure_executor(client, fake.url)
+        set_token(client, "caller-token")
+        result = call(client, "sample_table_data", {"table": "shop.orders"})
+        assert result.isError
+        assert result.structuredContent["code"] == "invalid_input"
+        assert "不合法" in result.structuredContent["message"]
+        assert not fake.calls
+    finally:
+        fake.close()
