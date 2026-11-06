@@ -182,6 +182,20 @@ async def plan(body: PlanInput, user: Annotated[Requester, Depends(current_reque
     }
 
 
+async def propose_query(sql: str) -> dict:
+    """Propose a validated Doris SQL query for the questioner to confirm.
+
+    This creates a plan only; it does not execute the query. After proposing,
+    stop and wait for the questioner to confirm execution.
+    """
+    from . import sql_validation
+    from .mcp_context import current_requester
+
+    if sql_validation.validate_sql(sql, dialect="doris").get("status") != "pass":
+        raise ValueError("SQL validation did not pass")
+    return await plan(PlanInput(sql=sql), current_requester())
+
+
 async def _execute(
     query_id: str,
     body: ExecuteInput,
