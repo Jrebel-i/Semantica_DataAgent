@@ -109,6 +109,16 @@ def cleanup_expired_sessions() -> None:
             workspace = agent_root() / row.id
             if workspace.exists():
                 shutil.rmtree(workspace)
+            turn_ids = db.query(Turn.id).filter_by(conversation_id=row.id)
+            db.query(TurnEvent).filter(
+                TurnEvent.turn_id.in_(turn_ids), TurnEvent.type == "query_result"
+            ).delete(synchronize_session=False)
+            db.query(QueryExecution).filter_by(conversation_id=row.id).delete(
+                synchronize_session=False
+            )
+            db.query(AgentCredential).filter_by(conversation_id=row.id).delete(
+                synchronize_session=False
+            )
             row.resumable = False
 
 
