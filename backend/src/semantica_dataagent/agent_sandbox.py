@@ -63,14 +63,14 @@ class SessionSandbox:
         target = (
             "host.docker.internal"
             if host in ("127.0.0.1", "localhost", "::1")
-            else sorted(
+            else min(
                 socket.getaddrinfo(
                     host,
                     url.port or (443 if url.scheme == "https" else 80),
                     type=socket.SOCK_STREAM,
                 ),
                 key=lambda entry: entry[0] != socket.AF_INET,
-            )[0][4][0]
+            )[4][0]
         )
         try:
             ipaddress.ip_address(host)
