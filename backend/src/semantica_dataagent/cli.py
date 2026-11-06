@@ -187,6 +187,21 @@ def _parser() -> argparse.ArgumentParser:
         default=600.0,
         help="per-question agent timeout in seconds",
     )
+    execution = commands.add_parser("eval-exec", help="evaluate query execution")
+    execution.add_argument("--questions", required=True, type=Path)
+    execution.add_argument("--report", required=True, type=Path)
+    execution.add_argument("--base-url", required=True)
+    execution.add_argument(
+        "--token",
+        required=True,
+        help="environment variable containing the application token",
+    )
+    execution.add_argument("--agent", required=True, choices=("pi", "claude", "codex"))
+    execution.add_argument("--provider-id", required=True)
+    execution.add_argument("--model", required=True)
+    execution.add_argument("--only")
+    execution.add_argument("--max-queries", type=int, default=40)
+    execution.add_argument("--skip-reference", action="store_true")
     return parser
 
 
@@ -324,4 +339,8 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         _serve()
         return 0
+    if args.command == "eval-exec":
+        from .eval_exec import run_cli
+
+        return run_cli(args)
     return _run_eval(args)

@@ -11,6 +11,7 @@ from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Literal
 
@@ -51,6 +52,73 @@ _FILTER_TYPES = (
     exp.Between,
     exp.Is,
 )
+
+
+def compare_results(left: dict, right: dict) -> str:
+    """Compare unordered result multisets, retaining column positions."""
+    if left.get("truncated") or right.get("truncated"):
+        return "uncomparable"
+    if len(left["columns"]) != len(right["columns"]):
+        return "different"
+    left_rows, right_rows = left["rows"], right["rows"]
+    if len(left_rows) != len(right_rows):
+        return "different"
+
+    def equal_value(first, second):
+        if first is None or second is None:
+            return first is None and second is None
+        if isinstance(first, bool) or isinstance(second, bool):
+            return type(first) is type(second) and first == second
+        try:
+            number_a, number_b = Decimal(str(first)), Decimal(str(second))
+            if number_a.is_finite() and number_b.is_finite():
+                return abs(number_a - number_b) <= Decimal("1e-6") * max(
+                    abs(number_a), abs(number_b)
+                )
+        except InvalidOperation:
+            pass
+        return first == second
+
+    candidates = [
+        [
+            index
+            for index, row in enumerate(right_rows)
+            if len(row) == len(left["columns"])
+            and len(other) == len(left["columns"])
+            and all(equal_value(a, b) for a, b in zip(other, row, strict=True))
+        ]
+        for other in left_rows
+    ]
+    assigned: dict[int, int] = {}
+    for source in range(len(left_rows)):
+        queue = [source]
+        parents: dict[int, tuple[int, int] | None] = {source: None}
+        visited_targets: set[int] = set()
+        found = False
+        for current in queue:
+            # Prefer unused targets to keep repeated rows inexpensive.
+            free = next((t for t in candidates[current] if t not in assigned), None)
+            if free is not None:
+                target = free
+                while True:
+                    assigned[target] = current
+                    parent = parents[current]
+                    if parent is None:
+                        break
+                    current, target = parent
+                found = True
+                break
+            for target in candidates[current]:
+                if target in visited_targets:
+                    continue
+                visited_targets.add(target)
+                other = assigned[target]
+                if other not in parents:
+                    parents[other] = (current, target)
+                    queue.append(other)
+        if not found:
+            return "different"
+    return "equal"
 
 
 @dataclass(slots=True)
