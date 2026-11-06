@@ -366,6 +366,10 @@ def publish_pull(root, files, operation_id=None):
     try:
         parent.mkdir(exist_ok=True)
         staging.mkdir()
+        (staging / "pull-manifest.json").write_text(
+            json.dumps({"published_at": datetime.now(UTC).isoformat()}),
+            encoding="utf-8",
+        )
         for path, content in paths.items():
             target = staging.joinpath(*path.parts)
             target.parent.mkdir(parents=True, exist_ok=True)

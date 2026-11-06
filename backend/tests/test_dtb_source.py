@@ -172,3 +172,21 @@ def test_every_record_carries_source_provenance():
     assert hashes == result.hashes
     assert commit is None
     assert stats["dtb_files_hashed"] == len(result.hashes)
+
+
+def test_explicit_pull_manifest_overrides_legacy_snapshot_name(tmp_path):
+    import json
+    import shutil
+
+    root = tmp_path / "dtb"
+    root.mkdir()
+    shutil.copytree(FIXTURES / "dtb" / LATEST, root / "zzzz-old")
+    shutil.copytree(FIXTURES / "dtb" / LATEST, root / "20261101-new")
+    (root / "20261101-new" / "pull-manifest.json").write_text(
+        json.dumps({"published_at": "2026-11-06T00:00:00+00:00"})
+    )
+    from semantica_dataagent.dtb_source import DtbAdapter
+
+    result = DtbAdapter().read(tmp_path, {})
+    assert any("20261101-new" in path for path in result.hashes)
+    assert not any("zzzz-old" in path for path in result.hashes)
