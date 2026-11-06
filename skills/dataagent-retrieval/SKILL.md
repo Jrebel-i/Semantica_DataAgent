@@ -108,7 +108,9 @@ Keep the answer focused:
 
 1. State the chosen definition and scope, with document/table references.
 2. Name the exact tables and fields, with references.
-3. Give the SQL in a fenced code block and state its dialect.
+3. Give the SQL in a fenced code block and state its dialect. The final answer must
+   literally contain the block; saying that SQL was written or validated is not a
+   substitute for pasting it.
 4. Summarize `validate_sql` results. Mention any weak/unsupported join and ambiguity.
 5. Cite each conclusion with the returned reference ids. If the knowledge base does not
    support the question, say so and name the missing knowledge.
