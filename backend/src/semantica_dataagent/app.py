@@ -106,7 +106,12 @@ async def lifespan(application):
     await asyncio.to_thread(recover_applying)
     from .pull_service import recover_pulls
 
-    await asyncio.to_thread(recover_pulls)
+    try:
+        await asyncio.to_thread(recover_pulls)
+    except Exception:  # noqa: BLE001 - retry recovery on the next startup
+        import logging
+
+        logging.getLogger(__name__).exception("Pull recovery failed")
     build_queue.start()
     with sessions()() as db:
         interval = db.get(Setting, "schedule_interval_seconds")

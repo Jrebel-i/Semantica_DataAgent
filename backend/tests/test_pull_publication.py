@@ -52,7 +52,7 @@ def test_interrupted_pull_recovers_without_duplicate_commit(tmp_path, point):
         source_directory.git(root, "commit", "-m", "initial", author="tester")
         before = source_directory.git(root, "rev-parse", "HEAD").decode().strip()
     script = """
-import os, sys
+import os, sys, signal
 from semantica_dataagent import source_directory as source
 point = sys.argv[2]
 original_git = source.git
@@ -61,13 +61,13 @@ original_replace = source.os.replace
 def git(root, *args, **kwargs):
     result = original_git(root, *args, **kwargs)
     if args[0] == point:
-        os._exit(42)
+        os.kill(os.getpid(), signal.SIGKILL)
     return result
 
 def replace(src, dst):
     original_replace(src, dst)
     if point == "rename" and ".pull-" in str(src):
-        os._exit(42)
+        os.kill(os.getpid(), signal.SIGKILL)
 source.git = git
 source.os.replace = replace
 with source.repository(sys.argv[1]) as root:
@@ -78,7 +78,7 @@ with source.repository(sys.argv[1]) as root:
         env=os.environ.copy(),
         check=False,
     )
-    assert child.returncode == 42
+    assert child.returncode == -9
     with source_directory.repository(path) as root:
         head = source_directory.git(root, "rev-parse", "HEAD").decode().strip()
         if point == "commit":

@@ -954,3 +954,62 @@ def test_interrupted_pull_recovers_committed_snapshot_once(client, tmp_path):
         from semantica_dataagent.db import Build
 
         assert db.query(Build).filter(Build.id == record.build_id).count() == 1
+
+
+def test_failed_recovery_does_not_prevent_startup_and_can_retry(tmp_path, monkeypatch):
+    from datetime import UTC, datetime
+
+    from cryptography.fernet import Fernet
+    from fastapi.testclient import TestClient
+
+    from semantica_dataagent import pull_service
+    from semantica_dataagent.app import app
+    from semantica_dataagent.cli import initialize
+    from semantica_dataagent.db import PullRecord, sessions
+    from semantica_dataagent.source_directory import publish_pull, repository
+
+    monkeypatch.setenv("DATAAGENT_DB_PATH", str(tmp_path / "recover.db"))
+    monkeypatch.setenv("DATAAGENT_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    token = initialize()
+    root = tmp_path / "source"
+    with sessions().begin() as db:
+        row = PullRecord(
+            status="running",
+            started_at=datetime.now(UTC),
+            tables=5,
+            tasks=3,
+            source_directory=str(root),
+            operation_id="retry-test",
+        )
+        db.add(row)
+        db.flush()
+        record_id = row.id
+    with repository(root) as repo:
+        commit = publish_pull(repo, {"任务信息.json": b"x"}, operation_id="retry-test")
+    original = pull_service.add_queued_build
+
+    def fail(*args, **kwargs):
+        raise RuntimeError("queue unavailable")
+
+    monkeypatch.setattr(pull_service, "add_queued_build", fail)
+    with TestClient(app) as client:
+        assert (
+            client.get(
+                "/api/v1/me", headers={"Authorization": f"Bearer {token}"}
+            ).status_code
+            == 200
+        )
+    with sessions()() as db:
+        assert db.get(PullRecord, record_id).status == "running"
+    monkeypatch.setattr(pull_service, "add_queued_build", original)
+    monkeypatch.setattr(pull_service.build_queue, "enqueue", lambda: None)
+    pull_service.recover_pulls()
+    with sessions()() as db:
+        row = db.get(PullRecord, record_id)
+        assert (row.status, row.commit, row.tables, row.tasks) == (
+            "succeeded",
+            commit,
+            5,
+            3,
+        )
+        assert row.build_id is not None

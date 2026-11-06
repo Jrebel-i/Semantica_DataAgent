@@ -68,7 +68,9 @@ def run_pull():
             with httpx.Client(timeout=30, follow_redirects=False) as client:
                 files, counts = puller.fetch(client, url, token)
             with sessions().begin() as db:
-                db.get(PullRecord, record_id).source_directory = source
+                record = db.get(PullRecord, record_id)
+                record.source_directory = source
+                record.tables, record.tasks = counts["tables"], counts["tasks"]
             with repository(source) as root:
                 commit = publish_pull(root, files, operation_id=operation_id)
             finalize_pull(record_id, commit, counts)
