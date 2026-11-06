@@ -11,9 +11,9 @@ ROOT = Path(__file__).resolve().parents[2]
 def pod_spec():
     module = importlib.util.find_spec("semantica_dataagent.k8s_sandbox")
     assert module is not None, "Kubernetes session sandbox must be implemented"
-    from semantica_dataagent.k8s_sandbox import build_pod_spec
-
     from unittest.mock import patch
+
+    from semantica_dataagent.k8s_sandbox import build_pod_spec
 
     def resolve(host, *args, **kwargs):
         ips = {

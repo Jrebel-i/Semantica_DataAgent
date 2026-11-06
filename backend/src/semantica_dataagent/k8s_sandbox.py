@@ -266,9 +266,19 @@ class KubernetesSessionSandbox:
         import tarfile
 
         data = io.BytesIO()
+
+        def regular_only(member):
+            if not (member.isfile() or member.isdir()):
+                raise ValueError(f"unsupported session file: {member.name}")
+            return member
+
         with tarfile.open(fileobj=data, mode="w") as archive:
-            archive.add(self.workspace / "work", arcname="workspace")
-            archive.add(self.workspace / "sessions", arcname="sessions")
+            archive.add(
+                self.workspace / "work", arcname="workspace", filter=regular_only
+            )
+            archive.add(
+                self.workspace / "sessions", arcname="sessions", filter=regular_only
+            )
         self._transfer("upload", data.getvalue())
 
     def _download(self):
@@ -280,6 +290,8 @@ class KubernetesSessionSandbox:
         data = self._transfer("download")
         with tempfile.TemporaryDirectory(dir=self.workspace) as directory:
             with tarfile.open(fileobj=io.BytesIO(data), mode="r:") as archive:
+                if any(not (item.isfile() or item.isdir()) for item in archive):
+                    raise ValueError("unsupported session archive entry")
                 archive.extractall(directory, filter="data")
             for source, target in (("workspace", "work"), ("sessions", "sessions")):
                 shutil.copytree(

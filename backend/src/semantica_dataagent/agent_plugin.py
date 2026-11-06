@@ -30,7 +30,7 @@ from .agent_types import (
     AgentTurnRequest,
 )
 from .mcp_context import CONVERSATION_HEADER, TURN_HEADER
-from .session_runtime import runtime_available, runtime_class
+from .session_runtime import LocalSessionRuntime, runtime_available, runtime_class
 
 TOKEN_ENV = "DATAAGENT_TOKEN"
 KEY_ENV = "DATAAGENT_PROVIDER_KEY"
@@ -341,15 +341,12 @@ class SandboxTurn:
         sandbox_class=None,
     ):
         self.request = request
-        self.sandbox = None
-        self.model_url = request.provider.base_url
-        self.mcp_url = request.mcp_url
-        if sandbox_class is not None:
-            self.sandbox = sandbox_class(
-                request.workspace, self.model_url, self.mcp_url
-            )
-            self.model_url = self.sandbox.model_url
-            self.mcp_url = self.sandbox.mcp_url
+        runtime = sandbox_class or LocalSessionRuntime
+        self.sandbox = runtime(
+            request.workspace, request.provider.base_url, request.mcp_url
+        )
+        self.model_url = self.sandbox.model_url
+        self.mcp_url = self.sandbox.mcp_url
 
     async def __aenter__(self) -> Self:
         if self.sandbox is not None:
