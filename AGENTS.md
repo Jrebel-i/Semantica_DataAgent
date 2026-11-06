@@ -30,4 +30,6 @@ Issue 和 spec 记在 GitHub Issues（`Jrebel-i/Semantica_DataAgent`），用 `g
 
 本项目基于 Semantica 搭建 DataAgent。
 
+新增在线 agent（runner 插件）见 [docs/agents/adding-an-agent.md](docs/agents/adding-an-agent.md)。
+
 <!-- 只写 agent 在代码和配置里查不到的内容：约定、坑、某个选择背后的原因。命令、目录结构这类一查就知道的，不要写在这里。 -->
