@@ -1,0 +1,6 @@
+[
+  {"database": "shop", "table": "orders", "name": "id", "type": "string", "comment": "order id", "partition": false},
+  {"database": "shop", "table": "orders", "name": "dt", "type": "string", "comment": "day partition", "partition": true},
+  {"database": "shop", "table": "orders", "name": "amount", "type": "decimal", "comment": "order amount", "partition": false},
+  {"database": "shop", "table": "orders", "name": "status", "type": "string", "comment": "order status", "partition": false}
+]
