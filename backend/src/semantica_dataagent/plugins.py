@@ -29,6 +29,14 @@ class ParseResult:
     column_reason: str | None = None
 
 
+class ExecutorError(RuntimeError):
+    """The configured execution platform failed."""
+
+
+class ExecutorAuthenticationError(ExecutorError):
+    """The caller credential was rejected."""
+
+
 class QueryExecutor(Protocol):
     async def submit(self, sql: str, limit: int) -> str: ...
 

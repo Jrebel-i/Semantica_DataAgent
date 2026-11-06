@@ -6,12 +6,14 @@ from urllib.parse import quote
 
 import httpx
 
+from .plugins import ExecutorAuthenticationError, ExecutorError
 
-class DtbError(RuntimeError):
+
+class DtbError(ExecutorError):
     pass
 
 
-class DtbAuthenticationError(DtbError):
+class DtbAuthenticationError(DtbError, ExecutorAuthenticationError):
     pass
 
 

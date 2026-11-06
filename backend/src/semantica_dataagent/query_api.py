@@ -19,8 +19,7 @@ from . import knowledge
 from .auth import Requester, admin, current_requester
 from .crypto import decrypt
 from .db import PersonalDtbToken, QueryAudit, QueryExecution, sessions
-from .dtb_executor import DtbAuthenticationError, DtbError
-from .plugins import configured
+from .plugins import ExecutorAuthenticationError, ExecutorError, configured
 
 router = APIRouter()
 
@@ -216,7 +215,7 @@ async def _execute(
             or len(rows) > cap
             or not all(isinstance(r, list) and len(r) == len(columns) for r in rows)
         ):
-            raise DtbError("DTB 返回无效结果或超过下载上限")
+            raise ExecutorError("执行器返回无效结果或超过下载上限")
         status = "succeeded"
         return {
             "id": query_id,
@@ -224,11 +223,11 @@ async def _execute(
             "rows": rows[: body.limit],
             "row_count": len(rows),
         }
-    except DtbAuthenticationError as exc:
+    except ExecutorAuthenticationError as exc:
         raise HTTPException(401, str(exc)) from exc
     except TimeoutError as exc:
         raise HTTPException(504, "查询超时") from exc
-    except DtbError as exc:
+    except ExecutorError as exc:
         raise HTTPException(502, str(exc)) from exc
     finally:
         with sessions().begin() as db:
@@ -341,9 +340,9 @@ async def download(
             content, content_type = await plugin.bind(config, token).download(
                 key, format
             )
-    except DtbAuthenticationError as exc:
+    except ExecutorAuthenticationError as exc:
         raise HTTPException(401, str(exc)) from exc
-    except (DtbError, TimeoutError) as exc:
+    except (ExecutorError, TimeoutError) as exc:
         raise HTTPException(502, "下载失败") from exc
     return Response(
         content,
