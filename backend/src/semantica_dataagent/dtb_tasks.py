@@ -26,6 +26,15 @@ _BEELINE_E = re.compile(
     r"(?m)\bbeeline\b[^\n]*?(?<![\w-])-e(?:[ \t]*=[ \t]*|[ \t]+)"
     r"(?P<argument>\"(?:[^\"\\]|\\.)*\"|'(?:[^'\\]|\\.)*'|[^\s;]+)"
 )
+_MYSQL_E = re.compile(
+    r"(?m)\bmysql\b[^\n]*?(?<![\w-])-e(?:[ \t]*=[ \t]*|[ \t]+)"
+    r"(?P<argument>\"(?:[^\"\\]|\\.)*\"|'(?:[^'\\]|\\.)*'|[^\s;]+)"
+)
+_MYSQL_HEREDOC = re.compile(
+    r"(?m)\bmysql\b[^\n]*?<<-?[ \t]*(?P<quote>['\"]?)(?P<delimiter>[A-Za-z_][\w]*)"
+    r"(?P=quote)[^\n]*\n(?P<body>.*?)(?=^[ \t]*(?P=delimiter)[ \t]*$)",
+    re.DOTALL,
+)
 _TEMP_VIEW = re.compile(
     r"(?is)\bcreate\s+(?:or\s+replace\s+)?temporary\s+view\s+"
     r"(?:if\s+not\s+exists\s+)?(?P<name>[A-Za-z_][\w$]*)\b(?P<body>[^;]*)"
@@ -302,6 +311,29 @@ class DtbTaskParser:
                         parsed_reasons.add("beeline")
                 else:
                     failed_sql += 1
+
+        submissions = [
+            _submission_sql(match, assignments, cache, unresolved)
+            for match in _MYSQL_E.finditer(source)
+        ]
+        submissions.extend(
+            match.group("body")
+            if match.group("quote")
+            else _expand(match.group("body"), assignments, cache)
+            for match in _MYSQL_HEREDOC.finditer(source)
+        )
+        for sql in submissions:
+            if not sql:
+                continue
+            parsed = _parse_sql(sql, name, parameters, views)
+            if parsed.status == "success":
+                column_edges.update(parsed.column_edges or [])
+                if parsed.column_status == "failed":
+                    column_reasons.append(parsed.column_reason or "Column parse failed")
+                if _add_sql(parsed, reads, writes, edges, views):
+                    parsed_reasons.add("mysql")
+            else:
+                failed_sql += 1
 
         if failed_sql:
             column_reasons.append(

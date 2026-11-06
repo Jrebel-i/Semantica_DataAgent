@@ -142,3 +142,16 @@ def test_shell_with_large_catalog_finishes_promptly():
     elapsed = time.monotonic() - started
     assert result.column_edges == [("src.items", "id", "dst.items", "id")]
     assert elapsed < 0.5, f"shell parsing took {elapsed:.3f}s"
+
+
+def test_mysql_submissions_resolve_columns():
+    schema = {"src.items": ["id"], "dst.items": ["id"]}
+    scripts = [
+        'database=src\nmysql -h host -e "INSERT INTO dst.items SELECT id FROM ${database}.items"',
+        "mysql --host=host <<EOF\nINSERT INTO dst.items SELECT id FROM src.items;\nEOF\n",
+        "mysql --host=host <<'SQL'\nINSERT INTO dst.items SELECT id FROM src.items;\nSQL\n",
+    ]
+    for source in scripts:
+        result = DtbTaskParser().parse(task("shell", source), {"schema": schema})
+        assert result.column_status == "success", result.column_reason
+        assert result.column_edges == [("src.items", "id", "dst.items", "id")]
