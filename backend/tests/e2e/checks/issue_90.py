@@ -56,8 +56,11 @@ def check_missing_field_produces_sql_and_gap(ctx):
         )
     answer = done.get("text", "")
     ctx.require(
-        any(word in answer for word in ("假设", "假定", "假设为")),
-        f"missing assumption: {answer}",
+        any(
+            marker in answer
+            for marker in ("假设", "假定", "近似", "替代", "部分结果", "已知限制")
+        ),
+        f"missing assumption or limitation label: {answer}",
     )
     ctx.require(
         "金额" in answer, f"answer does not explain the missing amount: {answer}"

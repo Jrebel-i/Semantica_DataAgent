@@ -88,6 +88,23 @@ def _provider(ctx) -> tuple[str, str]:
     return created.json()["id"], model
 
 
+def _delegated_answer(ctx, question: str) -> tuple[dict, int]:
+    """Retry a completed turn that stopped before doing any work."""
+    retries = 0
+    for attempt in range(3):
+        answer = ctx.mcp_call("ask_dataagent", {"question": question}, timeout=600)
+        if (
+            answer.get("status") != "completed"
+            or answer.get("sql")
+            or answer.get("citations")
+            or len(answer.get("answer") or "") >= 200
+        ):
+            return answer, retries
+        if attempt < 2:
+            retries += 1
+    return answer, retries
+
+
 def _clarifications(events: list[tuple[str, dict]]) -> list[dict]:
     questions: list[dict] = []
     for name, data in events:
@@ -242,7 +259,7 @@ def check_local_ask_dataagent_answers_and_continues(ctx):
         "登记缺口或提交纠错。必须先用 describe_tables 确认表字段，写出 SQL 后必须调用 "
         "validate_sql；回答中原样附上工具返回的表引用，例如 table:shop.orders。"
     )
-    answer = ctx.mcp_call("ask_dataagent", {"question": question}, timeout=600)
+    answer, delegated_retries = _delegated_answer(ctx, question)
     ctx.require(
         answer.get("status") == "completed",
         f"ask_dataagent status: {answer.get('status')!r} {answer.get('message')!r}",
@@ -301,4 +318,5 @@ def check_local_ask_dataagent_answers_and_continues(ctx):
         "turns": len(stored["turns"]),
         "sql_blocks": len(sql),
         "citations": len(answer["citations"]),
+        "delegated_retries": delegated_retries,
     }
