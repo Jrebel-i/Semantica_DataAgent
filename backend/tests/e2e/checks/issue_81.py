@@ -1,0 +1,158 @@
+"""Exercise confirmed online queries with a fake DTB and the real model gateway."""
+
+import json
+import os
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from threading import Thread
+
+
+def events(body):
+    found = []
+    for block in body.split("\n\n"):
+        name, data = None, None
+        for line in block.splitlines():
+            if line.startswith("event: "):
+                name = line[7:]
+            if line.startswith("data: "):
+                data = json.loads(line[6:])
+        if name:
+            found.append((name, data))
+    return found
+
+
+def check_online_query_confirmation(ctx):
+    calls = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def do_POST(self):
+            request = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            calls.append(request)
+            payload = {"status": 200, "data": {"queryKey": "query-81"}}
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(json.dumps(payload).encode())
+
+        def do_GET(self):
+            if "/result/" in self.path:
+                data = {
+                    "progress": 1,
+                    "columns": [{"name": "sales", "type": "long"}],
+                    "data": [[12345]],
+                }
+                payload = json.dumps({"status": 200, "data": data}).encode()
+            else:
+                payload = b"sales\n12345\n"
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(payload)
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        response = ctx.rest.put(
+            "/api/v1/plugins/executor/dtb",
+            json={
+                "enabled": True,
+                "parameters": {
+                    "base_url": f"http://127.0.0.1:{server.server_port}",
+                    "row_limit": 100,
+                    "download_limit": 100,
+                    "timeout_seconds": 5,
+                },
+            },
+        )
+        ctx.require(response.status_code == 200, response.text)
+        ctx.require(
+            ctx.rest.put(
+                "/api/v1/me/dtb-token", json={"token": "fake-token"}
+            ).status_code
+            == 200,
+            "token setup failed",
+        )
+        model = os.environ.get("TEST_PI_MODEL", "deepseek-v4.1-flash#claude")
+        provider = ctx.rest.post(
+            "/api/v1/providers",
+            json={
+                "name": "issue 81 e2e",
+                "type": "anthropic-messages",
+                "base_url": os.environ.get("TEST_PI_BASE_URL", "http://127.0.0.1:3425"),
+                "api_key": "test",
+                "models": [model],
+            },
+        )
+        ctx.require(provider.status_code == 201, provider.text)
+        with ctx.rest.stream(
+            "POST",
+            "/api/v1/conversations/ask",
+            json={
+                "question": "请计算 shop.orders 在 2025-01-01 的销售总额，请先查询表结构、用 Doris SQL 校验后调用 propose_query 提议执行，等待确认。",
+                "agent": "pi",
+                "provider_id": provider.json()["id"],
+                "model": model,
+            },
+            timeout=600,
+        ) as response:
+            ctx.require(response.status_code == 200, str(response.status_code))
+            initial = events("".join(response.iter_text()))
+        plan_events = [data for name, data in initial if name == "query_plan"]
+        ctx.require(len(plan_events) == 1, f"missing query plan: {initial[-5:]}")
+        ctx.require(not calls, "query ran before confirmation")
+        info = next(data for name, data in initial if name == "conversation")
+        plan = plan_events[0]
+        path = f"/api/v1/conversations/{info['conversation_id']}/turns/{info['turn_id']}/queries/{plan['id']}/execute"
+        other = ctx.rest.post(
+            "/api/v1/tokens", json={"name": "issue-81-other", "role": "user"}
+        )
+        ctx.require(other.status_code == 201, other.text)
+        rejected = ctx.rest.post(
+            path, headers={"Authorization": "Bearer " + other.json()["token"]}
+        )
+        ctx.require(
+            rejected.status_code == 404 and not calls,
+            f"other user confirmation accepted: {rejected.status_code}",
+        )
+        with ctx.rest.stream("POST", path, timeout=600) as response:
+            ctx.require(response.status_code == 200, str(response.status_code))
+            finished = events("".join(response.iter_text()))
+        result = next((data for name, data in finished if name == "query_result"), None)
+        ctx.require(
+            result and result["columns"] == ["sales"] and result["rows"] == [[12345]],
+            f"incorrect result: {result}",
+        )
+        ctx.require(
+            len(calls) == 1 and calls[0]["dataSource"] == "doris_ai",
+            f"incorrect execution count: {calls}",
+        )
+        done = next((data for name, data in finished if name == "done"), None)
+        ctx.require(
+            done and done.get("text"), f"agent conclusion missing: {finished[-3:]}"
+        )
+        ctx.require(
+            ctx.rest.post(path).status_code == 409, "confirmation could be replayed"
+        )
+        detail = ctx.rest.get(f"/api/v1/conversations/{info['conversation_id']}")
+        ctx.require(
+            detail.status_code == 200
+            and any(
+                e["type"] == "query_result" for e in detail.json()["turns"][0]["events"]
+            ),
+            "result was not saved",
+        )
+        ctx.require(
+            ctx.rest.get(f"/api/v1/queries/{plan['id']}/download?format=csv").content
+            == b"sales\n12345\n",
+            "download failed",
+        )
+        return {
+            "conversation_id": info["conversation_id"],
+            "rows": result["rows"],
+            "conclusion": done["text"],
+        }
+    finally:
+        server.shutdown()
+        thread.join()
+        server.server_close()
