@@ -351,10 +351,24 @@ def test_sample_missing_latest_partition_is_unavailable(client, monkeypatch):
         ],
     )
     monkeypatch.setattr(knowledge, "dimension_values", lambda *args: [], raising=False)
+    set_token(client, "caller-token")
     result = call(client, "sample_table_data", {"table": "shop.orders"})
     assert result.isError
     assert result.structuredContent["code"] == "unavailable"
     assert "最新分区" in result.structuredContent["message"]
+
+
+def test_sample_without_token_or_partition_reports_missing_token(client, fact_metadata):
+    fake = FakeDtb().start()
+    try:
+        configure_executor(client, fake.url)
+        result = call(client, "sample_table_data", {"table": "dm.sales_fact"})
+        assert result.isError
+        assert result.structuredContent["code"] == "invalid_input"
+        assert "DTB token" in result.structuredContent["message"]
+        assert not fake.calls
+    finally:
+        fake.close()
 
 
 def test_sample_schema_is_self_contained_and_caps_limit(client):
