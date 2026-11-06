@@ -736,8 +736,9 @@ export function ChatPage({
   }
 
   useEffect(() => {
-    if (citationDetail) setContextTab("schema");
-  }, [citationDetail]);
+    if (citationDetail && !latestPlan && !contextTouched.current)
+      setContextTab("schema");
+  }, [citationDetail, latestPlan]);
 
   const refreshConversations = useCallback(async () => {
     try {
@@ -1603,7 +1604,11 @@ export function ChatPage({
                   messages={t}
                   copied={copied}
                   onCopy={(sql) => void copySql(sql)}
-                  onOpen={(ref) => void openCitation(ref)}
+                  onOpen={(ref) => {
+                    contextTouched.current = true;
+                    setContextTab("schema");
+                    void openCitation(ref);
+                  }}
                   onClarify={chooseClarification}
                   onExecute={(turn, plan) => void executePlan(turn, plan)}
                   onShowResult={() => {
@@ -1648,7 +1653,11 @@ export function ChatPage({
                       <CitationList
                         citations={live.citations}
                         messages={t}
-                        onOpen={(ref) => void openCitation(ref)}
+                        onOpen={(ref) => {
+                          contextTouched.current = true;
+                          setContextTab("schema");
+                          void openCitation(ref);
+                        }}
                       />
                       <ClarificationList
                         groups={live.clarifications}
