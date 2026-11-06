@@ -528,21 +528,24 @@ class DtbPuller:
             base_url,
             token,
             f"SELECT * FROM hive.dimensions.{name}{where} LIMIT {dimension_limit}",
-            "csv",
+            "json",
             data_source="doris_query",
             row_limit=dimension_limit,
             allow_truncation=True,
         )
         try:
-            reader = csv.DictReader(
-                io.StringIO(content.decode("utf-8-sig"), newline="")
-            )
-            if not reader.fieldnames or any(not value for value in reader.fieldnames):
-                raise TableFailure("invalid_dimension_columns")
-            rows = list(reader)
-            if any(None in row for row in rows):
-                raise TableFailure("invalid_dimension_rows")
-        except (UnicodeError, csv.Error) as exc:
+            payload = json.loads(content)
+            descriptors = payload["columns"]
+            data = payload["data"]
+            if not isinstance(descriptors, list) or not descriptors or not isinstance(data, list):
+                raise ValueError("Invalid dimension result")
+            names = [column["name"] for column in descriptors]
+            if any(not isinstance(name, str) or not name for name in names) or len(set(names)) != len(names):
+                raise ValueError("Invalid dimension columns")
+            if any(not isinstance(row, list) or len(row) != len(names) or any(value is not None and not isinstance(value, str) for value in row) for row in data):
+                raise ValueError("Invalid dimension rows")
+            rows = [dict(zip(names, row, strict=True)) for row in data]
+        except (ValueError, TypeError, KeyError, UnicodeError) as exc:
             raise TableFailure("invalid_dimension_rows") from exc
         if stat and len(rows) != min(stat["records"], dimension_limit):
             raise TableFailure("dimension_row_count_mismatch")

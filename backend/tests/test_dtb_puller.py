@@ -741,5 +741,5 @@ def test_dimension_json_preserves_special_values():
                    dimension_rows={"dim_special": [["value"], *[[v] for v in values]]})
     files, counts = run_fetch(fake, {"layer": "dimensions", "max_tables": 1})
     assert counts["failures"] == []
-    rows = [json.loads(line) for line in files["dimensions/dim_special/rows.jsonl"].splitlines()]
+    rows = [json.loads(line) for line in files["dimensions/dim_special/current/rows.jsonl"].splitlines()]
     assert rows == [{"value": v} for v in values]
