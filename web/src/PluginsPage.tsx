@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Alert } from "antd";
 import type { Messages } from "./i18n";
 
 type Schema = {
@@ -150,10 +151,16 @@ export function PluginsPage({
     }
   }
   return (
-    <section>
-      <h2>{t.plugins}</h2>
-      {failure && <p role="alert">{t.error}</p>}
-      <fieldset>
+    <section className="stack">
+      <div className="page-header">
+        <div>
+          <h1 className="page-title">{t.plugins}</h1>
+          <p className="page-subtitle">{t.pluginsHint}</p>
+        </div>
+      </div>
+      {failure && <Alert type="error" title={t.error} />}
+      <section className="card form-card">
+        <h2 className="card-title">{t.dimLimit}</h2>
         <label>
           {t.dimLimit}
           <input
@@ -183,9 +190,9 @@ export function PluginsPage({
         >
           {t.save}
         </button>
-      </fieldset>
-      <fieldset>
-        <legend>{t.langfuseSettings}</legend>
+      </section>
+      <section className="card form-card">
+        <h2 className="card-title">{t.langfuseSettings}</h2>
         <p>{t.langfuseDisclosure}</p>
         <label>
           {t.langfuseEnabled}
@@ -241,9 +248,9 @@ export function PluginsPage({
         >
           {t.save}
         </button>
-      </fieldset>
-      <fieldset>
-        <legend>{t.embeddingSettings}</legend>
+      </section>
+      <section className="card form-card">
+        <h2 className="card-title">{t.embeddingSettings}</h2>
         {(
           [
             ["embedding_concurrency", t.embeddingConcurrency, "1"],
@@ -286,16 +293,16 @@ export function PluginsPage({
         >
           {t.save}
         </button>
-      </fieldset>
+      </section>
       {plugins.map((plugin) => {
         const key = `${plugin.category}/${plugin.id}`;
         const issues = errors[key] || [];
         return (
-          <fieldset key={key}>
-            <legend>
+          <section className="card form-card" key={key}>
+            <h2 className="card-title">
               {plugin.display_name} ({plugin.category} / {plugin.id} /{" "}
               {plugin.version})
-            </legend>
+            </h2>
             <label>
               <input
                 type="checkbox"
@@ -407,12 +414,12 @@ export function PluginsPage({
                 </p>
               ))}
             <button onClick={() => void save(plugin)}>{t.save}</button>
-          </fieldset>
+          </section>
         );
       })}
       {rules && (
-        <fieldset>
-          <legend>{t.filters}</legend>
+        <section className="card form-card">
+          <h2 className="card-title">{t.filters}</h2>
           {(Object.keys(rules) as (keyof Rules)[]).map((key) => (
             <div key={key}>
               <label>
@@ -432,9 +439,9 @@ export function PluginsPage({
           ))}
           <p>{t.patternsHint}</p>
           <button onClick={() => void saveRules()}>{t.save}</button>
-        </fieldset>
+        </section>
       )}
-      <fieldset>
+      <section className="card form-card">
         <label>
           {t.sessionRetention}
           <input
@@ -463,7 +470,7 @@ export function PluginsPage({
         >
           {t.save}
         </button>
-      </fieldset>
+      </section>
     </section>
   );
 }

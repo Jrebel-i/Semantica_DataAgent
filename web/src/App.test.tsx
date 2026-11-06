@@ -10,6 +10,14 @@ import {
 import { App } from "./App";
 
 beforeEach(() => {
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  );
   localStorage.clear();
   Object.defineProperty(window, "matchMedia", {
     writable: true,
@@ -51,8 +59,8 @@ test("sign in and render dependency states", async () => {
     target: { value: "token" },
   });
   fireEvent.click(screen.getByRole("button", { name: /登\s*录/ }));
-  expect(await screen.findByText("正常")).toBeTruthy();
-  expect(screen.getByText("不可用")).toBeTruthy();
+  expect(await screen.findByText(/neo4j: 正常.*1 ms/)).toBeTruthy();
+  expect(screen.getByText(/milvus: 不可用.*2 ms/)).toBeTruthy();
   expect(localStorage.getItem("token")).toBe("token");
 });
 
@@ -107,6 +115,7 @@ test("admin issues and revokes a token", async () => {
   );
   localStorage.setItem("token", "admin");
   render(<App />);
+  fireEvent.click(await screen.findByRole("link", { name: "配置" }));
   fireEvent.click(await screen.findByRole("link", { name: "令牌管理" }));
   fireEvent.click(await screen.findByRole("button", { name: "发放令牌" }));
   fireEvent.change(screen.getByLabelText("名称"), {
@@ -144,6 +153,8 @@ test("browse tables and view field details", async () => {
     vi.fn(async (url: string) => {
       if (url === "/api/v1/me") return new Response("{}", { status: 200 });
       if (url === "/api/v1/categories") return Response.json([]);
+      if (url.startsWith("/api/v1/document?"))
+        return Response.json({ path: "sales.md", content: "订单定义" });
       if (url.startsWith("/api/v1/table-lineage"))
         return Response.json({ upstream: [], downstream: [], tasks: [] });
       if (url.startsWith("/api/v1/tables"))
@@ -154,6 +165,13 @@ test("browse tables and view field details", async () => {
               name: "orders",
               comment: "交易订单",
               ref: "table:shop.orders",
+              documents: [
+                {
+                  ref: "document:metrics/sales.md",
+                  category: "metrics",
+                  path: "sales.md",
+                },
+              ],
               fields: [
                 {
                   name: "dt",
@@ -170,10 +188,12 @@ test("browse tables and view field details", async () => {
     }),
   );
   render(<App />);
-  fireEvent.click(await screen.findByRole("link", { name: "知识浏览" }));
+  fireEvent.click(await screen.findByRole("link", { name: "知识" }));
   fireEvent.click(await screen.findByText("orders"));
   expect(await screen.findByText("日期分区")).toBeTruthy();
   expect(screen.getByText("string")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "sales.md" }));
+  expect(await screen.findByText("订单定义")).toBeTruthy();
 });
 
 test("search debug is accessible from navigation", async () => {
@@ -183,11 +203,13 @@ test("search debug is accessible from navigation", async () => {
     "fetch",
     vi.fn(async (url: string) => {
       if (url === "/api/v1/me") return Response.json({ role: "user" });
-      if (url === "/api/v1/categories") return Response.json([]);
+      if (url === "/api/v1/categories" || url.startsWith("/api/v1/tables"))
+        return Response.json([]);
       return Response.json({});
     }),
   );
   render(<App />);
+  fireEvent.click(await screen.findByRole("link", { name: "知识" }));
   fireEvent.click(await screen.findByRole("link", { name: "检索调试" }));
   expect(screen.getByRole("heading", { name: "检索调试" })).toBeTruthy();
   expect(screen.getByLabelText("查询内容")).toBeTruthy();
@@ -205,6 +227,7 @@ test("MCP access page is reachable from navigation", async () => {
     ),
   );
   render(<App />);
+  fireEvent.click(await screen.findByRole("link", { name: "个人设置" }));
   fireEvent.click(await screen.findByRole("link", { name: "MCP 接入" }));
   expect(screen.getByRole("heading", { name: "MCP 接入" })).toBeTruthy();
   expect(screen.getByLabelText("MCP 连接地址")).toBeTruthy();

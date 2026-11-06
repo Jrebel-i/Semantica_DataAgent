@@ -89,67 +89,74 @@ export function TokensPage({
     setIssued("");
   };
   return (
-    <section>
-      <Typography.Title level={2}>{t.tokens}</Typography.Title>
+    <section className="stack">
+      <div className="page-header">
+        <div>
+          <h1 className="page-title">{t.tokens}</h1>
+          <p className="page-subtitle">{t.tokenHint}</p>
+        </div>
+        <div className="page-actions">
+          <Button
+            autoInsertSpace={false}
+            type="primary"
+            onClick={() => {
+              setOpen(true);
+              setName("");
+              setRole("user");
+              setError("");
+            }}
+          >
+            {t.issue}
+          </Button>
+        </div>
+      </div>
       {error && <Alert type="error" title={error} />}
-      <Space style={{ marginBottom: 16 }}>
-        <Button
-          autoInsertSpace={false}
-          type="primary"
-          onClick={() => {
-            setOpen(true);
-            setName("");
-            setRole("user");
-            setError("");
-          }}
-        >
-          {t.issue}
-        </Button>
-      </Space>
-      <Table
-        rowKey="id"
-        dataSource={rows}
-        pagination={false}
-        columns={[
-          { title: t.name, dataIndex: "name" },
-          {
-            title: t.role,
-            render: (_, row) =>
-              row.role === "admin" ? t.roleAdmin : t.roleUser,
-          },
-          {
-            title: t.created,
-            render: (_, row) => localTime(row.created_at),
-          },
-          {
-            title: t.lastUsed,
-            render: (_, row) =>
-              row.last_used_at ? localTime(row.last_used_at) : t.never,
-          },
-          {
-            title: t.status,
-            render: (_, row) =>
-              row.revoked ? (
-                <Tag color="red">{t.revoked}</Tag>
-              ) : (
-                <Tag color="green">{t.active}</Tag>
-              ),
-          },
-          {
-            title: t.actions,
-            render: (_, row) =>
-              !row.revoked && (
-                <Button
-                  autoInsertSpace={false}
-                  danger
-                  onClick={() => setConfirm(row.id)}
-                >
-                  {t.revoke}
-                </Button>
-              ),
-          },
-        ]}
-      />
+      <div className="card section-card token-table-card">
+        <Table
+          rowKey="id"
+          dataSource={rows}
+          pagination={false}
+          columns={[
+            { title: t.name, dataIndex: "name" },
+            {
+              title: t.role,
+              render: (_, row) =>
+                row.role === "admin" ? t.roleAdmin : t.roleUser,
+            },
+            {
+              title: t.created,
+              render: (_, row) => localTime(row.created_at),
+            },
+            {
+              title: t.lastUsed,
+              render: (_, row) =>
+                row.last_used_at ? localTime(row.last_used_at) : t.never,
+            },
+            {
+              title: t.status,
+              render: (_, row) =>
+                row.revoked ? (
+                  <Tag color="red">{t.revoked}</Tag>
+                ) : (
+                  <Tag color="green">{t.active}</Tag>
+                ),
+            },
+            {
+              title: t.actions,
+              render: (_, row) =>
+                !row.revoked && (
+                  <Button
+                    autoInsertSpace={false}
+                    danger
+                    onClick={() => setConfirm(row.id)}
+                  >
+                    {t.revoke}
+                  </Button>
+                ),
+            },
+          ]}
+        />
+      </div>
       {open && (
         <Modal
           destroyOnHidden

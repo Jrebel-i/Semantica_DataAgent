@@ -693,3 +693,30 @@ def test_full_build_applies_field_override_on_reimport(tmp_path, monkeypatch):
             assert build.status == "succeeded", build.error
     assert observed == ["corrected", "corrected"]
     assert original.data["comment"] == "exported"
+
+
+def test_user_can_submit_table_correction_via_rest(client, monkeypatch):
+    from semantica_dataagent import knowledge
+
+    c, admin_token = client
+    requester = _requester(role="user", token="issue79-corrector")
+    monkeypatch.setattr(knowledge, "existing_refs", lambda refs: set(refs))
+    monkeypatch.setattr(knowledge, "settings", lambda: {"knowledge_generation": "test"})
+    monkeypatch.setattr(knowledge, "read_graph", lambda values: None)
+    monkeypatch.setattr(
+        knowledge, "execute", lambda *args: [{"node": {"comment": "原说明"}}]
+    )
+    response = c.post(
+        "/api/v1/corrections",
+        headers={"Authorization": f"Bearer {requester.token}"},
+        json={"target": "table:shop.orders", "patch": "新说明", "reason": "口径更新"},
+    )
+    assert response.status_code == 201, response.text
+    assert response.json()["status"] == "pending"
+    reviewed = c.get(
+        "/api/v1/corrections", headers={"Authorization": f"Bearer {admin_token}"}
+    )
+    assert any(
+        row["owner_id"] == requester.id and row["patch"] == "新说明"
+        for row in reviewed.json()
+    )

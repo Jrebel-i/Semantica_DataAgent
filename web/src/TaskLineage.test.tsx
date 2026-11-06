@@ -11,6 +11,14 @@ afterEach(() => {
 
 test("shows table dependencies, evidence and producing tasks", async () => {
   vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  );
+  vi.stubGlobal(
     "fetch",
     vi.fn(async () =>
       Response.json({
@@ -38,7 +46,7 @@ test("shows table dependencies, evidence and producing tasks", async () => {
       }),
     ),
   );
-  render(
+  const { container } = render(
     <TaskLineage
       table="shop.orders"
       token="token"
@@ -48,4 +56,6 @@ test("shows table dependencies, evidence and producing tasks", async () => {
   expect(await screen.findByText(/raw.orders.*both/)).toBeTruthy();
   expect(screen.getByText(/shop.report.*parsed/)).toBeTruthy();
   expect(screen.getByText("load")).toBeTruthy();
+  const canvas = container.querySelector(".lineage-canvas") as HTMLElement;
+  expect(canvas.style.height).toBe("200px");
 });

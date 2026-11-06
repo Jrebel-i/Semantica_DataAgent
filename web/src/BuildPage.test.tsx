@@ -8,6 +8,7 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { BuildPage } from "./BuildPage";
+import { PlatformSettings } from "./PlatformSettings";
 import { getMessages } from "./i18n";
 
 beforeEach(() => {
@@ -123,13 +124,13 @@ test("loads and saves the scheduled build interval", async () => {
       return Response.json([]);
     }),
   );
-  render(<BuildPage token="token" messages={getMessages("zh")} />);
+  render(<PlatformSettings token="token" messages={getMessages("zh")} />);
   const input = (await screen.findByLabelText(
     "间隔秒数（0 为关闭）",
   )) as HTMLInputElement;
   await waitFor(() => expect(input.value).toBe("60"));
   fireEvent.change(input, { target: { value: "5" } });
-  fireEvent.click(screen.getByRole("button", { name: "保存定时" }));
+  fireEvent.click(screen.getByRole("button", { name: "保存设置" }));
   await waitFor(() =>
     expect(requests).toEqual([{ values: { schedule_interval_seconds: "5" } }]),
   );

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Alert, Button, Typography } from "antd";
+import { Alert, Button, Tree, Typography } from "antd";
 import type { paths } from "./api";
 import type { Messages } from "./i18n";
 
@@ -51,30 +51,32 @@ export function DocumentsPage({
     <section>
       <Typography.Title level={2}>{messages.categories}</Typography.Title>
       {error && <Alert type="error" title={messages.error} />}
-      {categories.map((c) => (
-        <div key={c.ref}>
-          <Button
-            type="link"
-            onClick={() => {
-              setCategory(c);
-              setDoc(null);
-              void load(
-                `/api/v1/category-index?${new URLSearchParams({ category: c.name })}`,
-              );
-            }}
-          >
-            {c.name}
-          </Button>{" "}
-          {c.description}
-        </div>
-      ))}
-      {category && (
-        <>
-          <Typography.Title level={3}>
-            {messages.documents}: {category.name}
-          </Typography.Title>
-          {category.documents.map((d) => (
-            <div key={d.ref}>
+      <Tree
+        key={categories.map((c) => c.ref).join("|")}
+        defaultExpandAll
+        treeData={categories.map((c) => ({
+          key: c.ref,
+          title: (
+            <>
+              <Button
+                type="link"
+                onClick={() => {
+                  setCategory(c);
+                  setDoc(null);
+                  void load(
+                    `/api/v1/category-index?${new URLSearchParams({ category: c.name })}`,
+                  );
+                }}
+              >
+                {c.name}
+              </Button>{" "}
+              {c.description}
+            </>
+          ),
+          children: c.documents.map((d) => ({
+            key: d.ref,
+            isLeaf: true,
+            title: (
               <Button
                 type="link"
                 onClick={() =>
@@ -85,9 +87,14 @@ export function DocumentsPage({
               >
                 {d.path}
               </Button>
-            </div>
-          ))}
-        </>
+            ),
+          })),
+        }))}
+      />
+      {category && (
+        <Typography.Title level={3}>
+          {messages.documents}: {category.name}
+        </Typography.Title>
       )}
       {doc && (
         <>

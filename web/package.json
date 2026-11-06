@@ -13,6 +13,8 @@
     "format:check": "prettier --check \"src/**/*.{ts,tsx}\" --ignore-path .prettierignore"
   },
   "dependencies": {
+    "@ant-design/icons": "6.3.4",
+    "@xyflow/react": "12.10.1",
     "antd": "6.3.4",
     "react": "19.2.4",
     "react-dom": "19.2.4"
@@ -25,9 +27,9 @@
     "@vitejs/plugin-react": "6.2.1",
     "jsdom": "28.1.0",
     "openapi-typescript": "7.13.0",
+    "prettier": "3.8.1",
     "typescript": "5.9.3",
     "vite": "8.3.5",
-    "vitest": "5.1.0",
-    "prettier": "3.8.1"
+    "vitest": "5.1.0"
   }
 }

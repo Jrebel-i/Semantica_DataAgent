@@ -898,3 +898,33 @@ def test_mcp_turn_header_selects_owned_turn_and_rejects_forgery(client, monkeypa
     assert spans[2]["traceId"] not in {
         telemetry.trace_id("trace-test", turn) for turn in ids
     }
+
+
+def test_existing_conversation_rejects_changed_agent_or_model(client):
+    from semantica_dataagent.db import Conversation, Token, digest, sessions
+
+    c, token = client
+    with sessions().begin() as db:
+        owner_id = db.get(Token, digest(token)).id
+        db.add(
+            Conversation(
+                id="fixed-settings",
+                owner_id=owner_id,
+                title="test",
+                agent="pi",
+                provider_id="original",
+                model="model-a",
+            )
+        )
+    headers = {"Authorization": f"Bearer {token}"}
+    for override in (
+        {"agent": "claude"},
+        {"provider_id": "other"},
+        {"model": "model-b"},
+    ):
+        response = c.post(
+            "/api/v1/conversations/ask",
+            headers=headers,
+            json={"conversation_id": "fixed-settings", "question": "继续", **override},
+        )
+        assert response.status_code == 409, response.text

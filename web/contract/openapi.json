@@ -920,6 +920,38 @@
         "title": "PluginView",
         "type": "object"
       },
+      "ProposalCreate": {
+        "properties": {
+          "patch": {
+            "maxLength": 20000,
+            "minLength": 1,
+            "pattern": "\\S",
+            "title": "Patch",
+            "type": "string"
+          },
+          "reason": {
+            "maxLength": 20000,
+            "minLength": 1,
+            "pattern": "\\S",
+            "title": "Reason",
+            "type": "string"
+          },
+          "target": {
+            "maxLength": 20000,
+            "minLength": 1,
+            "pattern": "\\S",
+            "title": "Target",
+            "type": "string"
+          }
+        },
+        "required": [
+          "target",
+          "patch",
+          "reason"
+        ],
+        "title": "ProposalCreate",
+        "type": "object"
+      },
       "ProposalView": {
         "properties": {
           "commit_sha": {
@@ -1982,6 +2014,40 @@
         "summary": "Agents"
       }
     },
+    "/api/v1/assistant-defaults": {
+      "get": {
+        "operationId": "assistant_defaults_api_v1_assistant_defaults_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "title": "Response Assistant Defaults Api V1 Assistant Defaults Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Assistant Defaults"
+      }
+    },
     "/api/v1/builds": {
       "get": {
         "operationId": "builds_api_v1_builds_get",
@@ -2346,6 +2412,45 @@
           }
         ],
         "summary": "List Proposals"
+      },
+      "post": {
+        "operationId": "create_proposal_api_v1_corrections_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProposalCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Proposal"
       }
     },
     "/api/v1/corrections/{proposal_id}": {

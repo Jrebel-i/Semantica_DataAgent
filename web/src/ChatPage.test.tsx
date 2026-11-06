@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -146,6 +147,15 @@ test("streams tools and text, copies SQL, and opens table and document citations
   fireEvent.click(screen.getByRole("button", { name: "table:shop.payments" }));
   expect(await screen.findByText("支付流水")).toBeTruthy();
   expect(screen.getByText(/日期分区/)).toBeTruthy();
+  const schemaHead = window.document.querySelector(".context-schema-head");
+  expect(schemaHead?.textContent).toContain("shop.payments");
+  expect(schemaHead?.textContent).toContain("支付流水");
+  fireEvent.click(screen.getByRole("button", { name: "关闭" }));
+  expect(window.document.querySelector(".context-schema-head")).toBeNull();
+  expect(fetcher).toHaveBeenCalledWith(
+    "/api/v1/tables?database=shop&search=payments",
+    { headers: { Authorization: "Bearer personal-token" } },
+  );
 
   fireEvent.click(
     screen.getByRole("button", {
@@ -156,7 +166,7 @@ test("streams tools and text, copies SQL, and opens table and document citations
     await screen.findByText("支付销售额按支付成功时间归属日期。"),
   ).toBeTruthy();
   expect(fetcher).toHaveBeenCalledWith(
-    "/api/v1/document?doc_id=metrics%2Fdefinitions%2Fsales.md",
+    "/api/v1/document?doc_id=document%3Ametrics%2Fdefinitions%2Fsales.md",
     { headers: { Authorization: "Bearer personal-token" } },
   );
 });
@@ -276,6 +286,7 @@ test("admins configure providers without sending a blank API key", async () => {
     <ChatPage
       token="personal-token"
       role="admin"
+      settingsOnly
       messages={getMessages("zh")}
     />,
   );
@@ -426,4 +437,399 @@ test("a clarification option continues the same conversation with its evidence",
     "document:metrics/definitions/sales.md#chunk-1",
   );
   expect(followUp.question).toContain("不要把它作为全局规则");
+});
+
+test("新会话发送所选 agent 与模型并在建立后锁定", async () => {
+  const fetcher = vi.fn(
+    async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/v1/agents")
+        return json([
+          { id: "pi", name: "pi", available: true },
+          { id: "claude", name: "Claude", available: true },
+        ]);
+      if (url === "/api/v1/providers")
+        return json([{ ...provider, models: ["model-a", "model-b"] }]);
+      if (url === "/api/v1/conversations") return json([]);
+      if (url === "/api/v1/assistant-defaults")
+        return json({
+          assistant_agent: "pi",
+          assistant_provider_id: provider.id,
+          assistant_model: "model-a",
+        });
+      if (url === "/api/v1/conversations/ask" && init?.method === "POST")
+        return new Response(sse, {
+          headers: { "Content-Type": "text/event-stream" },
+        });
+      return new Response("", { status: 404 });
+    },
+  );
+  vi.stubGlobal("fetch", fetcher);
+  render(
+    <ChatPage
+      token="personal-token"
+      role="user"
+      messages={getMessages("zh")}
+    />,
+  );
+  await screen.findByRole("option", { name: "Claude" });
+  fireEvent.change(screen.getByLabelText("Agent"), {
+    target: { value: "claude" },
+  });
+  fireEvent.change(screen.getByLabelText("模型"), {
+    target: { value: "model-b" },
+  });
+  fireEvent.change(screen.getByLabelText("问题"), {
+    target: { value: "订单在哪里？" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: /提\s*问/ }));
+  await waitFor(() =>
+    expect(
+      fetcher.mock.calls.some(
+        ([url]) => String(url) === "/api/v1/conversations/ask",
+      ),
+    ).toBe(true),
+  );
+  const call = fetcher.mock.calls.find(
+    ([url]) => String(url) === "/api/v1/conversations/ask",
+  );
+  expect(JSON.parse(String(call?.[1]?.body))).toMatchObject({
+    agent: "claude",
+    provider_id: provider.id,
+    model: "model-b",
+  });
+  await waitFor(() =>
+    expect((screen.getByLabelText("Agent") as HTMLSelectElement).disabled).toBe(
+      true,
+    ),
+  );
+  expect((screen.getByLabelText("模型") as HTMLSelectElement).disabled).toBe(
+    true,
+  );
+});
+
+test("新会话切换 agent 时使用该 agent 的 provider 和默认模型", async () => {
+  const second = {
+    ...provider,
+    id: "provider-2",
+    name: "Second",
+    models: ["model-b"],
+  };
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/v1/agents")
+        return json([
+          { id: "pi", name: "pi", available: true },
+          { id: "claude", name: "Claude", available: true },
+        ]);
+      if (url === "/api/v1/providers") return json([provider, second]);
+      if (url === "/api/v1/conversations") return json([]);
+      if (url === "/api/v1/assistant-defaults")
+        return json({
+          assistant_agent: "pi",
+          assistant_agent_profiles: JSON.stringify({
+            claude: {
+              providers: [second.id],
+              default_provider: second.id,
+              default_model: "model-b",
+            },
+          }),
+        });
+      return new Response("", { status: 404 });
+    }),
+  );
+  render(
+    <ChatPage
+      token="personal-token"
+      role="user"
+      messages={getMessages("zh")}
+    />,
+  );
+  await screen.findByRole("option", { name: "Claude" });
+  await waitFor(() =>
+    expect(screen.getByRole("option", { name: "Second" })).toBeTruthy(),
+  );
+  fireEvent.change(screen.getByLabelText("Agent"), {
+    target: { value: "claude" },
+  });
+  expect((screen.getByLabelText("Provider") as HTMLSelectElement).value).toBe(
+    "provider-2",
+  );
+  expect((screen.getByLabelText("模型") as HTMLSelectElement).value).toBe(
+    "model-b",
+  );
+  expect(screen.queryByRole("option", { name: "Local gateway" })).toBeNull();
+});
+
+test("上下文面板收起后释放空间并可重新展开", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (
+        [
+          "/api/v1/agents",
+          "/api/v1/providers",
+          "/api/v1/conversations",
+        ].includes(url)
+      )
+        return json([]);
+      return new Response("", { status: 404 });
+    }),
+  );
+  const { container } = render(
+    <ChatPage token="token" role="user" messages={getMessages("zh")} />,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "收起面板" }));
+  expect(
+    container.querySelector(".chat-layout.context-collapsed"),
+  ).toBeTruthy();
+  expect(screen.queryByRole("tab", { name: "血缘" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "展开面板" }));
+  expect(screen.getByRole("tab", { name: "血缘" })).toBeTruthy();
+});
+
+test("新建会话不会恢复不允许使用的默认 provider", async () => {
+  const second = {
+    ...provider,
+    id: "provider-2",
+    name: "Second",
+    models: ["model-b"],
+  };
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/v1/agents")
+        return json([{ id: "pi", name: "pi", available: true }]);
+      if (url === "/api/v1/providers") return json([provider, second]);
+      if (url === "/api/v1/conversations") return json([]);
+      if (url === "/api/v1/assistant-defaults")
+        return json({
+          assistant_agent: "pi",
+          assistant_provider_id: provider.id,
+          assistant_model: provider.models[0],
+          assistant_agent_profiles: JSON.stringify({
+            pi: {
+              providers: [second.id],
+              default_provider: "",
+              default_model: "",
+            },
+          }),
+        });
+      return new Response("", { status: 404 });
+    }),
+  );
+  render(<ChatPage token="token" role="user" messages={getMessages("zh")} />);
+  await waitFor(() =>
+    expect((screen.getByLabelText("Provider") as HTMLSelectElement).value).toBe(
+      "provider-2",
+    ),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "新对话" }));
+  expect((screen.getByLabelText("Provider") as HTMLSelectElement).value).toBe(
+    "provider-2",
+  );
+  expect((screen.getByLabelText("模型") as HTMLSelectElement).value).toBe(
+    "model-b",
+  );
+});
+
+test("后打开的引用不会被较晚返回的旧请求覆盖", async () => {
+  let resolveTable!: (response: Response) => void;
+  const delayedTable = new Promise<Response>((resolve) => {
+    resolveTable = resolve;
+  });
+  const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url === "/api/v1/agents")
+      return json([{ id: "pi", name: "pi", available: true }]);
+    if (url === "/api/v1/providers") return json([provider]);
+    if (url === "/api/v1/conversations") return json([]);
+    if (url === "/api/v1/conversations/ask")
+      return new Response(sse, {
+        headers: { "Content-Type": "text/event-stream" },
+      });
+    if (url.startsWith("/api/v1/tables?")) return delayedTable;
+    if (url.startsWith("/api/v1/document?")) return json(document);
+    return new Response("", { status: 404 });
+  });
+  vi.stubGlobal("fetch", fetcher);
+  render(<ChatPage token="token" role="user" messages={getMessages("zh")} />);
+  await waitFor(() =>
+    expect((screen.getByLabelText("模型") as HTMLSelectElement).value).toBe(
+      provider.models[0],
+    ),
+  );
+  fireEvent.change(screen.getByLabelText("问题"), {
+    target: { value: "支付销售额？" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: /提\s*问/ }));
+  fireEvent.click(
+    await screen.findByRole("button", {
+      name: "document:metrics/definitions/sales.md#chunk-1",
+    }),
+  );
+  expect(
+    await screen.findByText("支付销售额按支付成功时间归属日期。"),
+  ).toBeTruthy();
+  await waitFor(() =>
+    expect(
+      fetcher.mock.calls.some(([url]) =>
+        String(url).startsWith("/api/v1/tables?"),
+      ),
+    ).toBe(true),
+  );
+  await act(async () => {
+    resolveTable(json([table]));
+    await delayedTable;
+  });
+  expect(screen.getByText("支付销售额按支付成功时间归属日期。")).toBeTruthy();
+  expect(screen.queryByText("支付流水")).toBeNull();
+});
+
+test("keeps the previous answer when a second question is sent", async () => {
+  const asks: string[] = [];
+  const historyTurn = (sequence: number, question: string, answer: string) => ({
+    id: sequence,
+    sequence,
+    question,
+    status: "completed",
+    answer,
+    sql: [],
+    citations: [],
+    error: null,
+    started_at: "2026-11-05T00:00:00Z",
+    finished_at: "2026-11-05T00:00:01Z",
+    events: [],
+  });
+  const answer = (text: string) =>
+    [
+      'event: conversation\ndata: {"conversation_id":"conv-1","turn_id":1}',
+      `event: done\ndata: {"text":"${text}","sql":[],"citations":[]}`,
+    ].join("\n\n");
+  const fetcher = vi.fn(
+    async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/v1/agents")
+        return json([{ id: "pi", name: "pi", available: true }]);
+      if (url === "/api/v1/providers") return json([provider]);
+      if (url === "/api/v1/conversations") {
+        return json([
+          {
+            id: "conv-1",
+            title: "第一问",
+            agent: "pi",
+            provider_id: provider.id,
+            model: provider.models[0],
+            created_at: "2026-11-05T00:00:00Z",
+            updated_at: "2026-11-05T00:00:00Z",
+            turn_count: asks.length,
+          },
+        ]);
+      }
+      if (url === "/api/v1/conversations/conv-1") {
+        return json({
+          id: "conv-1",
+          resumable: true,
+          agent: "pi",
+          provider_id: provider.id,
+          model: provider.models[0],
+          turns:
+            asks.length === 1
+              ? [historyTurn(1, "第一问", "第一轮回答")]
+              : [
+                  historyTurn(1, "第一问", "第一轮回答"),
+                  historyTurn(2, "第二问", "第二轮回答"),
+                ],
+        });
+      }
+      if (url === "/api/v1/conversations/ask") {
+        asks.push(String(init?.body));
+        return new Response(
+          answer(asks.length === 1 ? "第一轮回答" : "第二轮回答"),
+          { status: 200, headers: { "Content-Type": "text/event-stream" } },
+        );
+      }
+      return new Response("", { status: 404 });
+    },
+  );
+  vi.stubGlobal("fetch", fetcher);
+  render(<ChatPage token="token" role="user" messages={getMessages("zh")} />);
+  await waitFor(() =>
+    expect((screen.getByLabelText("模型") as HTMLSelectElement).value).toBe(
+      provider.models[0],
+    ),
+  );
+  fireEvent.change(screen.getByLabelText("问题"), {
+    target: { value: "第一问" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: /提\s*问/ }));
+  expect(await screen.findByText("第一轮回答")).toBeTruthy();
+  await waitFor(() =>
+    expect(fetcher).toHaveBeenCalledWith(
+      "/api/v1/conversations/conv-1",
+      expect.anything(),
+    ),
+  );
+  fireEvent.change(screen.getByLabelText("问题"), {
+    target: { value: "第二问" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: /提\s*问/ }));
+  expect(await screen.findByText("第二轮回答")).toBeTruthy();
+  expect(screen.getByText("第一轮回答")).toBeTruthy();
+});
+
+test("folds long user messages after six lines", async () => {
+  const question = Array.from(
+    { length: 8 },
+    (_, index) => `第 ${index + 1} 行内容`,
+  ).join("\n");
+  const conversation = {
+    id: "conv-long",
+    title: "长问题",
+    agent: "pi",
+    provider_id: provider.id,
+    model: provider.models[0],
+    created_at: "2026-11-05T00:00:00Z",
+    updated_at: "2026-11-05T00:00:00Z",
+    turn_count: 1,
+  };
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/v1/agents")
+        return json([{ id: "pi", name: "pi", available: true }]);
+      if (url === "/api/v1/providers") return json([provider]);
+      if (url === "/api/v1/conversations") return json([conversation]);
+      if (url === "/api/v1/conversations/conv-long")
+        return json({
+          ...conversation,
+          turns: [
+            {
+              id: 1,
+              sequence: 1,
+              question,
+              status: "completed",
+              answer: "已收到。",
+              sql: [],
+              citations: [],
+              error: null,
+              started_at: "2026-11-05T00:00:00Z",
+              finished_at: "2026-11-05T00:00:01Z",
+              events: [],
+            },
+          ],
+        });
+      return new Response("", { status: 404 });
+    }),
+  );
+  render(<ChatPage token="token" role="user" messages={getMessages("zh")} />);
+  fireEvent.click(await screen.findByRole("button", { name: "长问题" }));
+  expect(await screen.findByText(/第 8 行内容/)).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "展开" }));
+  expect(screen.getByRole("button", { name: "收起" })).toBeTruthy();
 });

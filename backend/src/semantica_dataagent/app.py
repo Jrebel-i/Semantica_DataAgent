@@ -162,6 +162,7 @@ KEYS = {
     "assistant_provider_id",
     "assistant_model",
     "assistant_timeout_seconds",
+    "assistant_agent_profiles",
     "langfuse_enabled",
     "langfuse_url",
     "langfuse_public_key",
@@ -244,6 +245,22 @@ def me(role: Annotated[str, Depends(current_user)]) -> dict[str, str]:
     return {"role": role}
 
 
+@app.get("/api/v1/assistant-defaults")
+def assistant_defaults(
+    _: Annotated[str, Depends(current_user)],
+) -> dict[str, str | None]:
+    from .ask_api import _configured
+
+    result = {
+        key: _configured(key)
+        for key in ("assistant_agent", "assistant_provider_id", "assistant_model")
+    }
+    with sessions()() as db:
+        row = db.get(Setting, "assistant_agent_profiles")
+        result["assistant_agent_profiles"] = row.value if row else None
+    return result
+
+
 @app.get("/api/v1/settings")
 def get_settings(_: Annotated[str, Depends(admin)]) -> dict[str, str | None]:
     with sessions()() as db:
@@ -268,6 +285,29 @@ def put_settings(
         validate_settings(body.values)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
+    profiles = body.values.get("assistant_agent_profiles")
+    if profiles:
+        try:
+            parsed = json.loads(profiles)
+            if not isinstance(parsed, dict) or any(
+                not isinstance(name, str)
+                or not isinstance(profile, dict)
+                or set(profile) != {"providers", "default_provider", "default_model"}
+                or not isinstance(profile["providers"], list)
+                or any(not isinstance(value, str) for value in profile["providers"])
+                or not isinstance(profile["default_provider"], str)
+                or not isinstance(profile["default_model"], str)
+                or (
+                    profile["default_provider"]
+                    and profile["default_provider"] not in profile["providers"]
+                )
+                for name, profile in parsed.items()
+            ):
+                raise ValueError()
+        except (ValueError, TypeError):
+            raise HTTPException(
+                status_code=422, detail="Invalid agent profiles"
+            ) from None
     limit = body.values.get("dimension_value_limit")
     if limit and (
         not limit.isascii() or not limit.isdigit() or not 1 <= int(limit) <= 1000000

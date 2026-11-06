@@ -1,4 +1,4 @@
-import { Button, Card, Space, Table } from "antd";
+import { Button, Card, Table } from "antd";
 import type { paths } from "./api";
 import type { Messages } from "./i18n";
 
@@ -8,19 +8,16 @@ export function StatusPage({
   messages,
   health,
   onRefresh,
-  onLogout,
 }: {
   messages: Messages;
   health: Health | null;
   onRefresh: () => void;
-  onLogout: () => void;
 }) {
   return (
-    <Card>
-      <Space>
+    <Card className="section-card" title={messages.statusPage}>
+      <div className="page-actions" style={{ marginBottom: 12 }}>
         <Button onClick={onRefresh}>{messages.refresh}</Button>
-        <Button onClick={onLogout}>{messages.logout}</Button>
-      </Space>
+      </div>
       <Table
         pagination={false}
         rowKey="name"

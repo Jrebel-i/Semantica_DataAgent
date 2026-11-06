@@ -21,6 +21,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/assistant-defaults": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Assistant Defaults */
+        get: operations["assistant_defaults_api_v1_assistant_defaults_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/builds": {
         parameters: {
             query?: never;
@@ -168,7 +185,8 @@ export interface paths {
         /** List Proposals */
         get: operations["list_proposals_api_v1_corrections_get"];
         put?: never;
-        post?: never;
+        /** Create Proposal */
+        post: operations["create_proposal_api_v1_corrections_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1115,6 +1133,15 @@ export interface components {
             /** Version */
             version: string;
         };
+        /** ProposalCreate */
+        ProposalCreate: {
+            /** Patch */
+            patch: string;
+            /** Reason */
+            reason: string;
+            /** Target */
+            target: string;
+        };
         /** ProposalView */
         ProposalView: {
             /** Commit Sha */
@@ -1498,6 +1525,28 @@ export interface operations {
             };
         };
     };
+    assistant_defaults_api_v1_assistant_defaults_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string | null;
+                    };
+                };
+            };
+        };
+    };
     builds_api_v1_builds_get: {
         parameters: {
             query?: never;
@@ -1762,6 +1811,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ProposalView"][];
+                };
+            };
+        };
+    };
+    create_proposal_api_v1_corrections_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProposalCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

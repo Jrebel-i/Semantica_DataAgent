@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { Alert } from "antd";
 import type { components } from "./api";
 import type { Messages } from "./i18n";
 
@@ -44,6 +45,52 @@ function FileTree({
         </li>
       ))}
     </ul>
+  );
+}
+function FilePicker({
+  label,
+  files,
+  emptyLabel,
+  countLabel,
+  chooseLabel,
+  directory = false,
+  onChange,
+}: {
+  label: string;
+  files: File[];
+  emptyLabel: string;
+  countLabel: string;
+  chooseLabel: string;
+  directory?: boolean;
+  onChange: (files: File[]) => void;
+}) {
+  const value = files.length
+    ? files.length === 1
+      ? files[0].name
+      : `${files.length} ${countLabel}`
+    : emptyLabel;
+  return (
+    <label className="file-picker">
+      <input
+        className="file-picker-input"
+        aria-label={label}
+        type="file"
+        multiple
+        {...(directory ? ({ webkitdirectory: "" } as object) : {})}
+        onChange={(event) => onChange(Array.from(event.target.files ?? []))}
+      />
+      <span className="file-picker-button">{chooseLabel}</span>
+      <span
+        className={`file-picker-value${files.length ? "" : " is-empty"}`}
+        title={
+          files.length > 1
+            ? files.map((file) => file.name).join(", ")
+            : undefined
+        }
+      >
+        {value}
+      </span>
+    </label>
   );
 }
 function encoded(file: File): Promise<string> {
@@ -151,103 +198,152 @@ export function SourcePage({
     }
   }
   return (
-    <section>
-      <h2>{t.source}</h2>
-      {error && <p role="alert">{error}</p>}
-      {success && (
-        <p>
-          {t.uploaded}: {success}
-        </p>
-      )}
-      <label>
-        {t.sourceTarget}{" "}
-        <input value={target} onChange={(e) => setTarget(e.target.value)} />
-      </label>
-      <br />
-      <label>
-        {t.sourceFiles}{" "}
-        <input
-          type="file"
-          multiple
-          onChange={(e) => setFiles(Array.from(e.target.files ?? []))}
-        />
-      </label>
-      <br />
-      <label>
-        {t.sourceFolder}{" "}
-        <input
-          type="file"
-          multiple
-          {...({ webkitdirectory: "" } as object)}
-          onChange={(e) => setFiles(Array.from(e.target.files ?? []))}
-        />
-      </label>
-      <br />
-      <label>
-        <input
-          type="checkbox"
-          checked={replace}
-          onChange={(e) => setReplace(e.target.checked)}
-        />
-        {t.sourceReplace}
-      </label>
-      <br />
-      <button type="button" onClick={() => void send()}>
-        {t.sourceUpload}
-      </button>
-      <h3>{t.sourceBrowse}</h3>
-      <FileTree node={tree(paths)} prefix="" open={(p) => void open(p)} />
-      {path && (
-        <>
-          <h3>{path}</h3>
-          {binary ? (
-            <a
-              href={`data:application/octet-stream;base64,${content}`}
-              download={path.split("/").pop()}
-            >
-              {t.sourceDownload}
-            </a>
+    <section className="stack">
+      <div className="page-header">
+        <div>
+          <h1 className="page-title">{t.source}</h1>
+          <p className="page-subtitle">{t.sourceHint}</p>
+        </div>
+      </div>
+      {error && <Alert type="error" title={error} />}
+      {success && <Alert type="success" title={`${t.uploaded}: ${success}`} />}
+      <div className="source-layout">
+        <div className="source-stack">
+          <section className="card section-card">
+            <div className="card-title-row">
+              <h2 className="card-title">{t.sourceUpload}</h2>
+            </div>
+            <div className="stack">
+              <label className="field">
+                <span className="field-label">{t.sourceTarget}</span>
+                <input
+                  aria-label={t.sourceTarget}
+                  value={target}
+                  onChange={(e) => setTarget(e.target.value)}
+                />
+              </label>
+              <div className="field">
+                <span className="field-label">{t.sourceFiles}</span>
+                <FilePicker
+                  label={t.sourceFiles}
+                  files={files}
+                  emptyLabel={t.sourceNoFile}
+                  countLabel={t.sourceFileCount}
+                  chooseLabel={t.sourceChoose}
+                  onChange={(next) => setFiles(next)}
+                />
+              </div>
+              <div className="field">
+                <span className="field-label">{t.sourceFolder}</span>
+                <FilePicker
+                  label={t.sourceFolder}
+                  files={files}
+                  emptyLabel={t.sourceNoFile}
+                  countLabel={t.sourceFileCount}
+                  chooseLabel={t.sourceChoose}
+                  directory
+                  onChange={(next) => setFiles(next)}
+                />
+              </div>
+              <label className="plugin-enable">
+                <input
+                  type="checkbox"
+                  checked={replace}
+                  onChange={(e) => setReplace(e.target.checked)}
+                />
+                {t.sourceReplace}
+              </label>
+              <div className="save-bar" style={{ marginTop: 0 }}>
+                <button type="button" onClick={() => void send()}>
+                  {t.sourceUpload}
+                </button>
+              </div>
+            </div>
+          </section>
+          <section className="card section-card">
+            <div className="card-title-row">
+              <h2 className="card-title">{t.sourceBrowse}</h2>
+              <span className="muted">{paths.length}</span>
+            </div>
+            <div className="source-tree">
+              <FileTree
+                node={tree(paths)}
+                prefix=""
+                open={(p) => void open(p)}
+              />
+            </div>
+          </section>
+        </div>
+        <div className="source-stack">
+          {path ? (
+            <section className="card section-card">
+              <div className="card-title-row">
+                <h2 className="card-title mono">{path}</h2>
+              </div>
+              {binary ? (
+                <a
+                  href={`data:application/octet-stream;base64,${content}`}
+                  download={path.split("/").pop()}
+                >
+                  {t.sourceDownload}
+                </a>
+              ) : (
+                <pre className="source-preview">{content}</pre>
+              )}
+              <h3 className="card-title" style={{ marginTop: 16 }}>
+                {t.sourceHistory}
+              </h3>
+              <ul className="source-history">
+                {versions.map((v) => (
+                  <li key={v.commit}>
+                    {v.commit.slice(0, 12)} {v.author} {v.date} {v.message}
+                  </li>
+                ))}
+              </ul>
+              <div className="source-compare" style={{ marginTop: 12 }}>
+                <label className="field">
+                  <span className="field-label">{t.sourceBefore}</span>
+                  <select
+                    aria-label={t.sourceBefore}
+                    value={before}
+                    onChange={(e) => setBefore(e.target.value)}
+                  >
+                    {versions.map((v) => (
+                      <option value={v.commit} key={v.commit}>
+                        {v.commit.slice(0, 12)} {v.author}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="field">
+                  <span className="field-label">{t.sourceAfter}</span>
+                  <select
+                    aria-label={t.sourceAfter}
+                    value={after}
+                    onChange={(e) => setAfter(e.target.value)}
+                  >
+                    {versions.map((v) => (
+                      <option value={v.commit} key={v.commit}>
+                        {v.commit.slice(0, 12)} {v.author}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <button
+                  type="button"
+                  disabled={!before || !after}
+                  onClick={() => void compare()}
+                >
+                  {t.sourceCompare}
+                </button>
+              </div>
+              {diff && <pre className="diff-block">{diff}</pre>}
+            </section>
           ) : (
-            <pre style={{ whiteSpace: "pre-wrap" }}>{content}</pre>
+            <div className="empty-state">{t.sourceSelectFile}</div>
           )}
-          <h3>{t.sourceHistory}</h3>
-          <ul>
-            {versions.map((v) => (
-              <li key={v.commit}>
-                {v.commit.slice(0, 12)} {v.author} {v.date} {v.message}
-              </li>
-            ))}
-          </ul>
-          <label>
-            {t.sourceBefore}
-            <select value={before} onChange={(e) => setBefore(e.target.value)}>
-              {versions.map((v) => (
-                <option value={v.commit} key={v.commit}>
-                  {v.commit.slice(0, 12)} {v.author}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            {t.sourceAfter}
-            <select value={after} onChange={(e) => setAfter(e.target.value)}>
-              {versions.map((v) => (
-                <option value={v.commit} key={v.commit}>
-                  {v.commit.slice(0, 12)} {v.author}
-                </option>
-              ))}
-            </select>
-          </label>
-          <button
-            type="button"
-            disabled={!before || !after}
-            onClick={() => void compare()}
-          >
-            {t.sourceCompare}
-          </button>
-          <pre>{diff}</pre>
-        </>
-      )}
+        </div>
+      </div>
     </section>
   );
 }
