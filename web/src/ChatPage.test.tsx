@@ -833,3 +833,48 @@ test("folds long user messages after six lines", async () => {
   fireEvent.click(screen.getByRole("button", { name: "展开" }));
   expect(screen.getByRole("button", { name: "收起" })).toBeTruthy();
 });
+
+test("字段引用的血缘标签显示字段血缘", async () => {
+  const fieldSse = sse.replace(
+    '"ref":"table:shop.payments","type":"table"',
+    '"ref":"field:shop.payments.dt","type":"field"',
+  );
+  const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url === "/api/v1/agents")
+      return json([{ id: "pi", name: "pi", available: true }]);
+    if (url === "/api/v1/providers") return json([provider]);
+    if (url === "/api/v1/conversations") return json([]);
+    if (url === "/api/v1/conversations/ask")
+      return new Response(fieldSse, {
+        status: 200,
+        headers: { "Content-Type": "text/event-stream" },
+      });
+    if (url.startsWith("/api/v1/tables?")) return json([table]);
+    if (url.startsWith("/api/v1/column-lineage?"))
+      return json({ upstream: [], downstream: [] });
+    return new Response("", { status: 404 });
+  });
+  vi.stubGlobal("fetch", fetcher);
+  render(<ChatPage token="token" role="user" messages={getMessages("zh")} />);
+  await waitFor(() =>
+    expect((screen.getByLabelText("模型") as HTMLSelectElement).value).toBe(
+      provider.models[0],
+    ),
+  );
+  fireEvent.change(screen.getByLabelText("问题"), {
+    target: { value: "查询字段" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: /提\s*问/ }));
+  fireEvent.click(
+    await screen.findByRole("button", { name: "field:shop.payments.dt" }),
+  );
+  await screen.findByText("支付流水");
+  fireEvent.click(screen.getByRole("tab", { name: "血缘" }));
+  expect(await screen.findByText(/暂无字段级血缘/)).toBeTruthy();
+  expect(
+    fetcher.mock.calls.some(([url]) =>
+      String(url).includes("table=shop.payments&column=dt"),
+    ),
+  ).toBe(true);
+});
