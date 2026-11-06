@@ -34,8 +34,11 @@ Use this skill when a question needs warehouse knowledge or SQL. Retrieve before
    if some fields or definitions are missing. Use only known fields, state the assumptions,
    and explain how the result differs from the requested metric. Then call
    `report_knowledge_gap` for the missing knowledge and call `propose_correction` when
-   evidence shows existing content is wrong. Skip SQL only when no relevant table exists.
-   Conflicting metric definitions still require clarification before writing SQL.
+   evidence shows existing content is wrong. A request for a concrete computation on a
+   known table, such as a row count per partition, is answerable without a formal metric
+   definition; do not withhold SQL just because that definition is absent. Skip SQL only
+   when no relevant table exists. Conflicting metric definitions still require clarification
+   before writing SQL.
 7. **Always** call `validate_sql` with the SQL and dialect. Do not present SQL as final
    before validation. If validation fails, correct the SQL and validate again.
 8. Answer with the SQL and citations. Attach the exact `ref` values returned by the tools to each material claim. Do not invent, shorten, or rewrite reference ids.
