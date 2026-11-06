@@ -1406,18 +1406,6 @@ export function ChatPage({
                       </Button>
                     ))}
                   </div>
-                  <div className="card plan-placeholder">
-                    <div className="card-title-row">
-                      <h3 className="card-title">{t.queryPlan}</h3>
-                      <span className="subtle">
-                        {t.planPartitions} — · {t.planRows} —
-                      </span>
-                    </div>
-                    <p className="muted">{t.noPlan}</p>
-                    <Button size="small" disabled>
-                      {t.executePlan}
-                    </Button>
-                  </div>
                 </div>
               )}
               {turns.map((turn) => (
