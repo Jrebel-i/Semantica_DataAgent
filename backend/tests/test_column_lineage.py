@@ -105,3 +105,25 @@ def test_sql_temporary_view_retains_field_lineage():
         ("src.orders", "id", "dst.orders", "order_id"),
         ("src.orders", "amount", "dst.orders", "total"),
     }
+
+
+def test_field_lineage_query_returns_upstream_task_and_evidence(monkeypatch):
+    from semantica_dataagent import task_api
+
+    edge = {
+        "upstream_table": "src.orders",
+        "upstream_field": "id",
+        "downstream_table": "dst.orders",
+        "downstream_field": "order_id",
+        "task_id": "load",
+        "task_type": "spark",
+        "evidence": "parsed",
+        "parse_status": "success",
+    }
+    monkeypatch.setattr(task_api.knowledge, "settings", lambda: {"knowledge_generation": "test"})
+    monkeypatch.setattr(task_api.knowledge, "read_graph", lambda _: object())
+    monkeypatch.setattr(task_api.knowledge, "execute", lambda *args: [{"edge": edge}])
+    result = task_api.get_lineage("dst.orders", column="order_id")
+    assert result[0]["upstream_field"] == "id"
+    assert result[0]["task_id"] == "load"
+    assert result[0]["evidence"] == "parsed"
