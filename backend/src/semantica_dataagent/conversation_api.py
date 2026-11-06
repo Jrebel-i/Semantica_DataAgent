@@ -537,7 +537,7 @@ async def _stream(
     trace = {
         "id": observation_id,
         "name": "online-conversation",
-        "input": run_request.prompt,
+        "input": run_request.prompt if include_conversation else "查询结果解读",
         "metadata": {
             "agent": runner.agent_id,
             "provider": run_request.provider.name,
