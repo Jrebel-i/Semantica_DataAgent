@@ -587,7 +587,7 @@ def test_mcp_and_online_use_same_execution_service(client, monkeypatch):
         return {"row_count": 0}
 
     monkeypatch.setattr(query_api, "_execute_with_audit", service)
-    c, headers = client
+    _, headers = client
     with sessions().begin() as db:
         token = db.query(Token).filter_by(role="admin").first()
         requester = Requester(
