@@ -440,7 +440,7 @@ def check_dtb_pull(ctx):
             "lookup_dim_values", {"table": "dimensions.new_orders", "keyword": "quoted"}
         )
         ctx.require(
-            'quoted "value"' in json.dumps(dimension_hits, ensure_ascii=False),
+            any(hit["value"] == 'quoted "value",\nline' for hit in dimension_hits),
             f"pulled dimension value absent: {dimension_hits}",
         )
 
