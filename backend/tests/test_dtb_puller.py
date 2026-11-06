@@ -55,9 +55,11 @@ def test_dtb_puller_rejects_failed_or_incomplete_response(failure):
             },
         )
 
-    with httpx.Client(transport=httpx.MockTransport(reply)) as client:
-        with pytest.raises(ValueError):
-            puller().list_tables(client, "http://dtb", "secret", "dimensions")
+    with (
+        httpx.Client(transport=httpx.MockTransport(reply)) as client,
+        pytest.raises(ValueError),
+    ):
+        puller().list_tables(client, "http://dtb", "secret", "dimensions")
 
 
 def test_dtb_puller_reads_table_detail_and_all_columns():
@@ -119,6 +121,8 @@ def test_dtb_puller_rejects_incomplete_columns():
             )
         return httpx.Response(200, json={"status": "200", "data": {"tableId": 12}})
 
-    with httpx.Client(transport=httpx.MockTransport(reply)) as client:
-        with pytest.raises(ValueError, match="pagination"):
-            puller().table_detail(client, "http://dtb", "secret", 12)
+    with (
+        httpx.Client(transport=httpx.MockTransport(reply)) as client,
+        pytest.raises(ValueError, match="pagination"),
+    ):
+        puller().table_detail(client, "http://dtb", "secret", 12)

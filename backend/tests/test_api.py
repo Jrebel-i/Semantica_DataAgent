@@ -789,3 +789,43 @@ def test_neo4j_runtime_secret_is_private_and_explicit_setting_takes_precedence(
     assert knowledge.settings()["neo4j_password"] == "explicit-test-secret"
     assert "runtime-test-secret" not in response.text
     assert "explicit-test-secret" not in response.text
+
+
+def test_dtb_puller_token_is_encrypted_and_not_returned(client):
+    c, token = client
+    headers = {"Authorization": f"Bearer {token}"}
+    secret = "example-puller-secret-76"
+    url = "/api/v1/plugins/puller/dtb"
+    response = c.put(
+        url,
+        headers=headers,
+        json={
+            "enabled": True,
+            "parameters": {
+                "url": "https://dtb.example",
+                "interval_seconds": 3600,
+                "token": secret,
+            },
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert secret not in response.text
+    assert secret not in c.get("/api/v1/plugins", headers=headers).text
+    assert secret.encode() not in Path(os.environ["DATAAGENT_DB_PATH"]).read_bytes()
+    response = c.put(
+        url,
+        headers=headers,
+        json={
+            "enabled": True,
+            "parameters": {
+                "url": "https://dtb.example",
+                "interval_seconds": 7200,
+            },
+        },
+    )
+    assert response.status_code == 200
+    from semantica_dataagent.crypto import decrypt
+    from semantica_dataagent.db import Setting, sessions
+
+    with sessions()() as db:
+        assert decrypt(db.get(Setting, "puller.dtb.token").value) == secret

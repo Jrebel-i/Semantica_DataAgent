@@ -1,5 +1,6 @@
 """DTB metadata puller."""
 
+from typing import ClassVar
 from urllib.parse import quote
 
 import httpx
@@ -9,10 +10,11 @@ class DtbPuller:
     id = "dtb"
     version = "1"
     display_name = "DTB"
-    parameters_schema = {
+    parameters_schema: ClassVar[dict] = {
         "type": "object",
         "properties": {
             "url": {"type": "string", "format": "uri"},
+            "token": {"type": "string", "format": "password"},
             "interval_seconds": {"type": "integer", "minimum": 0},
         },
         "additionalProperties": False,
@@ -55,7 +57,7 @@ class DtbPuller:
                 batch = data[key]
                 total = data.get("totalElements", data.get("total"))
                 if not isinstance(batch, list) or isinstance(total, bool):
-                    raise ValueError("Invalid DTB pagination")
+                    raise ValueError("Invalid DTB pagination")  # noqa: TRY004
                 total = int(total)
                 if total < 0 or (expected is not None and total != expected):
                     raise ValueError("Inconsistent DTB pagination")
@@ -64,7 +66,7 @@ class DtbPuller:
                     if not isinstance(row, dict) or not isinstance(
                         row.get(identity), (str, int)
                     ):
-                        raise ValueError("Invalid DTB row")
+                        raise ValueError("Invalid DTB row")  # noqa: TRY004
                     value = str(row[identity])
                     if value in seen:
                         raise ValueError("Duplicate DTB row")
@@ -95,7 +97,7 @@ class DtbPuller:
         data = self._get(client, base_url, token, endpoint)
         detail = data.get("table", data)
         if not isinstance(detail, dict):
-            raise ValueError("Invalid DTB table detail")
+            raise ValueError("Invalid DTB table detail")  # noqa: TRY004
         columns = self._pages(
             client,
             base_url,

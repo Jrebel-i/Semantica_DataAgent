@@ -769,19 +769,33 @@ def update_plugin(
                 for error in errors
             ],
         )
+    parameters = dict(body.parameters)
+    token = (
+        parameters.pop("token", None)
+        if (category, plugin_id) == ("puller", "dtb")
+        else None
+    )
     with sessions().begin() as db:
+        if token:
+            from .crypto import encrypt
+
+            secret = db.get(Setting, "puller.dtb.token")
+            if secret is None:
+                db.add(Setting(key="puller.dtb.token", value=encrypt(token)))
+            else:
+                secret.value = encrypt(token)
         row = db.get(PluginConfig, (category, plugin_id))
         if row is None:
             row = PluginConfig(
                 category=category,
                 plugin_id=plugin_id,
                 enabled=body.enabled,
-                parameters=json.dumps(body.parameters),
+                parameters=json.dumps(parameters),
             )
             db.add(row)
         else:
             row.enabled = body.enabled
-            row.parameters = json.dumps(body.parameters)
+            row.parameters = json.dumps(parameters)
     return PluginView(
         category=category,
         id=plugin.id,
@@ -789,7 +803,7 @@ def update_plugin(
         display_name=plugin.display_name,
         parameters_schema=plugin.parameters_schema,
         enabled=body.enabled,
-        parameters=body.parameters,
+        parameters=parameters,
     )
 
 

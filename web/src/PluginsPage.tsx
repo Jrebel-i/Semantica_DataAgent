@@ -4,6 +4,7 @@ import type { Messages } from "./i18n";
 type Schema = {
   type?: string;
   title?: string;
+  format?: string;
   default?: unknown;
   enum?: (string | number | boolean)[];
   items?: Schema;
@@ -368,7 +369,13 @@ export function PluginsPage({
                       ) : (
                         <input
                           aria-label={name}
-                          type={schema.type === "integer" ? "number" : "text"}
+                          type={
+                            schema.format === "password"
+                              ? "password"
+                              : schema.type === "integer"
+                                ? "number"
+                                : "text"
+                          }
                           value={value == null ? "" : String(value)}
                           onChange={(e) =>
                             set(
