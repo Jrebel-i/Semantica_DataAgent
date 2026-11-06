@@ -29,7 +29,7 @@ class PlanInput(BaseModel):
 
 
 class ExecuteInput(BaseModel):
-    limit: int = Field(default=1000, ge=1)
+    limit: int | None = Field(default=None, ge=1)
 
 
 def _validate_sql(sql):
@@ -179,7 +179,8 @@ async def _execute(
     audit_id: str,
 ):
     plugin, config = _config()
-    if body.limit > config.get("row_limit", 1000):
+    limit = body.limit if body.limit is not None else config.get("row_limit", 1000)
+    if limit > config.get("row_limit", 1000):
         raise HTTPException(422, "超过返回行数上限")
     with sessions().begin() as db:
         row = db.get(QueryExecution, query_id)
@@ -220,7 +221,7 @@ async def _execute(
         return {
             "id": query_id,
             "columns": columns,
-            "rows": rows[: body.limit],
+            "rows": rows[:limit],
             "row_count": len(rows),
         }
     except ExecutorAuthenticationError as exc:

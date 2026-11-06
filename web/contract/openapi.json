@@ -593,10 +593,16 @@
       "ExecuteInput": {
         "properties": {
           "limit": {
-            "default": 1000,
-            "minimum": 1.0,
-            "title": "Limit",
-            "type": "integer"
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Limit"
           }
         },
         "title": "ExecuteInput",

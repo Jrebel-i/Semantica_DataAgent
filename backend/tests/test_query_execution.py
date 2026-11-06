@@ -173,7 +173,7 @@ def test_partition_safety_and_execution(client, monkeypatch):
             c.post(path + "/execute", headers=headers, json={"limit": 2}).status_code
             == 422
         )
-        response = c.post(path + "/execute", headers=headers, json={"limit": 1})
+        response = c.post(path + "/execute", headers=headers, json={})
         assert response.status_code == 200, response.text
         assert response.json()["rows"] == [[1]]
         assert calls[0][0] == "caller-token"

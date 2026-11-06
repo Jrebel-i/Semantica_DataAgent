@@ -958,11 +958,8 @@ export interface components {
         };
         /** ExecuteInput */
         ExecuteInput: {
-            /**
-             * Limit
-             * @default 1000
-             */
-            limit: number;
+            /** Limit */
+            limit?: number | null;
         };
         /** FieldView */
         FieldView: {
