@@ -219,7 +219,9 @@ class FakeDtb:
             header, data = rows[0], rows[1:]
             if limit:
                 data = data[:limit]
-            content = "\n".join(",".join(row) for row in [header, *data]) + "\n"
+            if format == "json":
+                return json.dumps({"columns": [{"name": col, "type": "VARCHAR"} for col in header], "data": data}).encode(), "application/json"
+            content = "\n".join(",".join("" if v is None else v for v in row) for row in [header, *data]) + "\n"
             return content.encode(), "text/csv"
         sql = self.sqls["table"][-1]
         rows = self.table_rows
@@ -730,3 +732,14 @@ def test_fetch_rejects_malformed_dimensions_metadata(payload):
         pytest.raises(ValueError),
     ):
         puller().fetch_dimensions_metadata(client, "http://dtb", "secret")
+
+
+def test_dimension_json_preserves_special_values():
+    values = ['say "hello",\nworld', '', None]
+    fake = FakeDtb(metadata_rows=[metadata_row(1, "dim_special", "value", 1, "string")],
+                   stats=PARTITION_HEADER + "\n",
+                   dimension_rows={"dim_special": [["value"], *[[v] for v in values]]})
+    files, counts = run_fetch(fake, {"layer": "dimensions", "max_tables": 1})
+    assert counts["failures"] == []
+    rows = [json.loads(line) for line in files["dimensions/dim_special/rows.jsonl"].splitlines()]
+    assert rows == [{"value": v} for v in values]
