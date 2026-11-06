@@ -2238,6 +2238,67 @@
         "summary": "Index Route"
       }
     },
+    "/api/v1/column-lineage": {
+      "get": {
+        "operationId": "column_lineage_api_v1_column_lineage_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "table",
+            "required": true,
+            "schema": {
+              "title": "Table",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "column",
+            "required": true,
+            "schema": {
+              "title": "Column",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "depth",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "title": "Depth",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Column Lineage"
+      }
+    },
     "/api/v1/conversations": {
       "get": {
         "operationId": "conversations_api_v1_conversations_get",

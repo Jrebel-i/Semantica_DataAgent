@@ -116,6 +116,7 @@ def write(records, generation, storage):
         rows.append(
             {
                 "name": name,
+                "type": task.data.get("type", ""),
                 "ref": ref,
                 "sql": task.data["sql"],
                 "description": task.data.get("description", ""),

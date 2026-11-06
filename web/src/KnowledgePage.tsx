@@ -3,6 +3,7 @@ import { Alert, Button, Input, Modal, Table, Tree, Typography } from "antd";
 import type { paths } from "./api";
 import { TaskLineage, type TableLineage } from "./TaskLineage";
 import type { Messages } from "./i18n";
+import { ColumnLineage } from "./ColumnLineage";
 import { DimensionStatus } from "./DimensionStatus";
 
 type WarehouseTable =
@@ -35,6 +36,7 @@ export function KnowledgePage({
   const [selected, setSelected] = useState<WarehouseTable | null>(null);
   const [readingDoc, setReadingDoc] = useState<Document | null>(null);
   const [linkedDocument, setLinkedDocument] = useState<Document | null>(null);
+  const [expandedColumn, setExpandedColumn] = useState("");
   const [lineage, setLineage] = useState<TableLineage | null>(null);
   const [database, setDatabase] = useState("");
   const [search, setSearch] = useState("");
@@ -371,7 +373,25 @@ export function KnowledgePage({
                   <tbody>
                     {selected.fields.map((field) => (
                       <tr key={field.name}>
-                        <td>{field.name}</td>
+                        <td>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setExpandedColumn(
+                                expandedColumn === field.name ? "" : field.name,
+                              )
+                            }
+                          >
+                            {field.name}
+                          </button>
+                          {expandedColumn === field.name && (
+                            <ColumnLineage
+                              table={`${selected.database}.${selected.name}`}
+                              column={field.name}
+                              token={token}
+                            />
+                          )}
+                        </td>
                         <td>{field.type}</td>
                         <td>{field.comment}</td>
                         <td>
