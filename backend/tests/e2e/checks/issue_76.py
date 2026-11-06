@@ -134,7 +134,6 @@ def check_dtb_pull(ctx):
         lines = [
             PARTITION_HEADER,
             partition_row(501, "new_orders"),
-            partition_row(502, "z_orders"),
         ]
         if limit:
             lines = lines[: limit + 1]
@@ -170,6 +169,10 @@ def check_dtb_pull(ctx):
             return "task"
         if "metadata_partition" in sql:
             return "stats"
+        if "SELECT MAX(" in sql:
+            return "max_" + re.search(
+                r"hive\.dimensions\.([A-Za-z_][A-Za-z0-9_]*)", sql
+            ).group(1)
         match = re.search(r"hive\.dimensions\.([A-Za-z_][A-Za-z0-9_]*)", sql)
         if match:
             return "dim_" + match.group(1)
@@ -199,7 +202,7 @@ def check_dtb_pull(ctx):
                 and limit >= 0
                 and (
                     key in {"metadata", "task", "table", "stats"}
-                    or limit in {100, 50000}
+                    or limit in {1, 100, 50000}
                 )
             )
             if not allowed or request.get("dataSource") != "doris_ai":
@@ -242,13 +245,20 @@ def check_dtb_pull(ctx):
                     )
                 elif key == "stats":
                     self.send(stats_csv(limit), "text/csv")
-                elif key.startswith("dim_"):
-                    rows = [["id", "day_num"], ["1", "20261105"]]
-                    if limit:
-                        rows = rows[: limit + 1]
+                elif key.startswith("max_"):
                     self.send(
-                        ("\n".join(",".join(row) for row in rows) + "\n").encode(),
-                        "text/csv",
+                        {"columns": [{"name": "__partition"}], "data": [["20261105"]]}
+                    )
+                elif key.startswith("dim_"):
+                    self.send(
+                        {
+                            "columns": [{"name": "id"}, {"name": "day_num"}],
+                            "data": [
+                                ['quoted "value",\nline', "20261105"],
+                                ["", "20261105"],
+                                [None, "20261105"],
+                            ],
+                        }
                     )
                 elif key == "table":
                     sql = state["queries"]["table"][-1]
@@ -371,6 +381,26 @@ def check_dtb_pull(ctx):
             and meta["columns"][1]["seq_no"] == 10001,
             f"dimension metadata is not the SQL metadata: {meta}",
         )
+        tree = commit_files(record["commit"])
+        row_path = next(
+            path
+            for path in tree
+            if path.endswith("dimensions/new_orders/current/rows.jsonl")
+        )
+        rows = [
+            json.loads(line)
+            for line in git("show", f"{record['commit']}:{row_path}").splitlines()
+        ]
+        ctx.require(
+            [row["id"] for row in rows] == ['quoted "value",\nline', "", None],
+            f"special values corrupted: {rows}",
+        )
+        ctx.require(
+            meta["estimated_rows"] == 1
+            and meta["record_count"] == 3
+            and meta["row_count_differs"] is True,
+            f"row count mismatch missing: {meta}",
+        )
         build = wait_build(record)
         ctx.require(
             build["status"] == "succeeded", f"incremental build failed: {build}"
@@ -424,6 +454,13 @@ def check_dtb_pull(ctx):
             and limits["dim_z_orders"] == [50000],
             f"full defaultLimit does not match the contract: {limits}",
         )
+        fallback = snapshot_file(full["commit"], "dimensions/z_orders/meta.json")
+        ctx.require(
+            fallback["latest_partition"] == "20261105"
+            and fallback["estimated_rows"] is None,
+            f"fallback failed: {fallback}",
+        )
+        ctx.require(limits["max_z_orders"] == [1], "fallback limit must be one")
         build = wait_build(full)
         ctx.require(build["status"] == "succeeded", f"full build failed: {build}")
 

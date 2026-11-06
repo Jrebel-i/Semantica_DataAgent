@@ -513,13 +513,31 @@ class DtbPuller:
             field = partition_columns[0]["name"]
             if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", field):
                 raise TableFailure("invalid_partition_field")
-            if name not in stats:
-                raise TableFailure("partition_stats_missing")
-            if stat is None or stat["field"] != field:
-                raise TableFailure("partition_stats_field_mismatch")
-            escaped = stat["value"].replace("'", "''")
+            if stat is None:
+                raw = self.query_download(
+                    client,
+                    base_url,
+                    token,
+                    f"SELECT MAX({field}) AS __partition FROM hive.dimensions.{name}",
+                    "json",
+                    data_source="doris_query",
+                    row_limit=1,
+                    allow_truncation=True,
+                )
+                try:
+                    payload = json.loads(raw)
+                    value = payload["data"][0][0]
+                    if not isinstance(value, str) or not value:
+                        raise ValueError("Empty partition")
+                except (ValueError, TypeError, KeyError, IndexError) as exc:
+                    raise TableFailure("missing_latest_partition") from exc
+            else:
+                if stat["field"] != field:
+                    raise TableFailure("partition_stats_field_mismatch")
+                value = stat["value"]
+                estimated = stat["records"]
+            escaped = value.replace("'", "''")
             where = f" WHERE {field} = '{escaped}'"
-            estimated = stat["records"]
         elif stat is not None:
             raise TableFailure("partition_stats_field_mismatch")
         dimension_limit = 100 if maximum is not None else 50000
@@ -528,24 +546,38 @@ class DtbPuller:
             base_url,
             token,
             f"SELECT * FROM hive.dimensions.{name}{where} LIMIT {dimension_limit}",
-            "csv",
+            "json",
             data_source="doris_query",
             row_limit=dimension_limit,
             allow_truncation=True,
         )
         try:
-            reader = csv.DictReader(
-                io.StringIO(content.decode("utf-8-sig"), newline="")
-            )
-            if not reader.fieldnames or any(not value for value in reader.fieldnames):
-                raise TableFailure("invalid_dimension_columns")
-            rows = list(reader)
-            if any(None in row for row in rows):
-                raise TableFailure("invalid_dimension_rows")
-        except (UnicodeError, csv.Error) as exc:
+            payload = json.loads(content)
+            descriptors = payload["columns"]
+            data = payload["data"]
+            if (
+                not isinstance(descriptors, list)
+                or not descriptors
+                or not isinstance(data, list)
+            ):
+                raise ValueError("Invalid dimension result")
+            names = [column["name"] for column in descriptors]
+            if any(not isinstance(name, str) or not name for name in names) or len(
+                set(names)
+            ) != len(names):
+                raise ValueError("Invalid dimension columns")
+            if any(
+                not isinstance(row, list)
+                or len(row) != len(names)
+                or any(
+                    value is not None and not isinstance(value, str) for value in row
+                )
+                for row in data
+            ):
+                raise ValueError("Invalid dimension rows")
+            rows = [dict(zip(names, row, strict=True)) for row in data]
+        except (ValueError, TypeError, KeyError, UnicodeError) as exc:
             raise TableFailure("invalid_dimension_rows") from exc
-        if stat and len(rows) != min(stat["records"], dimension_limit):
-            raise TableFailure("dimension_row_count_mismatch")
         meta = {
             "database": "dimensions",
             "table": name,
@@ -561,11 +593,13 @@ class DtbPuller:
                 for column in columns
             ],
             "record_count": len(rows),
-            "partition_field": stat["field"] if stat else None,
-            "latest_partition": stat["value"] if stat else None,
+            "partition_field": field if partition_columns else None,
+            "latest_partition": value if partition_columns else None,
             "estimated_rows": estimated,
             "truncated": len(rows) >= dimension_limit,
         }
+        if estimated is not None and len(rows) != estimated:
+            meta["row_count_differs"] = True
         return {
             f"dimensions/{name}/meta.json": json.dumps(
                 meta, ensure_ascii=False
