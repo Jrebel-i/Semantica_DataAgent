@@ -245,6 +245,73 @@ test("查询计划可确认执行，结果和下载显示在右侧面板", async
   });
 });
 
+test("查看历史预览会打开对应查询结果", async () => {
+  const conversation = {
+    id: "conv-history",
+    title: "历史",
+    agent: "pi",
+    provider_id: provider.id,
+    model: provider.models[0],
+    created_at: "2026-11-05T00:00:00Z",
+    updated_at: "2026-11-05T00:00:00Z",
+    turn_count: 2,
+    resumable: true,
+  };
+  const turns = ["old", "new"].map((id, index) => ({
+    id: index + 1,
+    sequence: index + 1,
+    question: id,
+    status: "completed",
+    answer: "",
+    sql: [],
+    citations: [],
+    error: null,
+    started_at: conversation.created_at,
+    finished_at: null,
+    events: [
+      {
+        seq: 0,
+        type: "query_plan",
+        data: {
+          id,
+          sql: `SELECT '${id}'`,
+          data_source: "doris_ai",
+          tables: [],
+          estimated_partitions: null,
+          estimated_rows: null,
+          row_limit: 10,
+        },
+      },
+      {
+        seq: 1,
+        type: "query_result",
+        data: { id, columns: ["value"], rows: [[`${id}-value`]], row_count: 1 },
+      },
+    ],
+  }));
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/v1/agents")
+        return json([{ id: "pi", available: true }]);
+      if (url === "/api/v1/providers") return json([provider]);
+      if (url === "/api/v1/conversations") return json([conversation]);
+      if (url === "/api/v1/conversations/conv-history")
+        return json({ ...conversation, turns });
+      return new Response("", { status: 404 });
+    }),
+  );
+  const { container } = render(
+    <ChatPage token="token" role="user" messages={getMessages("zh")} />,
+  );
+  await screen.findByText("old-value");
+  fireEvent.click(screen.getAllByRole("button", { name: "查看完整结果" })[0]);
+  expect(container.querySelector(".context-body")?.textContent).toContain(
+    "old-value",
+  );
+});
+
 test("streams tools and text, copies SQL, and opens table and document citations", async () => {
   const fetcher = vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input);
