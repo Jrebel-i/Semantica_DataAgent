@@ -789,3 +789,334 @@ def test_neo4j_runtime_secret_is_private_and_explicit_setting_takes_precedence(
     assert knowledge.settings()["neo4j_password"] == "explicit-test-secret"
     assert "runtime-test-secret" not in response.text
     assert "explicit-test-secret" not in response.text
+
+
+def test_dtb_puller_token_is_encrypted_and_not_returned(client):
+    c, token = client
+    headers = {"Authorization": f"Bearer {token}"}
+    secret = "example-puller-secret-76"
+    url = "/api/v1/plugins/puller/dtb"
+    response = c.put(
+        url,
+        headers=headers,
+        json={
+            "enabled": True,
+            "parameters": {
+                "url": "https://dtb.example",
+                "interval_seconds": 3600,
+                "token": secret,
+            },
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert secret not in response.text
+    assert secret not in c.get("/api/v1/plugins", headers=headers).text
+    assert secret.encode() not in Path(os.environ["DATAAGENT_DB_PATH"]).read_bytes()
+    response = c.put(
+        url,
+        headers=headers,
+        json={
+            "enabled": True,
+            "parameters": {
+                "url": "https://dtb.example",
+                "interval_seconds": 7200,
+            },
+        },
+    )
+    assert response.status_code == 200
+    from semantica_dataagent.crypto import decrypt
+    from semantica_dataagent.db import Setting, sessions
+
+    with sessions()() as db:
+        assert decrypt(db.get(Setting, "puller.dtb.token").value) == secret
+
+
+def test_manual_pull_commits_then_queues_incremental_build(
+    client, tmp_path, monkeypatch
+):
+    from semantica_dataagent import pull_service
+    from semantica_dataagent.dtb_puller import DtbPuller
+
+    c, token = client
+    headers = {"Authorization": f"Bearer {token}"}
+    root = tmp_path / "source"
+    assert (
+        c.put(
+            "/api/v1/settings",
+            headers=headers,
+            json={"values": {"source_directory": str(root)}},
+        ).status_code
+        == 200
+    )
+    assert (
+        c.put(
+            "/api/v1/plugins/puller/dtb",
+            headers=headers,
+            json={
+                "enabled": True,
+                "parameters": {
+                    "url": "http://example.test",
+                    "token": "test",
+                    "interval_seconds": 0,
+                },
+            },
+        ).status_code
+        == 200
+    )
+    monkeypatch.setattr(
+        DtbPuller,
+        "fetch",
+        lambda *args: (
+            {"任务信息.json": b"task", "表信息.xlsx": b"table"},
+            {"tables": 1, "tasks": 2},
+        ),
+    )
+    monkeypatch.setattr(pull_service.build_queue, "enqueue", lambda: None)
+    response = c.post("/api/v1/pulls/dtb", headers=headers)
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "succeeded"
+    assert response.json()["tables"] == 1
+    build = c.get(
+        f"/api/v1/builds/{response.json()['build_id']}", headers=headers
+    ).json()
+    assert build["build_type"] == "incremental"
+    assert build["triggered_by"] == "定时拉取"
+    assert (
+        c.get("/api/v1/pulls", headers=headers).json()[0]["commit"]
+        == response.json()["commit"]
+    )
+
+
+def test_failed_pull_does_not_change_source(client, tmp_path, monkeypatch):
+    from semantica_dataagent.dtb_puller import DtbPuller
+
+    c, token = client
+    headers = {"Authorization": f"Bearer {token}"}
+    root = tmp_path / "source"
+    root.mkdir()
+    (root / "original").write_text("unchanged")
+    c.put(
+        "/api/v1/settings",
+        headers=headers,
+        json={"values": {"source_directory": str(root)}},
+    )
+    c.put(
+        "/api/v1/plugins/puller/dtb",
+        headers=headers,
+        json={
+            "enabled": True,
+            "parameters": {"url": "http://example.test", "token": "test"},
+        },
+    )
+
+    def fail(*args):
+        raise ValueError("DTB authentication failed (401)")
+
+    monkeypatch.setattr(DtbPuller, "fetch", fail)
+    response = c.post("/api/v1/pulls/dtb", headers=headers)
+    assert response.status_code == 200
+    assert response.json()["status"] == "failed"
+    assert "401" in response.json()["error"]
+    assert sorted(p.name for p in root.iterdir()) == ["original"]
+
+
+def test_partial_pull_records_failed_tables(client, tmp_path, monkeypatch):
+    from semantica_dataagent import pull_service
+    from semantica_dataagent.dtb_puller import DtbPuller
+
+    c, token = client
+    headers = {"Authorization": f"Bearer {token}"}
+    root = tmp_path / "partial-source"
+    c.put(
+        "/api/v1/settings",
+        headers=headers,
+        json={"values": {"source_directory": str(root)}},
+    )
+    c.put(
+        "/api/v1/plugins/puller/dtb",
+        headers=headers,
+        json={
+            "enabled": True,
+            "parameters": {"url": "http://example.test", "token": "test"},
+        },
+    )
+    monkeypatch.setattr(
+        DtbPuller,
+        "fetch",
+        lambda *args: (
+            {"任务信息.json": b"task", "表信息.xlsx": b"table"},
+            {
+                "tables": 1,
+                "tasks": 0,
+                "failures": [
+                    {"table": "dim_bad", "reason": "multiple_partition_fields"}
+                ],
+            },
+        ),
+    )
+    monkeypatch.setattr(pull_service.build_queue, "enqueue", lambda: None)
+
+    response = c.post("/api/v1/pulls/dtb", headers=headers)
+
+    assert response.status_code == 200, response.text
+    record = response.json()
+    assert record["status"] == "succeeded"
+    assert "dim_bad" in record["error"]
+    assert "multiple_partition_fields" in record["error"]
+
+
+def test_interrupted_pull_recovers_committed_snapshot_once(client, tmp_path):
+    from datetime import UTC, datetime
+
+    from semantica_dataagent.db import PullRecord, sessions
+    from semantica_dataagent.pull_service import recover_pulls
+    from semantica_dataagent.source_directory import publish_pull, repository
+
+    root = tmp_path / "recover-source"
+    with sessions().begin() as db:
+        record = PullRecord(
+            status="running",
+            started_at=datetime.now(UTC),
+            tables=0,
+            tasks=0,
+            source_directory=str(root),
+            operation_id="unique-operation",
+        )
+        db.add(record)
+        db.flush()
+        record_id = record.id
+    with repository(root) as source:
+        commit = publish_pull(
+            source, {"任务信息.json": b"x"}, operation_id="unique-operation"
+        )
+    recover_pulls()
+    recover_pulls()
+    with sessions()() as db:
+        record = db.get(PullRecord, record_id)
+        assert record.commit == commit
+        assert record.build_id is not None
+        assert record.status == "succeeded"
+        from semantica_dataagent.db import Build
+
+        assert db.query(Build).filter(Build.id == record.build_id).count() == 1
+
+
+def test_failed_recovery_does_not_prevent_startup_and_can_retry(tmp_path, monkeypatch):
+    from datetime import UTC, datetime
+
+    from cryptography.fernet import Fernet
+    from fastapi.testclient import TestClient
+
+    from semantica_dataagent import pull_service
+    from semantica_dataagent.app import app
+    from semantica_dataagent.cli import initialize
+    from semantica_dataagent.db import PullRecord, sessions
+    from semantica_dataagent.source_directory import publish_pull, repository
+
+    monkeypatch.setenv("DATAAGENT_DB_PATH", str(tmp_path / "recover.db"))
+    monkeypatch.setenv("DATAAGENT_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    token = initialize()
+    root = tmp_path / "source"
+    with sessions().begin() as db:
+        row = PullRecord(
+            status="running",
+            started_at=datetime.now(UTC),
+            tables=5,
+            tasks=3,
+            source_directory=str(root),
+            operation_id="retry-test",
+        )
+        db.add(row)
+        db.flush()
+        record_id = row.id
+    with repository(root) as repo:
+        commit = publish_pull(repo, {"任务信息.json": b"x"}, operation_id="retry-test")
+    original = pull_service.add_queued_build
+
+    def fail(*args, **kwargs):
+        raise RuntimeError("queue unavailable")
+
+    monkeypatch.setattr(pull_service, "add_queued_build", fail)
+    with TestClient(app) as client:
+        assert (
+            client.get(
+                "/api/v1/me", headers={"Authorization": f"Bearer {token}"}
+            ).status_code
+            == 200
+        )
+    with sessions()() as db:
+        assert db.get(PullRecord, record_id).status == "running"
+    monkeypatch.setattr(pull_service, "add_queued_build", original)
+    monkeypatch.setattr(pull_service.build_queue, "enqueue", lambda: None)
+    pull_service.recover_pulls()
+    with sessions()() as db:
+        row = db.get(PullRecord, record_id)
+        assert (row.status, row.commit, row.tables, row.tasks) == (
+            "succeeded",
+            commit,
+            5,
+            3,
+        )
+        assert row.build_id is not None
+
+
+@pytest.mark.parametrize("point", ["after_commit", "after_insert"])
+def test_sigkill_between_source_commit_and_build_finalization(
+    client, tmp_path, point, monkeypatch
+):
+    import os
+    import signal
+    from datetime import UTC, datetime
+
+    from semantica_dataagent import pull_service
+    from semantica_dataagent.db import Build, PullRecord, sessions
+    from semantica_dataagent.source_directory import publish_pull, repository
+
+    root = tmp_path / "source"
+    with sessions().begin() as db:
+        row = PullRecord(
+            status="running",
+            started_at=datetime.now(UTC),
+            tables=5,
+            tasks=3,
+            source_directory=str(root),
+            operation_id="kill-test",
+        )
+        db.add(row)
+        db.flush()
+        record_id = row.id
+    with repository(root) as source:
+        commit = publish_pull(source, {"任务信息.json": b"x"}, operation_id="kill-test")
+    child = os.fork()
+    if child == 0:
+        if point == "after_commit":
+            os.kill(os.getpid(), signal.SIGKILL)
+        original = pull_service.add_queued_build
+
+        def kill_after_insert(*args, **kwargs):
+            original(*args, **kwargs)
+            os.kill(os.getpid(), signal.SIGKILL)
+
+        pull_service.add_queued_build = kill_after_insert
+        pull_service.finalize_pull(record_id, commit)
+        os._exit(1)
+    _, status = os.waitpid(child, 0)
+    assert os.WIFSIGNALED(status) and os.WTERMSIG(status) == signal.SIGKILL
+    monkeypatch.setattr(pull_service.build_queue, "enqueue", lambda: None)
+    pull_service.recover_pulls()
+    pull_service.recover_pulls()
+    with sessions()() as db:
+        row = db.get(PullRecord, record_id)
+        assert (row.status, row.commit, row.tables, row.tasks) == (
+            "succeeded",
+            commit,
+            5,
+            3,
+        )
+        assert (
+            db.query(Build)
+            .filter(Build.id == row.build_id, Build.build_type == "incremental")
+            .count()
+            == 1
+        )
+        assert db.query(Build).count() == 1

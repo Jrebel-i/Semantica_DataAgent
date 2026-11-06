@@ -4,6 +4,7 @@ import base64
 import binascii
 import fcntl
 import io
+import json
 import os
 import re
 import shutil
@@ -137,6 +138,7 @@ def repository(directory):
                 git(root, "init", "--quiet")
             if not (root / ".git").is_dir() or (root / ".git").is_symlink():
                 raise ValueError("Invalid source repository")
+            recover_pulls(root)
             yield root
         finally:
             fcntl.flock(lock, fcntl.LOCK_UN)
@@ -291,3 +293,102 @@ def diff(root, path, before, after):
         "--",
         relative(path).as_posix(),
     ).decode("utf-8", errors="replace")
+
+
+def recover_pulls(root):
+    """Recover a pull interrupted before or after its git commit."""
+    journal = root / ".git" / "dataagent-pull.json"
+    if not journal.exists():
+        return
+    record = json.loads(journal.read_text(encoding="utf-8"))
+    version = record["version"]
+    if not re.fullmatch(r"[0-9]{8}T[0-9]{12}Z-[0-9a-f]{32}", version):
+        raise ValueError("Invalid pull recovery journal")
+    path = f"dtb/{version}"
+    try:
+        head = git(root, "rev-parse", "--verify", "HEAD").decode().strip()
+        subject = git(root, "log", "-1", "--format=%s").decode().strip()
+    except ValueError:
+        head, subject = None, None
+    if subject == f"定时拉取 {version}":
+        journal.unlink()
+        return
+    if head != record["head"]:
+        raise ValueError("Source HEAD changed during pull recovery")
+    staged = git(root, "diff", "--cached", "--name-only", "-z").decode().split("\0")
+    if any(item and not item.startswith(path + "/") for item in staged):
+        raise ValueError("Source repository has staged changes during pull recovery")
+    if head:
+        git(root, "reset", "--quiet", "HEAD", "--", path)
+    else:
+        git(root, "rm", "-r", "-f", "--cached", "--ignore-unmatch", "--", path)
+    for item in (root / "dtb" / version, root / "dtb" / (".pull-" + version)):
+        if item.exists():
+            shutil.rmtree(item)
+    journal.unlink()
+
+
+def publish_pull(root, files, operation_id=None):
+    """Publish an immutable DTB snapshot while holding the source lock."""
+    import uuid
+
+    recover_pulls(root)
+    if git(root, "diff", "--cached", "--name-only"):
+        raise ValueError("Source repository has staged changes")
+    if not files:
+        raise ValueError("Empty pull snapshot")
+    paths = {relative(name): content for name, content in files.items()}
+    if len(paths) != len(files):
+        raise ValueError("Duplicate pull snapshot path")
+    parent = safe(root, relative("dtb"))
+    try:
+        head = git(root, "rev-parse", "--verify", "HEAD").decode().strip()
+    except ValueError:
+        head = None
+    version = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ-") + uuid.uuid4().hex
+    destination = parent / version
+    staging = parent / (".pull-" + version)
+    if operation_id is not None and not re.fullmatch(
+        r"[A-Za-z0-9_-]{1,80}", operation_id
+    ):
+        raise ValueError("Invalid pull operation identifier")
+    journal = root / ".git" / "dataagent-pull.json"
+    with tempfile.NamedTemporaryFile(
+        mode="w", dir=journal.parent, delete=False
+    ) as temp:
+        try:
+            json.dump({"version": version, "head": head}, temp)
+            temp.flush()
+            os.fsync(temp.fileno())
+            os.replace(temp.name, journal)
+        finally:
+            Path(temp.name).unlink(missing_ok=True)
+    try:
+        parent.mkdir(exist_ok=True)
+        staging.mkdir()
+        (staging / "pull-manifest.json").write_text(
+            json.dumps({"published_at": datetime.now(UTC).isoformat()}),
+            encoding="utf-8",
+        )
+        for path, content in paths.items():
+            target = staging.joinpath(*path.parts)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(content)
+        os.replace(staging, destination)
+        git(root, "add", "-f", "--", f"dtb/{version}")
+        message = ["-m", f"Pull-Operation: {operation_id}"] if operation_id else []
+        git(
+            root,
+            "commit",
+            "--quiet",
+            "-m",
+            f"定时拉取 {version}",
+            *message,
+            author="定时拉取",
+        )
+        commit = git(root, "rev-parse", "HEAD").decode().strip()
+        journal.unlink()
+        return commit
+    except BaseException:
+        recover_pulls(root)
+        raise

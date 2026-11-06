@@ -14,6 +14,7 @@ GROUPS = {
     "source": "semantica_dataagent.source_adapters",
     "parser": "semantica_dataagent.task_parsers",
     "executor": "semantica_dataagent.executors",
+    "puller": "semantica_dataagent.pullers",
 }
 
 # Agent runners are plugins too, but they are not persisted or enabled per

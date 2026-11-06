@@ -36,7 +36,7 @@ from .db import (
     sessions,
 )
 from .embedding_client import validate_settings
-from .scheduler import scheduler
+from .scheduler import pull_scheduler, scheduler
 
 
 @asynccontextmanager
@@ -104,10 +104,21 @@ async def lifespan(application):
     from .corrections import recover_applying
 
     await asyncio.to_thread(recover_applying)
+    from .pull_service import recover_pulls
+
+    try:
+        await asyncio.to_thread(recover_pulls)
+    except Exception:  # retry recovery on the next startup
+        import logging
+
+        logging.getLogger(__name__).exception("Pull recovery failed")
     build_queue.start()
     with sessions()() as db:
         interval = db.get(Setting, "schedule_interval_seconds")
         scheduler.start(int(interval.value) if interval else 0)
+    from .pull_service import interval as pull_interval
+
+    pull_scheduler.start(pull_interval())
     server = create_mcp()
     application.state.mcp_app = server.streamable_http_app()
     async with server.session_manager.run():
@@ -116,6 +127,7 @@ async def lifespan(application):
         finally:
             cleanup_task.cancel()
             await asyncio.gather(cleanup_task, return_exceptions=True)
+            pull_scheduler.stop()
             scheduler.stop()
             build_queue.stop()
             knowledge.close_readers()
@@ -769,19 +781,37 @@ def update_plugin(
                 for error in errors
             ],
         )
+    parameters = dict(body.parameters)
+    token = (
+        parameters.pop("token", None)
+        if (category, plugin_id) == ("puller", "dtb")
+        else None
+    )
     with sessions().begin() as db:
+        if token:
+            from .crypto import encrypt
+
+            secret = db.get(Setting, "puller.dtb.token")
+            if secret is None:
+                db.add(Setting(key="puller.dtb.token", value=encrypt(token)))
+            else:
+                secret.value = encrypt(token)
         row = db.get(PluginConfig, (category, plugin_id))
         if row is None:
             row = PluginConfig(
                 category=category,
                 plugin_id=plugin_id,
                 enabled=body.enabled,
-                parameters=json.dumps(body.parameters),
+                parameters=json.dumps(parameters),
             )
             db.add(row)
         else:
             row.enabled = body.enabled
-            row.parameters = json.dumps(body.parameters)
+            row.parameters = json.dumps(parameters)
+    if (category, plugin_id) == ("puller", "dtb"):
+        pull_scheduler.configure(
+            parameters.get("interval_seconds", 0) if body.enabled else 0
+        )
     return PluginView(
         category=category,
         id=plugin.id,
@@ -789,7 +819,7 @@ def update_plugin(
         display_name=plugin.display_name,
         parameters_schema=plugin.parameters_schema,
         enabled=body.enabled,
-        parameters=body.parameters,
+        parameters=parameters,
     )
 
 
@@ -985,3 +1015,38 @@ def mount_frontend(application: FastAPI, directory):
 
 if static_dir := os.environ.get("DATAAGENT_STATIC_DIR"):
     mount_frontend(app, static_dir)
+
+
+class PullView(BaseModel):
+    id: int
+    status: str
+    started_at: UtcDatetime
+    finished_at: UtcDatetime | None
+    tables: int
+    tasks: int
+    error: str | None
+    commit: str | None
+    build_id: int | None
+
+    model_config = {"from_attributes": True}
+
+
+@app.post("/api/v1/pulls/dtb", response_model=PullView)
+def trigger_pull(_: Annotated[str, Depends(admin)]):
+    from .pull_service import run_pull
+
+    try:
+        return run_pull()
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@app.get("/api/v1/pulls", response_model=list[PullView])
+def list_pulls(_: Annotated[str, Depends(current_user)]):
+    from .db import PullRecord
+
+    with sessions()() as db:
+        return [
+            PullView.model_validate(row)
+            for row in db.query(PullRecord).order_by(PullRecord.id.desc()).all()
+        ]

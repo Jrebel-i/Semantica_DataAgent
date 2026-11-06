@@ -162,7 +162,12 @@ class DtbAdapter:
             (snapshot / "任务信息.json").relative_to(base).as_posix(),
             (snapshot / "表信息.xlsx").relative_to(base).as_posix(),
         )
-        dimensions = self._dimensions(base, parameters, hashes, stats)
+        dimensions_parameters = dict(parameters)
+        if (snapshot / "dimensions").is_dir():
+            dimensions_parameters["dimensions_path"] = (
+                (snapshot / "dimensions").relative_to(base).as_posix()
+            )
+        dimensions = self._dimensions(base, dimensions_parameters, hashes, stats)
 
         records.extend(tasks)
         records.extend(tables)
@@ -199,7 +204,22 @@ class DtbAdapter:
         if not candidates:
             raise ValueError(f"No DTB snapshot found under {root}")
         stats["snapshot_directories"] = len(candidates)
-        return candidates[-1]
+        marked = []
+        for candidate in candidates:
+            manifest = candidate / "pull-manifest.json"
+            if manifest.exists():
+                from datetime import datetime
+
+                try:
+                    published = datetime.fromisoformat(
+                        json.loads(manifest.read_text(encoding="utf-8"))["published_at"]
+                    )
+                    if published.utcoffset() is None:
+                        raise ValueError("Missing timezone")
+                except (OSError, ValueError, KeyError, TypeError) as exc:
+                    raise ValueError("Invalid pull snapshot manifest") from exc
+                marked.append((published, candidate.name, candidate))
+        return max(marked)[2] if marked else candidates[-1]
 
     @staticmethod
     def _hash(path, base, hashes):

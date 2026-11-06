@@ -216,3 +216,18 @@ class QueryAudit(Base):
     row_count: Mapped[int | None]
     elapsed_ms: Mapped[int]
     created_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC))
+
+
+class PullRecord(Base):
+    __tablename__ = "pull_records"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    status: Mapped[str]
+    started_at: Mapped[datetime]
+    finished_at: Mapped[datetime | None]
+    tables: Mapped[int] = mapped_column(default=0)
+    tasks: Mapped[int] = mapped_column(default=0)
+    error: Mapped[str | None]
+    commit: Mapped[str | None]
+    build_id: Mapped[int | None]
+    source_directory: Mapped[str | None]
+    operation_id: Mapped[str | None]
