@@ -1203,6 +1203,89 @@
         "title": "ProviderView",
         "type": "object"
       },
+      "PullView": {
+        "properties": {
+          "build_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Build Id"
+          },
+          "commit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Commit"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "started_at": {
+            "format": "date-time",
+            "title": "Started At",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "tables": {
+            "title": "Tables",
+            "type": "integer"
+          },
+          "tasks": {
+            "title": "Tasks",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "started_at",
+          "finished_at",
+          "tables",
+          "tasks",
+          "error",
+          "commit",
+          "build_id"
+        ],
+        "title": "PullView",
+        "type": "object"
+      },
       "SearchHit": {
         "additionalProperties": true,
         "properties": {
@@ -2968,6 +3051,56 @@
           }
         ],
         "summary": "Update Provider"
+      }
+    },
+    "/api/v1/pulls": {
+      "get": {
+        "operationId": "list_pulls_api_v1_pulls_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/PullView"
+                  },
+                  "title": "Response List Pulls Api V1 Pulls Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Pulls"
+      }
+    },
+    "/api/v1/pulls/dtb": {
+      "post": {
+        "operationId": "trigger_pull_api_v1_pulls_dtb_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PullView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Trigger Pull"
       }
     },
     "/api/v1/queries/plan": {

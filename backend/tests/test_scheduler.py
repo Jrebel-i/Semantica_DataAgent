@@ -99,3 +99,37 @@ def test_scheduler_queues_behind_manual_build(tmp_path, monkeypatch):
     finally:
         release.set()
         queue.stop()
+
+
+def test_puller_interval_restored_on_restart(tmp_path, monkeypatch):
+    from cryptography.fernet import Fernet
+    from fastapi.testclient import TestClient
+
+    from semantica_dataagent.app import app
+    from semantica_dataagent.cli import initialize
+    from semantica_dataagent.scheduler import pull_scheduler
+
+    monkeypatch.setenv("DATAAGENT_DB_PATH", str(tmp_path / "pull.db"))
+    monkeypatch.setenv("DATAAGENT_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    token = initialize()
+    starts = []
+    original = pull_scheduler.start
+
+    def observe(interval):
+        starts.append(interval)
+        original(interval)
+
+    monkeypatch.setattr(pull_scheduler, "start", observe)
+    with TestClient(app) as client:
+        result = client.put(
+            "/api/v1/plugins/puller/dtb",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "enabled": True,
+                "parameters": {"url": "http://dtb.test", "interval_seconds": 42},
+            },
+        )
+        assert result.status_code == 200
+    with TestClient(app):
+        pass
+    assert starts == [0, 42]

@@ -829,3 +829,91 @@ def test_dtb_puller_token_is_encrypted_and_not_returned(client):
 
     with sessions()() as db:
         assert decrypt(db.get(Setting, "puller.dtb.token").value) == secret
+
+
+def test_manual_pull_commits_then_queues_incremental_build(
+    client, tmp_path, monkeypatch
+):
+    from semantica_dataagent import pull_service
+    from semantica_dataagent.dtb_puller import DtbPuller
+
+    c, token = client
+    headers = {"Authorization": f"Bearer {token}"}
+    root = tmp_path / "source"
+    assert (
+        c.put(
+            "/api/v1/settings",
+            headers=headers,
+            json={"values": {"source_directory": str(root)}},
+        ).status_code
+        == 200
+    )
+    assert (
+        c.put(
+            "/api/v1/plugins/puller/dtb",
+            headers=headers,
+            json={
+                "enabled": True,
+                "parameters": {
+                    "url": "http://example.test",
+                    "token": "test",
+                    "interval_seconds": 0,
+                },
+            },
+        ).status_code
+        == 200
+    )
+    monkeypatch.setattr(
+        DtbPuller,
+        "fetch",
+        lambda *args: (
+            {"任务信息.json": b"task", "表信息.xlsx": b"table"},
+            {"tables": 1, "tasks": 2},
+        ),
+    )
+    queued = []
+    monkeypatch.setattr(
+        pull_service, "enqueue_build", lambda kind, by: queued.append((kind, by)) or 123
+    )
+    response = c.post("/api/v1/pulls/dtb", headers=headers)
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "succeeded"
+    assert response.json()["tables"] == 1
+    assert queued == [("incremental", "定时拉取")]
+    assert (
+        c.get("/api/v1/pulls", headers=headers).json()[0]["commit"]
+        == response.json()["commit"]
+    )
+
+
+def test_failed_pull_does_not_change_source(client, tmp_path, monkeypatch):
+    from semantica_dataagent.dtb_puller import DtbPuller
+
+    c, token = client
+    headers = {"Authorization": f"Bearer {token}"}
+    root = tmp_path / "source"
+    root.mkdir()
+    (root / "original").write_text("unchanged")
+    c.put(
+        "/api/v1/settings",
+        headers=headers,
+        json={"values": {"source_directory": str(root)}},
+    )
+    c.put(
+        "/api/v1/plugins/puller/dtb",
+        headers=headers,
+        json={
+            "enabled": True,
+            "parameters": {"url": "http://example.test", "token": "test"},
+        },
+    )
+
+    def fail(*args):
+        raise ValueError("DTB authentication failed (401)")
+
+    monkeypatch.setattr(DtbPuller, "fetch", fail)
+    response = c.post("/api/v1/pulls/dtb", headers=headers)
+    assert response.status_code == 200
+    assert response.json()["status"] == "failed"
+    assert "401" in response.json()["error"]
+    assert sorted(p.name for p in root.iterdir()) == ["original"]

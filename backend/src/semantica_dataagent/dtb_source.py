@@ -162,7 +162,12 @@ class DtbAdapter:
             (snapshot / "任务信息.json").relative_to(base).as_posix(),
             (snapshot / "表信息.xlsx").relative_to(base).as_posix(),
         )
-        dimensions = self._dimensions(base, parameters, hashes, stats)
+        dimensions_parameters = dict(parameters)
+        if (snapshot / "dimensions").is_dir():
+            dimensions_parameters["dimensions_path"] = (
+                (snapshot / "dimensions").relative_to(base).as_posix()
+            )
+        dimensions = self._dimensions(base, dimensions_parameters, hashes, stats)
 
         records.extend(tasks)
         records.extend(tables)

@@ -14,7 +14,18 @@ export function BuildsPage({
     [],
   );
   const [error, setError] = useState(false);
+  const [pulls, setPulls] = useState<components["schemas"]["PullView"][]>([]);
+  const [pulling, setPulling] = useState(false);
+  const refreshPulls = () =>
+    fetch("/api/v1/pulls", { headers: { Authorization: `Bearer ${token}` } })
+      .then((r) => {
+        if (!r.ok) throw new Error();
+        return r.json();
+      })
+      .then(setPulls)
+      .catch(() => setError(true));
   useEffect(() => {
+    void refreshPulls();
     const controller = new AbortController();
     fetch("/api/v1/builds", {
       headers: { Authorization: `Bearer ${token}` },
@@ -33,6 +44,36 @@ export function BuildsPage({
   return (
     <>
       {error && <Alert type="error" title={messages.error} />}
+      <Typography.Title level={3}>{messages.pulls}</Typography.Title>
+      <button
+        disabled={pulling}
+        onClick={() => {
+          setPulling(true);
+          fetch("/api/v1/pulls/dtb", {
+            method: "POST",
+            headers: { Authorization: `Bearer ${token}` },
+          })
+            .then((r) => {
+              if (!r.ok) throw new Error();
+              return refreshPulls();
+            })
+            .catch(() => setError(true))
+            .finally(() => setPulling(false));
+        }}
+      >
+        {messages.pullNow}
+      </button>
+      <List
+        dataSource={pulls}
+        renderItem={(pull) => (
+          <List.Item>
+            <div>
+              {pull.started_at} {pull.status} · {messages.pullTables}:{" "}
+              {pull.tables} · {messages.pullTasks}: {pull.tasks} {pull.error}
+            </div>
+          </List.Item>
+        )}
+      />
       <List
         dataSource={builds}
         renderItem={(build) => (

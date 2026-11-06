@@ -180,6 +180,7 @@ def test_rest_time_fields_have_utc_offset(client):
         "knowledge_gaps": c.get("/api/v1/knowledge-gaps", headers=headers).json(),
         "build": c.get(f"/api/v1/builds/{build_id}", headers=headers).json(),
         "builds": c.get("/api/v1/builds", headers=headers).json(),
+        "pulls": c.get("/api/v1/pulls", headers=headers).json(),
         "generations": c.get("/api/v1/generations", headers=headers).json(),
         "providers": c.get("/api/v1/providers", headers=headers).json(),
         "conversations": c.get("/api/v1/conversations", headers=headers).json(),

@@ -27,7 +27,8 @@ class Schedule:
 
 
 class Scheduler:
-    def __init__(self):
+    def __init__(self, action=None):
+        self._action = action or (lambda: enqueue_build("incremental", "scheduler"))
         self._condition = threading.Condition()
         self._schedule = Schedule()
         self._thread = None
@@ -66,7 +67,7 @@ class Scheduler:
                     self._condition.wait(self._schedule.remaining())
                     continue
             try:
-                enqueue_build("incremental", "scheduler")
+                self._action()
             except Exception:
                 import logging
 
@@ -76,3 +77,12 @@ class Scheduler:
 
 
 scheduler = Scheduler()
+
+
+def _scheduled_pull():
+    from .pull_service import run_pull
+
+    run_pull()
+
+
+pull_scheduler = Scheduler(_scheduled_pull)

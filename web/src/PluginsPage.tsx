@@ -128,6 +128,7 @@ export function PluginsPage({
         throw new Error();
       }
       setErrors((old) => ({ ...old, [key]: [] }));
+      change(data as Plugin);
       setFailure(false);
       return true;
     } catch {

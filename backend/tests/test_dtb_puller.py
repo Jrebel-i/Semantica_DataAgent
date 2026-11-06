@@ -194,3 +194,37 @@ def test_authentication_and_timeout_have_distinct_safe_errors():
             puller().list_tables(client, "http://dtb", "private-token", "dimensions")
         assert "private-token" not in str(error.value)
         assert "secret" not in str(error.value)
+
+
+def test_fetch_validates_snapshot_before_returning():
+    import io
+    import json
+
+    from openpyxl import Workbook
+
+    book = Workbook()
+    book.active.append(["database_name", "table_name", "column_name", "column_type"])
+    book.active.append(["demo", "new_table", "id", "string"])
+    output = io.BytesIO()
+    book.save(output)
+    tasks = json.dumps(
+        {"columns": [{"name": "task_name"}, {"name": "task_src"}], "data": []}
+    ).encode()
+
+    def reply(request):
+        if request.url.path == "/api/data-map/table":
+            return httpx.Response(
+                200,
+                json={"status": "200", "data": {"tableList": [], "totalElements": 0}},
+            )
+        raise AssertionError(request.url.path)
+
+    obj = puller()
+    obj.query_download = lambda client, base, token, sql, format, **kw: (
+        tasks if format == "json" else output.getvalue()
+    )
+    with httpx.Client(transport=httpx.MockTransport(reply)) as client:
+        files, counts = obj.fetch(client, "http://dtb", "secret")
+    assert files["任务信息.json"] == tasks
+    assert files["表信息.xlsx"] == output.getvalue()
+    assert counts["tables"] == 1

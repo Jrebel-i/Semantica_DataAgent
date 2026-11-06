@@ -36,7 +36,7 @@ from .db import (
     sessions,
 )
 from .embedding_client import validate_settings
-from .scheduler import scheduler
+from .scheduler import pull_scheduler, scheduler
 
 
 @asynccontextmanager
@@ -108,6 +108,9 @@ async def lifespan(application):
     with sessions()() as db:
         interval = db.get(Setting, "schedule_interval_seconds")
         scheduler.start(int(interval.value) if interval else 0)
+    from .pull_service import interval as pull_interval
+
+    pull_scheduler.start(pull_interval())
     server = create_mcp()
     application.state.mcp_app = server.streamable_http_app()
     async with server.session_manager.run():
@@ -116,6 +119,7 @@ async def lifespan(application):
         finally:
             cleanup_task.cancel()
             await asyncio.gather(cleanup_task, return_exceptions=True)
+            pull_scheduler.stop()
             scheduler.stop()
             build_queue.stop()
             knowledge.close_readers()
@@ -796,6 +800,10 @@ def update_plugin(
         else:
             row.enabled = body.enabled
             row.parameters = json.dumps(parameters)
+    if (category, plugin_id) == ("puller", "dtb"):
+        pull_scheduler.configure(
+            parameters.get("interval_seconds", 0) if body.enabled else 0
+        )
     return PluginView(
         category=category,
         id=plugin.id,
@@ -999,3 +1007,38 @@ def mount_frontend(application: FastAPI, directory):
 
 if static_dir := os.environ.get("DATAAGENT_STATIC_DIR"):
     mount_frontend(app, static_dir)
+
+
+class PullView(BaseModel):
+    id: int
+    status: str
+    started_at: UtcDatetime
+    finished_at: UtcDatetime | None
+    tables: int
+    tasks: int
+    error: str | None
+    commit: str | None
+    build_id: int | None
+
+    model_config = {"from_attributes": True}
+
+
+@app.post("/api/v1/pulls/dtb", response_model=PullView)
+def trigger_pull(_: Annotated[str, Depends(admin)]):
+    from .pull_service import run_pull
+
+    try:
+        return run_pull()
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@app.get("/api/v1/pulls", response_model=list[PullView])
+def list_pulls(_: Annotated[str, Depends(current_user)]):
+    from .db import PullRecord
+
+    with sessions()() as db:
+        return [
+            PullView.model_validate(row)
+            for row in db.query(PullRecord).order_by(PullRecord.id.desc()).all()
+        ]

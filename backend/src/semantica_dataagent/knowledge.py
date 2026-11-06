@@ -537,7 +537,7 @@ def run_build(build_id):
             "plugins": [
                 (category, plugin.id, plugin.version, parameters)
                 for category, plugin, enabled, parameters in plugins
-                if enabled
+                if enabled and category in {"source", "parser"}
             ],
             "filters": filters,
             "dimension_value_limit": values.get("dimension_value_limit", "1000"),
