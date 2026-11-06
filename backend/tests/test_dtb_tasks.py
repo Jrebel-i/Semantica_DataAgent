@@ -155,3 +155,13 @@ def test_mysql_submissions_resolve_columns():
         result = DtbTaskParser().parse(task("shell", source), {"schema": schema})
         assert result.column_status == "success", result.column_reason
         assert result.column_edges == [("src.items", "id", "dst.items", "id")]
+
+
+def test_beeline_with_continued_options_and_quoted_table_names():
+    source = 'beeline -u jdbc:hive2://host \\\n  -e "INSERT INTO `dst`.`items` SELECT id FROM `src`.`items`"'
+    result = DtbTaskParser().parse(
+        task("shell", source), {"schema": {"src.items": ["id"], "dst.items": ["id"]}}
+    )
+    assert result.reads == ["src.items"]
+    assert result.writes == ["dst.items"]
+    assert result.column_edges == [("src.items", "id", "dst.items", "id")]

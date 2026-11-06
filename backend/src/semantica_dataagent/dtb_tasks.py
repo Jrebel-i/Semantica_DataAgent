@@ -249,7 +249,7 @@ class DtbTaskParser:
         )
 
     def _shell(self, task, parameters):
-        source = _text(task.data.get("sql"))
+        source = re.sub(r"\\\r?\n", "", _text(task.data.get("sql")))
         name = _text(task.data.get("name")) or "shell"
         assignments = _assignments(source)
         cache = {}
