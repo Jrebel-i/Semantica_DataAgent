@@ -1,0 +1,10 @@
+[
+  {"database": "src", "table": "orders", "name": "id", "type": "string", "comment": "id", "partition": false},
+  {"database": "src", "table": "orders", "name": "amount", "type": "string", "comment": "amount", "partition": false},
+  {"database": "dst", "table": "orders", "name": "order_id", "type": "string", "comment": "order_id", "partition": false},
+  {"database": "dst", "table": "orders", "name": "total", "type": "string", "comment": "total", "partition": false},
+  {"database": "dst", "table": "summary", "name": "order_id", "type": "string", "comment": "order_id", "partition": false},
+  {"database": "dst", "table": "summary", "name": "total", "type": "string", "comment": "total", "partition": false},
+  {"database": "dst", "table": "merged", "name": "order_id", "type": "string", "comment": "order_id", "partition": false},
+  {"database": "dst", "table": "merged", "name": "total", "type": "string", "comment": "total", "partition": false}
+]

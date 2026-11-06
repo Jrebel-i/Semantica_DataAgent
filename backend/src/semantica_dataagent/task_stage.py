@@ -267,11 +267,13 @@ def write(records, generation, storage):
         all_records, all_tasks, parsed_tasks, schema, generation, storage
     )
     failures.extend(column_failures)
+    column_failure_tasks = len({failure["task_id"] for failure in column_failures})
     return StageResult(
         counts={
             "task": len(rows),
             "lineage": len(edges),
             "column_lineage": column_count,
+            "column_failures": column_failure_tasks,
         },
         failures=failures,
     )

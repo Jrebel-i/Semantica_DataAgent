@@ -1,0 +1,7 @@
+[
+  {"database": "src", "name": "orders", "comment": "source orders"},
+  {"database": "src", "name": "extra", "comment": "source without field metadata"},
+  {"database": "dst", "name": "orders", "comment": "resolved copy"},
+  {"database": "dst", "name": "summary", "comment": "second resolved copy"},
+  {"database": "dst", "name": "merged", "comment": "union target"}
+]
