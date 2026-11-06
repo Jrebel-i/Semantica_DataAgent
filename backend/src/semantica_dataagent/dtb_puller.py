@@ -18,6 +18,24 @@ TASK_SQL = "select version_id,\nversion_code,message,committer,task_id,task_name
 TABLE_SQL = "select a.*,b.column_name,b.seq_no,b.column_type,b.column_comment,b.column_business_comment from\n(\n    select table_id,table_name,database_name,create_time,modify_time,\n    comment,output_task_id,output_task_name,use_direction\n    from mysql.data_tool_box_emr.metadata_table where catalog_type='HIVE' and status='在用'\n) a\n left join mysql.data_tool_box_emr.metadata_column b on a.table_id=b.table_id"
 
 
+def _total_count(data):
+    """Read a DTB page total, accepting both ``total`` and ``totalElements``."""
+    total = data.get("totalElements")
+    if total is None:
+        total = data.get("total")
+    if total is None:
+        return None
+    if isinstance(total, bool):
+        raise ValueError("Invalid DTB pagination")  # noqa: TRY004
+    try:
+        total = int(total)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Invalid DTB pagination") from exc
+    if total < 0:
+        raise ValueError("Invalid DTB pagination")
+    return total
+
+
 def checked_request(client, method, base_url, token, path, **kwargs):
     allowed_get = (
         path == "/api/data-map/table"
@@ -121,11 +139,10 @@ class DtbPuller:
             )
             try:
                 batch = data[key]
-                total = data.get("totalElements", data.get("total"))
-                if not isinstance(batch, list) or isinstance(total, bool):
+                total = _total_count(data)
+                if not isinstance(batch, list):
                     raise ValueError("Invalid DTB pagination")  # noqa: TRY004
-                total = int(total)
-                if total < 0 or (expected is not None and total != expected):
+                if expected is not None and total is not None and total != expected:
                     raise ValueError("Inconsistent DTB pagination")
                 expected = total
                 for row in batch:
@@ -138,10 +155,13 @@ class DtbPuller:
                         raise ValueError("Duplicate DTB row")
                     seen.add(value)
                 rows.extend(batch)
-                if len(rows) == total:
+                if total is not None:
+                    if len(rows) == total:
+                        return rows
+                    if not batch or len(rows) > total:
+                        raise ValueError("Incomplete DTB pagination")
+                elif not batch or len(batch) < limit:
                     return rows
-                if not batch or len(rows) > total:
-                    raise ValueError("Incomplete DTB pagination")
                 page += 1
             except (KeyError, TypeError) as exc:
                 raise ValueError("Invalid DTB pagination") from exc
@@ -269,11 +289,10 @@ class DtbPuller:
                 {"layer": layer, "page": 1, "limit": maximum},
             )
             tables = data.get("tableList")
-            if (
-                not isinstance(tables, list)
-                or len(tables) > maximum
-                or len(tables) < min(maximum, int(data["totalElements"]))
-            ):
+            total = _total_count(data)
+            if not isinstance(tables, list) or len(tables) > maximum:
+                raise ValueError("Incomplete DTB pagination")
+            if total is not None and len(tables) < min(maximum, total):
                 raise ValueError("Incomplete DTB pagination")
         task_sql, table_sql = TASK_SQL, TABLE_SQL
         scope_names = []

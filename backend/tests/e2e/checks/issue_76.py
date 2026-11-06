@@ -73,7 +73,7 @@ def check_dtb_pull(ctx):
                                     "catalogType": "HIVE",
                                 }
                             ],
-                            "totalElements": 2,
+                            "total": 2,
                         },
                     }
                 )
@@ -86,7 +86,7 @@ def check_dtb_pull(ctx):
                                 {"columnName": "id", "columnType": "string"},
                                 {"columnName": "day_num", "columnType": "string"},
                             ],
-                            "totalElements": 2,
+                            "total": 2,
                         },
                     }
                 )

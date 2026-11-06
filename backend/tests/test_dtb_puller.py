@@ -340,3 +340,79 @@ def test_bounded_pull_limits_queries_to_selected_tables():
         )
     assert "dim_a" in calls[0] and "dim_b" in calls[0]
     assert "dim_c" not in calls[0]
+
+
+def _bounded_pull_with_table_page(total_field, table_list, maximum=2):
+    obj = puller()
+    calls = []
+
+    def reply(request):
+        assert request.url.path == "/api/data-map/table"
+        assert request.url.params["page"] == "1"
+        assert request.url.params["limit"] == str(maximum)
+        data = {"tableList": table_list}
+        if total_field is not None:
+            data["total"] = total_field
+        return httpx.Response(200, json={"status": "200", "data": data})
+
+    def query(client, base, token, sql, fmt, **kwargs):
+        calls.append(sql)
+        raise RuntimeError("stop after observing scoped task query")
+
+    obj.query_download = query
+    with (
+        httpx.Client(transport=httpx.MockTransport(reply)) as client,
+        pytest.raises(RuntimeError),
+    ):
+        obj.fetch(
+            client,
+            "http://dtb",
+            "secret",
+            {"layer": "dimensions", "max_tables": maximum},
+        )
+    return calls
+
+
+def test_bounded_pull_accepts_real_total_field_from_table_endpoint():
+    calls = _bounded_pull_with_table_page(
+        8718,
+        [
+            {"tableId": 1, "tableName": "dim_a", "catalogType": "HIVE"},
+            {"tableId": 2, "tableName": "dim_b", "catalogType": "HIVE"},
+        ],
+    )
+    assert "dim_a" in calls[0] and "dim_b" in calls[0]
+
+
+def test_pagination_falls_back_to_total_when_total_elements_is_null():
+    def reply(request):
+        return httpx.Response(
+            200,
+            json={
+                "status": "200",
+                "data": {
+                    "tableList": [{"tableId": 1, "tableName": "dim_a"}],
+                    "totalElements": None,
+                    "total": 1,
+                },
+            },
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(reply)) as client:
+        tables = puller().list_tables(client, "http://dtb", "secret", "dimensions")
+    assert [row["tableId"] for row in tables] == [1]
+
+
+@pytest.mark.parametrize(
+    "table_list",
+    [
+        [
+            {"tableId": 1, "tableName": "dim_a", "catalogType": "HIVE"},
+            {"tableId": 2, "tableName": "dim_b", "catalogType": "HIVE"},
+        ],
+        [{"tableId": 1, "tableName": "dim_a", "catalogType": "HIVE"}],
+    ],
+)
+def test_bounded_pull_without_total_uses_page_size_as_end(table_list):
+    calls = _bounded_pull_with_table_page(None, table_list)
+    assert "dim_a" in calls[0]
