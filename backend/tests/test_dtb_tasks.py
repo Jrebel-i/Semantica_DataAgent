@@ -165,3 +165,12 @@ def test_beeline_with_continued_options_and_quoted_table_names():
     assert result.reads == ["src.items"]
     assert result.writes == ["dst.items"]
     assert result.column_edges == [("src.items", "id", "dst.items", "id")]
+
+
+def test_mysql_single_quoted_sql_does_not_expand_shell_variables():
+    source = "database=src\nmysql -e 'INSERT INTO dst.items SELECT id FROM ${database}.items'"
+    result = DtbTaskParser().parse(
+        task("shell", source), {"schema": {"src.items": ["id"], "dst.items": ["id"]}}
+    )
+    assert result.column_status != "success"
+    assert not result.column_edges

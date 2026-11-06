@@ -313,7 +313,9 @@ class DtbTaskParser:
                     failed_sql += 1
 
         submissions = [
-            _submission_sql(match, assignments, cache, unresolved)
+            _strip_quotes(match.group("argument"))
+            if match.group("argument").startswith("'")
+            else _submission_sql(match, assignments, cache, unresolved)
             for match in _MYSQL_E.finditer(source)
         ]
         submissions.extend(
