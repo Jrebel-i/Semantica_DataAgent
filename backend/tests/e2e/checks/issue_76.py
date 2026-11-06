@@ -253,7 +253,11 @@ def check_dtb_pull(ctx):
                     self.send(
                         {
                             "columns": [{"name": "id"}, {"name": "day_num"}],
-                            "data": [['quoted "value",\nline', "20261105"]],
+                            "data": [
+                                ['quoted "value",\nline', "20261105"],
+                                ["", "20261105"],
+                                [None, "20261105"],
+                            ],
                         }
                     )
                 elif key == "table":
@@ -383,9 +387,19 @@ def check_dtb_pull(ctx):
             for path in tree
             if path.endswith("dimensions/new_orders/current/rows.jsonl")
         )
-        row = json.loads(git("show", f"{record['commit']}:{row_path}"))
+        rows = [
+            json.loads(line)
+            for line in git("show", f"{record['commit']}:{row_path}").splitlines()
+        ]
         ctx.require(
-            row["id"] == 'quoted "value",\nline', f"special value corrupted: {row}"
+            [row["id"] for row in rows] == ['quoted "value",\nline', "", None],
+            f"special values corrupted: {rows}",
+        )
+        ctx.require(
+            meta["estimated_rows"] == 1
+            and meta["record_count"] == 3
+            and meta["row_count_differs"] is True,
+            f"row count mismatch missing: {meta}",
         )
         build = wait_build(record)
         ctx.require(
