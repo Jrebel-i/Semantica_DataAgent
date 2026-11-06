@@ -1013,3 +1013,65 @@ def test_failed_recovery_does_not_prevent_startup_and_can_retry(tmp_path, monkey
             3,
         )
         assert row.build_id is not None
+
+
+@pytest.mark.parametrize("point", ["after_commit", "after_insert"])
+def test_sigkill_between_source_commit_and_build_finalization(
+    client, tmp_path, point, monkeypatch
+):
+    import os
+    import signal
+    from datetime import UTC, datetime
+
+    from semantica_dataagent import pull_service
+    from semantica_dataagent.db import Build, PullRecord, sessions
+    from semantica_dataagent.source_directory import publish_pull, repository
+
+    root = tmp_path / "source"
+    with sessions().begin() as db:
+        row = PullRecord(
+            status="running",
+            started_at=datetime.now(UTC),
+            tables=5,
+            tasks=3,
+            source_directory=str(root),
+            operation_id="kill-test",
+        )
+        db.add(row)
+        db.flush()
+        record_id = row.id
+    with repository(root) as source:
+        commit = publish_pull(source, {"任务信息.json": b"x"}, operation_id="kill-test")
+    child = os.fork()
+    if child == 0:
+        if point == "after_commit":
+            os.kill(os.getpid(), signal.SIGKILL)
+        original = pull_service.add_queued_build
+
+        def kill_after_insert(*args, **kwargs):
+            original(*args, **kwargs)
+            os.kill(os.getpid(), signal.SIGKILL)
+
+        pull_service.add_queued_build = kill_after_insert
+        pull_service.finalize_pull(record_id, commit)
+        os._exit(1)
+    _, status = os.waitpid(child, 0)
+    assert os.WIFSIGNALED(status) and os.WTERMSIG(status) == signal.SIGKILL
+    monkeypatch.setattr(pull_service.build_queue, "enqueue", lambda: None)
+    pull_service.recover_pulls()
+    pull_service.recover_pulls()
+    with sessions()() as db:
+        row = db.get(PullRecord, record_id)
+        assert (row.status, row.commit, row.tables, row.tasks) == (
+            "succeeded",
+            commit,
+            5,
+            3,
+        )
+        assert (
+            db.query(Build)
+            .filter(Build.id == row.build_id, Build.build_type == "incremental")
+            .count()
+            == 1
+        )
+        assert db.query(Build).count() == 1
