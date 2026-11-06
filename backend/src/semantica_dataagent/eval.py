@@ -7,6 +7,7 @@ import json
 import os
 import time
 import uuid
+from decimal import Decimal, InvalidOperation
 from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass
@@ -51,6 +52,56 @@ _FILTER_TYPES = (
     exp.Between,
     exp.Is,
 )
+
+
+def compare_results(left: dict, right: dict) -> str:
+    """Compare unordered result multisets, retaining column positions."""
+    if left.get("truncated") or right.get("truncated"):
+        return "uncomparable"
+    if len(left["columns"]) != len(right["columns"]):
+        return "different"
+    left_rows, right_rows = left["rows"], right["rows"]
+    if len(left_rows) != len(right_rows):
+        return "different"
+
+    def equal_value(first, second):
+        if first is None or second is None:
+            return first is None and second is None
+        if isinstance(first, bool) or isinstance(second, bool):
+            return type(first) is type(second) and first == second
+        try:
+            number_a, number_b = Decimal(str(first)), Decimal(str(second))
+            if number_a.is_finite() and number_b.is_finite():
+                return abs(number_a - number_b) <= Decimal("1e-6") * max(
+                    abs(number_a), abs(number_b)
+                )
+        except InvalidOperation:
+            pass
+        return first == second
+
+    candidates = [
+        [
+            index
+            for index, row in enumerate(right_rows)
+            if len(row) == len(left["columns"])
+            and len(other) == len(left["columns"])
+            and all(equal_value(a, b) for a, b in zip(other, row, strict=True))
+        ]
+        for other in left_rows
+    ]
+    assigned: dict[int, int] = {}
+
+    def match(index, visited):
+        for target in candidates[index]:
+            if target in visited:
+                continue
+            visited.add(target)
+            if target not in assigned or match(assigned[target], visited):
+                assigned[target] = index
+                return True
+        return False
+
+    return "equal" if all(match(i, set()) for i in range(len(left_rows))) else "different"
 
 
 @dataclass(slots=True)
