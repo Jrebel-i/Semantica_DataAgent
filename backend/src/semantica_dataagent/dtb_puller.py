@@ -80,6 +80,8 @@ class DtbPuller:
             "url": {"type": "string", "format": "uri"},
             "token": {"type": "string", "format": "password"},
             "interval_seconds": {"type": "integer", "minimum": 0},
+            "layer": {"type": "string", "enum": ["dimensions"]},
+            "max_tables": {"type": "integer", "minimum": 1, "maximum": 100},
         },
         "additionalProperties": False,
     }
@@ -241,16 +243,57 @@ class DtbPuller:
         except (httpx.HTTPError, KeyError, TypeError, AttributeError) as exc:
             raise ValueError("DTB query request failed") from exc
 
-    def fetch(self, client, base_url, token):
+    def fetch(self, client, base_url, token, parameters=None):
         from .dtb_source import DtbAdapter
 
-        tables = self.list_tables(client, base_url, token, "dimensions")
+        parameters = parameters or {}
+        layer = parameters.get("layer", "dimensions")
+        maximum = parameters.get("max_tables")
+        if layer != "dimensions" or (
+            maximum is not None
+            and (
+                isinstance(maximum, bool)
+                or not isinstance(maximum, int)
+                or not 1 <= maximum <= 100
+            )
+        ):
+            raise ValueError("Invalid pull scope")
+        if maximum is None:
+            tables = self.list_tables(client, base_url, token, layer)
+        else:
+            data = self._get(
+                client,
+                base_url,
+                token,
+                "/api/data-map/table",
+                {"layer": layer, "page": 1, "limit": maximum},
+            )
+            tables = data.get("tableList")
+            if (
+                not isinstance(tables, list)
+                or len(tables) > maximum
+                or len(tables) < min(maximum, int(data["totalElements"]))
+            ):
+                raise ValueError("Incomplete DTB pagination")
+        task_sql, table_sql = TASK_SQL, TABLE_SQL
+        scope_names = []
+        if maximum is not None:
+            for table in tables:
+                name = str(table.get("tableName", "")).removeprefix("dimensions.")
+                if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
+                    raise ValueError("Invalid DTB table name")
+                scope_names.append(name)
+            names = ",".join("'" + name + "'" for name in scope_names) or "''"
+            task_sql += f" AND output_table_name IN ({names})"
+            table_sql += (
+                f" WHERE a.database_name='dimensions' AND a.table_name IN ({names})"
+            )
         files = {
             "任务信息.json": self.query_download(
-                client, base_url, token, TASK_SQL, "json"
+                client, base_url, token, task_sql, "json"
             ),
             "表信息.xlsx": self.query_download(
-                client, base_url, token, TABLE_SQL, "xlsx"
+                client, base_url, token, table_sql, "xlsx"
             ),
         }
         stats = {}
@@ -263,6 +306,11 @@ class DtbPuller:
                 "mysql.data_tool_box_emr.metadata_partition b ON a.table_id=b.table_id "
                 "WHERE a.catalog_type='HIVE' AND a.status='在用' AND a.database_name='dimensions') tt) kk WHERE rk=1"
             )
+            if maximum is not None:
+                sql = sql.replace(
+                    "a.database_name='dimensions'",
+                    "a.database_name='dimensions' AND a.table_name IN (" + names + ")",
+                )
             raw = self.query_download(client, base_url, token, sql, "csv")
             try:
                 reader = csv.DictReader(
@@ -320,7 +368,7 @@ class DtbPuller:
                 client,
                 base_url,
                 token,
-                f"SELECT * FROM hive.dimensions.{name}{where} LIMIT 50000",
+                f"SELECT * FROM hive.dimensions.{name}{where} LIMIT {100 if maximum is not None else 50000}",
                 "csv",
                 data_source="doris_query",
             )
@@ -337,7 +385,9 @@ class DtbPuller:
                     raise ValueError("Invalid DTB dimension rows")
             except (UnicodeError, csv.Error) as exc:
                 raise ValueError("Invalid DTB dimension download") from exc
-            if stat and len(rows) != min(stat[2], 50000):
+            if stat and len(rows) != min(
+                stat[2], 100 if maximum is not None else 50000
+            ):
                 raise ValueError("DTB dimension row count mismatch")
             meta = {
                 "database": "dimensions",

@@ -66,7 +66,14 @@ def run_pull():
                 raise ValueError("Invalid DTB URL")
             puller = discover()[("puller", "dtb")]
             with httpx.Client(timeout=30, follow_redirects=False) as client:
-                files, counts = puller.fetch(client, url, token)
+                scope = {
+                    k: parameters[k] for k in ("layer", "max_tables") if k in parameters
+                }
+                files, counts = (
+                    puller.fetch(client, url, token, scope)
+                    if scope
+                    else puller.fetch(client, url, token)
+                )
             with sessions().begin() as db:
                 record = db.get(PullRecord, record_id)
                 record.source_directory = source

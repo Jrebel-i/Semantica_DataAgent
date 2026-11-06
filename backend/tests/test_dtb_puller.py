@@ -316,3 +316,27 @@ def test_dtb_request_allowlist_blocks_network_before_sending():
             with pytest.raises(ValueError):
                 checked_request(client, method, "http://dtb", "token", path, json=body)
     assert calls == []
+
+
+def test_bounded_pull_limits_queries_to_selected_tables():
+    obj = puller()
+    calls = []
+    obj._get = lambda client, base, token, endpoint, params=None: {
+        "tableList": [
+            {"tableId": 1, "tableName": "dim_a", "catalogType": "HIVE"},
+            {"tableId": 2, "tableName": "dim_b", "catalogType": "HIVE"},
+        ],
+        "totalElements": 20,
+    }
+
+    def query(client, base, token, sql, fmt, **kwargs):
+        calls.append(sql)
+        raise RuntimeError("stop after observing scoped task query")
+
+    obj.query_download = query
+    with httpx.Client() as client, pytest.raises(RuntimeError):
+        obj.fetch(
+            client, "http://dtb", "secret", {"layer": "dimensions", "max_tables": 2}
+        )
+    assert "dim_a" in calls[0] and "dim_b" in calls[0]
+    assert "dim_c" not in calls[0]
