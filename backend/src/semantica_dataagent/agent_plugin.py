@@ -265,8 +265,8 @@ class EventParser:
     stop_reason: str | None = None
     error_overrides_text: bool = True
 
-    def emit_text(self, text: str) -> list[AgentEvent]:
-        if not text:
+    def emit_text(self, text: str, *, emit_empty: bool = False) -> list[AgentEvent]:
+        if not text and not emit_empty:
             return []
         self.text_parts.append(text)
         return [text_event(text)]
@@ -390,9 +390,10 @@ class SandboxTurn:
 class AgentProcess:
     """A running agent CLI with drained stderr and safe teardown."""
 
-    def __init__(self, process, stderr: deque[str]):
+    def __init__(self, process, stderr: deque[str], drain):
         self.process = process
         self._stderr = stderr
+        self._drain = drain
 
     def write(self, data: bytes) -> None:
         if self.process.stdin is None:
@@ -417,6 +418,10 @@ class AgentProcess:
 
     async def wait(self) -> int:
         return await self.process.wait()
+
+    async def wait_for_stderr(self) -> None:
+        with contextlib.suppress(asyncio.CancelledError):
+            await self._drain
 
     @property
     def returncode(self) -> int | None:
@@ -474,7 +479,7 @@ async def agent_process(
     )
     stderr: deque[str] = deque(maxlen=80)
     drain = asyncio.create_task(drain_stream(process.stderr, stderr))
-    agent = AgentProcess(process, stderr)
+    agent = AgentProcess(process, stderr, drain)
     try:
         if header is not None:
             agent.write(header)
