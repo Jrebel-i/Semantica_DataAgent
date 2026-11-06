@@ -17,6 +17,7 @@ from collections.abc import AsyncIterator, Iterable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Self
 
 from .agent_sandbox import SessionSandbox, register_session, unregister_session
 from .agent_types import (
@@ -237,8 +238,7 @@ def done_event(text: str, stop_reason: str | None = None) -> AgentEvent:
             "stop_reason": stop_reason,
             "sql": extract_sql(text),
             "citations": [
-                {"ref": ref, "type": ref.split(":", 1)[0]}
-                for ref in extract_refs(text)
+                {"ref": ref, "type": ref.split(":", 1)[0]} for ref in extract_refs(text)
             ],
         },
     )
@@ -281,7 +281,9 @@ class EventParser:
             self.error_overrides_text or not (self.final_text or self.text_parts)
         ):
             return error_event(self.error)
-        text = self.final_text if self.final_text is not None else "".join(self.text_parts)
+        text = (
+            self.final_text if self.final_text is not None else "".join(self.text_parts)
+        )
         self.add_refs(text)
         return done_event(text, self.stop_reason)
 
@@ -312,7 +314,9 @@ def is_sandboxed(binary: str | None = None) -> bool:
 
 def available_in_runtime(name: str, binary: str | None = None) -> bool:
     if is_sandboxed(binary):
-        tool = "kubectl" if os.environ.get("DATAAGENT_AGENT_MODE") == "k8s" else "docker"
+        tool = (
+            "kubectl" if os.environ.get("DATAAGENT_AGENT_MODE") == "k8s" else "docker"
+        )
         return bool(shutil.which(tool))
     return bool(binary or shutil.which(name))
 
@@ -355,7 +359,7 @@ class SandboxTurn:
             self.model_url = self.sandbox.model_url
             self.mcp_url = self.sandbox.mcp_url
 
-    async def __aenter__(self) -> "SandboxTurn":
+    async def __aenter__(self) -> Self:
         if self.sandbox is not None:
             register_session(self.request.conversation_id, self.sandbox)
             try:
@@ -394,6 +398,16 @@ class AgentProcess:
         if self.process.stdin is None:
             raise RuntimeError("agent stdin is not available")
         self.process.stdin.write(data)
+
+    async def drain(self) -> None:
+        if self.process.stdin is None:
+            raise RuntimeError("agent stdin is not available")
+        await self.process.stdin.drain()
+
+    async def readline(self) -> bytes:
+        if self.process.stdout is None:
+            return b""
+        return await self.process.stdout.readline()
 
     async def lines(self) -> AsyncIterator[bytes]:
         if self.process.stdout is None:

@@ -9,6 +9,32 @@ from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .agent_plugin import (
+    STREAM_LIMIT,
+    extract_refs,
+    extract_sql,
+)
+from .agent_plugin import (
+    clarification_questions as _clarification_questions,
+)
+from .agent_plugin import (
+    drain_stream as _drain,
+)
+from .agent_plugin import (
+    redact_event as _redact_event,
+)
+from .agent_plugin import (
+    result_summary as _result_summary,
+)
+from .agent_plugin import (
+    stop_process as _stop,
+)
+from .agent_plugin import (
+    tool_args_summary as _tool_args_summary,
+)
+from .agent_plugin import (
+    write_json as _write_json,
+)
 from .agent_sandbox import SessionSandbox, register_session, unregister_session
 from .agent_types import (
     CLARIFICATION,
@@ -21,18 +47,6 @@ from .agent_types import (
 )
 from .k8s_sandbox import KubernetesSessionSandbox
 from .mcp_context import CONVERSATION_HEADER, TURN_HEADER
-from .pi_runner import (
-    STREAM_LIMIT,
-    _clarification_questions,
-    _drain,
-    _redact_event,
-    _result_summary,
-    _stop,
-    _tool_args_summary,
-    _write_json,
-    extract_refs,
-    extract_sql,
-)
 from .skill import read_skill
 
 
