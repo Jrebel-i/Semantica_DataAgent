@@ -28,4 +28,5 @@ spec:
             cidr: ::/0
       ports:
         - protocol: TCP
-          port: 443
+          port: 1
+          endPort: 65535

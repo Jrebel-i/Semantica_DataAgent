@@ -52,7 +52,7 @@ def check_session_runtime(ctx):
                         name,
                         "node",
                         "-e",
-                        "require('dns').resolve4('example.com', (e) => process.exit(e ? 0 : 1)); setTimeout(() => process.exit(0), 3000)",
+                        "require('dns').resolve4('sda-relay', (e) => process.exit(e ? 0 : 1)); setTimeout(() => process.exit(0), 3000)",
                     ],
                     capture_output=True,
                     check=False,

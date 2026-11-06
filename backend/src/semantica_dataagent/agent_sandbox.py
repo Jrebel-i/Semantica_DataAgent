@@ -97,6 +97,8 @@ class SessionSandbox:
     def _start(self):
         (self.workspace / "work").mkdir(parents=True, exist_ok=True)
         (self.workspace / "sessions").mkdir(parents=True, exist_ok=True)
+        resolv = self.workspace / "agent-resolv.conf"
+        resolv.write_text("nameserver 127.0.0.1\n", encoding="ascii")
         try:
             self._run(
                 "network",
@@ -168,6 +170,8 @@ class SessionSandbox:
                 "--dns",
                 "127.0.0.1",
                 *hosts,
+                "--mount",
+                f"type=bind,src={resolv},dst=/etc/resolv.conf,readonly",
                 "--read-only",
                 "--tmpfs",
                 "/tmp:rw,nosuid,nodev",

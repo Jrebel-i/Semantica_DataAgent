@@ -51,3 +51,42 @@ def test_session_rbac_is_only_in_session_namespace():
         binding["metadata"]["namespace"] == "semantica-dataagent-sessions"
         for binding in bindings
     )
+
+
+def test_runtime_selection_rejects_unknown_modes(monkeypatch):
+    import pytest
+
+    from semantica_dataagent.session_runtime import LocalSessionRuntime, runtime_class
+
+    monkeypatch.setenv("DATAAGENT_AGENT_MODE", "local")
+    assert runtime_class() is LocalSessionRuntime
+    monkeypatch.setenv("DATAAGENT_AGENT_MODE", "misspelled")
+    with pytest.raises(ValueError, match="unknown session runtime"):
+        runtime_class()
+
+
+def test_session_firewall_covers_ipv6_and_custom_namespace(monkeypatch):
+    from semantica_dataagent.k8s_sandbox import build_pod_spec
+
+    monkeypatch.setenv("DATAAGENT_SESSION_NAMESPACE", "custom-sessions")
+    addresses = {
+        "gateway.example": ["203.0.113.10", "2001:db8::10"],
+        "mcp.example": ["192.0.2.20", "2001:db8::20"],
+    }
+
+    def resolve(host, *args, **kwargs):
+        return [(10 if ":" in ip else 2, 1, 6, "", (ip, 0)) for ip in addresses[host]]
+
+    with patch("socket.getaddrinfo", side_effect=resolve):
+        pod = build_pod_spec(
+            name="example",
+            workspace_subpath="conversations/example",
+            model_url="https://gateway.example/v1",
+            mcp_url="http://mcp.example:8000/mcp",
+        )
+    assert pod["metadata"]["namespace"] == "custom-sessions"
+    script = pod["spec"]["initContainers"][0]["args"][0]
+    assert "ip6tables -P OUTPUT DROP" in script
+    assert "--ctorigdst 2001:db8::10 --dport 443" in script
+    assert "--ctorigdst 2001:db8::20 --dport 8000" in script
+    assert "--dport 53" not in script
