@@ -555,6 +555,41 @@ async def _stream(
             payload = {"conversation_id": conversation_id, "turn_id": turn_id}
             payload.update(event.data)
             yield _sse(event.type, payload)
+            if (
+                event.type == "tool_end"
+                and str(event.data.get("name", "")).endswith("propose_query")
+                and not event.data.get("is_error")
+            ):
+                with sessions()() as db:
+                    planned = (
+                        db.query(QueryExecution)
+                        .filter_by(
+                            conversation_id=conversation_id,
+                            turn_id=turn_id,
+                            status="planned",
+                        )
+                        .order_by(QueryExecution.created_at.desc())
+                        .first()
+                    )
+                    plan_data = (
+                        json.loads(planned.plan_data)
+                        if planned and planned.plan_data
+                        else None
+                    )
+                if plan_data:
+                    plan_event = AgentEvent("query_plan", plan_data)
+                    _record_event(turn_id, seq, plan_event)
+                    _finish_turn(turn_id, "awaiting_confirmation", None)
+                    terminal = True
+                    yield _sse(
+                        "query_plan",
+                        {
+                            "conversation_id": conversation_id,
+                            "turn_id": turn_id,
+                            **plan_data,
+                        },
+                    )
+                    return
             if event.type == "query_plan":
                 _finish_turn(turn_id, "awaiting_confirmation", None)
                 terminal = True

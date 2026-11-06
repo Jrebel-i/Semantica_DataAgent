@@ -198,6 +198,8 @@ class QueryExecution(Base):
     id: Mapped[str] = mapped_column(primary_key=True, default=lambda: uuid.uuid4().hex)
     owner_id: Mapped[str]
     conversation_id: Mapped[str | None]
+    turn_id: Mapped[int | None]
+    plan_data: Mapped[str | None]
     sql: Mapped[str]
     status: Mapped[str]
     rows: Mapped[str | None]

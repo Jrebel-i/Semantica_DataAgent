@@ -176,6 +176,15 @@ async def _create_plan(body, user, conversation_id=None, turn_id=None):
     plugin, config = _config()
     estimate = await plugin.bind(config, "").estimate(body.sql)
     query_id = uuid.uuid4().hex
+    plan_data = {
+        "id": query_id,
+        "sql": body.sql,
+        "data_source": "doris_ai",
+        "tables": tables,
+        "estimated_partitions": estimate.get("partitions"),
+        "estimated_rows": estimate.get("rows"),
+        "row_limit": config.get("row_limit", 1000),
+    }
     with sessions().begin() as db:
         if conversation_id is not None:
             conversation = db.get(Conversation, conversation_id)
@@ -195,17 +204,11 @@ async def _create_plan(body, user, conversation_id=None, turn_id=None):
                 sql=body.sql,
                 status="planned",
                 conversation_id=conversation_id,
+                turn_id=turn_id,
+                plan_data=json.dumps(plan_data, ensure_ascii=False),
             )
         )
-    return {
-        "id": query_id,
-        "sql": body.sql,
-        "data_source": "doris_ai",
-        "tables": tables,
-        "estimated_partitions": estimate.get("partitions"),
-        "estimated_rows": estimate.get("rows"),
-        "row_limit": config.get("row_limit", 1000),
-    }
+    return plan_data
 
 
 async def propose_query(sql: str) -> dict:
