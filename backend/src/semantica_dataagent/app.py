@@ -108,7 +108,7 @@ async def lifespan(application):
 
     try:
         await asyncio.to_thread(recover_pulls)
-    except Exception:  # noqa: BLE001 - retry recovery on the next startup
+    except Exception:  # retry recovery on the next startup
         import logging
 
         logging.getLogger(__name__).exception("Pull recovery failed")
