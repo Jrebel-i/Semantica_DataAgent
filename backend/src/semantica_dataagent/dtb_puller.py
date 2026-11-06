@@ -3,7 +3,6 @@
 import csv
 import io
 import json
-import math
 import re
 import tempfile
 import time
@@ -19,30 +18,37 @@ from .dtb_auth import authentication_failed
 
 TASK_SQL = "select version_id,\nversion_code,message,committer,task_id,task_name,\n(case when task_type_id=1 then 'shell'\nwhen task_type_id=2 then 'merge onself'\nwhen task_type_id=3 then 'spark sql'\nelse '' end) as task_type\n,task_conf,task_src,project_name,upstream_tasks,output_table_name,a.create_time,a.modify_time\n from(\n    select *,rank() over(partition by task_id order by modify_time desc) rk  from mysql.data_tool_box_emr.task_version\n    where status!=1 and task_type_id!=4\n) a\nleft join  mysql.data_tool_box_emr.project b\non a.project_id=b.project_id\nwhere rk=1 and status=2"
 TABLE_SQL = "select a.*,b.column_name,b.seq_no,b.column_type,b.column_comment,b.column_business_comment from\n(\n    select table_id,table_name,database_name,create_time,modify_time,\n    comment,output_task_id,output_task_name,use_direction\n    from mysql.data_tool_box_emr.metadata_table where catalog_type='HIVE' and status='在用'\n) a\n left join mysql.data_tool_box_emr.metadata_column b on a.table_id=b.table_id"
-DIMENSION_TABLES_SQL = (
-    "SELECT table_id, table_name FROM mysql.data_tool_box_emr.metadata_table "
-    "WHERE database_name='dimensions' AND catalog_type='HIVE' AND status='在用' "
-    "ORDER BY table_name"
+DIMENSIONS_METADATA_SQL = (
+    "SELECT a.table_id, a.table_name, a.database_name, a.create_time, a.modify_time, "
+    "a.comment, a.output_task_id, a.output_task_name, a.use_direction, "
+    "b.column_name, b.seq_no, b.column_type, b.column_comment, b.column_business_comment "
+    "FROM ("
+    "SELECT table_id, table_name, database_name, create_time, modify_time, comment, "
+    "output_task_id, output_task_name, use_direction "
+    "FROM mysql.data_tool_box_emr.metadata_table "
+    "WHERE catalog_type='HIVE' AND status='在用' AND database_name='dimensions'"
+    ") a LEFT JOIN mysql.data_tool_box_emr.metadata_column b ON a.table_id=b.table_id "
+    "ORDER BY a.table_id, b.seq_no"
 )
-METADATA_ROW_LIMIT = 500000
+PARTITION_SEQ_NO = 10001
+MAX_ROW_LIMIT = 500000
 
 
-def _total_count(data):
-    """Read a DTB page total, accepting both ``total`` and ``totalElements``."""
-    total = data.get("totalElements")
-    if total is None:
-        total = data.get("total")
-    if total is None:
-        return None
-    if isinstance(total, bool):
-        raise ValueError("Invalid DTB pagination")  # noqa: TRY004
-    try:
-        total = int(total)
-    except (TypeError, ValueError) as exc:
-        raise ValueError("Invalid DTB pagination") from exc
-    if total < 0:
-        raise ValueError("Invalid DTB pagination")
-    return total
+def _partition_stats_sql(names=None):
+    selected = f" AND table_name IN ({names})" if names is not None else ""
+    return (
+        "select * from ("
+        "select *,rank() over(partition by database_name,table_name "
+        "order by split_part(partition_name, '=', 2) DESC) as rk from("
+        "select a.*,b.partition_id,b.partition_name,b.records,"
+        "b.create_time as partition_create_time from ("
+        "select table_id,table_name,database_name,create_time,modify_time,comment "
+        "from mysql.data_tool_box_emr.metadata_table "
+        "where catalog_type='HIVE' and status='在用' and database_name='dimensions'"
+        f"{selected}"
+        ") a left join mysql.data_tool_box_emr.metadata_partition b on a.table_id=b.table_id"
+        ") tt) kk where rk=1"
+    )
 
 
 def _result_count(data, key):
@@ -96,11 +102,29 @@ def _downloaded_row_count(content, format):
         raise ValueError("Invalid DTB query result") from exc
 
 
+def _optional_text(value):
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        raise ValueError("Invalid DTB metadata value")  # noqa: TRY004
+    return str(value)
+
+
+def _integer(value):
+    if isinstance(value, bool) or value is None:
+        raise ValueError("Invalid DTB metadata value")
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        text = value.strip()
+        if re.fullmatch(r"-?[0-9]+", text):
+            return int(text)
+    raise ValueError("Invalid DTB metadata value")
+
+
 def checked_request(client, method, base_url, token, path, **kwargs):
     allowed_get = (
-        path == "/api/data-map/table"
-        or re.fullmatch(r"/api/data-map/detail/[A-Za-z0-9_-]+(?:/column)?", path)
-        or re.fullmatch(r"/api/data-query/(?:result|download)/[A-Za-z0-9_-]+", path)
+        re.fullmatch(r"/api/data-query/(?:result|download)/[A-Za-z0-9_-]+", path)
         or path == "/api/data-query/download"
     )
     if method == "POST" and path == "/api/data-query/async-execute":
@@ -110,7 +134,7 @@ def checked_request(client, method, base_url, token, path, **kwargs):
             or body.get("dataSource") != "doris_ai"
             or not isinstance(body.get("defaultLimit"), int)
             or isinstance(body.get("defaultLimit"), bool)
-            or not 0 <= body["defaultLimit"] <= METADATA_ROW_LIMIT
+            or not 0 <= body["defaultLimit"] <= MAX_ROW_LIMIT
         ):
             raise ValueError("DTB query is not permitted")
         try:
@@ -148,6 +172,18 @@ def checked_request(client, method, base_url, token, path, **kwargs):
     )
 
 
+class DtbAuthenticationError(ValueError):
+    """The DTB gateway rejected the token."""
+
+
+class TableFailure(ValueError):
+    """One dimension table cannot be pulled without blocking the others."""
+
+    def __init__(self, reason):
+        super().__init__(reason)
+        self.reason = reason
+
+
 class DtbPuller:
     id = "dtb"
     version = "1"
@@ -171,11 +207,15 @@ class DtbPuller:
                 client, "GET", base_url, token, endpoint, params=params
             )
             if authentication_failed(response.status_code, None):
-                raise ValueError(f"DTB authentication failed ({response.status_code})")
+                raise DtbAuthenticationError(
+                    f"DTB authentication failed ({response.status_code})"
+                )
             response.raise_for_status()
             payload = response.json()
             if authentication_failed(response.status_code, payload):
-                raise ValueError(f"DTB authentication failed ({payload.get('status')})")
+                raise DtbAuthenticationError(
+                    f"DTB authentication failed ({payload.get('status')})"
+                )
             if str(payload.get("status")) != "200" or not isinstance(
                 payload.get("data"), dict
             ):
@@ -186,131 +226,171 @@ class DtbPuller:
         except (httpx.HTTPError, TypeError, AttributeError) as exc:
             raise ValueError("DTB request failed") from exc
 
-    def _pages(self, client, base_url, token, endpoint, key, identity, params, limit):
-        rows, seen = [], set()
-        page, expected = 1, None
-        while True:
-            data = self._get(
-                client,
-                base_url,
-                token,
-                endpoint,
-                {**params, "page": page, "limit": limit},
-            )
-            try:
-                batch = data[key]
-                total = _total_count(data)
-                if not isinstance(batch, list):
-                    raise ValueError("Invalid DTB pagination")  # noqa: TRY004
-                if total is not None and page > math.ceil(total / limit) + 1:
-                    raise ValueError("Invalid DTB pagination")
-                if expected is not None and total is not None and total != expected:
-                    raise ValueError("Inconsistent DTB pagination")
-                expected = total
-                for row in batch:
-                    if not isinstance(row, dict) or not isinstance(
-                        row.get(identity), (str, int)
-                    ):
-                        raise ValueError("Invalid DTB row")  # noqa: TRY004
-                    value = str(row[identity])
-                    if value in seen:
-                        raise ValueError("Duplicate DTB row")
-                    seen.add(value)
-                rows.extend(batch)
-                if total is not None:
-                    if len(rows) == total:
-                        return rows
-                    if not batch or len(rows) > total:
-                        raise ValueError("Incomplete DTB pagination")
-                elif not batch or len(batch) < limit:
-                    return rows
-                page += 1
-            except (KeyError, TypeError) as exc:
-                raise ValueError("Invalid DTB pagination") from exc
-
     @staticmethod
     def _dimension_name(table):
-        name = table.get("tableName")
-        if not isinstance(name, str):
+        value = table.get("tableName") if isinstance(table, dict) else table
+        if not isinstance(value, str):
             raise ValueError(  # noqa: TRY004 - response contents, not an argument
                 "Invalid DTB dimension table name"
             )
-        name = name.removeprefix("dimensions.")
-        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
+        name = value.removeprefix("dimensions.")
+        if "." in name or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
             raise ValueError("Invalid DTB dimension table name")
         return name
 
-    def list_tables(self, client, base_url, token, maximum=None):
-        if maximum is not None and (
-            isinstance(maximum, bool)
-            or not isinstance(maximum, int)
-            or not 1 <= maximum <= 100
-        ):
-            raise ValueError("Invalid pull scope")
-        sql = DIMENSION_TABLES_SQL
-        if maximum is not None:
-            sql += f" LIMIT {maximum}"
+    def fetch_dimensions_metadata(self, client, base_url, token):
+        """Read every dimensions table and column from the fixed metadata query."""
         raw = self.query_download(
-            client, base_url, token, sql, "json", row_limit=METADATA_ROW_LIMIT
+            client, base_url, token, DIMENSIONS_METADATA_SQL, "json", row_limit=0
         )
         try:
             payload = json.loads(raw)
             if not isinstance(payload, dict):
-                raise ValueError("Invalid DTB dimension tables")  # noqa: TRY004
+                raise ValueError  # noqa: TRY004 - response contents
             columns, rows = payload.get("columns"), payload.get("data")
             if not isinstance(columns, list) or not isinstance(rows, list):
-                raise ValueError("Invalid DTB dimension tables")  # noqa: TRY004
-            positions = {}
-            for position, column in enumerate(columns):
+                raise ValueError  # noqa: TRY004 - response contents
+            names = []
+            for column in columns:
                 if not isinstance(column, dict) or not isinstance(
                     column.get("name"), str
                 ):
-                    raise ValueError(  # noqa: TRY004 - response contents
-                        "Invalid DTB dimension tables"
-                    )
-                positions[column["name"]] = position
-            if "table_id" not in positions or "table_name" not in positions:
-                raise ValueError("Invalid DTB dimension tables")
-            tables = []
+                    raise ValueError  # noqa: TRY004 - response contents
+                names.append(column["name"])
+            required = {
+                "table_id",
+                "table_name",
+                "database_name",
+                "column_name",
+                "seq_no",
+                "column_type",
+                "column_comment",
+                "column_business_comment",
+            }
+            if not required.issubset(names):
+                raise ValueError("Invalid DTB dimensions metadata")
+            grouped = {}
             for row in rows:
-                if not isinstance(row, list) or len(row) <= max(positions.values()):
-                    raise ValueError("Invalid DTB dimension tables")
-                identity = row[positions["table_id"]]
+                if not isinstance(row, list) or len(row) < len(names):
+                    raise ValueError("Invalid DTB dimensions metadata")
+                values = dict(zip(names, row))
+                identity = values.get("table_id")
                 if (
                     isinstance(identity, bool)
                     or not isinstance(identity, (str, int))
                     or not str(identity)
                 ):
-                    raise ValueError("Invalid DTB dimension tables")
-                table = {
-                    "tableId": identity,
-                    "tableName": row[positions["table_name"]],
-                }
-                self._dimension_name(table)
-                tables.append(table)
-            if maximum is not None and len(tables) > maximum:
-                raise ValueError("Invalid DTB dimension tables")
-            return tables
+                    raise ValueError("Invalid DTB dimensions metadata")
+                name = self._dimension_name(values.get("table_name"))
+                key = str(identity)
+                table = grouped.get(key)
+                if table is None:
+                    table = {
+                        "tableId": key,
+                        "tableName": name,
+                        "database": _optional_text(values.get("database_name")),
+                        "columns": [],
+                        "error": None,
+                        "_seen": set(),
+                    }
+                    grouped[key] = table
+                elif table["tableName"] != name:
+                    table["error"] = "invalid_table_metadata"
+                if table["database"] != "dimensions" and table["error"] is None:
+                    table["error"] = "invalid_table_metadata"
+                if table["error"] is not None:
+                    continue
+                column_name = values.get("column_name")
+                seq_no = values.get("seq_no")
+                column_type = values.get("column_type")
+                if column_name is None and seq_no is None and column_type is None:
+                    continue
+                if (
+                    not isinstance(column_name, str)
+                    or not column_name
+                    or not isinstance(column_type, str)
+                    or not column_type
+                ):
+                    table["error"] = "invalid_column_metadata"
+                    continue
+                try:
+                    ordinal = _integer(seq_no)
+                    comment = _optional_text(values.get("column_comment"))
+                    business = _optional_text(values.get("column_business_comment"))
+                except ValueError:
+                    table["error"] = "invalid_column_metadata"
+                    continue
+                if column_name in table["_seen"]:
+                    table["error"] = "duplicate_column_metadata"
+                    continue
+                table["_seen"].add(column_name)
+                table["columns"].append(
+                    {
+                        "name": column_name,
+                        "seq_no": ordinal,
+                        "data_type": column_type,
+                        "comment": comment,
+                        "business_comment": business,
+                    }
+                )
+            result = []
+            for table in grouped.values():
+                table["columns"].sort(key=lambda column: column["seq_no"])
+                if not table["columns"] and table["error"] is None:
+                    table["error"] = "missing_columns_metadata"
+                table.pop("_seen")
+                result.append(table)
+            return result
         except (UnicodeError, TypeError, json.JSONDecodeError) as exc:
-            raise ValueError("Invalid DTB dimension tables") from exc
+            raise ValueError("Invalid DTB dimensions metadata") from exc
 
-    def table_detail(self, client, base_url, token, table_id):
-        endpoint = "/api/data-map/detail/" + quote(str(table_id), safe="")
-        data = self._get(client, base_url, token, endpoint)
-        detail = data.get("table", data)
-        if not isinstance(detail, dict):
-            raise ValueError("Invalid DTB table detail")  # noqa: TRY004
-        columns = self._pages(
-            client,
-            base_url,
-            token,
-            endpoint + "/column",
-            "columnList",
-            "columnName",
-            {},
-            200,
-        )
-        return detail, columns
+    @staticmethod
+    def _partition_stats(raw):
+        try:
+            reader = csv.DictReader(io.StringIO(raw.decode("utf-8-sig"), newline=""))
+            required = {
+                "table_name",
+                "database_name",
+                "partition_name",
+                "records",
+                "rk",
+            }
+            if not reader.fieldnames or not required.issubset(reader.fieldnames):
+                raise ValueError("Invalid DTB partition statistics")
+            stats, errors = {}, {}
+            for stat in reader:
+                name = DtbPuller._dimension_name(stat["table_name"])
+                if name in stats or name in errors:
+                    stats.pop(name, None)
+                    errors[name] = "invalid_partition_statistics"
+                    continue
+                if stat["database_name"] != "dimensions":
+                    errors[name] = "invalid_partition_statistics"
+                    continue
+                if not stat["partition_name"]:
+                    stats[name] = None
+                    continue
+                field, sep, value = stat["partition_name"].partition("=")
+                if (
+                    not sep
+                    or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", field)
+                    or not value
+                    or stat["rk"] != "1"
+                ):
+                    errors[name] = "invalid_partition_statistics"
+                    continue
+                try:
+                    count = int(stat["records"])
+                except (TypeError, ValueError):
+                    errors[name] = "invalid_partition_statistics"
+                    continue
+                if count < 0:
+                    errors[name] = "invalid_partition_statistics"
+                    continue
+                stats[name] = {"field": field, "value": value, "records": count}
+            return stats, errors
+        except (UnicodeError, csv.Error, KeyError, TypeError) as exc:
+            raise ValueError("Invalid DTB partition statistics") from exc
 
     def query_download(
         self,
@@ -322,7 +402,7 @@ class DtbPuller:
         poll_interval=2,
         max_polls=30,
         data_source="presto-emr",
-        row_limit=100,
+        row_limit=0,
         allow_truncation=False,
     ):
         if format not in {"json", "xlsx", "csv"}:
@@ -330,7 +410,7 @@ class DtbPuller:
         if (
             isinstance(row_limit, bool)
             or not isinstance(row_limit, int)
-            or not 1 <= row_limit <= METADATA_ROW_LIMIT
+            or not 0 <= row_limit <= MAX_ROW_LIMIT
         ):
             raise ValueError("Invalid DTB query row limit")
         try:
@@ -348,11 +428,15 @@ class DtbPuller:
                 },
             )
             if authentication_failed(response.status_code, None):
-                raise ValueError(f"DTB authentication failed ({response.status_code})")
+                raise DtbAuthenticationError(
+                    f"DTB authentication failed ({response.status_code})"
+                )
             response.raise_for_status()
             payload = response.json()
             if authentication_failed(response.status_code, payload):
-                raise ValueError(f"DTB authentication failed ({payload.get('status')})")
+                raise DtbAuthenticationError(
+                    f"DTB authentication failed ({payload.get('status')})"
+                )
             if str(payload.get("status")) != "200":
                 raise ValueError("DTB query submission failed")
             data = payload["data"]
@@ -374,7 +458,12 @@ class DtbPuller:
                     time.sleep(poll_interval)
             else:
                 raise ValueError("DTB query timed out")
-            if not allow_truncation and total is not None and total >= row_limit:
+            if (
+                row_limit
+                and not allow_truncation
+                and total is not None
+                and total >= row_limit
+            ):
                 raise ValueError("DTB result truncated")
             response = checked_request(
                 client,
@@ -385,7 +474,9 @@ class DtbPuller:
                 params={"format": format},
             )
             if authentication_failed(response.status_code, None):
-                raise ValueError(f"DTB authentication failed ({response.status_code})")
+                raise DtbAuthenticationError(
+                    f"DTB authentication failed ({response.status_code})"
+                )
             response.raise_for_status()
             if "json" in response.headers.get("content-type", "").lower():
                 try:
@@ -394,10 +485,10 @@ class DtbPuller:
                     pass
                 else:
                     if authentication_failed(response.status_code, payload):
-                        raise ValueError(
+                        raise DtbAuthenticationError(
                             f"DTB authentication failed ({payload.get('status')})"
                         )
-            if not allow_truncation and total is None:
+            if row_limit and not allow_truncation and total is None:
                 total = _downloaded_row_count(response.content, format)
                 if total >= row_limit:
                     raise ValueError("DTB result truncated")
@@ -406,6 +497,83 @@ class DtbPuller:
             raise ValueError("DTB query timeout") from exc
         except (httpx.HTTPError, KeyError, TypeError, AttributeError) as exc:
             raise ValueError("DTB query request failed") from exc
+
+    def _fetch_dimension_table(self, client, base_url, token, table, stats, maximum):
+        name = table["tableName"]
+        columns = table["columns"]
+        partition_columns = [
+            column for column in columns if column["seq_no"] >= PARTITION_SEQ_NO
+        ]
+        if len(partition_columns) > 1:
+            raise TableFailure("multiple_partition_fields")
+        stat = stats.get(name)
+        where = ""
+        estimated = None
+        if partition_columns:
+            field = partition_columns[0]["name"]
+            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", field):
+                raise TableFailure("invalid_partition_field")
+            if name not in stats:
+                raise TableFailure("partition_stats_missing")
+            if stat is None or stat["field"] != field:
+                raise TableFailure("partition_stats_field_mismatch")
+            escaped = stat["value"].replace("'", "''")
+            where = f" WHERE {field} = '{escaped}'"
+            estimated = stat["records"]
+        elif stat is not None:
+            raise TableFailure("partition_stats_field_mismatch")
+        dimension_limit = 100 if maximum is not None else 50000
+        content = self.query_download(
+            client,
+            base_url,
+            token,
+            f"SELECT * FROM hive.dimensions.{name}{where} LIMIT {dimension_limit}",
+            "csv",
+            data_source="doris_query",
+            row_limit=dimension_limit,
+            allow_truncation=True,
+        )
+        try:
+            reader = csv.DictReader(
+                io.StringIO(content.decode("utf-8-sig"), newline="")
+            )
+            if not reader.fieldnames or any(not value for value in reader.fieldnames):
+                raise TableFailure("invalid_dimension_columns")
+            rows = list(reader)
+            if any(None in row for row in rows):
+                raise TableFailure("invalid_dimension_rows")
+        except (UnicodeError, csv.Error) as exc:
+            raise TableFailure("invalid_dimension_rows") from exc
+        if stat and len(rows) != min(stat["records"], dimension_limit):
+            raise TableFailure("dimension_row_count_mismatch")
+        meta = {
+            "database": "dimensions",
+            "table": name,
+            "qualified_table": f"dimensions.{name}",
+            "columns": [
+                {
+                    "name": column["name"],
+                    "data_type": column["data_type"],
+                    "comment": column["comment"],
+                    "seq_no": column["seq_no"],
+                    "business_comment": column["business_comment"],
+                }
+                for column in columns
+            ],
+            "record_count": len(rows),
+            "partition_field": stat["field"] if stat else None,
+            "latest_partition": stat["value"] if stat else None,
+            "estimated_rows": estimated,
+            "truncated": len(rows) >= dimension_limit,
+        }
+        return {
+            f"dimensions/{name}/meta.json": json.dumps(
+                meta, ensure_ascii=False
+            ).encode(),
+            f"dimensions/{name}/current/rows.jsonl": b"".join(
+                (json.dumps(row, ensure_ascii=False) + "\n").encode() for row in rows
+            ),
+        }
 
     def fetch(self, client, base_url, token, parameters=None):
         from .dtb_source import DtbAdapter
@@ -422,8 +590,11 @@ class DtbPuller:
             )
         ):
             raise ValueError("Invalid pull scope")
-        tables = self.list_tables(client, base_url, token, maximum)
-        names = ",".join("'" + self._dimension_name(table) + "'" for table in tables)
+        tables = self.fetch_dimensions_metadata(client, base_url, token)
+        tables.sort(key=lambda table: table["tableName"])
+        if maximum is not None:
+            tables = tables[:maximum]
+        names = ",".join("'" + table["tableName"] + "'" for table in tables)
         names = names or "''"
         task_sql = TASK_SQL
         table_sql = TABLE_SQL
@@ -434,139 +605,50 @@ class DtbPuller:
             )
         files = {
             "任务信息.json": self.query_download(
-                client,
-                base_url,
-                token,
-                task_sql,
-                "json",
-                row_limit=METADATA_ROW_LIMIT,
+                client, base_url, token, task_sql, "json", row_limit=0
             ),
             "表信息.xlsx": self.query_download(
-                client,
-                base_url,
-                token,
-                table_sql,
-                "xlsx",
-                row_limit=METADATA_ROW_LIMIT,
+                client, base_url, token, table_sql, "xlsx", row_limit=0
             ),
         }
-        stats = {}
+        stats, stats_errors = {}, {}
         if tables:
-            sql = (
-                "SELECT * FROM (SELECT *, rank() OVER (PARTITION BY database_name, table_name "
-                "ORDER BY split_part(partition_name, '=', 2) DESC) AS rk FROM ("
-                "SELECT a.table_name, a.database_name, b.partition_name, b.records "
-                "FROM mysql.data_tool_box_emr.metadata_table a LEFT JOIN "
-                "mysql.data_tool_box_emr.metadata_partition b ON a.table_id=b.table_id "
-                "WHERE a.catalog_type='HIVE' AND a.status='在用' AND a.database_name='dimensions' "
-                f"AND a.table_name IN ({names})) tt) kk WHERE rk=1"
-            )
             raw = self.query_download(
                 client,
                 base_url,
                 token,
-                sql,
+                _partition_stats_sql(names if maximum is not None else None),
                 "csv",
-                row_limit=METADATA_ROW_LIMIT,
+                row_limit=0,
             )
-            try:
-                reader = csv.DictReader(
-                    io.StringIO(raw.decode("utf-8-sig"), newline="")
-                )
-                if not reader.fieldnames or not {
-                    "table_name",
-                    "database_name",
-                    "partition_name",
-                    "records",
-                    "rk",
-                }.issubset(reader.fieldnames):
-                    raise ValueError("Invalid DTB partition statistics")
-                for stat in reader:
-                    name = stat["table_name"].removeprefix("dimensions.")
-                    if stat["database_name"] != "dimensions" or name in stats:
-                        raise ValueError("Invalid DTB partition statistics")
-                    if not stat["partition_name"]:
-                        stats[name] = None
-                        continue
-                    field, sep, value = stat["partition_name"].partition("=")
-                    if (
-                        not sep
-                        or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", field)
-                        or not value
-                        or stat["rk"] != "1"
-                    ):
-                        raise ValueError("Invalid DTB partition statistics")
-                    count = int(stat["records"])
-                    if count < 0:
-                        raise ValueError("Invalid DTB partition count")
-                    stats[name] = (field, value, count)
-            except (UnicodeError, csv.Error, KeyError, TypeError) as exc:
-                raise ValueError("Invalid DTB partition statistics") from exc
+            stats, stats_errors = self._partition_stats(raw)
+        failures = []
+        succeeded = 0
         for table in tables:
-            name = self._dimension_name(table)
-            _detail, columns = self.table_detail(
-                client, base_url, token, table["tableId"]
-            )
-            if name not in stats:
-                raise ValueError("Missing DTB partition statistics")
-            stat = stats[name]
-            where = ""
-            if stat:
-                field, value, _estimated = stat
-                if field not in {col["columnName"] for col in columns}:
-                    raise ValueError("DTB partition field mismatch")
-                escaped = value.replace("'", "''")
-                where = f" WHERE {field} = '{escaped}'"
-            dimension_limit = 100 if maximum is not None else 50000
-            content = self.query_download(
-                client,
-                base_url,
-                token,
-                f"SELECT * FROM hive.dimensions.{name}{where} LIMIT {dimension_limit}",
-                "csv",
-                data_source="doris_query",
-                row_limit=dimension_limit,
-                allow_truncation=True,
-            )
+            name = table["tableName"]
+            reason = table["error"] or stats_errors.get(name)
+            if reason is not None:
+                failures.append({"table": name, "reason": reason})
+                continue
             try:
-                reader = csv.DictReader(
-                    io.StringIO(content.decode("utf-8-sig"), newline="")
+                files.update(
+                    self._fetch_dimension_table(
+                        client, base_url, token, table, stats, maximum
+                    )
                 )
-                if not reader.fieldnames or any(
-                    not value for value in reader.fieldnames
-                ):
-                    raise ValueError("Invalid DTB dimension columns")
-                rows = list(reader)
-                if any(None in row for row in rows):
-                    raise ValueError("Invalid DTB dimension rows")
-            except (UnicodeError, csv.Error) as exc:
-                raise ValueError("Invalid DTB dimension download") from exc
-            if stat and len(rows) != min(stat[2], dimension_limit):
-                raise ValueError("DTB dimension row count mismatch")
-            meta = {
-                "database": "dimensions",
-                "table": name,
-                "qualified_table": f"dimensions.{name}",
-                "columns": [
-                    {
-                        "name": col["columnName"],
-                        "data_type": col.get("columnType"),
-                        "comment": col.get("comment"),
-                    }
-                    for col in columns
-                ],
-                "record_count": len(rows),
-                "partition_field": stat[0] if stat else None,
-                "latest_partition": stat[1] if stat else None,
-                "estimated_rows": stat[2] if stat else None,
-                "truncated": len(rows) >= dimension_limit,
-            }
-            files[f"dimensions/{name}/meta.json"] = json.dumps(
-                meta, ensure_ascii=False
-            ).encode()
-            files[f"dimensions/{name}/current/rows.jsonl"] = b"".join(
-                (json.dumps(row, ensure_ascii=False) + "\n").encode() for row in rows
+            except DtbAuthenticationError:
+                raise
+            except TableFailure as exc:
+                failures.append({"table": name, "reason": exc.reason})
+            except Exception:  # noqa: BLE001 - one table must not stop the pull
+                failures.append({"table": name, "reason": "dimension_fetch_failed"})
+            else:
+                succeeded += 1
+        if tables and not succeeded:
+            detail = "; ".join(
+                f"{failure['table']} ({failure['reason']})" for failure in failures
             )
+            raise ValueError(f"All DTB dimension tables failed: {detail}")
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             for name, content in files.items():
@@ -579,6 +661,7 @@ class DtbPuller:
             counts = {
                 "tables": sum(r.kind == "table" for r in result.records),
                 "tasks": sum(r.kind == "task" for r in result.records),
+                "failures": failures,
             }
             if result.stats.get("table_rows_skipped") or result.stats.get(
                 "task_rows_unreadable"

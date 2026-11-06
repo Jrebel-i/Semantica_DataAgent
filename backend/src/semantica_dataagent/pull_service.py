@@ -100,7 +100,16 @@ def finalize_pull(record_id, commit, counts=None):
         row = db.get(PullRecord, record_id)
         if row.build_id is None:
             row.build_id = add_queued_build(db, "incremental", "定时拉取")
-        row.status, row.commit, row.error = "succeeded", commit, None
+        failures = (counts or {}).get("failures") or []
+        row.status, row.commit = "succeeded", commit
+        row.error = (
+            "Partial DTB pull failures: "
+            + "; ".join(
+                f"{failure['table']} ({failure['reason']})" for failure in failures
+            )
+            if failures
+            else None
+        )
         if counts:
             row.tables, row.tasks = counts["tables"], counts["tasks"]
         row.finished_at = datetime.now(UTC)

@@ -920,6 +920,51 @@ def test_failed_pull_does_not_change_source(client, tmp_path, monkeypatch):
     assert sorted(p.name for p in root.iterdir()) == ["original"]
 
 
+def test_partial_pull_records_failed_tables(client, tmp_path, monkeypatch):
+    from semantica_dataagent import pull_service
+    from semantica_dataagent.dtb_puller import DtbPuller
+
+    c, token = client
+    headers = {"Authorization": f"Bearer {token}"}
+    root = tmp_path / "partial-source"
+    c.put(
+        "/api/v1/settings",
+        headers=headers,
+        json={"values": {"source_directory": str(root)}},
+    )
+    c.put(
+        "/api/v1/plugins/puller/dtb",
+        headers=headers,
+        json={
+            "enabled": True,
+            "parameters": {"url": "http://example.test", "token": "test"},
+        },
+    )
+    monkeypatch.setattr(
+        DtbPuller,
+        "fetch",
+        lambda *args: (
+            {"任务信息.json": b"task", "表信息.xlsx": b"table"},
+            {
+                "tables": 1,
+                "tasks": 0,
+                "failures": [
+                    {"table": "dim_bad", "reason": "multiple_partition_fields"}
+                ],
+            },
+        ),
+    )
+    monkeypatch.setattr(pull_service.build_queue, "enqueue", lambda: None)
+
+    response = c.post("/api/v1/pulls/dtb", headers=headers)
+
+    assert response.status_code == 200, response.text
+    record = response.json()
+    assert record["status"] == "succeeded"
+    assert "dim_bad" in record["error"]
+    assert "multiple_partition_fields" in record["error"]
+
+
 def test_interrupted_pull_recovers_committed_snapshot_once(client, tmp_path):
     from datetime import UTC, datetime
 
