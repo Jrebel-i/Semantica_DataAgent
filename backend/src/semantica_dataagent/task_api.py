@@ -18,6 +18,11 @@ def get_lineage(
     depth: int = 1,
     column: str | None = None,
 ) -> list[dict]:
+    """Find table lineage, or field lineage when column is provided.
+
+    Table is database.table; column is its field name. Direction is up or
+    down and depth is the number of dependency hops (1–3).
+    """
     if not table or direction not in ("up", "down") or not 1 <= depth <= 3:
         raise ValueError("Invalid table, direction or depth")
     values = knowledge.settings()
