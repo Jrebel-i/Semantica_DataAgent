@@ -224,6 +224,103 @@ def test_query_plan_stream_waits_for_confirmation_and_persists(client, monkeypat
     assert detail["turns"][0]["events"][0]["data"]["id"] == "plan-1"
 
 
+@pytest.mark.parametrize("interpret", [True, False])
+def test_confirmed_query_resumes_agent_and_respects_interpretation_setting(
+    client, monkeypatch, interpret
+):
+    from semantica_dataagent import agent_runner, knowledge, query_api
+
+    executions = []
+
+    class Executor:
+        def bind(self, config, token):
+            return self
+
+        async def estimate(self, sql):
+            return {"partitions": None, "rows": None}
+
+        async def submit(self, sql, limit):
+            executions.append(sql)
+            return "fake-key"
+
+        async def wait(self, key):
+            return {"columns": ["sales"], "data": [["private-value-81"]]}
+
+    monkeypatch.setattr(knowledge, "describe", lambda **_: [])
+    monkeypatch.setattr(
+        query_api, "_config", lambda: (Executor(), {"interpret_results": interpret})
+    )
+    c, token = client
+    headers = {"Authorization": f"Bearer {token}"}
+    c.put("/api/v1/me/dtb-token", headers=headers, json={"token": "fake"})
+    plan = c.post(
+        "/api/v1/queries/plan", headers=headers, json={"sql": "SELECT 1"}
+    ).json()
+
+    class Runner:
+        agent_id = "pi"
+        requests = []
+
+        def available(self):
+            return True
+
+        async def run(self, request):
+            self.requests.append(request)
+            if len(self.requests) == 1:
+                yield AgentEvent("query_plan", plan)
+            else:
+                yield AgentEvent(DONE, {"text": "结论", "sql": [], "citations": []})
+
+    runner = Runner()
+    monkeypatch.setitem(agent_runner.RUNNERS, "pi", runner)
+    provider = c.post(
+        "/api/v1/providers",
+        headers=headers,
+        json={
+            "name": "Local",
+            "base_url": "http://127.0.0.1:3425",
+            "models": ["model"],
+        },
+    ).json()
+    response = c.post(
+        "/api/v1/conversations/ask",
+        headers=headers,
+        json={
+            "question": "销售额",
+            "agent": "pi",
+            "provider_id": provider["id"],
+            "model": "model",
+        },
+    )
+    initial = _sse(response.text)
+    conversation_id = initial[0][1]["conversation_id"]
+    turn_id = initial[0][1]["turn_id"]
+    path = f"/api/v1/conversations/{conversation_id}/turns/{turn_id}/queries/{plan['id']}/execute"
+    other_token = c.post(
+        "/api/v1/tokens", headers=headers, json={"name": "other", "role": "user"}
+    ).json()["token"]
+    assert (
+        c.post(path, headers={"Authorization": f"Bearer {other_token}"}).status_code
+        == 404
+    )
+    assert executions == []
+    response = c.post(path, headers=headers)
+    assert response.status_code == 200, response.text
+    events = _sse(response.text)
+    assert events[0][0] == "query_result"
+    assert events[0][1]["rows"] == [["private-value-81"]]
+    assert events[-1][0] == "done"
+    assert len(executions) == 1
+    assert "sales" in runner.requests[1].prompt
+    assert ("private-value-81" in runner.requests[1].prompt) is interpret
+    assert c.post(path, headers=headers).status_code == 409
+    detail = c.get(f"/api/v1/conversations/{conversation_id}", headers=headers).json()
+    assert detail["turns"][0]["answer"] == "结论"
+    assert any(
+        event["type"] == "query_result" for event in detail["turns"][0]["events"]
+    )
+
+
 def test_pi_runner_reads_jsonl_records_past_the_default_stream_limit(tmp_path: Path):
     script = tmp_path / "fake-pi.py"
     script.write_text(
