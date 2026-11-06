@@ -6,7 +6,10 @@ import json
 import os
 
 PROVIDER_SECRET = "{{SECRET_issue20_e2e_key}}"
-AMBIGUOUS = "上个月销售额是多少？请用 Hive SQL 查询。"
+AMBIGUOUS = (
+    "上个月销售额是多少？我还没有决定采用支付销售额还是下单销售额，"
+    "请先检索两种定义，向我提供有证据引用的口径选项，待我选择后再写 Hive SQL。"
+)
 PAYMENT_REF = "definitions/sales.md"
 ORDER_REF = "sales_order.md"
 
@@ -47,7 +50,7 @@ def _ask(ctx, body: dict) -> list[tuple[str, dict]]:
 
 def _provider(ctx) -> tuple[str, str]:
     base_url = os.environ.get("TEST_PI_BASE_URL", "http://127.0.0.1:3425").rstrip("/")
-    model = os.environ.get("TEST_PI_MODEL", "codex/gpt-6.1-sol")
+    model = os.environ.get("TEST_PI_MODEL", "deepseek-v4.1-flash#claude")
     created = ctx.rest.post(
         "/api/v1/providers",
         json={
@@ -198,8 +201,8 @@ def check_online_clarification_selection_is_scoped_to_one_conversation(ctx):
 def check_local_ask_dataagent_answers_and_continues(ctx):
     _provider(ctx)
     question = (
-        "请用 shop.orders 表写一个按 dt 统计记录数的 Hive SQL（单表查询，"
-        "不要 JOIN 其他表）。必须先用 describe_tables 确认表字段，写出 SQL "
+        "请统计 shop.orders 表每个 dt 分区的订单记录数量，不计算金额，"
+        "不要 JOIN 其他表。请用 Hive SQL 回答。必须先用 describe_tables 确认表字段，写出 SQL "
         "后必须调用 validate_sql，并在回答里附引用 id。"
     )
     answer = ctx.mcp_call("ask_dataagent", {"question": question}, timeout=600)
