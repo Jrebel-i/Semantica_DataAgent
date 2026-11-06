@@ -11,9 +11,63 @@ from typing import ClassVar
 from urllib.parse import quote
 
 import httpx
+import sqlglot
+from sqlglot import exp
 
 TASK_SQL = "select version_id,\nversion_code,message,committer,task_id,task_name,\n(case when task_type_id=1 then 'shell'\nwhen task_type_id=2 then 'merge onself'\nwhen task_type_id=3 then 'spark sql'\nelse '' end) as task_type\n,task_conf,task_src,project_name,upstream_tasks,output_table_name,a.create_time,a.modify_time\n from(\n    select *,rank() over(partition by task_id order by modify_time desc) rk  from mysql.data_tool_box_emr.task_version\n    where status!=1 and task_type_id!=4\n) a\nleft join  mysql.data_tool_box_emr.project b\non a.project_id=b.project_id\nwhere rk=1 and status=2"
 TABLE_SQL = "select a.*,b.column_name,b.seq_no,b.column_type,b.column_comment,b.column_business_comment from\n(\n    select table_id,table_name,database_name,create_time,modify_time,\n    comment,output_task_id,output_task_name,use_direction\n    from mysql.data_tool_box_emr.metadata_table where catalog_type='HIVE' and status='在用'\n) a\n left join mysql.data_tool_box_emr.metadata_column b on a.table_id=b.table_id"
+
+
+def checked_request(client, method, base_url, token, path, **kwargs):
+    allowed_get = (
+        path == "/api/data-map/table"
+        or re.fullmatch(r"/api/data-map/detail/[A-Za-z0-9_-]+(?:/column)?", path)
+        or re.fullmatch(r"/api/data-query/(?:result|download)/[A-Za-z0-9_-]+", path)
+        or path == "/api/data-query/download"
+    )
+    if method == "POST" and path == "/api/data-query/async-execute":
+        body = kwargs.get("json")
+        if (
+            not isinstance(body, dict)
+            or body.get("dataSource") != "doris_ai"
+            or not isinstance(body.get("defaultLimit"), int)
+            or isinstance(body.get("defaultLimit"), bool)
+            or not 0 <= body["defaultLimit"] <= 100
+        ):
+            raise ValueError("DTB query is not permitted")
+        try:
+            statements = sqlglot.parse(body.get("sql", ""), read="presto")
+        except (sqlglot.errors.ParseError, TypeError) as exc:
+            raise ValueError("DTB query is not permitted") from exc
+        if (
+            len(statements) != 1
+            or not isinstance(statements[0], exp.Query)
+            or any(
+                isinstance(
+                    node,
+                    (
+                        exp.Insert,
+                        exp.Update,
+                        exp.Delete,
+                        exp.Command,
+                        exp.Create,
+                        exp.Drop,
+                    ),
+                )
+                for node in statements[0].walk()
+            )
+        ):
+            raise ValueError("DTB query is not permitted")
+    elif method != "GET" or not allowed_get:
+        raise ValueError("DTB endpoint is not permitted")
+    headers = {
+        "token": token,
+        "x-requested-with": "XMLHttpRequest",
+        "cookie": f"satoken={token}",
+    }
+    return client.request(
+        method, base_url.rstrip("/") + path, headers=headers, **kwargs
+    )
 
 
 class DtbPuller:
@@ -33,14 +87,8 @@ class DtbPuller:
     @staticmethod
     def _get(client, base_url, token, endpoint, params=None):
         try:
-            response = client.get(
-                base_url.rstrip("/") + endpoint,
-                params=params,
-                headers={
-                    "token": token,
-                    "x-requested-with": "XMLHttpRequest",
-                    "cookie": f"satoken={token}",
-                },
+            response = checked_request(
+                client, "GET", base_url, token, endpoint, params=params
             )
             if response.status_code == 401:
                 raise ValueError("DTB authentication failed (401)")
@@ -139,20 +187,18 @@ class DtbPuller:
     ):
         if format not in {"json", "xlsx", "csv"}:
             raise ValueError("Invalid DTB query format")
-        headers = {
-            "token": token,
-            "x-requested-with": "XMLHttpRequest",
-            "cookie": f"satoken={token}",
-        }
         try:
-            response = client.post(
-                base_url.rstrip("/") + "/api/data-query/async-execute",
-                headers=headers,
+            response = checked_request(
+                client,
+                "POST",
+                base_url,
+                token,
+                "/api/data-query/async-execute",
                 json={
                     "env": 2,
-                    "dataSource": data_source,
+                    "dataSource": "doris_ai",
                     "sql": sql,
-                    "defaultLimit": 0,
+                    "defaultLimit": 100,
                 },
             )
             if response.status_code == 401:
@@ -180,9 +226,12 @@ class DtbPuller:
                     time.sleep(poll_interval)
             else:
                 raise ValueError("DTB query timed out")
-            response = client.get(
-                base_url.rstrip("/") + "/api/data-query/download/" + key,
-                headers=headers,
+            response = checked_request(
+                client,
+                "GET",
+                base_url,
+                token,
+                "/api/data-query/download/" + key,
                 params={"format": format},
             )
             response.raise_for_status()

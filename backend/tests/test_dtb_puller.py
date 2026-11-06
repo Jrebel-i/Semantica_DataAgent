@@ -282,3 +282,37 @@ def test_partitioned_dimension_reads_only_latest_and_checks_count():
     obj.query_download = incomplete
     with httpx.Client() as client, pytest.raises(ValueError, match="count"):
         obj.fetch(client, "http://dtb", "secret")
+
+
+def test_dtb_request_allowlist_blocks_network_before_sending():
+    from semantica_dataagent.dtb_puller import checked_request
+
+    calls = []
+
+    def respond(request):
+        calls.append(request)
+        return httpx.Response(200, json={})
+
+    with httpx.Client(transport=httpx.MockTransport(respond)) as client:
+        for method, path, body in [
+            ("DELETE", "/api/data-map/table", None),
+            ("GET", "/api/data-map/table/extra", None),
+            (
+                "POST",
+                "/api/data-query/async-execute",
+                {"sql": "DELETE FROM x", "dataSource": "doris_ai", "defaultLimit": 10},
+            ),
+            (
+                "POST",
+                "/api/data-query/async-execute",
+                {"sql": "SELECT 1", "dataSource": "other", "defaultLimit": 10},
+            ),
+            (
+                "POST",
+                "/api/data-query/async-execute",
+                {"sql": "SELECT 1", "dataSource": "doris_ai", "defaultLimit": 101},
+            ),
+        ]:
+            with pytest.raises(ValueError):
+                checked_request(client, method, "http://dtb", "token", path, json=body)
+    assert calls == []
