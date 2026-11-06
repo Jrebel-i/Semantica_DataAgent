@@ -1,7 +1,8 @@
 """Kubernetes session Pod construction and lifecycle."""
 
+import ipaddress
 import os
-import shlex
+import socket
 from pathlib import PurePosixPath
 from urllib.parse import urlsplit
 
@@ -21,44 +22,39 @@ def _endpoint(address: str) -> tuple[str, int]:
     return url.hostname, url.port or (443 if url.scheme == "https" else 80)
 
 
-def _firewall(model_url: str, mcp_url: str) -> str:
-    model_host, model_port = _endpoint(model_url)
-    mcp_host, mcp_port = _endpoint(mcp_url)
-    # Resolve before installing the policy; init is the only process running then.
-    # conntrack's original destination preserves Service VIPs across kube-proxy DNAT.
-    return f"""set -eu
-model_host={shlex.quote(model_host)}
-mcp_host={shlex.quote(mcp_host)}
-resolve() {{
-  node -e 'const dns=require("dns"), net=require("net"); const family=Number(process.argv[1]), host=process.argv[2]; const literal=net.isIP(host); if (literal) {{ if(literal===family) console.log(host); }} else dns.lookup(host, {{all:true}}, (err, ips) => {{ if(!err) console.log(ips.filter(ip => ip.family === family).map(ip => ip.address).join("\\n")); }});' "$1" "$2"
-}}
-resolve4() {{ resolve 4 "$1"; }}
-resolve6() {{ resolve 6 "$1"; }}
-model_ips=$(resolve4 "$model_host")
-model_ips6=$(resolve6 "$model_host")
-mcp_ips=$(resolve4 "$mcp_host")
-mcp_ips6=$(resolve6 "$mcp_host")
-[ -n "$model_ips$model_ips6" ] && [ -n "$mcp_ips$mcp_ips6" ]
-dns_ip=$(awk '/^nameserver / {{print $2; exit}}' /etc/resolv.conf)
-[ -n "$dns_ip" ]
-iptables -P INPUT DROP
-iptables -P OUTPUT DROP
-ip6tables -P INPUT DROP
-ip6tables -P OUTPUT DROP
-iptables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
-ip6tables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
-iptables -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
-ip6tables -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
-for ip in $model_ips; do iptables -A OUTPUT -p tcp -m conntrack --ctorigdst "$ip" --dport {model_port} -j ACCEPT; done
-for ip in $mcp_ips; do iptables -A OUTPUT -p tcp -m conntrack --ctorigdst "$ip" --dport {mcp_port} -j ACCEPT; done
-for ip in $model_ips6; do ip6tables -A OUTPUT -p tcp -m conntrack --ctorigdst "$ip" --dport {model_port} -j ACCEPT; done
-for ip in $mcp_ips6; do ip6tables -A OUTPUT -p tcp -m conntrack --ctorigdst "$ip" --dport {mcp_port} -j ACCEPT; done
-case "$dns_ip" in
-  *:*) dns_cmd=ip6tables ;;
-  *) dns_cmd=iptables ;;
-esac
-for protocol in udp tcp; do "$dns_cmd" -A OUTPUT -p "$protocol" -m conntrack --ctorigdst "$dns_ip" --dport 53 -j ACCEPT; done
-"""
+def _resolve(address: str) -> tuple[str, int, list[str]]:
+    host, port = _endpoint(address)
+    addresses = sorted(
+        {info[4][0] for info in socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)}
+    )
+    if not addresses:
+        raise ValueError(f"cannot resolve agent endpoint: {host}")
+    return host, port, addresses
+
+
+def _firewall(endpoints) -> str:
+    rules = []
+    for _, port, addresses in endpoints:
+        for address in addresses:
+            ip = ipaddress.ip_address(address)
+            command = "iptables" if ip.version == 4 else "ip6tables"
+            rules.append(
+                f"{command} -A OUTPUT -p tcp -m conntrack --ctorigdst {ip} --dport {port} -j ACCEPT"
+            )
+    return "\n".join(
+        [
+            "set -eu",
+            "iptables -P INPUT DROP",
+            "iptables -P OUTPUT DROP",
+            "ip6tables -P INPUT DROP",
+            "ip6tables -P OUTPUT DROP",
+            "iptables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT",
+            "ip6tables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT",
+            "iptables -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT",
+            "ip6tables -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT",
+            *rules,
+        ]
+    )
 
 
 def build_pod_spec(
@@ -72,7 +68,15 @@ def build_pod_spec(
         or path.parts[1] in (".", "..")
     ):
         raise ValueError("invalid conversation workspace")
+    endpoints = [_resolve(model_url), _resolve(mcp_url)]
+    aliases = {}
+    for host, _, addresses in endpoints:
+        for address in addresses:
+            aliases.setdefault(address, []).append(host)
     spec = {
+        "hostAliases": [
+            {"ip": ip, "hostnames": sorted(set(hosts))} for ip, hosts in aliases.items()
+        ],
         "restartPolicy": "Never",
         "automountServiceAccountToken": False,
         "enableServiceLinks": False,
@@ -82,7 +86,7 @@ def build_pod_spec(
                 "name": "firewall",
                 "image": RUNNER_IMAGE,
                 "command": ["sh", "-ec"],
-                "args": [_firewall(model_url, mcp_url)],
+                "args": [_firewall(endpoints)],
                 "securityContext": {
                     "runAsUser": 0,
                     "allowPrivilegeEscalation": False,
@@ -106,22 +110,15 @@ def build_pod_spec(
                 },
                 "resources": {"limits": {"cpu": "2", "memory": "2Gi"}},
                 "volumeMounts": [
-                    {
-                        "name": "data",
-                        "mountPath": "/workspace",
-                        "subPath": f"{path}/work",
-                    },
-                    {
-                        "name": "data",
-                        "mountPath": "/sessions",
-                        "subPath": f"{path}/sessions",
-                    },
+                    {"name": "work", "mountPath": "/workspace"},
+                    {"name": "sessions", "mountPath": "/sessions"},
                     {"name": "tmp", "mountPath": "/tmp"},
                 ],
             }
         ],
         "volumes": [
-            {"name": "data", "persistentVolumeClaim": {"claimName": "dataagent-data"}},
+            {"name": "work", "emptyDir": {}},
+            {"name": "sessions", "emptyDir": {}},
             {"name": "tmp", "emptyDir": {}},
         ],
     }
@@ -133,7 +130,9 @@ def build_pod_spec(
         "kind": "Pod",
         "metadata": {
             "name": name,
-            "namespace": "semantica-dataagent",
+            "namespace": os.environ.get(
+                "DATAAGENT_SESSION_NAMESPACE", "semantica-dataagent-sessions"
+            ),
             "labels": {"app.kubernetes.io/component": "agent-session"},
         },
         "spec": spec,
@@ -180,15 +179,14 @@ class KubernetesSessionSandbox:
         root = Path(
             os.environ.get("DATAAGENT_AGENT_ROOT", "/data/conversations")
         ).resolve()
-        if root != Path("/data/conversations") or self.workspace.parent != root:
+        if self.workspace.parent != root:
             raise ValueError("workspace must be a direct child of /data/conversations")
-        if not os.environ.get("DATAAGENT_NODE_NAME"):
-            raise RuntimeError("DATAAGENT_NODE_NAME is required for the local PVC")
         self.name = "sda-agent-" + uuid.uuid4().hex
         self.model_url = model_url
         self.mcp_url = mcp_url
         self.lock = threading.RLock()
         self.closed = False
+        self.ready = False
         self.spec = build_pod_spec(
             name=self.name,
             workspace_subpath=f"conversations/{self.workspace.name}",
@@ -200,7 +198,14 @@ class KubernetesSessionSandbox:
         import subprocess
 
         return subprocess.run(
-            ["kubectl", "-n", "semantica-dataagent", *args],
+            [
+                "kubectl",
+                "-n",
+                os.environ.get(
+                    "DATAAGENT_SESSION_NAMESPACE", "semantica-dataagent-sessions"
+                ),
+                *args,
+            ],
             input=input,
             text=True,
             capture_output=True,
@@ -224,9 +229,65 @@ class KubernetesSessionSandbox:
                     f"pod/{self.name}",
                     "--timeout=120s",
                 )
+                self._upload()
+                self.ready = True
             except BaseException:
                 self.close()
                 raise
+
+    def _transfer(self, direction, payload=None):
+        import subprocess
+
+        command = [
+            "kubectl",
+            "-n",
+            os.environ.get(
+                "DATAAGENT_SESSION_NAMESPACE", "semantica-dataagent-sessions"
+            ),
+            "exec",
+            "-i",
+            self.name,
+            "-c",
+            "agent",
+            "--",
+            "tar",
+        ]
+        command += (
+            ["-xf", "-", "-C", "/"]
+            if direction == "upload"
+            else ["-cf", "-", "-C", "/", "workspace", "sessions"]
+        )
+        return subprocess.run(
+            command, input=payload, capture_output=True, check=True, timeout=150
+        ).stdout
+
+    def _upload(self):
+        import io
+        import tarfile
+
+        data = io.BytesIO()
+        with tarfile.open(fileobj=data, mode="w") as archive:
+            archive.add(self.workspace / "work", arcname="workspace")
+            archive.add(self.workspace / "sessions", arcname="sessions")
+        self._transfer("upload", data.getvalue())
+
+    def _download(self):
+        import io
+        import shutil
+        import tarfile
+        import tempfile
+
+        data = self._transfer("download")
+        with tempfile.TemporaryDirectory(dir=self.workspace) as directory:
+            with tarfile.open(fileobj=io.BytesIO(data), mode="r:") as archive:
+                archive.extractall(directory, filter="data")
+            for source, target in (("workspace", "work"), ("sessions", "sessions")):
+                shutil.copytree(
+                    os.path.join(directory, source),
+                    self.workspace / target,
+                    dirs_exist_ok=True,
+                    symlinks=False,
+                )
 
     def wrap_command(self, command, env, keys):
         import json
@@ -239,7 +300,9 @@ class KubernetesSessionSandbox:
         return [
             "kubectl",
             "-n",
-            "semantica-dataagent",
+            os.environ.get(
+                "DATAAGENT_SESSION_NAMESPACE", "semantica-dataagent-sessions"
+            ),
             "exec",
             "-i",
             self.name,
@@ -254,15 +317,21 @@ class KubernetesSessionSandbox:
 
     def close(self):
         with self.lock:
+            if self.closed:
+                return
             self.closed = True
-            self._run(
-                "delete",
-                "pod",
-                self.name,
-                "--ignore-not-found",
-                "--wait=true",
-                "--timeout=120s",
-            )
+            try:
+                if self.ready:
+                    self._download()
+            finally:
+                self._run(
+                    "delete",
+                    "pod",
+                    self.name,
+                    "--ignore-not-found",
+                    "--wait=true",
+                    "--timeout=120s",
+                )
 
 
 def cleanup_orphans():
@@ -272,7 +341,9 @@ def cleanup_orphans():
         [
             "kubectl",
             "-n",
-            "semantica-dataagent",
+            os.environ.get(
+                "DATAAGENT_SESSION_NAMESPACE", "semantica-dataagent-sessions"
+            ),
             "delete",
             "pods",
             "-l",

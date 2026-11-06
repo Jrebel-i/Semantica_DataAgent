@@ -3,6 +3,7 @@
 import json
 import os
 import shutil
+import socket
 import subprocess
 import threading
 import uuid
@@ -61,7 +62,11 @@ class SessionSandbox:
         target = (
             "host.docker.internal"
             if host in ("127.0.0.1", "localhost", "::1")
-            else host
+            else socket.getaddrinfo(
+                host,
+                url.port or (443 if url.scheme == "https" else 80),
+                type=socket.SOCK_STREAM,
+            )[0][4][0]
         )
         alias = "sda-relay" if target == "host.docker.internal" else host
         self.aliases.add(alias)
@@ -132,6 +137,23 @@ class SessionSandbox:
             )
             self._run("network", "connect", "bridge", self.proxy)
             self._run("start", self.proxy)
+            relay_ip = self._run(
+                "inspect",
+                "--format",
+                '{{range .NetworkSettings.Networks}}{{if eq .NetworkID "'
+                + self._run(
+                    "network", "inspect", "--format", "{{.Id}}", self.network
+                ).stdout.strip()
+                + '"}}{{.IPAddress}}{{end}}{{end}}',
+                self.proxy,
+            ).stdout.strip()
+            if not relay_ip:
+                raise RuntimeError("cannot determine relay address")
+            hosts = [
+                arg
+                for alias in self.aliases
+                for arg in ("--add-host", f"{alias}:{relay_ip}")
+            ]
             self._run(
                 "run",
                 "-d",
@@ -143,6 +165,9 @@ class SessionSandbox:
                 f"{OWNER}={self.owner}",
                 "--network",
                 self.network,
+                "--dns",
+                "127.0.0.1",
+                *hosts,
                 "--read-only",
                 "--tmpfs",
                 "/tmp:rw,nosuid,nodev",

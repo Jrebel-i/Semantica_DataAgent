@@ -13,12 +13,22 @@ def pod_spec():
     assert module is not None, "Kubernetes session sandbox must be implemented"
     from semantica_dataagent.k8s_sandbox import build_pod_spec
 
-    return build_pod_spec(
-        name="sda-agent-example",
-        workspace_subpath="conversations/example",
-        model_url="https://gateway.example:443/v1",
-        mcp_url="http://dataagent.semantica-dataagent.svc:8000/mcp/",
-    )
+    from unittest.mock import patch
+
+    def resolve(host, *args, **kwargs):
+        ips = {
+            "gateway.example": "203.0.113.10",
+            "dataagent.semantica-dataagent.svc": "10.96.0.25",
+        }
+        return [(2, 1, 6, "", (ips[host], 0))]
+
+    with patch("socket.getaddrinfo", side_effect=resolve):
+        return build_pod_spec(
+            name="sda-agent-example",
+            workspace_subpath="conversations/example",
+            model_url="https://gateway.example:443/v1",
+            mcp_url="http://dataagent.semantica-dataagent.svc:8000/mcp/",
+        )
 
 
 def manifests():
@@ -46,9 +56,8 @@ def test_session_pod_is_labeled_and_limits_its_workspace():
     assert "ALL" in security["capabilities"]["drop"]
     assert not security["capabilities"].get("add")
     mounts = [m for m in container["volumeMounts"] if m.get("subPath")]
-    assert mounts and all(
-        m["subPath"].startswith("conversations/example/") for m in mounts
-    )
+    assert not mounts
+    assert all(volume.get("emptyDir") == {} for volume in spec["volumes"])
 
 
 def test_session_firewall_denies_ipv4_and_ipv6_by_default():
@@ -59,8 +68,8 @@ def test_session_firewall_denies_ipv4_and_ipv6_by_default():
     for command in ("iptables", "ip6tables"):
         assert command in script
         assert f"{command} -P OUTPUT DROP" in script
-    assert "gateway.example" in script
-    assert "dataagent.semantica-dataagent.svc" in script
+    assert "203.0.113.10" in script
+    assert "10.96.0.25" in script
 
 
 def test_application_rbac_is_namespace_scoped_and_minimal():
@@ -69,7 +78,7 @@ def test_application_rbac_is_namespace_scoped_and_minimal():
     assert roles, "application Role is required"
     assert not any(d.get("kind") in ("ClusterRole", "ClusterRoleBinding") for d in docs)
     for role in roles:
-        assert role["metadata"]["namespace"] == "semantica-dataagent"
+        assert role["metadata"]["namespace"] == "semantica-dataagent-sessions"
         for rule in role["rules"]:
             assert set(rule["resources"]) <= {"pods", "pods/log", "pods/exec"}
             assert set(rule["verbs"]) <= {"get", "list", "watch", "create", "delete"}
@@ -157,10 +166,6 @@ esac
     assert set(destinations) == {
         "iptables -A OUTPUT -p tcp -m conntrack --ctorigdst 203.0.113.10 --dport 443 -j ACCEPT",
         "iptables -A OUTPUT -p tcp -m conntrack --ctorigdst 10.96.0.25 --dport 8000 -j ACCEPT",
-        "ip6tables -A OUTPUT -p tcp -m conntrack --ctorigdst 2001:db8::10 --dport 443 -j ACCEPT",
-        "ip6tables -A OUTPUT -p tcp -m conntrack --ctorigdst 2001:db8::25 --dport 8000 -j ACCEPT",
-        "iptables -A OUTPUT -p udp -m conntrack --ctorigdst 10.96.0.10 --dport 53 -j ACCEPT",
-        "iptables -A OUTPUT -p tcp -m conntrack --ctorigdst 10.96.0.10 --dport 53 -j ACCEPT",
     }
     assert not any(
         "-A OUTPUT" in line
@@ -183,7 +188,7 @@ def test_orphan_cleanup_selects_only_labeled_session_pods(tmp_path, monkeypatch)
     monkeypatch.setenv("CLEANUP_LOG", str(log))
     cleanup_orphans()
     args = log.read_text().splitlines()
-    assert args[:5] == ["-n", "semantica-dataagent", "delete", "pods", "-l"]
+    assert args[:5] == ["-n", "semantica-dataagent-sessions", "delete", "pods", "-l"]
     assert args[5] == "app.kubernetes.io/component=agent-session"
 
 
