@@ -126,3 +126,51 @@ def test_installed_entry_points_register_dtb_plugins():
     found = discover()
     assert ("source", "dtb") in found
     assert ("parser", "dtb") in found
+
+
+def test_shell_with_large_catalog_finishes_promptly():
+    import time
+
+    schema = {f"db.table_{i}": [f"column_{j}" for j in range(25)] for i in range(1800)}
+    schema.update({"src.items": ["id"], "dst.items": ["id"]})
+    source = ("# filler line with no shell command\n" * 100) + (
+        'query="INSERT INTO dst.items SELECT id FROM src.items"\n'
+        'submit_sql_and_wait "$query"\n'
+    )
+    started = time.monotonic()
+    result = DtbTaskParser().parse(task("shell", source), {"schema": schema})
+    elapsed = time.monotonic() - started
+    assert result.column_edges == [("src.items", "id", "dst.items", "id")]
+    assert elapsed < 0.5, f"shell parsing took {elapsed:.3f}s"
+
+
+def test_mysql_submissions_resolve_columns():
+    schema = {"src.items": ["id"], "dst.items": ["id"]}
+    scripts = [
+        'database=src\nmysql -h host -e "INSERT INTO dst.items SELECT id FROM ${database}.items"',
+        "mysql --host=host <<EOF\nINSERT INTO dst.items SELECT id FROM src.items;\nEOF\n",
+        "mysql --host=host <<'SQL'\nINSERT INTO dst.items SELECT id FROM src.items;\nSQL\n",
+    ]
+    for source in scripts:
+        result = DtbTaskParser().parse(task("shell", source), {"schema": schema})
+        assert result.column_status == "success", result.column_reason
+        assert result.column_edges == [("src.items", "id", "dst.items", "id")]
+
+
+def test_beeline_with_continued_options_and_quoted_table_names():
+    source = 'beeline -u jdbc:hive2://host \\\n  -e "INSERT INTO `dst`.`items` SELECT id FROM `src`.`items`"'
+    result = DtbTaskParser().parse(
+        task("shell", source), {"schema": {"src.items": ["id"], "dst.items": ["id"]}}
+    )
+    assert result.reads == ["src.items"]
+    assert result.writes == ["dst.items"]
+    assert result.column_edges == [("src.items", "id", "dst.items", "id")]
+
+
+def test_mysql_single_quoted_sql_does_not_expand_shell_variables():
+    source = "database=src\nmysql -e 'INSERT INTO dst.items SELECT id FROM ${database}.items'"
+    result = DtbTaskParser().parse(
+        task("shell", source), {"schema": {"src.items": ["id"], "dst.items": ["id"]}}
+    )
+    assert result.column_status != "success"
+    assert not result.column_edges
