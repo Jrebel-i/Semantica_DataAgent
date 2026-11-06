@@ -7,11 +7,11 @@ import json
 import os
 import time
 import uuid
-from decimal import Decimal, InvalidOperation
 from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Literal
 
@@ -101,7 +101,9 @@ def compare_results(left: dict, right: dict) -> str:
                 return True
         return False
 
-    return "equal" if all(match(i, set()) for i in range(len(left_rows))) else "different"
+    return (
+        "equal" if all(match(i, set()) for i in range(len(left_rows))) else "different"
+    )
 
 
 @dataclass(slots=True)
