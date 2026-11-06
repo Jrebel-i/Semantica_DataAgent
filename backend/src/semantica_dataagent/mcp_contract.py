@@ -31,6 +31,10 @@ class ToolUnavailable(Exception):
         self.details = details
 
 
+class ToolInvalidInput(ValueError):
+    """A request the caller can fix, with a message safe to return verbatim."""
+
+
 def error(code, message, retryable, next_action, **details):
     body = {
         "code": code,
@@ -60,6 +64,13 @@ def classify_error(exc):
             True,
             "Retry the call, reusing conversation_id when present",
             **exc.details,
+        )
+    if isinstance(exc, ToolInvalidInput):
+        return error(
+            "invalid_input",
+            str(exc),
+            False,
+            "Check the tool parameters and allowed values",
         )
     if isinstance(exc, EmbeddingError):
         # Retries exhausted (cause present) mean the service stayed unreachable.

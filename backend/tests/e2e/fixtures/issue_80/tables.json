@@ -1,0 +1,4 @@
+[
+  {"database": "shop", "name": "orders", "comment": "synthetic sample source"},
+  {"database": "dm", "name": "sales_fact", "comment": "synthetic fact sample source"}
+]

@@ -955,6 +955,24 @@ def describe(names=None, database=None, search=None):
     ]
 
 
+def dimension_values(database, table, field):
+    """Return every indexed value for one field in the current generation."""
+    values = settings()
+    rows = execute(
+        read_graph(values),
+        """MATCH (v:SDADimensionValue {generation:$generation})
+           WHERE v.database = $database AND v.table = $table AND v.field = $field
+           RETURN v.value AS value ORDER BY v.value""",
+        {
+            "generation": values["knowledge_generation"],
+            "database": database,
+            "table": table,
+            "field": field,
+        },
+    )
+    return [row["value"] for row in rows if isinstance(row.get("value"), str)]
+
+
 # Ranking constants are versioned so clients can interpret scores consistently.
 RANKING_VERSION = "3"
 RRF_K = 60

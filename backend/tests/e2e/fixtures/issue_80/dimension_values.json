@@ -1,0 +1,5 @@
+[
+  {"database": "shop", "table": "orders", "field": "dt", "value": "2025-01-01"},
+  {"database": "shop", "table": "orders", "field": "dt", "value": "2025-01-03"},
+  {"database": "shop", "table": "orders", "field": "dt", "value": "2025-01-02"}
+]

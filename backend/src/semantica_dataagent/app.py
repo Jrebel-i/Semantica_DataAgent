@@ -578,6 +578,7 @@ def build_detail(build_id: int, _: Annotated[str, Depends(current_user)]):
 from .dimension_api import lookup_dim_values
 from .personal_settings import router as personal_settings_router
 from .query_api import router as query_router
+from .sample_api import sample_table_data
 from .sql_validation import find_join_path, validate_sql
 from .table_api import describe_tables, search_knowledge
 from .table_api import router as table_router
@@ -640,6 +641,7 @@ def create_mcp():
     server.tool()(report_knowledge_gap)
     server.tool()(propose_correction)
     server.tool()(ask_dataagent)
+    server.tool()(sample_table_data)
 
     from .skill import register_prompt
 

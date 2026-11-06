@@ -19,6 +19,7 @@ from . import knowledge
 from .auth import Requester, admin, current_requester
 from .crypto import decrypt
 from .db import PersonalDtbToken, QueryAudit, QueryExecution, sessions
+from .dtb_executor import column_names
 from .plugins import ExecutorAuthenticationError, ExecutorError, configured
 
 router = APIRouter()
@@ -218,17 +219,19 @@ async def _execute(
             key = await executor.submit(bounded, cap)
             result = await executor.wait(key)
         columns, rows = result.get("columns"), result.get("data")
+        names = column_names(columns)
+        if names is None:
+            raise ExecutorError("执行器返回结果格式无效")
         if (
-            not isinstance(columns, list)
-            or not isinstance(rows, list)
+            not isinstance(rows, list)
             or len(rows) > cap
-            or not all(isinstance(r, list) and len(r) == len(columns) for r in rows)
+            or not all(isinstance(r, list) and len(r) == len(names) for r in rows)
         ):
             raise ExecutorError("执行器返回无效结果或超过下载上限")
         status = "succeeded"
         return {
             "id": query_id,
-            "columns": columns,
+            "columns": names,
             "rows": rows[:limit],
             "row_count": len(rows),
         }
@@ -302,6 +305,8 @@ def audit(_: Annotated[str, Depends(admin)]):
                 "owner_id": row.owner_id,
                 "sql": row.sql,
                 "status": row.status,
+                "kind": row.kind,
+                "type": "取样" if row.kind == "sample" else "查询",
                 "row_count": row.row_count,
                 "elapsed_ms": row.elapsed_ms,
             }

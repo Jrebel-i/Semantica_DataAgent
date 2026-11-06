@@ -1,0 +1,10 @@
+[
+  {"database": "shop", "table": "orders", "name": "id", "type": "string", "comment": "order id", "partition": false},
+  {"database": "shop", "table": "orders", "name": "dt", "type": "string", "comment": "day partition", "partition": true},
+  {"database": "shop", "table": "orders", "name": "amount", "type": "decimal", "comment": "order amount", "partition": false},
+  {"database": "shop", "table": "orders", "name": "status", "type": "string", "comment": "order status", "partition": false},
+  {"database": "dm", "table": "sales_fact", "name": "id", "type": "string", "comment": "sales id", "partition": false},
+  {"database": "dm", "table": "sales_fact", "name": "dt", "type": "string", "comment": "day partition", "partition": true},
+  {"database": "dm", "table": "sales_fact", "name": "amount", "type": "decimal", "comment": "sales amount", "partition": false},
+  {"database": "dm", "table": "sales_fact", "name": "region", "type": "string", "comment": "sales region", "partition": false}
+]

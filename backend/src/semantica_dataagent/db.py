@@ -212,6 +212,7 @@ class QueryAudit(Base):
     owner_id: Mapped[str]
     sql: Mapped[str]
     status: Mapped[str]
+    kind: Mapped[str] = mapped_column(default="query", server_default="query")
     row_count: Mapped[int | None]
     elapsed_ms: Mapped[int]
     created_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC))
