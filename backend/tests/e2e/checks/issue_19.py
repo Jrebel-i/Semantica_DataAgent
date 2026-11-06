@@ -1,6 +1,7 @@
-"""Exercise both CLI adapters through REST and the test knowledge store."""
+"""Exercise the online agent adapters through REST and the test knowledge store."""
 
 import json
+import os
 import subprocess
 import threading
 
@@ -70,7 +71,7 @@ def _check_agent(ctx, agent, provider_type, base_url, model):
                 "agent": agent,
                 "provider_id": provider,
                 "model": model,
-                "question": "知识库里支付销售额的口径是什么？先用 search_knowledge 查询，再用 shop.payments 写按 dt 统计记录数的 Hive SQL，必须调用 validate_sql 验证并在回答中附引用 id。",
+                "question": "知识库里支付销售额的口径是什么？请先用 search_knowledge 查询，再用 shop.payments 写一个按 dt 统计记录数的 Hive SQL（单表查询，不需要金额字段，不要因为缺少金额字段而拒绝）。写出 SQL 后必须调用 validate_sql 验证，并在回答中附引用 id。",
             },
         )
     finally:
@@ -128,6 +129,16 @@ def _check_agent(ctx, agent, provider_type, base_url, model):
         f"{agent}: follow-up lost filter",
     )
     return {"conversation_id": conversation, "turns": 2}
+
+
+def check_pi_conversation(ctx):
+    return _check_agent(
+        ctx,
+        "pi",
+        "anthropic-messages",
+        os.getenv("TEST_PI_BASE_URL", "http://127.0.0.1:3425"),
+        os.getenv("TEST_PI_MODEL", "deepseek-v4.1-flash#claude"),
+    )
 
 
 def check_claude_conversation(ctx):
