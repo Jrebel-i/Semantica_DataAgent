@@ -338,7 +338,9 @@ def test_confirmed_query_resumes_agent_and_respects_interpretation_setting(
 
     class Runner:
         agent_id = "pi"
-        requests = []
+
+        def __init__(self):
+            self.requests = []
 
         def available(self):
             return True
