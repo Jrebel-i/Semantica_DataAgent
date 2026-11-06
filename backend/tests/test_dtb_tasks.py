@@ -133,7 +133,7 @@ def test_shell_with_large_catalog_finishes_promptly():
 
     schema = {f"db.table_{i}": [f"column_{j}" for j in range(25)] for i in range(1800)}
     schema.update({"src.items": ["id"], "dst.items": ["id"]})
-    source = ('# filler line with no shell command\n' * 100) + (
+    source = ("# filler line with no shell command\n" * 100) + (
         'query="INSERT INTO dst.items SELECT id FROM src.items"\n'
         'submit_sql_and_wait "$query"\n'
     )

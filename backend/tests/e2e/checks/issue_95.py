@@ -42,7 +42,9 @@ def check_mysql_shell_lineage(ctx):
                 generation=ctx.generation,
             )
             edges = {(r["source"], r["target"]) for r in rows}
-        ctx.require(edges == {("id", "order_id"), ("amount", "total")}, f"字段边错误：{edges}")
+        ctx.require(
+            edges == {("id", "order_id"), ("amount", "total")}, f"字段边错误：{edges}"
+        )
         return {"edges": sorted(edges)}
     finally:
         driver.close()
