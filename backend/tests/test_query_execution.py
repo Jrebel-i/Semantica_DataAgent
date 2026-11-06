@@ -50,6 +50,41 @@ def test_query_endpoints_require_authentication(client):
     assert c.get("/api/v1/me/dtb-token").status_code == 401
 
 
+def test_expired_query_confirmation_cannot_execute(client, monkeypatch):
+    from datetime import UTC, datetime, timedelta
+
+    from semantica_dataagent import knowledge, query_api
+    from semantica_dataagent.db import QueryExecution, sessions
+
+    class Executor:
+        async def estimate(self, sql):
+            return {"partitions": None, "rows": None}
+
+        async def submit(self, sql, limit):
+            return "fake-query"
+
+        async def wait(self, key):
+            return {"columns": ["value"], "data": [[1]]}
+
+    class Plugin:
+        def bind(self, config, token):
+            return Executor()
+
+    monkeypatch.setattr(knowledge, "describe", lambda **_: [])
+    monkeypatch.setattr(query_api, "_config", lambda: (Plugin(), {}))
+    c, headers = client
+    c.put("/api/v1/me/dtb-token", headers=headers, json={"token": "test-token"})
+    plan = c.post("/api/v1/queries/plan", headers=headers, json={"sql": "SELECT 1"})
+    assert plan.status_code == 200, plan.text
+    query_id = plan.json()["id"]
+    with sessions().begin() as db:
+        db.get(QueryExecution, query_id).created_at = datetime.now(UTC) - timedelta(
+            minutes=31
+        )
+    response = c.post(f"/api/v1/queries/{query_id}/execute", headers=headers, json={})
+    assert response.status_code == 410, response.text
+
+
 def test_personal_credentials_are_isolated_between_callers(client):
     c, admin = client
     user = c.post(
