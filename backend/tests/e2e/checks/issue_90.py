@@ -1,45 +1,35 @@
 """Check best-effort SQL when payment amount metadata is missing."""
 
-import json
-import os
+import sys
+from pathlib import Path
+
+_CHECKS_DIR = str(Path(__file__).resolve().parent)
+if _CHECKS_DIR not in sys.path:
+    sys.path.append(_CHECKS_DIR)
+
+from _conversation import (
+    ask_stable,
+    clarifications,
+    create_provider,
+    sql_blocks,
+)
+from issue_20 import AMBIGUOUS
 
 
 def check_missing_field_produces_sql_and_gap(ctx):
-    model = os.environ.get("TEST_PI_MODEL", "deepseek-v4.1-flash#claude")
-    provider = ctx.rest.post(
-        "/api/v1/providers",
-        json={
-            "name": "Issue 90 E2E",
-            "type": "anthropic-messages",
-            "base_url": os.environ.get("TEST_PI_BASE_URL", "http://127.0.0.1:3425"),
-            "api_key": "{{SECRET_issue90_e2e_key}}",
-            "models": [model],
-        },
+    provider_id, model = create_provider(
+        ctx, name="Issue 90 E2E", secret="{{SECRET_issue90_e2e_key}}"
     )
-    ctx.require(provider.status_code == 201, provider.text)
     question = "请按支付日期统计 shop.payments 的支付金额，给出 Hive SQL。若字段知识不完整，请说明限制。"
-    with ctx.rest.stream(
-        "POST",
-        "/api/v1/conversations/ask",
-        json={
+    events = ask_stable(
+        ctx,
+        {
             "question": question,
             "agent": "pi",
-            "provider_id": provider.json()["id"],
+            "provider_id": provider_id,
             "model": model,
         },
-        timeout=600,
-    ) as response:
-        ctx.require(response.status_code == 200, f"ask HTTP {response.status_code}")
-        body = "".join(response.iter_text())
-    events = []
-    for block in body.split("\n\n"):
-        name = next(
-            (line[7:] for line in block.splitlines() if line.startswith("event: ")),
-            None,
-        )
-        data = [line[6:] for line in block.splitlines() if line.startswith("data: ")]
-        if name and data:
-            events.append((name, json.loads("\n".join(data))))
+    )[0]
     done = next((data for name, data in reversed(events) if name == "done"), {})
     sql = done.get("sql") or []
     ctx.require(sql, f"missing best-effort SQL: {done}")
@@ -80,3 +70,41 @@ def check_missing_field_produces_sql_and_gap(ctx):
         f"missing amount gap was not recorded: {gaps.text}",
     )
     return {"sql_blocks": len(sql)}
+
+
+def check_conflicting_definition_still_clarifies(ctx):
+    provider_id, model = create_provider(
+        ctx, name="Issue 90 Clarification E2E", secret="{{SECRET_issue90_e2e_key}}"
+    )
+    events, retries = ask_stable(
+        ctx,
+        {
+            "question": AMBIGUOUS,
+            "agent": "pi",
+            "provider_id": provider_id,
+            "model": model,
+        },
+        attempts=3,
+        expect_clarification=True,
+    )
+    ctx.require(
+        events and events[0][0] == "conversation",
+        f"ambiguous question did not open a conversation: {events[:1]}",
+    )
+    questions = clarifications(events)
+    ctx.require(
+        questions,
+        "the ambiguous question did not raise a clarification event: "
+        f"events={[name for name, _ in events]} "
+        f"errors={[(name, data) for name, data in events if name == 'error']} "
+        f"last={(events[-1:] if events else [])}",
+    )
+    ctx.require(
+        not sql_blocks(events),
+        "the agent wrote SQL for conflicting metric definitions instead of clarifying",
+    )
+    return {
+        "conversation_id": events[0][1]["conversation_id"],
+        "retries": retries,
+        "options": sum(len(item.get("options") or []) for item in questions),
+    }
