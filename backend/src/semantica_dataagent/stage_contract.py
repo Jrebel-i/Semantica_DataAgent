@@ -2,6 +2,8 @@
 
 from dataclasses import dataclass, field
 
+WRITE_BATCH_SIZE = 2000
+
 
 @dataclass
 class StorageHandles:
@@ -17,7 +19,23 @@ class StorageHandles:
     def execute(self, query, parameters):
         from .knowledge import execute
 
-        return execute(self._graph, query, parameters)
+        rows = parameters.get("rows")
+        if (
+            "UNWIND $rows AS row" not in query
+            or rows is None
+            or len(rows) <= WRITE_BATCH_SIZE
+        ):
+            return execute(self._graph, query, parameters)
+        result = []
+        for offset in range(0, len(rows), WRITE_BATCH_SIZE):
+            result.extend(
+                execute(
+                    self._graph,
+                    query,
+                    {**parameters, "rows": rows[offset : offset + WRITE_BATCH_SIZE]},
+                )
+            )
+        return result
 
     def add_vectors(self, ids, texts, metadata):
         from .knowledge import embed

@@ -182,3 +182,24 @@ def test_legacy_build_migration_preserves_existing_rows(tmp_path, monkeypatch):
             text("SELECT status, source_hashes, build_type FROM builds")
         ).one()
     assert tuple(row) == ("succeeded", None, None)
+
+
+def test_graph_row_writes_are_split_without_losing_rows(monkeypatch):
+    from semantica_dataagent.stage_contract import StorageHandles
+
+    calls = []
+
+    def execute(graph, query, parameters):
+        calls.append(parameters["rows"])
+        return []
+
+    monkeypatch.setattr(knowledge, "execute", execute)
+    monkeypatch.setattr(
+        "semantica_dataagent.stage_contract.WRITE_BATCH_SIZE", 2, raising=False
+    )
+    storage = StorageHandles("test", object(), object(), {})
+    storage.execute(
+        "UNWIND $rows AS row CREATE (n) SET n = row",
+        {"rows": [{"n": i} for i in range(5)]},
+    )
+    assert calls == [[{"n": 0}, {"n": 1}], [{"n": 2}, {"n": 3}], [{"n": 4}]]
