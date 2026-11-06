@@ -28,7 +28,6 @@ from .agent_plugin import (
     truncate,
     write_json,
 )
-from .agent_sandbox import SessionSandbox
 from .agent_types import AgentEvent, AgentTurnRequest
 from .skill import read_skill
 
@@ -37,7 +36,6 @@ PROVIDER_KEY = "dataagent"
 __all__ = [
     "PiEventParser",
     "PiRunner",
-    "SessionSandbox",
     "extract_refs",
     "extract_sql",
 ]

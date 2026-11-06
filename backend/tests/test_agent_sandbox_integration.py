@@ -37,8 +37,9 @@ class _Handler(BaseHTTPRequestHandler):
 
 @pytest.mark.skipif(not _docker_available(), reason="Docker daemon is required")
 def test_session_sandbox_files_network_and_cleanup(tmp_path):
-    sandbox_type = getattr(pi_runner, "SessionSandbox", None)
-    assert sandbox_type is not None, "pi sessions must run in an isolated container"
+    from semantica_dataagent.agent_sandbox import SessionSandbox
+
+    sandbox_type = SessionSandbox
     servers = [ThreadingHTTPServer(("0.0.0.0", 0), _Handler) for _ in range(3)]
     threads = [threading.Thread(target=s.serve_forever, daemon=True) for s in servers]
     for thread in threads:
@@ -54,6 +55,9 @@ def test_session_sandbox_files_network_and_cleanup(tmp_path):
     )
     try:
         sandbox.start()
+        import ipaddress
+
+        assert all(ipaddress.ip_address(target[1]) for target in sandbox.targets)
         script = f"""const fs = require('fs');
 const test = async (url) => {{
   try {{ return (await fetch(url, {{signal: AbortSignal.timeout(3000)}})).ok; }}

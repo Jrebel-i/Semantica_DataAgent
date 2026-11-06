@@ -63,10 +63,13 @@ class SessionSandbox:
         target = (
             "host.docker.internal"
             if host in ("127.0.0.1", "localhost", "::1")
-            else socket.getaddrinfo(
-                host,
-                url.port or (443 if url.scheme == "https" else 80),
-                type=socket.SOCK_STREAM,
+            else sorted(
+                socket.getaddrinfo(
+                    host,
+                    url.port or (443 if url.scheme == "https" else 80),
+                    type=socket.SOCK_STREAM,
+                ),
+                key=lambda entry: entry[0] != socket.AF_INET,
             )[0][4][0]
         )
         try:
@@ -106,6 +109,22 @@ class SessionSandbox:
         resolv = self.workspace / "agent-resolv.conf"
         resolv.write_text("nameserver 127.0.0.1\n", encoding="ascii")
         try:
+            if any(target[1] == "host.docker.internal" for target in self.targets):
+                resolved = self._run(
+                    "run",
+                    "--rm",
+                    "--network",
+                    "bridge",
+                    "--entrypoint",
+                    "node",
+                    IMAGE,
+                    "-e",
+                    "require('dns').lookup('host.docker.internal', (err, address) => { if (err) process.exit(1); console.log(address); })",
+                ).stdout.strip()
+                ipaddress.ip_address(resolved)
+                for target in self.targets:
+                    if target[1] == "host.docker.internal":
+                        target[1] = resolved
             self._run(
                 "network",
                 "create",
