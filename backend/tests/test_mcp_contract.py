@@ -21,6 +21,17 @@ from semantica.utils.exceptions import ProcessingError
 from semantica_dataagent.mcp_contract import install_contract
 
 
+def test_execute_query_is_available_to_mcp_clients():
+    from semantica_dataagent.app import create_mcp
+
+    async def run():
+        async with create_connected_server_and_client_session(create_mcp()) as client:
+            tools = (await client.list_tools()).tools
+        assert "execute_query" in {tool.name for tool in tools}
+
+    asyncio.run(run())
+
+
 def test_all_mcp_tool_input_schemas_are_self_contained():
     from semantica_dataagent.app import create_mcp
 
