@@ -131,6 +131,8 @@ class KnowledgeGeneration(Base):
     __tablename__ = "knowledge_generations"
     name: Mapped[str] = mapped_column(primary_key=True)
     build_id: Mapped[int | None]
+    source_directory: Mapped[str | None]
+    operation_id: Mapped[str | None]
     created_at: Mapped[str | None]
     deleting: Mapped[bool] = mapped_column(default=False, server_default="0")
 
@@ -229,3 +231,5 @@ class PullRecord(Base):
     error: Mapped[str | None]
     commit: Mapped[str | None]
     build_id: Mapped[int | None]
+    source_directory: Mapped[str | None]
+    operation_id: Mapped[str | None]

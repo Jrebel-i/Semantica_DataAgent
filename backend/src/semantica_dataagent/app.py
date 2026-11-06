@@ -104,6 +104,9 @@ async def lifespan(application):
     from .corrections import recover_applying
 
     await asyncio.to_thread(recover_applying)
+    from .pull_service import recover_pulls
+
+    await asyncio.to_thread(recover_pulls)
     build_queue.start()
     with sessions()() as db:
         interval = db.get(Setting, "schedule_interval_seconds")

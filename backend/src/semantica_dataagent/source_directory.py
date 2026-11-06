@@ -328,7 +328,7 @@ def recover_pulls(root):
     journal.unlink()
 
 
-def publish_pull(root, files):
+def publish_pull(root, files, operation_id=None):
     """Publish an immutable DTB snapshot while holding the source lock."""
     import uuid
 
@@ -348,6 +348,10 @@ def publish_pull(root, files):
     version = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ-") + uuid.uuid4().hex
     destination = parent / version
     staging = parent / (".pull-" + version)
+    if operation_id is not None and not re.fullmatch(
+        r"[A-Za-z0-9_-]{1,80}", operation_id
+    ):
+        raise ValueError("Invalid pull operation identifier")
     journal = root / ".git" / "dataagent-pull.json"
     with tempfile.NamedTemporaryFile(
         mode="w", dir=journal.parent, delete=False
@@ -368,7 +372,16 @@ def publish_pull(root, files):
             target.write_bytes(content)
         os.replace(staging, destination)
         git(root, "add", "-f", "--", f"dtb/{version}")
-        git(root, "commit", "--quiet", "-m", f"定时拉取 {version}", author="定时拉取")
+        message = ["-m", f"Pull-Operation: {operation_id}"] if operation_id else []
+        git(
+            root,
+            "commit",
+            "--quiet",
+            "-m",
+            f"定时拉取 {version}",
+            *message,
+            author="定时拉取",
+        )
         commit = git(root, "rev-parse", "HEAD").decode().strip()
         journal.unlink()
         return commit

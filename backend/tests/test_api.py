@@ -871,15 +871,16 @@ def test_manual_pull_commits_then_queues_incremental_build(
             {"tables": 1, "tasks": 2},
         ),
     )
-    queued = []
-    monkeypatch.setattr(
-        pull_service, "enqueue_build", lambda kind, by: queued.append((kind, by)) or 123
-    )
+    monkeypatch.setattr(pull_service.build_queue, "enqueue", lambda: None)
     response = c.post("/api/v1/pulls/dtb", headers=headers)
     assert response.status_code == 200, response.text
     assert response.json()["status"] == "succeeded"
     assert response.json()["tables"] == 1
-    assert queued == [("incremental", "定时拉取")]
+    build = c.get(
+        f"/api/v1/builds/{response.json()['build_id']}", headers=headers
+    ).json()
+    assert build["build_type"] == "incremental"
+    assert build["triggered_by"] == "定时拉取"
     assert (
         c.get("/api/v1/pulls", headers=headers).json()[0]["commit"]
         == response.json()["commit"]
@@ -917,3 +918,39 @@ def test_failed_pull_does_not_change_source(client, tmp_path, monkeypatch):
     assert response.json()["status"] == "failed"
     assert "401" in response.json()["error"]
     assert sorted(p.name for p in root.iterdir()) == ["original"]
+
+
+def test_interrupted_pull_recovers_committed_snapshot_once(client, tmp_path):
+    from datetime import UTC, datetime
+
+    from semantica_dataagent.db import PullRecord, sessions
+    from semantica_dataagent.pull_service import recover_pulls
+    from semantica_dataagent.source_directory import publish_pull, repository
+
+    root = tmp_path / "recover-source"
+    with sessions().begin() as db:
+        record = PullRecord(
+            status="running",
+            started_at=datetime.now(UTC),
+            tables=0,
+            tasks=0,
+            source_directory=str(root),
+            operation_id="unique-operation",
+        )
+        db.add(record)
+        db.flush()
+        record_id = record.id
+    with repository(root) as source:
+        commit = publish_pull(
+            source, {"任务信息.json": b"x"}, operation_id="unique-operation"
+        )
+    recover_pulls()
+    recover_pulls()
+    with sessions()() as db:
+        record = db.get(PullRecord, record_id)
+        assert record.commit == commit
+        assert record.build_id is not None
+        assert record.status == "succeeded"
+        from semantica_dataagent.db import Build
+
+        assert db.query(Build).filter(Build.id == record.build_id).count() == 1
