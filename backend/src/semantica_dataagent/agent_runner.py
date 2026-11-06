@@ -1,7 +1,7 @@
-"""Provider-neutral online agent interface.
+"""Provider-neutral online agent plugin registry.
 
-The REST layer only knows about this module. Each adapter (pi today, Claude and
-Codex later) turns its own wire protocol into the same stream of events.
+The REST layer only knows about this module. Each runner is registered as an
+entry-point plugin and turns its own wire protocol into the same event stream.
 """
 
 from importlib.metadata import entry_points
