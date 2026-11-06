@@ -200,7 +200,7 @@ test("查询计划可确认执行，结果和下载显示在右侧面板", async
     },
   );
   vi.stubGlobal("fetch", fetcher);
-  render(
+  const { container } = render(
     <ChatPage
       token="personal-token"
       role="user"
@@ -213,6 +213,9 @@ test("查询计划可确认执行，结果和下载显示在右侧面板", async
   expect(executed).toBe(false);
   fireEvent.click(screen.getByRole("button", { name: /执\s*行/ }));
   expect(await screen.findByText("结果可能被截断")).toBeTruthy();
+  expect(
+    container.querySelectorAll(".query-result-preview tbody tr"),
+  ).toHaveLength(5);
   expect(screen.queryByText("销售结论")).toBeNull();
   streamController?.enqueue(
     new TextEncoder().encode('event: done\ndata: {"text":"销售结论"}\n\n'),
@@ -259,6 +262,73 @@ test("查询计划可确认执行，结果和下载显示在右侧面板", async
       ),
     ).toBe(true);
   });
+});
+
+test("结果达到执行上限时提示可能被截断", async () => {
+  const plan = {
+    id: "query-limit",
+    sql: "SELECT value FROM shop.orders",
+    data_source: "doris_ai",
+    tables: ["shop.orders"],
+    estimated_partitions: 1,
+    estimated_rows: 6,
+    row_limit: 1000,
+    execution_limit: 6,
+  };
+  const result = {
+    id: plan.id,
+    columns: ["value"],
+    rows: [[1], [2], [3], [4], [5], [6]],
+    row_count: 6,
+  };
+  const conversation = {
+    id: "conv-limit",
+    title: "上限",
+    agent: "pi",
+    provider_id: provider.id,
+    model: provider.models[0],
+    created_at: "2026-11-05T00:00:00Z",
+    updated_at: "2026-11-05T00:00:00Z",
+    turn_count: 1,
+    resumable: true,
+  };
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/v1/agents")
+        return json([{ id: "pi", available: true }]);
+      if (url === "/api/v1/providers") return json([provider]);
+      if (url === "/api/v1/conversations") return json([conversation]);
+      if (url === "/api/v1/conversations/conv-limit")
+        return json({
+          ...conversation,
+          turns: [
+            {
+              id: 1,
+              sequence: 1,
+              question: "上限",
+              status: "completed",
+              answer: "结论",
+              sql: [],
+              citations: [],
+              error: null,
+              started_at: conversation.created_at,
+              finished_at: conversation.updated_at,
+              events: [
+                { seq: 0, type: "query_plan", data: plan },
+                { seq: 1, type: "query_result", data: result },
+              ],
+            },
+          ],
+        });
+      return new Response("", { status: 404 });
+    }),
+  );
+  render(<ChatPage token="token" role="user" messages={getMessages("zh")} />);
+  expect(await screen.findByText("结果可能被截断")).toBeTruthy();
+  fireEvent.click(screen.getByRole("tab", { name: "查询计划" }));
+  expect(await screen.findByText("行数上限: 6")).toBeTruthy();
 });
 
 test("查看历史预览会打开对应查询结果", async () => {

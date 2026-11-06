@@ -1374,9 +1374,12 @@ export function ChatPage({
       children: latestResult ? (
         <div className="context-section">
           <ResultTable result={latestResult} />
-          {latestPlan && latestResult.row_count >= latestPlan.row_limit && (
-            <p>结果可能被截断</p>
-          )}
+          {latestPlan &&
+            latestResult.row_count >=
+              Math.min(
+                latestPlan.row_limit,
+                latestPlan.execution_limit ?? latestPlan.row_limit,
+              ) && <p>结果可能被截断</p>}
           <Space>
             {[
               ["csv", "CSV"],
