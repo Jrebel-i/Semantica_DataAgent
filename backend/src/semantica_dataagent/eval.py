@@ -90,20 +90,35 @@ def compare_results(left: dict, right: dict) -> str:
         for other in left_rows
     ]
     assigned: dict[int, int] = {}
-
-    def match(index, visited):
-        for target in candidates[index]:
-            if target in visited:
-                continue
-            visited.add(target)
-            if target not in assigned or match(assigned[target], visited):
-                assigned[target] = index
-                return True
-        return False
-
-    return (
-        "equal" if all(match(i, set()) for i in range(len(left_rows))) else "different"
-    )
+    for source in range(len(left_rows)):
+        queue = [source]
+        parents: dict[int, tuple[int, int] | None] = {source: None}
+        visited_targets: set[int] = set()
+        found = False
+        for current in queue:
+            # Prefer unused targets to keep repeated rows inexpensive.
+            free = next((t for t in candidates[current] if t not in assigned), None)
+            if free is not None:
+                target = free
+                while True:
+                    assigned[target] = current
+                    parent = parents[current]
+                    if parent is None:
+                        break
+                    current, target = parent
+                found = True
+                break
+            for target in candidates[current]:
+                if target in visited_targets:
+                    continue
+                visited_targets.add(target)
+                other = assigned[target]
+                if other not in parents:
+                    parents[other] = (current, target)
+                    queue.append(other)
+        if not found:
+            return "different"
+    return "equal"
 
 
 @dataclass(slots=True)
