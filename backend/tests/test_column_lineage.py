@@ -120,7 +120,9 @@ def test_field_lineage_query_returns_upstream_task_and_evidence(monkeypatch):
         "evidence": "parsed",
         "parse_status": "success",
     }
-    monkeypatch.setattr(task_api.knowledge, "settings", lambda: {"knowledge_generation": "test"})
+    monkeypatch.setattr(
+        task_api.knowledge, "settings", lambda: {"knowledge_generation": "test"}
+    )
     monkeypatch.setattr(task_api.knowledge, "read_graph", lambda _: object())
     monkeypatch.setattr(task_api.knowledge, "execute", lambda *args: [{"edge": edge}])
     result = task_api.get_lineage("dst.orders", column="order_id")

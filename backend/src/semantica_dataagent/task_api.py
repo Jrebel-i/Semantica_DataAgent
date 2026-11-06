@@ -13,11 +13,44 @@ router = APIRouter()
 
 
 def get_lineage(
-    table: str, direction: Literal["up", "down"] = "up", depth: int = 1
+    table: str,
+    direction: Literal["up", "down"] = "up",
+    depth: int = 1,
+    column: str | None = None,
 ) -> list[dict]:
     if not table or direction not in ("up", "down") or not 1 <= depth <= 3:
         raise ValueError("Invalid table, direction or depth")
     values = knowledge.settings()
+    if column is not None:
+        if not column:
+            raise ValueError("Invalid column")
+        pattern = (
+            "(start)<-[:FIELD_DEPENDS_ON*1..%d]-(other)"
+            if direction == "up"
+            else "(start)-[:FIELD_DEPENDS_ON*1..%d]->(other)"
+        )
+        rows = knowledge.execute(
+            knowledge.read_graph(values),
+            "MATCH (start:SDAField {generation:$generation, name:$column}) "
+            "WHERE start.database + '.' + start.table = $table "
+            + "MATCH p="
+            + (pattern % depth)
+            + " UNWIND relationships(p) AS edge "
+            + "OPTIONAL MATCH (task:SDATask {generation:$generation, name:edge.task_id}) "
+            + "RETURN DISTINCT properties(edge) AS edge, task.type AS task_type",
+            {
+                "generation": values["knowledge_generation"],
+                "table": table,
+                "column": column,
+            },
+        )
+        return [
+            {
+                **row["edge"],
+                "task_type": row.get("task_type", row["edge"].get("task_type")),
+            }
+            for row in rows
+        ]
     pattern = (
         "(start)<-[:DEPENDS_ON*1..%d]-(other)"
         if direction == "up"
@@ -88,4 +121,14 @@ def table_lineage(table: str, _: Annotated[str, Depends(current_user)]):
         "upstream": get_lineage(table, "up"),
         "downstream": get_lineage(table, "down"),
         "tasks": rows,
+    }
+
+
+@router.get("/api/v1/column-lineage")
+def column_lineage(
+    table: str, column: str, _: Annotated[str, Depends(current_user)], depth: int = 1
+):
+    return {
+        "upstream": get_lineage(table, "up", depth, column),
+        "downstream": get_lineage(table, "down", depth, column),
     }
