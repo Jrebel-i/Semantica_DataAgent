@@ -23,8 +23,6 @@ from .agent_plugin import (
     redact_event,
     request_secrets,
     result_summary,
-    tool_end_event,
-    tool_start_event,
     truncate,
     write_json,
 )
@@ -88,14 +86,12 @@ class PiEventParser(EventParser):
             return []
         if kind == "tool_execution_start":
             name = record.get("toolName") or "tool"
-            return [
-                tool_start_event(record.get("toolCallId"), name, record.get("args"))
-            ]
+            return [self.start_tool(record.get("toolCallId"), name, record.get("args"))]
         if kind == "tool_execution_end":
             name = record.get("toolName") or "tool"
             result = record.get("result")
             events = [
-                tool_end_event(
+                self.end_tool(
                     record.get("toolCallId"),
                     name,
                     is_error=bool(record.get("isError")),
