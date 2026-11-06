@@ -892,7 +892,17 @@ def test_ask_streams_events_persists_history_and_reuses_session(client, monkeypa
     assert done["sql"] == [{"sql": "SELECT 1", "dialect": "hive"}]
     assert done["citations"] == [{"ref": "table:shop.orders", "type": "table"}]
     assert runner.requests[0].session_id == conversation_id
-    assert runner.requests[0].mcp_token == admin_token
+    agent_token = runner.requests[0].mcp_token
+    assert agent_token != admin_token
+    assert c.post(
+        "/api/v1/queries/plan",
+        headers={"Authorization": f"Bearer {agent_token}"},
+        json={"sql": "SELECT 1"},
+    ).status_code == 401
+    assert c.get(
+        f"/api/v1/conversations/{conversation_id}",
+        headers={"Authorization": f"Bearer {agent_token}"},
+    ).status_code == 401
     assert runner.requests[0].mcp_url.endswith("/mcp/")
 
     detail = c.get(f"/api/v1/conversations/{conversation_id}", headers=headers)
