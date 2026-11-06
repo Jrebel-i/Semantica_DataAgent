@@ -302,6 +302,8 @@ def audit(_: Annotated[str, Depends(admin)]):
                 "owner_id": row.owner_id,
                 "sql": row.sql,
                 "status": row.status,
+                "kind": row.kind,
+                "type": "取样" if row.kind == "sample" else "查询",
                 "row_count": row.row_count,
                 "elapsed_ms": row.elapsed_ms,
             }

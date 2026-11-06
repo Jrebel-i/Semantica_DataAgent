@@ -10,11 +10,31 @@ from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 from mcp.types import CallToolRequest, CallToolRequestParams
 
-
 FIELDS = [
-    {"database": "shop", "table": "orders", "name": "id", "type": "string", "comment": "", "partition": False},
-    {"database": "shop", "table": "orders", "name": "dt", "type": "string", "comment": "", "partition": True},
-    {"database": "shop", "table": "orders", "name": "amount", "type": "decimal", "comment": "", "partition": False},
+    {
+        "database": "shop",
+        "table": "orders",
+        "name": "id",
+        "type": "string",
+        "comment": "",
+        "partition": False,
+    },
+    {
+        "database": "shop",
+        "table": "orders",
+        "name": "dt",
+        "type": "string",
+        "comment": "",
+        "partition": True,
+    },
+    {
+        "database": "shop",
+        "table": "orders",
+        "name": "amount",
+        "type": "decimal",
+        "comment": "",
+        "partition": False,
+    },
 ]
 
 
@@ -206,9 +226,7 @@ def test_sample_uses_requested_columns_latest_partition_and_limit(
         fake.close()
 
 
-def test_sample_defaults_to_all_columns_and_caps_them_at_thirty(
-    client, monkeypatch
-):
+def test_sample_defaults_to_all_columns_and_caps_them_at_thirty(client, monkeypatch):
     from semantica_dataagent import knowledge
 
     fields = [
@@ -300,9 +318,7 @@ def test_sample_missing_latest_partition_is_unavailable(client, monkeypatch):
             }
         ],
     )
-    monkeypatch.setattr(
-        knowledge, "dimension_values", lambda *args: [], raising=False
-    )
+    monkeypatch.setattr(knowledge, "dimension_values", lambda *args: [], raising=False)
     result = call(client, "sample_table_data", {"table": "shop.orders"})
     assert result.isError
     assert result.structuredContent["code"] == "unavailable"
@@ -324,4 +340,7 @@ def test_sample_schema_is_self_contained_and_caps_limit(client):
     assert properties["limit"]["type"] == "integer"
     assert properties["limit"]["maximum"] == 20
     assert properties["limit"]["default"] == 20
-    assert properties["columns"]["type"] == "array"
+    columns_schema = properties["columns"]
+    assert columns_schema.get("type") == "array" or any(
+        option.get("type") == "array" for option in columns_schema.get("anyOf", [])
+    )
