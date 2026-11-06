@@ -57,3 +57,21 @@ def test_exec_cli_is_available():
 def test_comparison_handles_large_duplicate_multiset():
     result = {"columns": ["x"], "rows": [[1]] * 1100}
     assert evaluation.compare_results(result, result) == "equal"
+
+
+def test_numeric_tolerance_null_and_column_positions():
+    def result(*rows):
+        return {"columns": ["a", "b"], "rows": list(rows)}
+
+    assert (
+        evaluation.compare_results(result([100, None]), result(["100.00009", None]))
+        == "equal"
+    )
+    assert (
+        evaluation.compare_results(result([100, None]), result(["100.0002", None]))
+        == "different"
+    )
+    assert (
+        evaluation.compare_results(result([1, None]), result([None, 1])) == "different"
+    )
+    assert evaluation.compare_results(result([None, 1]), result(["", 1])) == "different"

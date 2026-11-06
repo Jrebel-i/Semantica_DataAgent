@@ -165,6 +165,10 @@ def check_execution_evaluation(ctx):
                 report["questions"][3]["agent"]["reason"] == "校验被拒", str(report)
             )
             ctx.require(
+                ctx.token not in ctx.runtime.service_log.read_text(),
+                "token leaked to service log",
+            )
+            ctx.require(
                 ctx.token not in raw
                 and ctx.token not in (path / "report.md").read_text(),
                 "token leaked",
