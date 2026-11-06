@@ -37,6 +37,8 @@ FIELDS = [
     },
 ]
 
+PARTITION_METADATA_COLUMNS = [{"name": "partition_name", "type": "char"}]
+
 
 @pytest.fixture
 def client(tmp_path, monkeypatch):
@@ -84,7 +86,10 @@ class FakeDtb:
         self.metadata = (
             metadata
             if metadata is not None
-            else {"columns": ["partition_name"], "data": [["dt=2025-01-03"]]}
+            else {
+                "columns": PARTITION_METADATA_COLUMNS,
+                "data": [["dt=2025-01-03"]],
+            }
         )
         self.queries = {}
 
@@ -119,7 +124,10 @@ class FakeDtb:
                 else:
                     data = {
                         "progress": 1,
-                        "columns": ["id", "dt"],
+                        "columns": [
+                            {"name": "id", "type": "long"},
+                            {"name": "dt", "type": "date"},
+                        ],
                         "data": [[1, "2025-01-03"], [2, "2025-01-03"]],
                     }
                 payload = json.dumps({"status": 200, "data": data}).encode()
@@ -442,7 +450,10 @@ def fact_metadata(monkeypatch):
 
 def test_sample_uses_dtb_partition_metadata_for_fact_table(client, fact_metadata):
     fake = FakeDtb(
-        metadata={"columns": ["partition_name"], "data": [["dt=2026-08-31"]]}
+        metadata={
+            "columns": PARTITION_METADATA_COLUMNS,
+            "data": [["dt=2026-08-31"]],
+        }
     ).start()
     try:
         configure_executor(client, fake.url)
@@ -480,9 +491,43 @@ def test_sample_uses_dtb_partition_metadata_for_fact_table(client, fact_metadata
         fake.close()
 
 
-def test_metadata_latest_partition_wins_over_knowledge(client, table_metadata):
+def test_metadata_accepts_plain_string_columns(client, fact_metadata):
     fake = FakeDtb(
         metadata={"columns": ["partition_name"], "data": [["dt=2026-08-31"]]}
+    ).start()
+    try:
+        configure_executor(client, fake.url)
+        set_token(client, "caller-token")
+        result = call(client, "sample_table_data", {"table": "dm.sales_fact"})
+        assert not result.isError, result.model_dump()
+        assert result.structuredContent["partition"] == [
+            {"field": "dt", "value": "2026-08-31"}
+        ]
+    finally:
+        fake.close()
+
+
+def test_metadata_column_object_without_name_is_format_error(client, fact_metadata):
+    fake = FakeDtb(
+        metadata={"columns": [{"type": "char"}], "data": [["dt=2026-08-31"]]}
+    ).start()
+    try:
+        configure_executor(client, fake.url)
+        set_token(client, "caller-token")
+        result = call(client, "sample_table_data", {"table": "dm.sales_fact"})
+        assert result.isError
+        assert result.structuredContent["code"] == "unavailable"
+        assert "格式无效" in result.structuredContent["message"]
+    finally:
+        fake.close()
+
+
+def test_metadata_latest_partition_wins_over_knowledge(client, table_metadata):
+    fake = FakeDtb(
+        metadata={
+            "columns": PARTITION_METADATA_COLUMNS,
+            "data": [["dt=2026-08-31"]],
+        }
     ).start()
     try:
         configure_executor(client, fake.url)
@@ -506,7 +551,7 @@ def test_metadata_latest_partition_wins_over_knowledge(client, table_metadata):
 def test_metadata_multiple_rows_uses_latest_partition(client, fact_metadata):
     fake = FakeDtb(
         metadata={
-            "columns": ["partition_name"],
+            "columns": PARTITION_METADATA_COLUMNS,
             "data": [["dt=2026-08-01"], ["dt=2026-08-31"], ["dt=2026-08-15"]],
         }
     ).start()
@@ -523,7 +568,7 @@ def test_metadata_multiple_rows_uses_latest_partition(client, fact_metadata):
 
 
 def test_metadata_empty_falls_back_to_knowledge(client, table_metadata):
-    fake = FakeDtb(metadata={"columns": ["partition_name"], "data": []}).start()
+    fake = FakeDtb(metadata={"columns": PARTITION_METADATA_COLUMNS, "data": []}).start()
     try:
         configure_executor(client, fake.url)
         set_token(client, "caller-token")
@@ -542,7 +587,7 @@ def test_metadata_empty_falls_back_to_knowledge(client, table_metadata):
 
 
 def test_metadata_empty_without_knowledge_is_unavailable(client, fact_metadata):
-    fake = FakeDtb(metadata={"columns": ["partition_name"], "data": []}).start()
+    fake = FakeDtb(metadata={"columns": PARTITION_METADATA_COLUMNS, "data": []}).start()
     try:
         configure_executor(client, fake.url)
         set_token(client, "caller-token")
@@ -558,7 +603,7 @@ def test_metadata_empty_without_knowledge_is_unavailable(client, fact_metadata):
 def test_metadata_malformed_falls_back_to_knowledge(client, table_metadata):
     fake = FakeDtb(
         metadata={
-            "columns": ["partition_name"],
+            "columns": PARTITION_METADATA_COLUMNS,
             "data": [["not-a-partition"], [123], [None]],
         }
     ).start()
@@ -609,7 +654,7 @@ def test_metadata_format_error_falls_back_to_knowledge(
 def test_metadata_malformed_without_knowledge_is_unavailable(client, fact_metadata):
     fake = FakeDtb(
         metadata={
-            "columns": ["partition_name"],
+            "columns": PARTITION_METADATA_COLUMNS,
             "data": [["amount=9"], ["dt="], ["dt"]],
         }
     ).start()

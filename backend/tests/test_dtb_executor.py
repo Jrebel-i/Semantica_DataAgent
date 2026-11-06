@@ -7,6 +7,7 @@ from semantica_dataagent.dtb_executor import (
     DtbAuthenticationError,
     DtbError,
     DtbExecutor,
+    column_names,
 )
 
 
@@ -22,7 +23,11 @@ def test_dtb_query_protocol_and_caller_token():
                 200,
                 json={
                     "status": 200,
-                    "data": {"progress": 1.0, "columns": ["n"], "data": [[1]]},
+                    "data": {
+                        "progress": 1.0,
+                        "columns": [{"name": "n", "type": "long"}],
+                        "data": [[1]],
+                    },
                 },
             )
         return httpx.Response(200, content=b"n\n1\n")
@@ -46,6 +51,14 @@ def test_dtb_query_protocol_and_caller_token():
         "defaultLimit": 1000,
     }
     assert all(call.headers["token"] == "my-token" for call in calls)
+
+
+def test_column_names_accepts_strings_and_named_objects():
+    assert column_names(["a", "b"]) == ["a", "b"]
+    assert column_names([{"name": "a", "type": "long"}, {"name": "b"}]) == ["a", "b"]
+    assert column_names([{"type": "long"}]) is None
+    assert column_names(["a", {"type": "long"}]) is None
+    assert column_names("a") is None
 
 
 def test_dtb_recognizes_auth_and_query_errors():

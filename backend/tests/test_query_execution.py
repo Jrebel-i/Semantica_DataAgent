@@ -107,7 +107,11 @@ def test_partition_safety_and_execution(client, monkeypatch):
                 payload = json.dumps(
                     {
                         "status": 200,
-                        "data": {"progress": 1, "columns": ["v"], "data": [[1], [2]]},
+                        "data": {
+                            "progress": 1,
+                            "columns": [{"name": "v", "type": "long"}],
+                            "data": [[1], [2]],
+                        },
                     }
                 ).encode()
             else:
@@ -202,6 +206,7 @@ def test_partition_safety_and_execution(client, monkeypatch):
         response = c.post(path + "/execute", headers=headers, json={})
         assert response.status_code == 200, response.text
         assert response.json()["rows"] == [[1]]
+        assert response.json()["columns"] == ["v"]
         assert calls[0][0] == "caller-token"
         assert calls[0][1]["dataSource"] == "doris_ai"
         assert calls[0][1]["defaultLimit"] == 5

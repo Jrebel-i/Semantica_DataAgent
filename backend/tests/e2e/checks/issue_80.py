@@ -35,19 +35,22 @@ def check_sample_table_data(ctx):
                 if "sales_fact" in sql:
                     data = {
                         "progress": 1.0,
-                        "columns": ["partition_name"],
+                        "columns": [{"name": "partition_name", "type": "char"}],
                         "data": [["dt=2026-08-31"]],
                     }
                 else:
                     data = {
                         "progress": 1.0,
-                        "columns": ["partition_name"],
+                        "columns": [{"name": "partition_name", "type": "char"}],
                         "data": [],
                     }
             else:
                 data = {
                     "progress": 1.0,
-                    "columns": ["id", "dt"],
+                    "columns": [
+                        {"name": "id", "type": "long"},
+                        {"name": "dt", "type": "date"},
+                    ],
                     "data": [[1, "2025-01-03"], [2, "2025-01-03"]],
                 }
             payload = json.dumps({"status": 200, "data": data}).encode()
