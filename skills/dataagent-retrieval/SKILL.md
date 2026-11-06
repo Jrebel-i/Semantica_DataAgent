@@ -30,7 +30,12 @@ Use this skill when a question needs warehouse knowledge or SQL. Retrieve before
    - `get_lineage` with `direction` `up` or `down` and `depth` 1-3 to understand dependencies.
    - `find_join_path` for two to four tables when a join is not already supported.
    - `read_task_sql` when the producing task SQL is needed as evidence.
-6. When a relevant table exists, write one SQL statement in the requested dialect even
+6. **Before best-effort SQL, check for conflicting definitions.** If two or more metric
+   definitions can match the question, stop this turn and call `request_clarification`
+   with the competing definitions. Do not choose a definition and do not write or validate
+   SQL in the same turn; wait for the user's choice. Ask in plain text only after the
+   clarification tool returns.
+7. When a relevant table exists, write one SQL statement in the requested dialect even
    if some fields or definitions are missing. Use only fields confirmed by
    `describe_tables` or returned table metadata, never a column name inferred from
    convention or the metric name (for example, do not invent an `amount` column). State
@@ -39,13 +44,12 @@ Use this skill when a question needs warehouse knowledge or SQL. Retrieve before
    evidence shows existing content is wrong. A request for a concrete computation on a
    known table, such as a row count per partition, is answerable without a formal metric
    definition; do not withhold SQL just because that definition is absent. Skip SQL only
-   when no relevant table exists. Conflicting metric definitions still require clarification
-   before writing SQL.
-7. **Always** call `validate_sql` with the SQL and dialect. Do not present SQL as final
+   when no relevant table exists.
+8. **Always** call `validate_sql` with the SQL and dialect. Do not present SQL as final
    before validation. If validation reports any table, field, or syntax error, rewrite the
    statement using only confirmed tables and fields and validate the replacement. Never
    present a statement that failed validation as final.
-8. Answer with the SQL and citations. Attach the exact `ref` values returned by the tools to each material claim. End the final answer with a short `引用：` line listing every ref used; an answer built from tool results must not omit references. Do not invent, shorten, or rewrite reference ids.
+9. Answer with the SQL and citations. Attach the exact `ref` values returned by the tools to each material claim. End the final answer with a short `引用：` line listing every ref used; an answer built from tool results must not omit references. Do not invent, shorten, or rewrite reference ids.
 
 ## Evidence and safety
 
