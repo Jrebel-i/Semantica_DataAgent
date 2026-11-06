@@ -475,6 +475,20 @@ def test_deleting_conversation_removes_its_query_results(client, monkeypatch):
     with sessions().begin() as db:
         db.get(Turn, turn_id).status = "completed"
     assert c.get(f"/api/v1/queries/{plan['id']}", headers=headers).status_code == 200
+    c.put("/api/v1/me/dtb-token", headers=headers, json={"token": ""})
+    download = f"/api/v1/queries/{plan['id']}/download"
+    assert c.get(download + "?format=csv", headers=headers).text == "value\n123\n"
+    assert c.get(download + "?format=json", headers=headers).json() == {
+        "columns": ["value"],
+        "rows": [[123]],
+    }
+    from io import BytesIO
+    from openpyxl import load_workbook
+
+    workbook = load_workbook(
+        BytesIO(c.get(download + "?format=xlsx", headers=headers).content)
+    )
+    assert list(workbook.active.values) == [("value",), (123,)]
     assert (
         c.delete("/api/v1/conversations/conv-delete", headers=headers).status_code
         == 204
