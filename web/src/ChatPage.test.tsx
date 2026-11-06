@@ -93,6 +93,15 @@ afterEach(() => {
   });
 });
 
+test("新对话的消息区不显示占位查询计划", async () => {
+  vi.stubGlobal("fetch", vi.fn(async () => json([])));
+  const { container } = render(
+    <ChatPage token="token" role="user" messages={getMessages("zh")} />,
+  );
+  await screen.findByText(getMessages("zh").exampleQuestions);
+  expect(container.querySelector(".chat-scroll .plan-placeholder")).toBeNull();
+});
+
 test("streams tools and text, copies SQL, and opens table and document citations", async () => {
   const fetcher = vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input);
