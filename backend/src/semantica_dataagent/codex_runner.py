@@ -19,6 +19,7 @@ from .agent_plugin import (
     is_sandboxed,
     mcp_headers,
     passthrough_environment,
+    query_plan_event,
     read_marker,
     redact_event,
     request_secrets,
@@ -71,6 +72,10 @@ class CodexEventParser(EventParser):
                 clarification = clarification_event(name, item.get("result"))
                 if clarification is not None:
                     events.append(clarification)
+                if item.get("status") != "failed" and not item.get("error"):
+                    plan = query_plan_event(name, item.get("result"))
+                    if plan is not None:
+                        events.append(plan)
                 return events
         return []
 

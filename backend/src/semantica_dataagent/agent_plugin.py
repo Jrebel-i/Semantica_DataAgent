@@ -23,6 +23,7 @@ from .agent_types import (
     CLARIFICATION,
     DONE,
     ERROR,
+    QUERY_PLAN,
     TEXT_DELTA,
     TOOL_END,
     TOOL_START,
@@ -227,6 +228,21 @@ def clarification_event(name: str, result) -> AgentEvent | None:
     if not questions:
         return None
     return AgentEvent(CLARIFICATION, {"questions": questions})
+
+
+def query_plan_event(name: str, result) -> AgentEvent | None:
+    if name.split("__")[-1] != "propose_query":
+        return None
+    if isinstance(result, dict) and isinstance(result.get("structuredContent"), dict):
+        body = result["structuredContent"]
+    else:
+        try:
+            body = json.loads(result_text(result))
+        except (TypeError, ValueError):
+            return None
+    if not isinstance(body, dict) or not isinstance(body.get("id"), str):
+        return None
+    return AgentEvent(QUERY_PLAN, body)
 
 
 def done_event(text: str, stop_reason: str | None = None) -> AgentEvent:

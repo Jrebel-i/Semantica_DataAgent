@@ -20,6 +20,7 @@ from .agent_plugin import (
     extract_sql,
     is_sandboxed,
     mcp_headers,
+    query_plan_event,
     redact_event,
     request_secrets,
     result_summary,
@@ -102,6 +103,10 @@ class PiEventParser(EventParser):
             clarification = clarification_event(name, result)
             if clarification is not None:
                 events.append(clarification)
+            if not record.get("isError"):
+                plan = query_plan_event(name, result)
+                if plan is not None:
+                    events.append(plan)
             return events
         if kind == "auto_retry_end" and record.get("success") is False:
             self.error = truncate(record.get("finalError") or "agent retry failed")

@@ -9,9 +9,10 @@ TEXT_DELTA = "text_delta"
 TOOL_START = "tool_start"
 TOOL_END = "tool_end"
 CLARIFICATION = "clarification"
+QUERY_PLAN = "query_plan"
 DONE = "done"
 ERROR = "error"
-EVENT_TYPES = (TEXT_DELTA, TOOL_START, TOOL_END, CLARIFICATION, DONE, ERROR)
+EVENT_TYPES = (TEXT_DELTA, TOOL_START, TOOL_END, CLARIFICATION, QUERY_PLAN, DONE, ERROR)
 
 
 @dataclass(slots=True)

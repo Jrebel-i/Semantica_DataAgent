@@ -416,6 +416,10 @@ async def _stream(
             payload = {"conversation_id": conversation_id, "turn_id": turn_id}
             payload.update(event.data)
             yield _sse(event.type, payload)
+            if event.type == "query_plan":
+                _finish_turn(turn_id, "awaiting_confirmation", None)
+                terminal = True
+                return
             if event.type == DONE:
                 submit(
                     "trace-create",
