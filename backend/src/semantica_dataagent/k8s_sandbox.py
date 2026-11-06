@@ -253,7 +253,7 @@ class KubernetesSessionSandbox:
             "tar",
         ]
         command += (
-            ["-xf", "-", "-C", "/"]
+            ["--no-overwrite-dir", "--no-same-owner", "-xf", "-", "-C", "/"]
             if direction == "upload"
             else ["-cf", "-", "-C", "/", "workspace", "sessions"]
         )

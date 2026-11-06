@@ -2,7 +2,7 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: dataagent-session-egress
-  namespace: semantica-dataagent
+  namespace: semantica-dataagent-sessions
 spec:
   podSelector:
     matchLabels:
@@ -10,7 +10,10 @@ spec:
   policyTypes: [Egress]
   egress:
     - to:
-        - podSelector:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: semantica-dataagent
+          podSelector:
             matchLabels:
               app: dataagent
       ports:
@@ -26,15 +29,3 @@ spec:
       ports:
         - protocol: TCP
           port: 443
-    - to:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: kube-system
-          podSelector:
-            matchLabels:
-              k8s-app: kube-dns
-      ports:
-        - protocol: UDP
-          port: 53
-        - protocol: TCP
-          port: 53

@@ -75,8 +75,13 @@ The script performs Cypher, creates and deletes a uniquely named Milvus collecti
 
 首次安装先创建 `dataagent-encryption` Secret（`key` 为新生成的 Fernet 密钥），不要覆盖已有密钥或 PVC。`kubectl apply -f deploy/k8s/app/bootstrap.yaml` 后等待 `dataagent-bootstrap` 就绪，在其中执行 `semantica-dataagent init` 并安全保存只显示一次的管理员 token；将源文件放到 PVC 的 `/data/source`。删除 bootstrap Pod 后 `kubectl apply -k deploy/k8s/app`。初始化只对空数据库执行；升级不能重新初始化数据库。应用从本命名空间现有 `neo4j-auth` Secret 的 `auth` 环境变量取得开发 Neo4j 凭据，只有用户名与设置一致且没有显式设置密码时使用；用户在设置中保存的密码优先。设置 Neo4j `bolt://neo4j:7687`、Milvus `http://milvus:19530`、embedding `http://embedding:7997` 和源目录 `/data/source`，在前端配置 provider 并触发全量构建。API key 加密存储，避免将密钥写入命令、镜像或日志。
 
-会话 Pod 的 init 容器解析当前 provider 和 MCP 地址，安装 IPv4/IPv6 iptables 默认拒绝规则，只允许到解析出的目标 IP 和端口，以及到 Pod 的集群 DNS 的 TCP/UDP 53；允许已建立连接的返回流量。agent 容器非 root、只读根文件系统、丢弃全部 capability，无法改规则。地址在每轮 init 时解析，DNS 仍可访问集群 DNS；模型网关地址改变时新轮次重新解析。`NetworkPolicy` 同时限制会话 Pod，但本集群只有 flannel，**目前不执行 NetworkPolicy**，实际限制由 iptables 执行。标准 NetworkPolicy 无法按 FQDN 表达动态 provider，当前对外 TCP 443 较宽，iptables 仍限定到解析后的地址；启用策略引擎或使用其他 provider 端口前需相应更新策略并重新验证。
+每轮由应用解析 provider 和 MCP 的主机名，写入会话 Pod 的 hostAliases；init 容器安装 IPv4/IPv6 默认拒绝规则，仅允许解析出的 IP 和端口，不允许 DNS 出站。会话 Pod 默认在 `semantica-dataagent-sessions`，可通过 `DATAAGENT_SESSION_NAMESPACE` 配置；对应命名空间需要部署 Role 和 RoleBinding。会话目录通过应用与 Pod 之间的归档传递，Pod 使用临时卷；应用 ServiceAccount 仅在会话命名空间具有 Pod 权限。agent 容器非 root、只读根文件系统、丢弃全部 capability。集群 flannel 不执行 NetworkPolicy，实际限制由 iptables 执行。
 
 升级先推送新镜像并更新清单中的镜像引用，再 `kubectl apply -k deploy/k8s/app`，验证首页、MCP 和会话出站；单副本 Recreate 会短暂中断服务。回滚使用上一版镜像引用重新 apply，保留 PVC 和加密 Secret；不可删除 PVC 来回滚。全量知识构建和当前代切换按现有构建 API 执行，回滚知识使用保留代切换，镜像回滚不会自动切换知识代。
 
 2026-11-05 的部署验收使用 `samples/demo` 初始化 `/data/source`，首次全量构建 56.5 秒（20 张表、15 篇文档）；这只是示例知识，接入实际业务前由管理员上传并全量构建真实源目录。验收脚本 `backend/tests/e2e/k8s/verify.py` 从 `DATAAGENT_TOKEN` 环境变量取令牌，检查内网首页、pi 问答的 SQL 和引用、轮次后 Pod 清理以及本地 MCP 检索；出站限制使用票专属 harness 检查复验。不要把令牌写进命令历史或日志。
+
+
+## 直接运行与会话运行时
+
+按 `docs/code-standards.md` 的“运行应用”初始化并启动服务。默认 `DATAAGENT_AGENT_MODE=sandbox` 使用 Docker；先构建 `docker build -t semantica-dataagent-agent-runner:1.2.0 deploy/agent-runner`。也可显式设置 `DATAAGENT_AGENT_MODE=docker`。Docker 会话使用 internal 网络和仅转发模型及 MCP 的中继；目标在每轮解析，容器通过 hosts 访问中继。可信开发调试可设置 `DATAAGENT_AGENT_MODE=local` 使用本机进程，该模式没有隔离。Kubernetes 使用 `DATAAGENT_AGENT_MODE=k8s`，部署方式见上文。
