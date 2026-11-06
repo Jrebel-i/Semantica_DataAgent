@@ -208,3 +208,56 @@ def test_pod_rejects_workspace_traversal_and_credentialed_urls():
             build_pod_spec(**(base | {"workspace_subpath": path}))
     with pytest.raises(ValueError):
         build_pod_spec(**(base | {"model_url": "https://user:secret@gateway.example/"}))
+
+
+def test_session_upload_extracts_into_existing_root_owned_mounts(tmp_path):
+    import subprocess
+
+    import pytest
+
+    from semantica_dataagent.k8s_sandbox import KubernetesSessionSandbox
+
+    if subprocess.run(["docker", "info"], capture_output=True, check=False).returncode:
+        pytest.skip("Docker daemon is required")
+    (tmp_path / "work" / "config").mkdir(parents=True)
+    (tmp_path / "sessions").mkdir()
+    (tmp_path / "work" / "config" / "models.json").write_text("{}")
+    (tmp_path / "sessions" / "saved.jsonl").write_text("saved")
+    runtime = object.__new__(KubernetesSessionSandbox)
+    runtime.workspace = tmp_path
+
+    def extract(direction, payload):
+        assert direction == "upload"
+        result = subprocess.run(
+            [
+                "docker",
+                "run",
+                "--rm",
+                "-i",
+                "--network",
+                "none",
+                "--user",
+                "65534:65534",
+                "--tmpfs",
+                "/workspace:rw,mode=1777",
+                "--tmpfs",
+                "/sessions:rw,mode=1777",
+                "--entrypoint",
+                "tar",
+                "semantica-dataagent-agent-runner:1.2.0",
+                "--no-overwrite-dir",
+                "--no-same-owner",
+                "-xf",
+                "-",
+                "-C",
+                "/",
+            ],
+            input=payload,
+            capture_output=True,
+            check=False,
+            timeout=30,
+        )
+        assert result.returncode == 0, result.stderr.decode()
+
+    runtime._transfer = extract
+    runtime._upload()
