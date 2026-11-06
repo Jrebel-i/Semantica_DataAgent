@@ -1,6 +1,7 @@
 """DTB query executor; credentials are supplied by the caller for each instance."""
 
 import asyncio
+import re
 from typing import ClassVar
 from urllib.parse import quote
 
@@ -67,6 +68,17 @@ class DtbExecutor:
         return DtbExecutor(parameters["base_url"], token)
 
     async def _request(self, method, path, *, raw=False, **kwargs):
+        allowed = (method == "POST" and path == "/api/data-query/async-execute") or (
+            method == "GET"
+            and (
+                path == "/api/data-query/download"
+                or re.fullmatch(
+                    r"/api/data-query/(?:result|download)/[A-Za-z0-9_-]+", path
+                )
+            )
+        )
+        if not allowed:
+            raise ValueError("DTB 请求不在允许的接口白名单中")
         headers = {
             "token": self.token,
             "x-requested-with": "XMLHttpRequest",

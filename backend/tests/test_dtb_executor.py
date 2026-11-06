@@ -73,3 +73,33 @@ def test_dtb_recognizes_auth_and_query_errors():
                     await executor.poll("q")
 
     asyncio.run(run())
+
+
+def test_disallowed_dtb_requests_never_reach_transport():
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        return httpx.Response(200, json={"status": 200, "data": {}})
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            executor = DtbExecutor(
+                "http://dtb.test", "token", client=client, retry_delays=()
+            )
+            for method, path in [
+                ("DELETE", "/api/data-query/result/q"),
+                ("GET", "/api/data-query/async-execute"),
+                ("POST", "/api/data-map/table"),
+                ("GET", "/api/data-query/result/q/extra"),
+                ("GET", "/api/data-query/download-evil"),
+                ("GET", "/api/data-query/result/../admin"),
+                ("GET", "/api/data-query/result/%2e%2e"),
+                ("GET", "//evil.test/api/data-query/result/q"),
+                ("GET", "/api/data-query/result/q?x=y"),
+            ]:
+                with pytest.raises(ValueError):
+                    await executor._request(method, path)
+            assert calls == []
+
+    asyncio.run(run())
