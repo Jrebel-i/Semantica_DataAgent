@@ -94,7 +94,7 @@ export function ColumnLineage({
     source: `${r.upstream_table}.${r.upstream_field}`,
     target: `${r.downstream_table}.${r.downstream_field}`,
     type: "smoothstep",
-    label: `${r.task_id} (${r.task_type ?? "—"}) · ${r.evidence} · ${r.parse_status}`,
+    label: r.task_id,
   }));
   return (
     <>
