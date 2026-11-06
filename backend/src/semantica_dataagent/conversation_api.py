@@ -281,6 +281,37 @@ async def end_conversation(
     await asyncio.to_thread(end_session, conversation_id)
 
 
+@router.delete("/api/v1/conversations/{conversation_id}", status_code=204)
+def delete_conversation(
+    conversation_id: str, requester: Annotated[Requester, Depends(current_requester)]
+):
+    with sessions().begin() as db:
+        db.execute(text("BEGIN IMMEDIATE"))
+        conversation = db.get(Conversation, conversation_id)
+        if conversation is None or conversation.owner_id != requester.id:
+            raise HTTPException(404, "Conversation not found")
+        turns = db.query(Turn).filter_by(conversation_id=conversation_id)
+        if (
+            turns.filter_by(status="running").first()
+            or db.query(QueryExecution)
+            .filter_by(conversation_id=conversation_id, status="running")
+            .first()
+        ):
+            raise HTTPException(409, "Conversation is running")
+        turn_ids = [turn.id for turn in turns.all()]
+        db.query(TurnEvent).filter(TurnEvent.turn_id.in_(turn_ids)).delete(
+            synchronize_session=False
+        )
+        turns.delete(synchronize_session=False)
+        db.query(QueryExecution).filter_by(conversation_id=conversation_id).delete(
+            synchronize_session=False
+        )
+        db.delete(conversation)
+    workspace = agent_root() / conversation_id
+    if workspace.exists():
+        shutil.rmtree(workspace)
+
+
 @router.post("/api/v1/conversations/ask")
 async def ask(
     body: AskRequest,

@@ -19,7 +19,14 @@ from sqlglot.optimizer.scope import traverse_scope
 from . import knowledge
 from .auth import Requester, admin, current_requester
 from .crypto import decrypt
-from .db import PersonalDtbToken, QueryAudit, QueryExecution, sessions
+from .db import (
+    Conversation,
+    PersonalDtbToken,
+    QueryAudit,
+    QueryExecution,
+    Turn,
+    sessions,
+)
 from .dtb_executor import column_names
 from .plugins import ExecutorAuthenticationError, ExecutorError, configured
 
@@ -160,15 +167,34 @@ def _tables_and_partitions(tree):
 
 @router.post("/api/v1/queries/plan")
 async def plan(body: PlanInput, user: Annotated[Requester, Depends(current_requester)]):
+    return await _create_plan(body, user)
+
+
+async def _create_plan(body, user, conversation_id=None, turn_id=None):
     tree = _validate_sql(body.sql)
     tables = _tables_and_partitions(tree)
     plugin, config = _config()
     estimate = await plugin.bind(config, "").estimate(body.sql)
     query_id = uuid.uuid4().hex
     with sessions().begin() as db:
+        if conversation_id is not None:
+            conversation = db.get(Conversation, conversation_id)
+            turn = db.get(Turn, turn_id) if turn_id else None
+            if (
+                conversation is None
+                or conversation.owner_id != user.id
+                or turn is None
+                or turn.conversation_id != conversation_id
+                or turn.status != "running"
+            ):
+                raise ValueError("Active conversation turn not found")
         db.add(
             QueryExecution(
-                id=query_id, owner_id=user.id, sql=body.sql, status="planned"
+                id=query_id,
+                owner_id=user.id,
+                sql=body.sql,
+                status="planned",
+                conversation_id=conversation_id,
             )
         )
     return {
@@ -189,11 +215,24 @@ async def propose_query(sql: str) -> dict:
     stop and wait for the questioner to confirm execution.
     """
     from . import sql_validation
-    from .mcp_context import current_requester
+    from .mcp_context import current_conversation_id, current_requester, current_turn_id
 
     if sql_validation.validate_sql(sql, dialect="doris").get("status") != "pass":
         raise ValueError("SQL validation did not pass")
-    return await plan(PlanInput(sql=sql), current_requester())
+    conversation_id = current_conversation_id()
+    supplied_turn = current_turn_id()
+    if conversation_id and (
+        not supplied_turn
+        or not supplied_turn.isascii()
+        or not supplied_turn.isdecimal()
+    ):
+        raise ValueError("Active conversation turn not found")
+    return await _create_plan(
+        PlanInput(sql=sql),
+        current_requester(),
+        conversation_id,
+        int(supplied_turn) if supplied_turn else None,
+    )
 
 
 async def _execute(

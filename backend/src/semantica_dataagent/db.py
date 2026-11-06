@@ -197,6 +197,7 @@ class QueryExecution(Base):
     __tablename__ = "query_executions"
     id: Mapped[str] = mapped_column(primary_key=True, default=lambda: uuid.uuid4().hex)
     owner_id: Mapped[str]
+    conversation_id: Mapped[str | None]
     sql: Mapped[str]
     status: Mapped[str]
     rows: Mapped[str | None]
