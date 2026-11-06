@@ -12,17 +12,47 @@ from openpyxl import Workbook
 
 
 def check_dtb_pull(ctx):
-    book = Workbook()
-    book.active.append(
-        ["database_name", "table_name", "column_name", "column_type", "comment"]
-    )
-    book.active.append(["dimensions", "new_orders", "id", "string", "issue76 新订单"])
-    output = io.BytesIO()
-    book.save(output)
+    table_headers = [
+        "database_name",
+        "table_name",
+        "column_name",
+        "column_type",
+        "comment",
+    ]
+    table_rows = [
+        ["dimensions", "new_orders", "id", "string", "issue76 新订单"],
+        ["dimensions", "z_orders", "id", "string", "issue76 历史订单"],
+    ]
+
+    def table_workbook(rows, limit):
+        book = Workbook()
+        book.active.append(table_headers)
+        for row in rows[:limit]:
+            book.active.append(row)
+        output = io.BytesIO()
+        book.save(output)
+        return output.getvalue()
+
     tasks = json.dumps(
-        {"columns": [{"name": "task_name"}, {"name": "task_src"}], "data": []}
+        {
+            "columns": [{"name": "task_name"}, {"name": "task_src"}],
+            "totalCount": 0,
+            "data": [],
+        }
     ).encode()
-    state = {"failure": False, "queries": {}, "paths": []}
+    state = {
+        "failure": False,
+        "truncate": False,
+        "queries": {},
+        "default_limits": {},
+        "paths": [],
+    }
+
+    def last(key):
+        return state["queries"][key][-1]
+
+    def last_limit(key):
+        return state["default_limits"][key][-1]
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *_args):
@@ -51,13 +81,17 @@ def check_dtb_pull(ctx):
                 if "hive.dimensions" in sql
                 else "table"
             )
-            state["queries"][key] = sql
+            default_limit = request.get("defaultLimit")
             if (
-                request.get("defaultLimit") != 100
+                not isinstance(default_limit, int)
+                or isinstance(default_limit, bool)
+                or default_limit not in {100, 50000, 500000}
                 or request.get("dataSource") != "doris_ai"
             ):
                 self.send({}, status=400)
                 return
+            state["queries"].setdefault(key, []).append(sql)
+            state["default_limits"].setdefault(key, []).append(default_limit)
             self.send({"status": "200", "data": {"queryKey": key}})
 
         def do_GET(self):
@@ -103,7 +137,10 @@ def check_dtb_pull(ctx):
                         "data": {"tableList": tables, "total": 502},
                     }
                 )
-            elif parsed.path == "/api/data-map/detail/502/column":
+            elif parsed.path in {
+                "/api/data-map/detail/501/column",
+                "/api/data-map/detail/502/column",
+            }:
                 self.send(
                     {
                         "status": "200",
@@ -116,30 +153,42 @@ def check_dtb_pull(ctx):
                         },
                     }
                 )
-            elif parsed.path == "/api/data-map/detail/502":
+            elif parsed.path in {
+                "/api/data-map/detail/501",
+                "/api/data-map/detail/502",
+            }:
+                identity = parsed.path.rsplit("/", 1)[-1]
                 self.send(
                     {
                         "status": "200",
                         "data": {
-                            "tableId": 502,
-                            "tableName": "new_orders",
+                            "tableId": int(identity),
+                            "tableName": "z_orders"
+                            if identity == "501"
+                            else "new_orders",
                             "databaseName": "dimensions",
                         },
                     }
                 )
             elif self.path.startswith("/api/data-query/result/"):
-                self.send({"status": "200", "data": {"progress": 1.0}})
+                key = parsed.path.rsplit("/", 1)[-1]
+                data = {"progress": 1.0}
+                if state["truncate"]:
+                    data["totalCount"] = last_limit(key)
+                self.send({"status": "200", "data": data})
             elif self.path.startswith("/api/data-query/download/tables"):
-                sql = state["queries"]["tables"]
+                sql = last("tables")
                 rows = [["501", "z_orders"], ["502", "new_orders"]]
                 if "LIMIT 1" in sql:
                     rows = rows[1:]
+                rows = rows[: last_limit("tables")]
                 self.send(
                     {
                         "columns": [
                             {"name": "table_id", "type": "BIGINT"},
                             {"name": "table_name", "type": "VARCHAR"},
                         ],
+                        "totalCount": len(rows),
                         "data": rows,
                     }
                 )
@@ -147,14 +196,20 @@ def check_dtb_pull(ctx):
                 self.send(tasks)
             elif self.path.startswith("/api/data-query/download/stats"):
                 self.send(
-                    b"table_name,database_name,partition_name,records,rk\nnew_orders,dimensions,day_num=20261105,1,1\n",
+                    b"table_name,database_name,partition_name,records,rk\n"
+                    b"z_orders,dimensions,day_num=20261105,1,1\n"
+                    b"new_orders,dimensions,day_num=20261105,1,1\n",
                     "text/csv",
                 )
             elif self.path.startswith("/api/data-query/download/dimension"):
                 self.send(b"id,day_num\n1,20261105\n", "text/csv")
             elif self.path.startswith("/api/data-query/download/table"):
+                sql = last("table")
+                rows = table_rows
+                if "a.table_name IN" in sql:
+                    rows = [row for row in rows if f"'{row[1]}'" in sql]
                 self.send(
-                    output.getvalue(),
+                    table_workbook(rows, last_limit("table")),
                     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 )
             else:
@@ -195,33 +250,47 @@ def check_dtb_pull(ctx):
         )
         ctx.require(record["tables"] == 1, "pull did not record selected table")
         queries = state["queries"]
+        limits = state["default_limits"]
         ctx.require(
             set(queries) == {"tables", "task", "table", "stats", "dimension"},
             f"missing scoped queries: {list(queries)}",
         )
+        table_list_sql = queries["tables"][-1]
         ctx.require(
-            "database_name='dimensions'" in queries["tables"]
-            and "catalog_type='HIVE'" in queries["tables"]
-            and "status='在用'" in queries["tables"]
-            and "ORDER BY table_name LIMIT 1" in queries["tables"],
+            "database_name='dimensions'" in table_list_sql
+            and "catalog_type='HIVE'" in table_list_sql
+            and "status='在用'" in table_list_sql
+            and "ORDER BY table_name LIMIT 1" in table_list_sql,
             "table list query is not scoped or bounded",
         )
         for key in ("task", "table", "stats"):
             ctx.require(
-                "new_orders" in queries[key]
-                and "ods_" not in queries[key]
-                and "z_orders" not in queries[key],
+                all(
+                    "new_orders" in sql and "ods_" not in sql and "z_orders" not in sql
+                    for sql in queries[key]
+                ),
                 f"{key} query is not scoped to dimensions tables",
             )
         ctx.require(
-            "ods_" not in queries["dimension"]
-            and "z_orders" not in queries["dimension"],
+            all(
+                "ods_" not in sql and "z_orders" not in sql
+                for sql in queries["dimension"]
+            ),
             "dimension query uses a table outside the selected dimensions table",
         )
         ctx.require(
-            "WHERE day_num = '20261105'" in queries["dimension"]
-            and "LIMIT 100" in queries["dimension"],
+            "WHERE day_num = '20261105'" in queries["dimension"][-1]
+            and "LIMIT 100" in queries["dimension"][-1],
             "dimension query must restrict latest partition and rows",
+        )
+        ctx.require(
+            all(
+                limit == 500000
+                for key in ("tables", "task", "table", "stats")
+                for limit in limits[key]
+            )
+            and limits["dimension"] == [100],
+            f"scoped defaultLimit does not match query limits: {limits}",
         )
         ctx.require(
             not any("/detail/501" in path for path in state["paths"]),
@@ -231,14 +300,19 @@ def check_dtb_pull(ctx):
             not any("/api/data-map/table" in path for path in state["paths"]),
             "table list was paginated instead of read from metadata SQL",
         )
-        deadline = time.monotonic() + 300
-        while time.monotonic() < deadline:
-            result = ctx.rest.get(f"/api/v1/builds/{record['build_id']}")
-            result.raise_for_status()
-            build = result.json()
-            if build["status"] in ("succeeded", "failed", "cancelled"):
-                break
-            time.sleep(0.5)
+
+        def wait_build(record):
+            deadline = time.monotonic() + 300
+            while time.monotonic() < deadline:
+                result = ctx.rest.get(f"/api/v1/builds/{record['build_id']}")
+                result.raise_for_status()
+                build = result.json()
+                if build["status"] in ("succeeded", "failed", "cancelled"):
+                    return build
+                time.sleep(0.5)
+            raise AssertionError("incremental build timed out")
+
+        build = wait_build(record)
         ctx.require(
             build["status"] == "succeeded", f"incremental build failed: {build}"
         )
@@ -250,6 +324,19 @@ def check_dtb_pull(ctx):
         ctx.require(
             "new_orders" in result.text, f"new table absent from search: {result.text}"
         )
+
+        state["truncate"] = True
+        truncated = ctx.rest.post("/api/v1/pulls/dtb").json()
+        ctx.require(
+            truncated["status"] == "failed"
+            and "DTB result truncated" in truncated["error"],
+            f"truncated result was not rejected: {truncated}",
+        )
+        ctx.require(
+            git("rev-parse", "HEAD") == record["commit"],
+            "truncated pull changed source commit",
+        )
+        state["truncate"] = False
         state["failure"] = True
         failed = ctx.rest.post("/api/v1/pulls/dtb").json()
         ctx.require(
@@ -264,7 +351,7 @@ def check_dtb_pull(ctx):
         )
         listing = ctx.rest.get("/api/v1/pulls").json()
         ctx.require(
-            len(listing) >= 2 and listing[0]["status"] == "failed",
+            len(listing) >= 3 and listing[0]["status"] == "failed",
             "pull history missing",
         )
         return {"commit": record["commit"], "build": record["build_id"]}

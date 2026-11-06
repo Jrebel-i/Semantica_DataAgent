@@ -269,6 +269,86 @@ def test_query_download_does_not_download_failed_query():
         )
 
 
+def test_metadata_result_at_default_limit_is_rejected(monkeypatch):
+    from semantica_dataagent import dtb_puller as module
+
+    monkeypatch.setattr(module, "METADATA_ROW_LIMIT", 3, raising=False)
+    rows = [["1", "dim_a"], ["2", "dim_b"], ["3", "dim_c"], ["4", "dim_d"]]
+    limits = []
+
+    def reply(request):
+        if request.url.path.endswith("/async-execute"):
+            body = json.loads(request.content)
+            limits.append(body["defaultLimit"])
+            return httpx.Response(
+                200, json={"status": "200", "data": {"queryKey": "query-1"}}
+            )
+        if "/result/" in request.url.path:
+            count = min(len(rows), limits[0])
+            return httpx.Response(
+                200,
+                json={
+                    "status": "200",
+                    "data": {"progress": 1.0, "totalCount": count},
+                },
+            )
+        count = min(len(rows), limits[0])
+        return httpx.Response(
+            200,
+            content=json.dumps(
+                {
+                    "columns": [
+                        {"name": "table_id", "type": "BIGINT"},
+                        {"name": "table_name", "type": "VARCHAR"},
+                    ],
+                    "totalCount": count,
+                    "data": rows[:count],
+                }
+            ).encode(),
+        )
+
+    with (
+        httpx.Client(transport=httpx.MockTransport(reply)) as client,
+        pytest.raises(ValueError, match="DTB result truncated"),
+    ):
+        puller().list_tables(client, "http://dtb", "secret")
+    assert limits == [3]
+
+
+def test_download_rows_at_row_limit_are_rejected_without_result_total():
+    rows = [["1"], ["2"], ["3"]]
+
+    def reply(request):
+        if request.url.path.endswith("/async-execute"):
+            body = json.loads(request.content)
+            assert body["defaultLimit"] == 3
+            return httpx.Response(
+                200, json={"status": "200", "data": {"queryKey": "query-1"}}
+            )
+        if "/result/" in request.url.path:
+            return httpx.Response(
+                200, json={"status": "200", "data": {"progress": 1.0}}
+            )
+        return httpx.Response(
+            200,
+            content=json.dumps({"columns": [{"name": "id"}], "data": rows}).encode(),
+        )
+
+    with (
+        httpx.Client(transport=httpx.MockTransport(reply)) as client,
+        pytest.raises(ValueError, match="DTB result truncated"),
+    ):
+        puller().query_download(
+            client,
+            "http://dtb",
+            "secret",
+            "select 1",
+            "json",
+            poll_interval=0,
+            row_limit=3,
+        )
+
+
 def test_authentication_and_timeout_have_distinct_safe_errors():
     def unauthorized(request):
         return httpx.Response(401, text="secret response")
@@ -402,7 +482,11 @@ def test_dtb_request_allowlist_blocks_network_before_sending():
             (
                 "POST",
                 "/api/data-query/async-execute",
-                {"sql": "SELECT 1", "dataSource": "doris_ai", "defaultLimit": 101},
+                {
+                    "sql": "SELECT 1",
+                    "dataSource": "doris_ai",
+                    "defaultLimit": 500001,
+                },
             ),
         ]:
             with pytest.raises(ValueError):
@@ -429,9 +513,11 @@ def test_bounded_pull_selects_sorted_dimensions_tables_only():
         [{"columnName": "id", "columnType": "string"}],
     )
     sqls = []
+    row_limits = []
 
     def query(client, base, token, sql, format, **kwargs):
         sqls.append(sql)
+        row_limits.append(kwargs.get("row_limit"))
         if "ORDER BY table_name" in sql:
             assert "LIMIT 1" in sql
             return _metadata_payload([["503", "dim_a"]])
@@ -451,6 +537,10 @@ def test_bounded_pull_selects_sorted_dimensions_tables_only():
 
     assert len(sqls) == 5
     assert all("dim_a" in sql for sql in sqls[1:])
+    assert "output_table_name IN ('dim_a')" in sqls[1]
+    assert "a.table_name IN ('dim_a')" in sqls[2]
+    assert "LIMIT 100" in sqls[4]
+    assert row_limits == [500000, 500000, 500000, 500000, 100]
     assert all(
         "ods_" not in sql and "dm_orders" not in sql and "z_orders" not in sql
         for sql in sqls

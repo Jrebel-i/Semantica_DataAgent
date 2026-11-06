@@ -24,6 +24,7 @@ DIMENSION_TABLES_SQL = (
     "WHERE database_name='dimensions' AND catalog_type='HIVE' AND status='在用' "
     "ORDER BY table_name"
 )
+METADATA_ROW_LIMIT = 500000
 
 
 def _total_count(data):
@@ -44,6 +45,57 @@ def _total_count(data):
     return total
 
 
+def _result_count(data, key):
+    """Read an optional non-negative integer result count."""
+    value = data.get(key)
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        raise ValueError("Invalid DTB query result")  # noqa: TRY004
+    try:
+        count = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Invalid DTB query result") from exc
+    if count < 0:
+        raise ValueError("Invalid DTB query result")
+    return count
+
+
+def _downloaded_row_count(content, format):
+    """Count rows in a downloaded query result when no total was reported."""
+    if format == "json":
+        try:
+            payload = json.loads(content)
+            if not isinstance(payload, dict):
+                raise ValueError  # noqa: TRY004 - response contents
+            total = _result_count(payload, "totalCount")
+            if total is not None:
+                return total
+            rows = payload.get("data")
+            if not isinstance(rows, list):
+                raise ValueError  # noqa: TRY004 - response contents
+            return len(rows)
+        except (UnicodeError, TypeError, json.JSONDecodeError) as exc:
+            raise ValueError("Invalid DTB query result") from exc
+    if format == "csv":
+        try:
+            reader = csv.reader(io.StringIO(content.decode("utf-8-sig"), newline=""))
+            rows = list(reader)
+        except (UnicodeError, csv.Error) as exc:
+            raise ValueError("Invalid DTB query result") from exc
+        return max(len(rows) - 1, 0)
+    from openpyxl import load_workbook
+
+    try:
+        book = load_workbook(io.BytesIO(content), read_only=True, data_only=True)
+        try:
+            return max((book.active.max_row or 0) - 1, 0)
+        finally:
+            book.close()
+    except Exception as exc:
+        raise ValueError("Invalid DTB query result") from exc
+
+
 def checked_request(client, method, base_url, token, path, **kwargs):
     allowed_get = (
         path == "/api/data-map/table"
@@ -58,7 +110,7 @@ def checked_request(client, method, base_url, token, path, **kwargs):
             or body.get("dataSource") != "doris_ai"
             or not isinstance(body.get("defaultLimit"), int)
             or isinstance(body.get("defaultLimit"), bool)
-            or not 0 <= body["defaultLimit"] <= 100
+            or not 0 <= body["defaultLimit"] <= METADATA_ROW_LIMIT
         ):
             raise ValueError("DTB query is not permitted")
         try:
@@ -198,7 +250,9 @@ class DtbPuller:
         sql = DIMENSION_TABLES_SQL
         if maximum is not None:
             sql += f" LIMIT {maximum}"
-        raw = self.query_download(client, base_url, token, sql, "json")
+        raw = self.query_download(
+            client, base_url, token, sql, "json", row_limit=METADATA_ROW_LIMIT
+        )
         try:
             payload = json.loads(raw)
             if not isinstance(payload, dict):
@@ -268,9 +322,17 @@ class DtbPuller:
         poll_interval=2,
         max_polls=30,
         data_source="presto-emr",
+        row_limit=100,
+        allow_truncation=False,
     ):
         if format not in {"json", "xlsx", "csv"}:
             raise ValueError("Invalid DTB query format")
+        if (
+            isinstance(row_limit, bool)
+            or not isinstance(row_limit, int)
+            or not 1 <= row_limit <= METADATA_ROW_LIMIT
+        ):
+            raise ValueError("Invalid DTB query row limit")
         try:
             response = checked_request(
                 client,
@@ -282,7 +344,7 @@ class DtbPuller:
                     "env": 2,
                     "dataSource": "doris_ai",
                     "sql": sql,
-                    "defaultLimit": 100,
+                    "defaultLimit": row_limit,
                 },
             )
             if authentication_failed(response.status_code, None):
@@ -298,6 +360,7 @@ class DtbPuller:
             if not isinstance(key, str) or not key:
                 raise ValueError("DTB query missing key")
             key = quote(key, safe="")
+            total = None
             for attempt in range(max_polls):
                 result = self._get(
                     client, base_url, token, "/api/data-query/result/" + key
@@ -305,11 +368,14 @@ class DtbPuller:
                 if result.get("errorMessage"):
                     raise ValueError("DTB query failed")
                 if result.get("progress") == 1.0:
+                    total = _result_count(result, "totalCount")
                     break
                 if attempt + 1 < max_polls:
                     time.sleep(poll_interval)
             else:
                 raise ValueError("DTB query timed out")
+            if not allow_truncation and total is not None and total >= row_limit:
+                raise ValueError("DTB result truncated")
             response = checked_request(
                 client,
                 "GET",
@@ -331,6 +397,10 @@ class DtbPuller:
                         raise ValueError(
                             f"DTB authentication failed ({payload.get('status')})"
                         )
+            if not allow_truncation and total is None:
+                total = _downloaded_row_count(response.content, format)
+                if total >= row_limit:
+                    raise ValueError("DTB result truncated")
             return response.content
         except httpx.TimeoutException as exc:
             raise ValueError("DTB query timeout") from exc
@@ -362,10 +432,20 @@ class DtbPuller:
         )
         files = {
             "任务信息.json": self.query_download(
-                client, base_url, token, task_sql, "json"
+                client,
+                base_url,
+                token,
+                task_sql,
+                "json",
+                row_limit=METADATA_ROW_LIMIT,
             ),
             "表信息.xlsx": self.query_download(
-                client, base_url, token, table_sql, "xlsx"
+                client,
+                base_url,
+                token,
+                table_sql,
+                "xlsx",
+                row_limit=METADATA_ROW_LIMIT,
             ),
         }
         stats = {}
@@ -379,7 +459,14 @@ class DtbPuller:
                 "WHERE a.catalog_type='HIVE' AND a.status='在用' AND a.database_name='dimensions' "
                 f"AND a.table_name IN ({names})) tt) kk WHERE rk=1"
             )
-            raw = self.query_download(client, base_url, token, sql, "csv")
+            raw = self.query_download(
+                client,
+                base_url,
+                token,
+                sql,
+                "csv",
+                row_limit=METADATA_ROW_LIMIT,
+            )
             try:
                 reader = csv.DictReader(
                     io.StringIO(raw.decode("utf-8-sig"), newline="")
@@ -428,13 +515,16 @@ class DtbPuller:
                     raise ValueError("DTB partition field mismatch")
                 escaped = value.replace("'", "''")
                 where = f" WHERE {field} = '{escaped}'"
+            dimension_limit = 100 if maximum is not None else 50000
             content = self.query_download(
                 client,
                 base_url,
                 token,
-                f"SELECT * FROM hive.dimensions.{name}{where} LIMIT {100 if maximum is not None else 50000}",
+                f"SELECT * FROM hive.dimensions.{name}{where} LIMIT {dimension_limit}",
                 "csv",
                 data_source="doris_query",
+                row_limit=dimension_limit,
+                allow_truncation=True,
             )
             try:
                 reader = csv.DictReader(
@@ -449,9 +539,7 @@ class DtbPuller:
                     raise ValueError("Invalid DTB dimension rows")
             except (UnicodeError, csv.Error) as exc:
                 raise ValueError("Invalid DTB dimension download") from exc
-            if stat and len(rows) != min(
-                stat[2], 100 if maximum is not None else 50000
-            ):
+            if stat and len(rows) != min(stat[2], dimension_limit):
                 raise ValueError("DTB dimension row count mismatch")
             meta = {
                 "database": "dimensions",
@@ -469,7 +557,7 @@ class DtbPuller:
                 "partition_field": stat[0] if stat else None,
                 "latest_partition": stat[1] if stat else None,
                 "estimated_rows": stat[2] if stat else None,
-                "truncated": len(rows) >= 50000,
+                "truncated": len(rows) >= dimension_limit,
             }
             files[f"dimensions/{name}/meta.json"] = json.dumps(
                 meta, ensure_ascii=False
