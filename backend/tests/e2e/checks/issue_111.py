@@ -1,4 +1,4 @@
-"""Large canonical dimension build and observable field metadata checks.
+"""Large DTB dimension build and observable field metadata checks.
 
 Run this file with --generate DIRECTORY before invoking the e2e harness.
 """
@@ -72,6 +72,20 @@ def check_large_dimensions(ctx):
                     generation=ctx.generation,
                 )
             )
+        with driver.session() as session:
+            linked = session.run(
+                "MATCH (:SDAField {generation:$generation})-[r:HAS_VALUE]->(:SDADimensionValue {generation:$generation}) RETURN count(r) AS count",
+                generation=ctx.generation,
+            ).single()["count"]
+        ctx.require(linked == TABLES * FIELDS * VALUES, f"维度值关系数量错误：{linked}")
+        hits = ctx.mcp_call(
+            "lookup_dim_values",
+            {"table": "issue111.dim_119", "field": "field_11", "keyword": "value_0104"},
+        )
+        ctx.require(
+            any(hit["value"] == "value_0104" for hit in hits),
+            f"MCP 未检索到维度值：{hits}",
+        )
         ctx.require(count == TABLES * FIELDS * VALUES, f"维度值数量错误：{count}")
         ctx.require(len(fields) == TABLES * FIELDS, f"字段数量错误：{len(fields)}")
         ctx.require(
