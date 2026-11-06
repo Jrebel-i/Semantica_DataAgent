@@ -156,6 +156,8 @@ class FakeDtb:
             return "task"
         if "metadata_partition" in sql:
             return "stats"
+        if "SELECT MAX(" in sql:
+            return "max_" + re.search(r"hive\.dimensions\.([A-Za-z_][A-Za-z0-9_]*)", sql).group(1)
         match = re.search(r"hive\.dimensions\.([A-Za-z_][A-Za-z0-9_]*)", sql)
         if match:
             return "dim_" + match.group(1)
@@ -213,6 +215,10 @@ class FakeDtb:
             if limit:
                 lines = lines[: limit + 1]
             return "".join(lines).encode(), "text/csv"
+        if key.startswith("max_"):
+            name = key.removeprefix("max_")
+            value = self.dimension_rows.get(name, [["day_num"], [None]])[1][0]
+            return json.dumps({"columns": [{"name": "__partition"}], "data": [[value]]}).encode(), "application/json"
         if key.startswith("dim_"):
             name = key.removeprefix("dim_")
             rows = self.dimension_rows.get(name, [["id"], ["1"]])
@@ -478,7 +484,7 @@ def test_missing_partition_stats_fails_only_that_table():
     _, counts = run_fetch(fake, {"layer": "dimensions", "max_tables": 2})
 
     assert counts["failures"] == [
-        {"table": "dim_bad", "reason": "partition_stats_missing"}
+        {"table": "dim_bad", "reason": "missing_latest_partition"}
     ]
 
 
@@ -743,3 +749,15 @@ def test_dimension_json_preserves_special_values():
     assert counts["failures"] == []
     rows = [json.loads(line) for line in files["dimensions/dim_special/current/rows.jsonl"].splitlines()]
     assert rows == [{"value": v} for v in values]
+
+
+def test_missing_statistics_falls_back_to_latest_partition():
+    fake = FakeDtb(metadata_rows=[metadata_row(1, "dim_a", "day_num", 10001, "string")],
+                   stats=PARTITION_HEADER + "\n", dimension_rows={"dim_a": [["day_num"], ["20261105"]]})
+    files, counts = run_fetch(fake, {"layer": "dimensions", "max_tables": 1})
+    assert counts["failures"] == []
+    meta = json.loads(files["dimensions/dim_a/meta.json"])
+    assert meta["latest_partition"] == "20261105"
+    assert meta["estimated_rows"] is None
+    assert "WHERE day_num = '20261105'" in fake.sqls["dim_dim_a"][-1]
+    assert fake.limits["max_dim_a"] == [1]

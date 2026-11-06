@@ -513,13 +513,26 @@ class DtbPuller:
             field = partition_columns[0]["name"]
             if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", field):
                 raise TableFailure("invalid_partition_field")
-            if name not in stats:
-                raise TableFailure("partition_stats_missing")
-            if stat is None or stat["field"] != field:
-                raise TableFailure("partition_stats_field_mismatch")
-            escaped = stat["value"].replace("'", "''")
+            if stat is None:
+                raw = self.query_download(
+                    client, base_url, token,
+                    f"SELECT MAX({field}) AS __partition FROM hive.dimensions.{name}",
+                    "json", data_source="doris_query", row_limit=1, allow_truncation=True,
+                )
+                try:
+                    payload = json.loads(raw)
+                    value = payload["data"][0][0]
+                    if not isinstance(value, str) or not value:
+                        raise ValueError("Empty partition")
+                except (ValueError, TypeError, KeyError, IndexError) as exc:
+                    raise TableFailure("missing_latest_partition") from exc
+            else:
+                if stat["field"] != field:
+                    raise TableFailure("partition_stats_field_mismatch")
+                value = stat["value"]
+                estimated = stat["records"]
+            escaped = value.replace("'", "''")
             where = f" WHERE {field} = '{escaped}'"
-            estimated = stat["records"]
         elif stat is not None:
             raise TableFailure("partition_stats_field_mismatch")
         dimension_limit = 100 if maximum is not None else 50000
@@ -564,8 +577,8 @@ class DtbPuller:
                 for column in columns
             ],
             "record_count": len(rows),
-            "partition_field": stat["field"] if stat else None,
-            "latest_partition": stat["value"] if stat else None,
+            "partition_field": field if partition_columns else None,
+            "latest_partition": value if partition_columns else None,
             "estimated_rows": estimated,
             "truncated": len(rows) >= dimension_limit,
         }
