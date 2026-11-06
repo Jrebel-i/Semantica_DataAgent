@@ -19,6 +19,11 @@ from .dtb_auth import authentication_failed
 
 TASK_SQL = "select version_id,\nversion_code,message,committer,task_id,task_name,\n(case when task_type_id=1 then 'shell'\nwhen task_type_id=2 then 'merge onself'\nwhen task_type_id=3 then 'spark sql'\nelse '' end) as task_type\n,task_conf,task_src,project_name,upstream_tasks,output_table_name,a.create_time,a.modify_time\n from(\n    select *,rank() over(partition by task_id order by modify_time desc) rk  from mysql.data_tool_box_emr.task_version\n    where status!=1 and task_type_id!=4\n) a\nleft join  mysql.data_tool_box_emr.project b\non a.project_id=b.project_id\nwhere rk=1 and status=2"
 TABLE_SQL = "select a.*,b.column_name,b.seq_no,b.column_type,b.column_comment,b.column_business_comment from\n(\n    select table_id,table_name,database_name,create_time,modify_time,\n    comment,output_task_id,output_task_name,use_direction\n    from mysql.data_tool_box_emr.metadata_table where catalog_type='HIVE' and status='在用'\n) a\n left join mysql.data_tool_box_emr.metadata_column b on a.table_id=b.table_id"
+DIMENSION_TABLES_SQL = (
+    "SELECT table_id, table_name FROM mysql.data_tool_box_emr.metadata_table "
+    "WHERE database_name='dimensions' AND catalog_type='HIVE' AND status='在用' "
+    "ORDER BY table_name"
+)
 
 
 def _total_count(data):
@@ -173,8 +178,6 @@ class DtbPuller:
 
     @staticmethod
     def _dimension_name(table):
-        if table.get("databaseName") != "dimensions":
-            return None
         name = table.get("tableName")
         if not isinstance(name, str):
             raise ValueError(  # noqa: TRY004 - response contents, not an argument
@@ -185,18 +188,57 @@ class DtbPuller:
             raise ValueError("Invalid DTB dimension table name")
         return name
 
-    def list_tables(self, client, base_url, token):
-        rows = self._pages(
-            client,
-            base_url,
-            token,
-            "/api/data-map/table",
-            "tableList",
-            "tableId",
-            {},
-            500,
-        )
-        return [row for row in rows if self._dimension_name(row) is not None]
+    def list_tables(self, client, base_url, token, maximum=None):
+        if maximum is not None and (
+            isinstance(maximum, bool)
+            or not isinstance(maximum, int)
+            or not 1 <= maximum <= 100
+        ):
+            raise ValueError("Invalid pull scope")
+        sql = DIMENSION_TABLES_SQL
+        if maximum is not None:
+            sql += f" LIMIT {maximum}"
+        raw = self.query_download(client, base_url, token, sql, "json")
+        try:
+            payload = json.loads(raw)
+            if not isinstance(payload, dict):
+                raise ValueError("Invalid DTB dimension tables")  # noqa: TRY004
+            columns, rows = payload.get("columns"), payload.get("data")
+            if not isinstance(columns, list) or not isinstance(rows, list):
+                raise ValueError("Invalid DTB dimension tables")  # noqa: TRY004
+            positions = {}
+            for position, column in enumerate(columns):
+                if not isinstance(column, dict) or not isinstance(
+                    column.get("name"), str
+                ):
+                    raise ValueError(  # noqa: TRY004 - response contents
+                        "Invalid DTB dimension tables"
+                    )
+                positions[column["name"]] = position
+            if "table_id" not in positions or "table_name" not in positions:
+                raise ValueError("Invalid DTB dimension tables")
+            tables = []
+            for row in rows:
+                if not isinstance(row, list) or len(row) <= max(positions.values()):
+                    raise ValueError("Invalid DTB dimension tables")
+                identity = row[positions["table_id"]]
+                if (
+                    isinstance(identity, bool)
+                    or not isinstance(identity, (str, int))
+                    or not str(identity)
+                ):
+                    raise ValueError("Invalid DTB dimension tables")
+                table = {
+                    "tableId": identity,
+                    "tableName": row[positions["table_name"]],
+                }
+                self._dimension_name(table)
+                tables.append(table)
+            if maximum is not None and len(tables) > maximum:
+                raise ValueError("Invalid DTB dimension tables")
+            return tables
+        except (UnicodeError, TypeError, json.JSONDecodeError) as exc:
+            raise ValueError("Invalid DTB dimension tables") from exc
 
     def table_detail(self, client, base_url, token, table_id):
         endpoint = "/api/data-map/detail/" + quote(str(table_id), safe="")
@@ -310,9 +352,7 @@ class DtbPuller:
             )
         ):
             raise ValueError("Invalid pull scope")
-        tables = self.list_tables(client, base_url, token)
-        if maximum is not None:
-            tables = sorted(tables, key=self._dimension_name)[:maximum]
+        tables = self.list_tables(client, base_url, token, maximum)
         names = ",".join("'" + self._dimension_name(table) + "'" for table in tables)
         names = names or "''"
         task_sql = TASK_SQL + f" AND output_table_name IN ({names})"
@@ -374,8 +414,6 @@ class DtbPuller:
             except (UnicodeError, csv.Error, KeyError, TypeError) as exc:
                 raise ValueError("Invalid DTB partition statistics") from exc
         for table in tables:
-            if str(table.get("catalogType", "")).upper() != "HIVE":
-                continue
             name = self._dimension_name(table)
             _detail, columns = self.table_detail(
                 client, base_url, token, table["tableId"]

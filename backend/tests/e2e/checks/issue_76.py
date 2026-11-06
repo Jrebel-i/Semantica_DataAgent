@@ -41,7 +41,9 @@ def check_dtb_pull(ctx):
             request = json.loads(self.rfile.read(size))
             sql = request["sql"]
             key = (
-                "task"
+                "tables"
+                if "ORDER BY table_name" in sql
+                else "task"
                 if "task_version" in sql
                 else "stats"
                 if "metadata_partition" in sql
@@ -76,7 +78,6 @@ def check_dtb_pull(ctx):
                         {
                             "tableId": identity,
                             "tableName": f"ods_{identity}",
-                            "databaseName": "ods",
                             "catalogType": "HIVE",
                         }
                         for identity in range(1, 501)
@@ -86,13 +87,11 @@ def check_dtb_pull(ctx):
                         {
                             "tableId": 501,
                             "tableName": "z_orders",
-                            "databaseName": "dimensions",
                             "catalogType": "HIVE",
                         },
                         {
                             "tableId": 502,
                             "tableName": "new_orders",
-                            "databaseName": "dimensions",
                             "catalogType": "HIVE",
                         },
                     ]
@@ -130,6 +129,20 @@ def check_dtb_pull(ctx):
                 )
             elif self.path.startswith("/api/data-query/result/"):
                 self.send({"status": "200", "data": {"progress": 1.0}})
+            elif self.path.startswith("/api/data-query/download/tables"):
+                sql = state["queries"]["tables"]
+                rows = [["501", "z_orders"], ["502", "new_orders"]]
+                if "LIMIT 1" in sql:
+                    rows = rows[1:]
+                self.send(
+                    {
+                        "columns": [
+                            {"name": "table_id", "type": "BIGINT"},
+                            {"name": "table_name", "type": "VARCHAR"},
+                        ],
+                        "data": rows,
+                    }
+                )
             elif self.path.startswith("/api/data-query/download/task"):
                 self.send(tasks)
             elif self.path.startswith("/api/data-query/download/stats"):
@@ -183,8 +196,15 @@ def check_dtb_pull(ctx):
         ctx.require(record["tables"] == 1, "pull did not record selected table")
         queries = state["queries"]
         ctx.require(
-            set(queries) == {"task", "table", "stats", "dimension"},
+            set(queries) == {"tables", "task", "table", "stats", "dimension"},
             f"missing scoped queries: {list(queries)}",
+        )
+        ctx.require(
+            "database_name='dimensions'" in queries["tables"]
+            and "catalog_type='HIVE'" in queries["tables"]
+            and "status='在用'" in queries["tables"]
+            and "ORDER BY table_name LIMIT 1" in queries["tables"],
+            "table list query is not scoped or bounded",
         )
         for key in ("task", "table", "stats"):
             ctx.require(
@@ -206,6 +226,10 @@ def check_dtb_pull(ctx):
         ctx.require(
             not any("/detail/501" in path for path in state["paths"]),
             "unselected table was fetched",
+        )
+        ctx.require(
+            not any("/api/data-map/table" in path for path in state["paths"]),
+            "table list was paginated instead of read from metadata SQL",
         )
         deadline = time.monotonic() + 300
         while time.monotonic() < deadline:
