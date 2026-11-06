@@ -297,6 +297,22 @@ def test_partition_safety_and_execution(client, monkeypatch):
         assert response.status_code == 200, response.text
         plan = response.json()
         assert plan["estimated_rows"] is None
+        assert plan["execution_limit"] == 5
+        assert (
+            c.put(
+                "/api/v1/plugins/executor/dtb",
+                headers=headers,
+                json={
+                    "enabled": True,
+                    "parameters": {
+                        "base_url": base_url,
+                        "row_limit": 1,
+                        "download_limit": 50,
+                    },
+                },
+            ).status_code
+            == 200
+        )
         path = "/api/v1/queries/" + plan["id"]
         assert (
             c.post(path + "/execute", headers=headers, json={"limit": 1}).status_code
