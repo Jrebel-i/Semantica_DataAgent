@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 
 @pytest.fixture
 def client(tmp_path, monkeypatch):
+    monkeypatch.setenv("DATAAGENT_AGENT_MODE", "local")
     monkeypatch.setenv("DATAAGENT_DB_PATH", str(tmp_path / "app.db"))
     monkeypatch.setenv("DATAAGENT_ENCRYPTION_KEY", Fernet.generate_key().decode())
     from semantica_dataagent.app import app
@@ -147,6 +148,7 @@ def test_partition_safety_and_execution(client, monkeypatch):
         assert response.status_code == 200, response.text
         for sql in [
             "select * from shop.orders",
+            "select * from shop.orders where dt = '2025' for update",
             "select * from shop.orders where dt = '2025' or 1=1",
         ]:
             response = c.post(
@@ -209,3 +211,99 @@ def test_partition_safety_and_execution(client, monkeypatch):
         server.shutdown()
         thread.join()
         server.server_close()
+
+
+def test_interrupted_execution_preserves_audit(tmp_path, monkeypatch):
+    import multiprocessing
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from threading import Event, Thread
+
+    from semantica_dataagent import knowledge
+    from semantica_dataagent.app import app
+    from semantica_dataagent.cli import initialize
+
+    monkeypatch.setenv("DATAAGENT_AGENT_MODE", "local")
+    monkeypatch.setenv("DATAAGENT_DB_PATH", str(tmp_path / "crash.db"))
+    monkeypatch.setenv("DATAAGENT_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    monkeypatch.setattr(
+        knowledge,
+        "describe",
+        lambda **_: [
+            {
+                "database": "shop",
+                "name": "orders",
+                "fields": [{"name": "dt", "partition": True}],
+            }
+        ],
+    )
+    entered, release = Event(), Event()
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def do_POST(self):
+            entered.set()
+            release.wait(15)
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    token = initialize()
+    headers = {"Authorization": f"Bearer {token}"}
+    try:
+        with TestClient(app) as c:
+            assert (
+                c.put(
+                    "/api/v1/plugins/executor/dtb",
+                    headers=headers,
+                    json={
+                        "enabled": True,
+                        "parameters": {
+                            "base_url": f"http://127.0.0.1:{server.server_port}"
+                        },
+                    },
+                ).status_code
+                == 200
+            )
+            assert (
+                c.put(
+                    "/api/v1/me/dtb-token",
+                    headers=headers,
+                    json={"token": "crash-test"},
+                ).status_code
+                == 200
+            )
+            plan = c.post(
+                "/api/v1/queries/plan",
+                headers=headers,
+                json={"sql": "select * from shop.orders where dt = '2025'"},
+            ).json()
+        path = "/api/v1/queries/" + plan["id"]
+
+        def run():
+            with TestClient(app) as child:
+                child.post(path + "/execute", headers=headers, json={"limit": 1})
+
+        process = multiprocessing.get_context("fork").Process(target=run)
+        process.start()
+        try:
+            assert entered.wait(10), "execution did not reach DTB"
+            process.kill()
+            process.join(10)
+            assert not process.is_alive()
+        finally:
+            if process.is_alive():
+                process.kill()
+                process.join(10)
+        with TestClient(app) as c:
+            assert c.get(path, headers=headers).json()["status"] == "failed"
+            assert (
+                c.get("/api/v1/query-audit", headers=headers).json()[0]["status"]
+                == "interrupted"
+            )
+    finally:
+        release.set()
+        server.shutdown()
+        server.server_close()
+        thread.join()

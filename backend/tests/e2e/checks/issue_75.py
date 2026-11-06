@@ -114,6 +114,43 @@ def check_query_executor(ctx):
             require(ctx.rest.get(path + "/download"), 200).content == b"n\n1\n2\n",
             "download differs",
         )
+        other = require(
+            ctx.rest.post(
+                "/api/v1/tokens", json={"name": "e2e-query-user", "role": "user"}
+            ),
+            201,
+        ).json()["token"]
+        user_headers = {"Authorization": f"Bearer {other}"}
+        ctx.require(
+            require(
+                ctx.rest.get("/api/v1/me/dtb-token", headers=user_headers), 200
+            ).json()["configured"]
+            is False,
+            "credentials leaked across callers",
+        )
+        require(
+            ctx.rest.put(
+                "/api/v1/me/dtb-token", headers=user_headers, json={"token": "caller-b"}
+            ),
+            200,
+        )
+        response = require(
+            ctx.rest.post(
+                "/api/v1/queries/plan",
+                headers=user_headers,
+                json={"sql": "SELECT * FROM shop.orders WHERE dt = '2025-01-01'"},
+            ),
+            200,
+        )
+        other_path = "/api/v1/queries/" + response.json()["id"]
+        require(ctx.rest.get(other_path), 404)
+        require(
+            ctx.rest.post(
+                other_path + "/execute", headers=user_headers, json={"limit": 1}
+            ),
+            200,
+        )
+        ctx.require(calls[-1][0] == "caller-b", "executor used another caller token")
         for token, expected in [("expired", 401), ("slow", 504)]:
             require(ctx.rest.put("/api/v1/me/dtb-token", json={"token": token}), 200)
             response = require(

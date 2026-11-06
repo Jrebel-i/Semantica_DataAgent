@@ -43,11 +43,21 @@ from .scheduler import scheduler
 async def lifespan(application):
     from .agent_sandbox import cleanup_orphans
     from .conversation_api import cleanup_expired_sessions
-    from .db import Turn
+    from .db import QueryAudit, QueryExecution, Turn
 
     if os.environ.get("DATAAGENT_AGENT_MODE", "sandbox") != "local":
         await asyncio.to_thread(cleanup_orphans)
     with sessions().begin() as db:
+        db.execute(
+            update(QueryExecution)
+            .where(QueryExecution.status == "running")
+            .values(status="failed")
+        )
+        db.execute(
+            update(QueryAudit)
+            .where(QueryAudit.status == "running")
+            .values(status="interrupted")
+        )
         db.execute(
             update(Turn)
             .where(Turn.status == "running")
@@ -566,15 +576,13 @@ def build_detail(build_id: int, _: Annotated[str, Depends(current_user)]):
 
 
 from .dimension_api import lookup_dim_values
+from .personal_settings import router as personal_settings_router
+from .query_api import router as query_router
 from .sql_validation import find_join_path, validate_sql
 from .table_api import describe_tables, search_knowledge
 from .table_api import router as table_router
 from .task_api import get_lineage, read_task_sql
 from .task_api import router as task_router
-
-from .personal_settings import router as personal_settings_router
-
-from .query_api import router as query_router
 
 app.include_router(query_router)
 app.include_router(personal_settings_router)

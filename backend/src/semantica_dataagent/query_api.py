@@ -42,7 +42,7 @@ def _validate_sql(sql):
         raise HTTPException(422, "仅允许 SELECT 或 WITH 查询")
     tree = expressions[0]
     if any(
-        isinstance(node, (exp.DML, exp.DDL, exp.Command, exp.Into))
+        isinstance(node, (exp.DML, exp.DDL, exp.Command, exp.Into, exp.Lock))
         for node in tree.walk()
     ):
         raise HTTPException(422, "仅允许 SELECT 或 WITH 查询")
@@ -99,6 +99,8 @@ def _tables_and_partitions(tree):
             table = source[1]
             if not isinstance(table, exp.Table):
                 continue
+            if not isinstance(table.this, exp.Identifier) or table.catalog:
+                raise HTTPException(422, "不支持此表来源")
             name = ".".join(part for part in (table.db, table.name) if part).lower()
             matches = lookup.get(name, [])
             if len(matches) != 1:
@@ -148,10 +150,11 @@ def _tables_and_partitions(tree):
 
 
 @router.post("/api/v1/queries/plan")
-def plan(body: PlanInput, user: Annotated[Requester, Depends(current_requester)]):
+async def plan(body: PlanInput, user: Annotated[Requester, Depends(current_requester)]):
     tree = _validate_sql(body.sql)
     tables = _tables_and_partitions(tree)
-    _, config = _config()
+    plugin, config = _config()
+    estimate = await plugin.bind(config, "").estimate(body.sql)
     query_id = uuid.uuid4().hex
     with sessions().begin() as db:
         db.add(
@@ -164,8 +167,8 @@ def plan(body: PlanInput, user: Annotated[Requester, Depends(current_requester)]
         "sql": body.sql,
         "data_source": "doris_ai",
         "tables": tables,
-        "estimated_partitions": None,
-        "estimated_rows": None,
+        "estimated_partitions": estimate.get("partitions"),
+        "estimated_rows": estimate.get("rows"),
         "row_limit": config.get("row_limit", 1000),
     }
 
@@ -173,7 +176,8 @@ def plan(body: PlanInput, user: Annotated[Requester, Depends(current_requester)]
 async def _execute(
     query_id: str,
     body: ExecuteInput,
-    user: Annotated[Requester, Depends(current_requester)],
+    user: Requester,
+    audit_id: str,
 ):
     plugin, config = _config()
     if body.limit > config.get("row_limit", 1000):
@@ -231,6 +235,10 @@ async def _execute(
             row = db.get(QueryExecution, query_id)
             row.status = status
             row.elapsed_ms = int((time.monotonic() - started) * 1000)
+            record = db.get(QueryAudit, audit_id)
+            record.status = status
+            record.elapsed_ms = row.elapsed_ms
+            record.row_count = len(result["data"]) if status == "succeeded" else None
             if status == "succeeded":
                 row.rows = json.dumps(result, ensure_ascii=False)
                 row.row_count = len(result["data"])
@@ -249,9 +257,21 @@ async def execute(
             raise HTTPException(404, "查询不存在")
         sql = row.sql
     started = time.monotonic()
+    audit_id = uuid.uuid4().hex
+    with sessions().begin() as db:
+        db.add(
+            QueryAudit(
+                id=audit_id,
+                owner_id=user.id,
+                sql=sql,
+                status="running",
+                row_count=None,
+                elapsed_ms=0,
+            )
+        )
     status, count = "failed", None
     try:
-        result = await _execute(query_id, body, user)
+        result = await _execute(query_id, body, user, audit_id)
         status, count = "succeeded", result["row_count"]
         return result
     except HTTPException as exc:
@@ -259,15 +279,10 @@ async def execute(
         raise
     finally:
         with sessions().begin() as db:
-            db.add(
-                QueryAudit(
-                    owner_id=user.id,
-                    sql=sql,
-                    status=status,
-                    row_count=count,
-                    elapsed_ms=int((time.monotonic() - started) * 1000),
-                )
-            )
+            record = db.get(QueryAudit, audit_id)
+            record.status = status
+            record.row_count = count
+            record.elapsed_ms = int((time.monotonic() - started) * 1000)
 
 
 @router.get("/api/v1/query-audit")
@@ -323,9 +338,9 @@ async def download(
         key, token = row.query_key, decrypt(secret.encrypted_token)
     try:
         async with asyncio.timeout(config.get("timeout_seconds", 300)):
-            content, content_type = await plugin.__class__(
-                config["base_url"], token
-            ).download(key, format)
+            content, content_type = await plugin.bind(config, token).download(
+                key, format
+            )
     except DtbAuthenticationError as exc:
         raise HTTPException(401, str(exc)) from exc
     except (DtbError, TimeoutError) as exc:
