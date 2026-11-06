@@ -35,6 +35,8 @@ def check_session_runtime(ctx):
                     "ps",
                     "--filter",
                     "label=com.semantica-dataagent.agent=1",
+                    "--filter",
+                    f"label=com.semantica-dataagent.owner={ctx.runtime.server.pid}",
                     "--format",
                     "{{.Names}}",
                 ],
@@ -52,13 +54,16 @@ def check_session_runtime(ctx):
                         name,
                         "node",
                         "-e",
-                        "require('dns').resolve4('sda-relay', (e) => process.exit(e ? 0 : 1)); setTimeout(() => process.exit(0), 3000)",
+                        "require('dns').resolve4('sda-relay', (e) => { console.log(e ? 'DNS_BLOCKED' : 'DNS_ALLOWED'); process.exit(0) }); setTimeout(() => { console.log('DNS_BLOCKED'); process.exit(0) }, 3000)",
                     ],
                     capture_output=True,
+                    text=True,
                     check=False,
                     timeout=8,
                 )
-                if result.returncode:
+                if result.returncode or "DNS_" not in result.stdout:
+                    continue
+                if "DNS_ALLOWED" in result.stdout:
                     failures.append("会话容器可以执行 DNS 查询")
                 observed.set()
                 return

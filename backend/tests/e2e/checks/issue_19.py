@@ -52,6 +52,8 @@ def _check_agent(ctx, agent, provider_type, base_url, model):
                     "ps",
                     "--filter",
                     "label=com.semantica-dataagent.agent=1",
+                    "--filter",
+                    f"label=com.semantica-dataagent.owner={ctx.runtime.server.pid}",
                     "--format",
                     "{{.Image}}",
                 ],
