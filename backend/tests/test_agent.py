@@ -321,6 +321,81 @@ def test_confirmed_query_resumes_agent_and_respects_interpretation_setting(
     )
 
 
+def test_deleting_conversation_removes_its_query_results(client, monkeypatch):
+    from semantica_dataagent import agent_runner, knowledge, query_api, sql_validation
+    from semantica_dataagent.auth import Requester
+    from semantica_dataagent.db import Conversation, Token, Turn, sessions
+    from semantica_dataagent.mcp_context import bind_mcp_context
+
+    class Executor:
+        def bind(self, config, token):
+            return self
+
+        async def estimate(self, sql):
+            return {"partitions": None, "rows": None}
+
+        async def submit(self, sql, limit):
+            return "key"
+
+        async def wait(self, key):
+            return {"columns": ["value"], "data": [[123]]}
+
+    monkeypatch.setattr(knowledge, "describe", lambda **_: [])
+    monkeypatch.setattr(
+        sql_validation, "validate_sql", lambda *a, **kw: {"status": "pass"}
+    )
+    monkeypatch.setattr(query_api, "_config", lambda: (Executor(), {}))
+    runner = FakeRunner()
+    monkeypatch.setitem(agent_runner.RUNNERS, "pi", runner)
+    c, token = client
+    headers = {"Authorization": f"Bearer {token}"}
+    c.put("/api/v1/me/dtb-token", headers=headers, json={"token": "fake"})
+    with sessions().begin() as db:
+        owner = db.query(Token).first()
+        requester = Requester(id=owner.id, role=owner.role, token=token)
+        db.add(
+            Conversation(
+                id="conv-delete",
+                owner_id=owner.id,
+                title="q",
+                agent="pi",
+                provider_id="p",
+                model="m",
+            )
+        )
+        turn = Turn(
+            conversation_id="conv-delete",
+            sequence=1,
+            question="q",
+            status="running",
+            answer="",
+            sql="[]",
+            citations="[]",
+        )
+        db.add(turn)
+        db.flush()
+        turn_id = turn.id
+    with bind_mcp_context(requester, "conv-delete", str(turn_id)):
+        plan = asyncio.run(query_api.propose_query("SELECT 1"))
+    assert (
+        c.post(
+            f"/api/v1/queries/{plan['id']}/execute", headers=headers, json={}
+        ).status_code
+        == 200
+    )
+    with sessions().begin() as db:
+        db.get(Turn, turn_id).status = "completed"
+    assert c.get(f"/api/v1/queries/{plan['id']}", headers=headers).status_code == 200
+    assert (
+        c.delete("/api/v1/conversations/conv-delete", headers=headers).status_code
+        == 204
+    )
+    assert c.get(f"/api/v1/queries/{plan['id']}", headers=headers).status_code == 404
+    assert (
+        c.get("/api/v1/conversations/conv-delete", headers=headers).status_code == 404
+    )
+
+
 def test_pi_runner_reads_jsonl_records_past_the_default_stream_limit(tmp_path: Path):
     script = tmp_path / "fake-pi.py"
     script.write_text(
