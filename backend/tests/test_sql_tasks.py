@@ -1,3 +1,5 @@
+import pytest
+
 from semantica_dataagent.canonical import Record
 from semantica_dataagent.sql_tasks import SQLTaskParser
 
@@ -89,3 +91,63 @@ def test_source_table_names_exclude_join_aliases():
         ("raw.orders", "shop.orders"),
         ("raw.customers", "shop.orders"),
     }
+
+
+UNAVAILABLE_BRANCH_SCHEMA = {
+    "src.orders": ["id", "amount"],
+    "dst.merged": ["order_id", "total"],
+}
+
+
+def union_with_unavailable_branch():
+    return Record(
+        "task",
+        {
+            "name": "union_load",
+            "type": "spark",
+            "sql": (
+                "INSERT INTO dst.merged "
+                "SELECT * FROM src.orders "
+                "UNION ALL "
+                "SELECT * FROM src.orders_extra"
+            ),
+        },
+    )
+
+
+def test_column_lineage_internal_error_degrades_to_field_failure():
+    result = SQLTaskParser().parse(
+        union_with_unavailable_branch(), {"schema": UNAVAILABLE_BRANCH_SCHEMA}
+    )
+    assert result.status == "success"
+    assert set(result.edges) == {
+        ("src.orders", "dst.merged"),
+        ("src.orders_extra", "dst.merged"),
+    }
+    assert result.column_edges == []
+    assert result.column_status == "failed"
+    assert result.column_reason == "column_lineage_internal_error: IndexError"
+
+
+def test_column_lineage_internal_error_does_not_include_exception_message(monkeypatch):
+    from semantica_dataagent import column_lineage
+
+    def fail(*args, **kwargs):
+        raise RuntimeError("INSERT INTO secret_table SELECT * FROM secret_source")
+
+    monkeypatch.setattr(column_lineage, "resolve_columns", fail)
+    result = SQLTaskParser().parse(union_with_unavailable_branch(), {})
+    assert result.column_status == "failed"
+    assert result.column_reason == "column_lineage_internal_error: RuntimeError"
+    assert "secret" not in result.column_reason
+
+
+def test_column_lineage_keyboard_interrupt_is_not_swallowed(monkeypatch):
+    from semantica_dataagent import column_lineage
+
+    def interrupt(*args, **kwargs):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(column_lineage, "resolve_columns", interrupt)
+    with pytest.raises(KeyboardInterrupt):
+        SQLTaskParser().parse(union_with_unavailable_branch(), {})
