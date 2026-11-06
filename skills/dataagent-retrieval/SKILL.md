@@ -45,7 +45,7 @@ Use this skill when a question needs warehouse knowledge or SQL. Retrieve before
    before validation. If validation reports any table, field, or syntax error, rewrite the
    statement using only confirmed tables and fields and validate the replacement. Never
    present a statement that failed validation as final.
-8. Answer with the SQL and citations. Attach the exact `ref` values returned by the tools to each material claim. Do not invent, shorten, or rewrite reference ids.
+8. Answer with the SQL and citations. Attach the exact `ref` values returned by the tools to each material claim. End the final answer with a short `引用：` line listing every ref used; an answer built from tool results must not omit references. Do not invent, shorten, or rewrite reference ids.
 
 ## Evidence and safety
 
@@ -117,8 +117,9 @@ Keep the answer focused:
    `validate_sql`; saying that SQL was written or validated is not a substitute for
    pasting it.
 4. Summarize `validate_sql` results. Mention any weak/unsupported join and ambiguity.
-5. Cite each conclusion with the returned reference ids. If the knowledge base does not
-   support the question, say so and name the missing knowledge.
+5. Cite each conclusion with the returned reference ids and end with a `引用：` line that
+   lists every ref used. If the knowledge base does not support the question, say so and
+   name the missing knowledge.
 
 ## Corrections and knowledge gaps
 
