@@ -191,7 +191,9 @@ test("查询计划可确认执行，结果和下载显示在右侧面板", async
       messages={getMessages("zh")}
     />,
   );
-  expect(await screen.findByText("SELECT sales FROM shop.orders")).toBeTruthy();
+  expect(
+    (await screen.findAllByText("SELECT sales FROM shop.orders")).length,
+  ).toBeGreaterThan(0);
   expect(executed).toBe(false);
   fireEvent.click(screen.getByRole("button", { name: /执\s*行/ }));
   expect(await screen.findByText("销售结论")).toBeTruthy();

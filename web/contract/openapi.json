@@ -2452,6 +2452,66 @@
         "summary": "End Conversation"
       }
     },
+    "/api/v1/conversations/{conversation_id}/turns/{turn_id}/queries/{query_id}/execute": {
+      "post": {
+        "operationId": "confirm_query_api_v1_conversations__conversation_id__turns__turn_id__queries__query_id__execute_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "turn_id",
+            "required": true,
+            "schema": {
+              "title": "Turn Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "query_id",
+            "required": true,
+            "schema": {
+              "title": "Query Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Confirm Query"
+      }
+    },
     "/api/v1/corrections": {
       "get": {
         "operationId": "list_proposals_api_v1_corrections_get",
