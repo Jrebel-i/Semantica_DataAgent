@@ -454,8 +454,11 @@ def test_deleting_conversation_removes_its_query_results(client, monkeypatch):
         c.post(
             f"/api/v1/queries/{plan['id']}/execute", headers=headers, json={}
         ).status_code
-        == 200
+        == 403
     )
+    assert asyncio.run(
+        query_api.execute_for_turn(plan["id"], requester, "conv-delete", turn_id)
+    )["rows"] == [[123]]
     with sessions().begin() as db:
         db.get(Turn, turn_id).status = "completed"
     assert c.get(f"/api/v1/queries/{plan['id']}", headers=headers).status_code == 200
