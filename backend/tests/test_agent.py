@@ -297,6 +297,61 @@ def test_query_plan_stream_waits_for_confirmation_and_persists(client, monkeypat
     assert detail["turns"][0]["events"][0]["data"]["id"] == "plan-1"
 
 
+def test_agent_mcp_credential_is_bound_to_running_turn(client, monkeypatch):
+    from fastapi import HTTPException
+    from fastapi.security import HTTPAuthorizationCredentials
+
+    from semantica_dataagent import agent_runner
+    from semantica_dataagent.auth import authenticate_mcp
+
+    seen = []
+
+    class Runner:
+        agent_id = "pi"
+
+        def available(self):
+            return True
+
+        async def run(self, request):
+            credentials = HTTPAuthorizationCredentials(
+                scheme="Bearer", credentials=request.mcp_token
+            )
+            identity = authenticate_mcp(
+                credentials, request.conversation_id, str(request.turn_id)
+            )
+            seen.append(identity.id)
+            with pytest.raises(HTTPException):
+                authenticate_mcp(
+                    credentials, request.conversation_id, str(request.turn_id + 1)
+                )
+            yield AgentEvent(DONE, {"text": "ok", "sql": [], "citations": []})
+
+    monkeypatch.setitem(agent_runner.RUNNERS, "pi", Runner())
+    c, token = client
+    headers = {"Authorization": f"Bearer {token}"}
+    provider = c.post(
+        "/api/v1/providers",
+        headers=headers,
+        json={
+            "name": "Local",
+            "base_url": "http://127.0.0.1:3425",
+            "models": ["model"],
+        },
+    ).json()
+    response = c.post(
+        "/api/v1/conversations/ask",
+        headers=headers,
+        json={
+            "question": "问题",
+            "agent": "pi",
+            "provider_id": provider["id"],
+            "model": "model",
+        },
+    )
+    assert _sse(response.text)[-1][0] == "done"
+    assert seen
+
+
 @pytest.mark.parametrize("interpret", [True, False])
 def test_confirmed_query_resumes_agent_and_respects_interpretation_setting(
     client, monkeypatch, interpret
@@ -894,15 +949,21 @@ def test_ask_streams_events_persists_history_and_reuses_session(client, monkeypa
     assert runner.requests[0].session_id == conversation_id
     agent_token = runner.requests[0].mcp_token
     assert agent_token != admin_token
-    assert c.post(
-        "/api/v1/queries/plan",
-        headers={"Authorization": f"Bearer {agent_token}"},
-        json={"sql": "SELECT 1"},
-    ).status_code == 401
-    assert c.get(
-        f"/api/v1/conversations/{conversation_id}",
-        headers={"Authorization": f"Bearer {agent_token}"},
-    ).status_code == 401
+    assert (
+        c.post(
+            "/api/v1/queries/plan",
+            headers={"Authorization": f"Bearer {agent_token}"},
+            json={"sql": "SELECT 1"},
+        ).status_code
+        == 401
+    )
+    assert (
+        c.get(
+            f"/api/v1/conversations/{conversation_id}",
+            headers={"Authorization": f"Bearer {agent_token}"},
+        ).status_code
+        == 401
+    )
     assert runner.requests[0].mcp_url.endswith("/mcp/")
 
     detail = c.get(f"/api/v1/conversations/{conversation_id}", headers=headers)
