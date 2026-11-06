@@ -35,6 +35,9 @@ pi = "semantica_dataagent.pi_runner:PiRunner"
 claude = "semantica_dataagent.claude_runner:ClaudeRunner"
 codex = "semantica_dataagent.codex_runner:CodexRunner"
 
+[project.entry-points."semantica_dataagent.pullers"]
+dtb = "semantica_dataagent.dtb_puller:DtbPuller"
+
 [project.scripts]
 semantica-dataagent = "semantica_dataagent.cli:main"
 [dependency-groups]
