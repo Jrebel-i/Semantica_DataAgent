@@ -152,7 +152,8 @@ def check_online_clarification_selection_is_scoped_to_one_conversation(ctx):
                 "不计算金额、不使用金额或状态字段、不要 JOIN，也不要执行 SQL。"
                 "即使该表缺少金额字段或指标定义，也必须先给出可验证的 Hive SQL，"
                 "并在文字中说明这只是部分结果；不要只登记缺口或提交纠错。"
-                "最终回答请包含完整的 SQL 代码块，不要仅摘要已验证的 SQL。"
+                "最终回答必须以 ```hive 开头的完整 SQL 代码块给出 SQL；"
+                "不要只写“已交付/已校验 SQL”，也不要只摘要。"
             ),
         ]
     )
