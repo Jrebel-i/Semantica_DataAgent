@@ -126,6 +126,7 @@ def test_field_lineage_query_returns_upstream_task_and_evidence(monkeypatch):
     monkeypatch.setattr(task_api.knowledge, "read_graph", lambda _: object())
     monkeypatch.setattr(task_api.knowledge, "execute", lambda *args: [{"edge": edge}])
     result = task_api.get_lineage("dst.orders", column="order_id")
+    assert result, "字段血缘应包含上游字段"
     assert result[0]["upstream_field"] == "id"
     assert result[0]["task_id"] == "load"
     assert result[0]["evidence"] == "parsed"
