@@ -30,3 +30,34 @@ def test_frontend_serves_assets_without_hiding_api(tmp_path):
         client.get("/api/v1/missing", headers={"Accept": "text/html"}).status_code
         == 404
     )
+
+
+def test_pull_api_is_registered_before_frontend_mount(tmp_path):
+    import os
+    import subprocess
+    import sys
+
+    (tmp_path / "index.html").write_text("<html>frontend</html>")
+    code = """
+from semantica_dataagent.app import app
+routes = list(app.routes)
+pull = next(
+    i
+    for i, route in enumerate(routes)
+    if getattr(route, "path", None) == "/api/v1/pulls"
+)
+mount = next(
+    i
+    for i, route in enumerate(routes)
+    if getattr(route, "name", None) == "frontend"
+)
+assert pull < mount, (pull, mount)
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        check=False,
+        env={**os.environ, "DATAAGENT_STATIC_DIR": str(tmp_path)},
+    )
+    assert result.returncode == 0, result.stderr

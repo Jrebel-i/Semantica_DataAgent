@@ -138,3 +138,55 @@ def check_correction_submission(ctx):
         ),
         "submitted correction absent from review",
     )
+
+
+def check_pull_api_matches_workbench(ctx):
+    plugins = ctx.rest.get("/api/v1/plugins")
+    ctx.require(
+        plugins.status_code == 200,
+        f"plugins: {plugins.status_code} {plugins.text}",
+    )
+    puller = next(
+        (
+            plugin
+            for plugin in plugins.json()
+            if plugin.get("category") == "puller" and plugin.get("id") == "dtb"
+        ),
+        None,
+    )
+    ctx.require(puller is not None, "DTB puller plugin is not listed")
+    ctx.require(
+        {
+            "category",
+            "id",
+            "version",
+            "display_name",
+            "parameters_schema",
+            "enabled",
+            "parameters",
+        }
+        <= set(puller),
+        f"pull plugin shape changed: {sorted(puller)}",
+    )
+    pulls = ctx.rest.get("/api/v1/pulls")
+    ctx.require(
+        pulls.status_code == 200 and isinstance(pulls.json(), list),
+        f"pull history: {pulls.status_code} {pulls.text}",
+    )
+    for row in pulls.json():
+        ctx.require(
+            {
+                "id",
+                "status",
+                "started_at",
+                "finished_at",
+                "tables",
+                "tasks",
+                "error",
+                "commit",
+                "build_id",
+            }
+            <= set(row),
+            f"pull record shape changed: {sorted(row)}",
+        )
+    return {"dtb_puller_listed": True, "pulls": len(pulls.json())}

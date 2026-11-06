@@ -1053,10 +1053,6 @@ def mount_frontend(application: FastAPI, directory):
     )
 
 
-if static_dir := os.environ.get("DATAAGENT_STATIC_DIR"):
-    mount_frontend(app, static_dir)
-
-
 class PullView(BaseModel):
     id: int
     status: str
@@ -1090,3 +1086,7 @@ def list_pulls(_: Annotated[str, Depends(current_user)]):
             PullView.model_validate(row)
             for row in db.query(PullRecord).order_by(PullRecord.id.desc()).all()
         ]
+
+
+if static_dir := os.environ.get("DATAAGENT_STATIC_DIR"):
+    mount_frontend(app, static_dir)
