@@ -4,9 +4,9 @@ import httpx
 import pytest
 
 from semantica_dataagent.dtb_executor import (
-    DtbExecutor,
-    DtbError,
     DtbAuthenticationError,
+    DtbError,
+    DtbExecutor,
 )
 
 
@@ -64,7 +64,7 @@ def test_dtb_recognizes_auth_and_query_errors():
             ),
         ]:
             async with httpx.AsyncClient(
-                transport=httpx.MockTransport(lambda _: response)
+                transport=httpx.MockTransport(lambda _, response=response: response)
             ) as client:
                 executor = DtbExecutor(
                     "http://dtb.test", "token", client=client, retry_delays=()

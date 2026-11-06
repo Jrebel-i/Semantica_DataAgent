@@ -12,6 +12,7 @@ import { SourcePage } from "./SourcePage";
 import { Login } from "./Login";
 import { StatusPage, type Health } from "./StatusPage";
 import { TokensPage } from "./TokensPage";
+import { PersonalSettingsPage } from "./PersonalSettingsPage";
 import { McpAccessPage } from "./McpAccessPage";
 
 export function App() {
@@ -100,6 +101,10 @@ export function App() {
               { path: "/knowledge", label: t.knowledge },
               { path: "/search", label: t.searchDebug },
               { path: "/mcp-access", label: t.mcpAccess },
+              {
+                path: "/personal-settings",
+                label: lang === "zh" ? "个人设置" : "Personal settings",
+              },
               { path: "/knowledge-gaps", label: t.gapTitle },
               { path: "/builds", label: t.builds },
               ...(role === "admin"
@@ -159,6 +164,8 @@ export function App() {
             ) : (
               <Alert title={t.forbidden} type="warning" />
             )
+          ) : path === "/personal-settings" ? (
+            <PersonalSettingsPage token={token} />
           ) : path === "/search" ? (
             <SearchPage token={token} messages={t} />
           ) : path === "/mcp-access" ? (

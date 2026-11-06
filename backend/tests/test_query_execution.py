@@ -29,12 +29,16 @@ def test_personal_dtb_token_is_encrypted_and_never_echoed(client):
     response = c.get("/api/v1/me/dtb-token", headers=headers)
     assert response.status_code == 200, response.text
     assert response.json() == {"configured": True}
-    assert secret not in Path(os.environ["DATAAGENT_DB_PATH"]).read_bytes().decode("latin1")
+    assert secret not in Path(os.environ["DATAAGENT_DB_PATH"]).read_bytes().decode(
+        "latin1"
+    )
 
 
 def test_query_plan_rejects_non_select(client):
     c, headers = client
-    response = c.post("/api/v1/queries/plan", headers=headers, json={"sql": "DELETE FROM shop.orders"})
+    response = c.post(
+        "/api/v1/queries/plan", headers=headers, json={"sql": "DELETE FROM shop.orders"}
+    )
     assert response.status_code == 422, response.text
     assert "SELECT" in response.text
 
@@ -43,3 +47,28 @@ def test_query_endpoints_require_authentication(client):
     c, _ = client
     assert c.post("/api/v1/queries/plan", json={"sql": "SELECT 1"}).status_code == 401
     assert c.get("/api/v1/me/dtb-token").status_code == 401
+
+
+def test_personal_credentials_are_isolated_between_callers(client):
+    c, admin = client
+    user = c.post(
+        "/api/v1/tokens", headers=admin, json={"name": "other", "role": "user"}
+    ).json()["token"]
+    other = {"Authorization": f"Bearer {user}"}
+    assert (
+        c.put(
+            "/api/v1/me/dtb-token", headers=admin, json={"token": "admin-secret"}
+        ).status_code
+        == 200
+    )
+    assert c.get("/api/v1/me/dtb-token", headers=other).json() == {"configured": False}
+    assert (
+        c.put(
+            "/api/v1/me/dtb-token", headers=other, json={"token": "other-secret"}
+        ).status_code
+        == 200
+    )
+    assert c.put("/api/v1/me/dtb-token", headers=admin, json={"token": ""}).json() == {
+        "configured": False
+    }
+    assert c.get("/api/v1/me/dtb-token", headers=other).json() == {"configured": True}

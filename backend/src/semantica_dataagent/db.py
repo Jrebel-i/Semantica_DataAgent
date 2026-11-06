@@ -185,3 +185,9 @@ class MetadataOverride(Base):
     __tablename__ = "metadata_overrides"
     target: Mapped[str] = mapped_column(primary_key=True)
     comment: Mapped[str]
+
+
+class PersonalDtbToken(Base):
+    __tablename__ = "personal_dtb_tokens"
+    owner_id: Mapped[str] = mapped_column(primary_key=True)
+    encrypted_token: Mapped[str]

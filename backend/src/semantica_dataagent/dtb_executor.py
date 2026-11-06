@@ -1,6 +1,7 @@
 """DTB query executor; credentials are supplied by the caller for each instance."""
 
 import asyncio
+from typing import ClassVar
 from urllib.parse import quote
 
 import httpx
@@ -18,7 +19,7 @@ class DtbExecutor:
     id = "dtb"
     version = "1.0"
     display_name = "DTB"
-    parameters_schema = {
+    parameters_schema: ClassVar[dict] = {
         "type": "object",
         "properties": {
             "base_url": {"type": "string", "format": "uri", "title": "DTB 地址"}

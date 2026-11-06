@@ -572,6 +572,9 @@ from .table_api import router as table_router
 from .task_api import get_lineage, read_task_sql
 from .task_api import router as task_router
 
+from .personal_settings import router as personal_settings_router
+
+app.include_router(personal_settings_router)
 app.include_router(table_router)
 app.include_router(task_router)
 
