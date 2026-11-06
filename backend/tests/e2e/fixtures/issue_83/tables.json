@@ -1,0 +1,22 @@
+[
+  {
+    "database": "src",
+    "name": "orders",
+    "comment": "orders"
+  },
+  {
+    "database": "dst",
+    "name": "orders",
+    "comment": "orders"
+  },
+  {
+    "database": "stage",
+    "name": "orders",
+    "comment": "orders"
+  },
+  {
+    "database": "report",
+    "name": "orders",
+    "comment": "orders"
+  }
+]
