@@ -75,7 +75,7 @@ def _downloaded_row_count(content, format):
             if not isinstance(rows, list):
                 raise ValueError  # noqa: TRY004 - response contents
             return len(rows)
-        except (UnicodeError, TypeError, json.JSONDecodeError) as exc:
+        except (UnicodeError, TypeError, ValueError) as exc:
             raise ValueError("Invalid DTB query result") from exc
     if format == "csv":
         try:
