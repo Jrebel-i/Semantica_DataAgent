@@ -564,6 +564,34 @@ def test_metadata_malformed_falls_back_to_knowledge(client, table_metadata):
         fake.close()
 
 
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        {"columns": ["other"], "data": [["dt=2026-08-31"]]},
+        {"columns": ["partition_name"], "data": [["dt=2026-08-31", "extra"]]},
+        {"columns": [], "data": []},
+    ],
+)
+def test_metadata_format_error_falls_back_to_knowledge(
+    client, table_metadata, metadata
+):
+    fake = FakeDtb(metadata=metadata).start()
+    try:
+        configure_executor(client, fake.url)
+        set_token(client, "caller-token")
+        result = call(
+            client,
+            "sample_table_data",
+            {"table": "shop.orders", "columns": ["id"]},
+        )
+        assert not result.isError, result.model_dump()
+        assert result.structuredContent["partition"] == [
+            {"field": "dt", "value": "2025-01-03"}
+        ]
+    finally:
+        fake.close()
+
+
 def test_metadata_malformed_without_knowledge_is_unavailable(client, fact_metadata):
     fake = FakeDtb(
         metadata={
