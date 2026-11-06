@@ -183,6 +183,9 @@ test("查询计划可确认执行，结果和下载显示在右侧面板", async
         );
       }
       if (url.startsWith("/api/v1/tables?")) return json([table]);
+      if (url.startsWith("/api/v1/queries/query-81/download?")) {
+        return new Response("download", { status: 200 });
+      }
       return new Response("", { status: 404 });
     },
   );
@@ -215,6 +218,31 @@ test("查询计划可确认执行，结果和下载显示在右侧面板", async
   expect(screen.getByRole("button", { name: "CSV" })).toBeTruthy();
   expect(screen.getByRole("button", { name: "Excel" })).toBeTruthy();
   expect(screen.getByRole("button", { name: "JSON" })).toBeTruthy();
+  vi.stubGlobal(
+    "URL",
+    Object.assign(URL, {
+      createObjectURL: vi.fn(() => "blob:test"),
+      revokeObjectURL: vi.fn(),
+    }),
+  );
+  vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+  for (const label of ["CSV", "Excel", "JSON"])
+    fireEvent.click(screen.getByRole("button", { name: label }));
+  await waitFor(() => {
+    const downloads = fetcher.mock.calls.filter(([input]) =>
+      String(input).includes("/download?format="),
+    );
+    expect(
+      downloads.map(([input]) => String(input).split("=").at(-1)).sort(),
+    ).toEqual(["csv", "json", "xlsx"]);
+    expect(
+      downloads.every(
+        ([, init]) =>
+          (init?.headers as Record<string, string>).Authorization ===
+          "Bearer personal-token",
+      ),
+    ).toBe(true);
+  });
 });
 
 test("streams tools and text, copies SQL, and opens table and document citations", async () => {
