@@ -3,10 +3,12 @@
 import io
 import json
 import re
+import shutil
 import subprocess
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from urllib.parse import urlsplit
 
 from openpyxl import Workbook
@@ -280,6 +282,26 @@ def check_dtb_pull(ctx):
             .decode()
             .strip()
         )
+        fixture = Path(__file__).resolve().parents[2] / "fixtures" / "dtb_source"
+        shutil.copytree(
+            fixture / "dtb" / "20260202T000000Z-bbbb",
+            ctx.source_dir / "dtb",
+            dirs_exist_ok=True,
+        )
+        shutil.copytree(
+            fixture / "dimensions", ctx.source_dir / "dimensions", dirs_exist_ok=True
+        )
+        git("add", "dtb", "dimensions")
+        git(
+            "-c",
+            "user.name=E2E",
+            "-c",
+            "user.email=e2e@example.invalid",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "准备旧快照",
+        )
         before = git("rev-parse", "HEAD")
         base_parameters = {
             "url": f"http://127.0.0.1:{server.server_port}",
@@ -412,6 +434,14 @@ def check_dtb_pull(ctx):
         result.raise_for_status()
         ctx.require(
             "new_orders" in result.text, f"new table absent from search: {result.text}"
+        )
+
+        dimension_hits = ctx.mcp_call(
+            "lookup_dim_values", {"table": "dimensions.new_orders", "keyword": "quoted"}
+        )
+        ctx.require(
+            'quoted "value"' in json.dumps(dimension_hits, ensure_ascii=False),
+            f"pulled dimension value absent: {dimension_hits}",
         )
 
         state["queries"].clear()
