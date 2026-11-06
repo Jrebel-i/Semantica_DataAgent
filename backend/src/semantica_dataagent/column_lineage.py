@@ -4,6 +4,7 @@ import sqlglot
 from sqlglot import exp
 from sqlglot.lineage import lineage
 from sqlglot.optimizer.qualify import qualify
+from sqlglot.optimizer.scope import build_scope
 
 from .sql_tasks import table_name
 
@@ -79,11 +80,21 @@ def resolve_columns(sql, dialect, tables):
             not c for c in target_columns
         ):
             raise ValueError(f"Cannot map projections to fields of {destination}")
+        scope = build_scope(query)
+        if scope is None:
+            raise ValueError("Cannot build SQL scope")
         for projection, target_column in zip(projections, target_columns, strict=True):
             name = projection.alias_or_name
             if not name:
                 raise ValueError("Projection has no name")
-            root = lineage(name, query, schema=schema, dialect=dialect)
+            root = lineage(
+                name,
+                query,
+                scope=scope,
+                dialect=dialect,
+                copy=False,
+                trim_selects=False,
+            )
             for node in root.walk():
                 if isinstance(node.expression, exp.Table):
                     source_column = sqlglot.parse_one(
