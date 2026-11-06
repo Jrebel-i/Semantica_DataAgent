@@ -194,16 +194,13 @@ class DtbAdapter:
             return snapshot
         if not parameters.get("latest", True):
             raise ValueError("snapshot is required when latest is false")
-        if (root / "任务信息.json").is_file():
-            return root
         candidates = sorted(
             path
             for path in root.iterdir()
             if path.is_dir() and (path / "任务信息.json").is_file()
         )
-        if not candidates:
-            raise ValueError(f"No DTB snapshot found under {root}")
-        stats["snapshot_directories"] = len(candidates)
+        if candidates:
+            stats["snapshot_directories"] = len(candidates)
         marked = []
         for candidate in candidates:
             manifest = candidate / "pull-manifest.json"
@@ -219,7 +216,13 @@ class DtbAdapter:
                 except (OSError, ValueError, KeyError, TypeError) as exc:
                     raise ValueError("Invalid pull snapshot manifest") from exc
                 marked.append((published, candidate.name, candidate))
-        return max(marked)[2] if marked else candidates[-1]
+        if marked:
+            return max(marked)[2]
+        if (root / "任务信息.json").is_file():
+            return root
+        if candidates:
+            return candidates[-1]
+        raise ValueError(f"No DTB snapshot found under {root}")
 
     @staticmethod
     def _hash(path, base, hashes):
