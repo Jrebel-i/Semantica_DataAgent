@@ -144,6 +144,11 @@ def check_online_query_confirmation(ctx):
         info = next(data for name, data in initial if name == "conversation")
         plan = plan_events[0]
         path = f"/api/v1/conversations/{info['conversation_id']}/turns/{info['turn_id']}/queries/{plan['id']}/execute"
+        direct = ctx.rest.post(f"/api/v1/queries/{plan['id']}/execute", json={})
+        ctx.require(
+            direct.status_code == 403 and not executions(),
+            "online query bypassed conversation confirmation",
+        )
         other = ctx.rest.post(
             "/api/v1/tokens", json={"name": "issue-81-other", "role": "user"}
         )
