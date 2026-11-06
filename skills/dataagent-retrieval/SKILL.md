@@ -112,6 +112,10 @@ strength, or two documents define the same metric differently, stop and call
 
 ## Answer shape
 
+For local MCP retrieval, call `execute_query` with SQL to obtain a plan, show it to the user,
+and wait for their explicit confirmation before calling it again with the confirmation id.
+Never confirm execution on the user's behalf; download links require the caller's bearer token.
+
 Keep the answer focused:
 
 1. State the chosen definition and scope, with document/table references.
