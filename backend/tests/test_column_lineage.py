@@ -69,3 +69,20 @@ def test_merge_onself_resolves_each_field_to_itself():
         ("dst.orders", "order_id", "dst.orders", "order_id"),
         ("dst.orders", "total", "dst.orders", "total"),
     }
+
+
+def test_shell_resolves_jdbc_view_columns_to_physical_source():
+    script = """
+create_temp_view="CREATE TEMPORARY VIEW v USING org.apache.spark.sql.jdbc OPTIONS (dbtable 'src.orders')"
+query="INSERT INTO dst.orders SELECT id AS order_id, amount AS total FROM v"
+submit_sql_and_wait "$create_temp_view"
+submit_sql_and_wait "$query"
+"""
+    result = DtbTaskParser().parse(
+        Record("task", {"name": "jdbc", "type": "shell", "sql": script}),
+        {"schema": SCHEMA},
+    )
+    assert edges(result) == {
+        ("src.orders", "id", "dst.orders", "order_id"),
+        ("src.orders", "amount", "dst.orders", "total"),
+    }

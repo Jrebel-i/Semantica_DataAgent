@@ -4,6 +4,9 @@ import json
 import re
 from typing import ClassVar
 
+import sqlglot
+from sqlglot import exp
+
 from .canonical import Record
 from .plugins import ParseResult
 from .sql_tasks import SQLTaskParser
@@ -91,7 +94,25 @@ def _expand(text, assignments, cache):
     return _VARIABLE.sub(replace, text)
 
 
-def _parse_sql(sql, name, parameters):
+def _parse_sql(sql, name, parameters, views):
+    if views:
+        try:
+            statements = sqlglot.parse(sql, read="spark")
+            for statement in statements:
+                if statement is None:
+                    continue
+                for table in statement.find_all(exp.Table):
+                    if table_name := views.get(table.name):
+                        replacement = sqlglot.to_table(table_name)
+                        replacement.set(
+                            "alias",
+                            table.args.get("alias")
+                            or exp.TableAlias(this=exp.to_identifier(table.name)),
+                        )
+                        table.replace(replacement)
+            sql = "; ".join(s.sql(dialect="spark") for s in statements if s is not None)
+        except sqlglot.errors.SqlglotError:
+            pass
     task = Record(
         "task",
         {"name": name, "type": "spark", "dialect": "spark", "sql": sql},
@@ -240,7 +261,7 @@ class DtbTaskParser:
                 continue
             if _TEMP_VIEW.search(sql) and not _WRITE.search(sql) and _dbtables(sql):
                 continue
-            parsed = _parse_sql(sql, name, parameters)
+            parsed = _parse_sql(sql, name, parameters, views)
             if parsed.status == "success":
                 column_edges.update(parsed.column_edges or [])
                 if parsed.column_status == "failed":
@@ -248,7 +269,7 @@ class DtbTaskParser:
                 if _add_sql(parsed, reads, writes, edges, views):
                     parsed_reasons.add("livy")
                 continue
-            parsed = _parse_sql(_normalize_sql(sql), name, parameters)
+            parsed = _parse_sql(_normalize_sql(sql), name, parameters, views)
             if parsed.status == "success":
                 column_edges.update(parsed.column_edges or [])
                 if parsed.column_status == "failed":
@@ -262,7 +283,7 @@ class DtbTaskParser:
             sql = _submission_sql(match, assignments, cache, unresolved)
             if not sql or _SKIP_SQL.match(_normalize_sql(sql)):
                 continue
-            parsed = _parse_sql(sql, name, parameters)
+            parsed = _parse_sql(sql, name, parameters, views)
             if parsed.status == "success":
                 column_edges.update(parsed.column_edges or [])
                 if parsed.column_status == "failed":
@@ -270,7 +291,7 @@ class DtbTaskParser:
                 if _add_sql(parsed, reads, writes, edges, views):
                     parsed_reasons.add("beeline")
             else:
-                parsed = _parse_sql(_normalize_sql(sql), name, parameters)
+                parsed = _parse_sql(_normalize_sql(sql), name, parameters, views)
                 if parsed.status == "success":
                     if _add_sql(parsed, reads, writes, edges, views):
                         parsed_reasons.add("beeline")
