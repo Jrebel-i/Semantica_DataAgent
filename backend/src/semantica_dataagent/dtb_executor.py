@@ -71,6 +71,11 @@ class DtbExecutor:
                 "default": 1800,
                 "title": "查询确认有效期（秒）",
             },
+            "interpret_results": {
+                "type": "boolean",
+                "default": True,
+                "title": "允许 agent 解读查询结果",
+            },
         },
         "required": ["base_url"],
         "additionalProperties": False,

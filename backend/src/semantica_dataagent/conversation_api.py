@@ -19,7 +19,15 @@ from sqlalchemy import func, text
 from .agent_runner import DONE, ERROR, AgentEvent, AgentTurnRequest, get_runner
 from .api_time import UtcDatetime
 from .auth import Requester, current_requester
-from .db import Conversation, Provider, Setting, Turn, TurnEvent, sessions
+from .db import (
+    Conversation,
+    Provider,
+    QueryExecution,
+    Setting,
+    Turn,
+    TurnEvent,
+    sessions,
+)
 from .provider_api import provider_config
 
 router = APIRouter()
@@ -171,7 +179,12 @@ def _record_event(turn_id: int, seq: int, event: AgentEvent) -> None:
                 turn_id=turn_id,
                 seq=seq,
                 type=event.type,
-                data=json.dumps(_summarize(event.data), ensure_ascii=False),
+                data=json.dumps(
+                    event.data
+                    if event.type in {"query_plan", "query_result"}
+                    else _summarize(event.data),
+                    ensure_ascii=False,
+                ),
             )
         )
 
@@ -378,17 +391,112 @@ async def ask(
     )
 
 
+@router.post(
+    "/api/v1/conversations/{conversation_id}/turns/{turn_id}/queries/{query_id}/execute"
+)
+async def confirm_query(
+    conversation_id: str,
+    turn_id: int,
+    query_id: str,
+    request: Request,
+    requester: Annotated[Requester, Depends(current_requester)],
+):
+    from .query_api import ExecuteInput, _config, execute
+
+    with sessions().begin() as db:
+        db.execute(text("BEGIN IMMEDIATE"))
+        conversation = db.get(Conversation, conversation_id)
+        turn = db.get(Turn, turn_id)
+        if (
+            conversation is None
+            or conversation.owner_id != requester.id
+            or turn is None
+            or turn.conversation_id != conversation_id
+        ):
+            raise HTTPException(404, "Conversation not found")
+        if turn.status != "awaiting_confirmation":
+            raise HTTPException(409, "查询不在等待确认状态")
+        plans = db.query(TurnEvent).filter_by(turn_id=turn_id, type="query_plan").all()
+        if not any(json.loads(event.data).get("id") == query_id for event in plans):
+            raise HTTPException(404, "查询计划不存在")
+        runner = get_runner(conversation.agent)
+        provider = db.get(Provider, conversation.provider_id)
+        if runner is None or not runner.available() or provider is None:
+            raise HTTPException(503, "Agent runtime is unavailable")
+        provider_settings = provider_config(provider)
+        model = conversation.model
+        seq = (
+            db.query(func.max(TurnEvent.seq)).filter_by(turn_id=turn_id).scalar() or 0
+        ) + 1
+        turn.status = "running"
+        turn.finished_at = None
+    try:
+        result = await execute(query_id, ExecuteInput(), requester)
+        _, config = _config()
+        with sessions()() as db:
+            saved = db.get(QueryExecution, query_id)
+            full = json.loads(saved.rows)
+        agent_input = {
+            "status": "executed",
+            "row_count": result["row_count"],
+            "columns": result["columns"],
+        }
+        if config.get("interpret_results", True):
+            agent_input["rows"] = full["data"][:50]
+        prompt = "查询已执行，请根据以下结果信息给出结论：\n" + json.dumps(
+            agent_input, ensure_ascii=False
+        )
+        event = AgentEvent("query_result", result)
+        _record_event(turn_id, seq, event)
+    except Exception:
+        with sessions().begin() as db:
+            turn = db.get(Turn, turn_id)
+            saved = db.get(QueryExecution, query_id)
+            turn.status = (
+                "awaiting_confirmation"
+                if saved and saved.status == "planned"
+                else "failed"
+            )
+        raise
+    run_request = AgentTurnRequest(
+        conversation_id=conversation_id,
+        prompt=prompt,
+        session_id=conversation_id,
+        workspace=agent_root() / conversation_id,
+        provider=provider_settings,
+        model=model,
+        mcp_url=public_base_url() + "/mcp/",
+        mcp_token=requester.token,
+        turn_id=turn_id,
+    )
+
+    async def resumed():
+        yield _sse(
+            "query_result",
+            {"conversation_id": conversation_id, "turn_id": turn_id, **result},
+        )
+        async for chunk in _stream(
+            run_request, runner, turn_id, conversation_id, request, seq + 1, False
+        ):
+            yield chunk
+
+    return StreamingResponse(resumed(), media_type="text/event-stream")
+
+
 async def _stream(
     run_request: AgentTurnRequest,
     runner,
     turn_id: int,
     conversation_id: str,
     request: Request,
+    start_seq: int = 0,
+    include_conversation: bool = True,
 ) -> AsyncIterator[str]:
-    yield _sse(
-        "conversation",
-        {"conversation_id": conversation_id, "turn_id": turn_id},
-    )
+    if include_conversation:
+        yield _sse(
+            "conversation",
+            {"conversation_id": conversation_id, "turn_id": turn_id},
+        )
     from .telemetry import submit, trace_id
 
     observation_id = trace_id(conversation_id, turn_id)
@@ -405,7 +513,7 @@ async def _stream(
         },
     }
     submit("trace-create", trace, secrets)
-    seq = 0
+    seq = start_seq
     terminal = False
     try:
         async for event in runner.run(run_request):
