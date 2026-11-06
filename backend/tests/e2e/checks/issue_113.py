@@ -6,6 +6,10 @@ def check_internal_error_degrades(ctx):
     failures = ctx.build.get("parse_failures") or []
     bad = [item for item in failures if item.get("task_id") == "bad_union"]
     ctx.require(len(bad) == 1, f"异常任务未记入 parse_failures：{failures}")
+    ctx.require(
+        {item.get("task_id") for item in failures} == {"bad_union"},
+        f"正常任务不应进入 parse_failures：{failures}",
+    )
     reason = bad[0].get("reason", "")
     ctx.require(
         reason.startswith("column_lineage_internal_error: "),
@@ -33,7 +37,8 @@ def check_internal_error_degrades(ctx):
         f"task 阶段日志未汇总字段级失败任务数：{task_logs}",
     )
 
-    for table in ("dst.orders", "dst.summary"):
+    expected_tasks = {"dst.orders": "good_orders", "dst.summary": "good_summary"}
+    for table, task_id in expected_tasks.items():
         response = ctx.rest.get(
             "/api/v1/column-lineage",
             params={"table": table, "column": "order_id"},
@@ -44,7 +49,7 @@ def check_internal_error_degrades(ctx):
             any(
                 edge.get("upstream_table") == "src.orders"
                 and edge.get("upstream_field") == "id"
-                and edge.get("task_id") in ("good_orders", "good_summary")
+                and edge.get("task_id") == task_id
                 for edge in upstream
             ),
             f"{table} 缺少正常任务的字段血缘：{upstream}",
