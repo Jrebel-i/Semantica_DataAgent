@@ -31,8 +31,10 @@ Use this skill when a question needs warehouse knowledge or SQL. Retrieve before
    - `find_join_path` for two to four tables when a join is not already supported.
    - `read_task_sql` when the producing task SQL is needed as evidence.
 6. When a relevant table exists, write one SQL statement in the requested dialect even
-   if some fields or definitions are missing. Use only known fields, state the assumptions,
-   and explain how the result differs from the requested metric. Then call
+   if some fields or definitions are missing. Use only fields confirmed by
+   `describe_tables` or returned table metadata, never a column name inferred from
+   convention or the metric name (for example, do not invent an `amount` column). State
+   the assumptions and explain how the result differs from the requested metric. Then call
    `report_knowledge_gap` for the missing knowledge and call `propose_correction` when
    evidence shows existing content is wrong. A request for a concrete computation on a
    known table, such as a row count per partition, is answerable without a formal metric
@@ -40,7 +42,9 @@ Use this skill when a question needs warehouse knowledge or SQL. Retrieve before
    when no relevant table exists. Conflicting metric definitions still require clarification
    before writing SQL.
 7. **Always** call `validate_sql` with the SQL and dialect. Do not present SQL as final
-   before validation. If validation fails, correct the SQL and validate again.
+   before validation. If validation reports any table, field, or syntax error, rewrite the
+   statement using only confirmed tables and fields and validate the replacement. Never
+   present a statement that failed validation as final.
 8. Answer with the SQL and citations. Attach the exact `ref` values returned by the tools to each material claim. Do not invent, shorten, or rewrite reference ids.
 
 ## Evidence and safety
@@ -109,8 +113,9 @@ Keep the answer focused:
 1. State the chosen definition and scope, with document/table references.
 2. Name the exact tables and fields, with references.
 3. Give the SQL in a fenced code block and state its dialect. The final answer must
-   literally contain the block; saying that SQL was written or validated is not a
-   substitute for pasting it.
+   literally contain the block, and the block must be the statement that last passed
+   `validate_sql`; saying that SQL was written or validated is not a substitute for
+   pasting it.
 4. Summarize `validate_sql` results. Mention any weak/unsupported join and ambiguity.
 5. Cite each conclusion with the returned reference ids. If the knowledge base does not
    support the question, say so and name the missing knowledge.
