@@ -101,6 +101,37 @@ def test_migrate_keeps_only_three_backups(database):
     assert all(backup.name != oldest for backup in backups)
 
 
+def test_serve_migrates_before_starting(database, capsys, monkeypatch):
+    _old_database(database)
+    started = []
+    monkeypatch.setattr(cli, "_serve", lambda: started.append(True))
+
+    assert cli.main(["serve"]) == 0
+    assert started == [True]
+    assert _schema_version(database) == "0020"
+    assert _kept_rows(database) == (("kept token", "admin"), ("kept value",))
+    assert len(_backups(database)) == 1
+
+    assert cli.main(["serve"]) == 0
+    assert started == [True, True]
+    assert len(_backups(database)) == 1
+    assert "0020" in capsys.readouterr().out
+
+
+def test_serve_does_not_start_when_migration_fails(database, capsys, monkeypatch):
+    database.write_bytes(b"not a sqlite database")
+    started = []
+    monkeypatch.setattr(cli, "_serve", lambda: started.append(True))
+
+    assert cli.main(["serve"]) != 0
+
+    assert started == []
+    error = capsys.readouterr().err
+    assert str(database) in error
+    assert "unknown" in error.lower()
+    assert "not a database" in error
+
+
 def test_init_still_initializes_an_empty_database(database):
     token = cli.initialize()
 

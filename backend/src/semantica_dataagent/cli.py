@@ -313,6 +313,11 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         return 0
     if args.command == "serve":
+        try:
+            migrate_database()
+        except MigrationError as exc:
+            print(f"serve aborted: {exc}", file=sys.stderr)
+            return 1
         _serve()
         return 0
     return _run_eval(args)
