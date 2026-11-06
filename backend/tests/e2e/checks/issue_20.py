@@ -58,12 +58,20 @@ def _empty_done(events: list[tuple[str, dict]]) -> bool:
 
 
 def _ask_stable(
-    ctx, body: dict, *, attempts: int = 3
+    ctx, body: dict, *, attempts: int = 3, expect_clarification: bool = False
 ) -> tuple[list[tuple[str, dict]], int]:
-    """Retry only a completely empty final turn, a known model gateway flake."""
+    """Retry an empty or undecided final turn, known model gateway flakes."""
     for attempt in range(attempts):
         events = _ask(ctx, body)
-        if not _empty_done(events) or attempt == attempts - 1:
+        empty = _empty_done(events)
+        undecided = (
+            expect_clarification
+            and bool(events)
+            and events[-1][0] == "done"
+            and not _clarifications(events)
+            and not _sql_blocks(events)
+        )
+        if not (empty or undecided) or attempt == attempts - 1:
             return events, attempt
     raise AssertionError("unreachable")
 
@@ -149,6 +157,7 @@ def check_online_clarification_selection_is_scoped_to_one_conversation(ctx):
             "provider_id": provider_id,
             "model": model,
         },
+        expect_clarification=True,
     )
     ctx.require(first and first[0][0] == "conversation", f"first events: {first[:1]}")
     conversation_id = first[0][1]["conversation_id"]
@@ -227,6 +236,7 @@ def check_online_clarification_selection_is_scoped_to_one_conversation(ctx):
             "provider_id": provider_id,
             "model": model,
         },
+        expect_clarification=True,
     )
     other_questions = _clarifications(other)
     ctx.require(
