@@ -204,6 +204,50 @@ class DtbPuller:
                 client, base_url, token, TABLE_SQL, "xlsx"
             ),
         }
+        stats = {}
+        if tables:
+            sql = (
+                "SELECT * FROM (SELECT *, rank() OVER (PARTITION BY database_name, table_name "
+                "ORDER BY split_part(partition_name, '=', 2) DESC) AS rk FROM ("
+                "SELECT a.table_name, a.database_name, b.partition_name, b.records "
+                "FROM mysql.data_tool_box_emr.metadata_table a LEFT JOIN "
+                "mysql.data_tool_box_emr.metadata_partition b ON a.table_id=b.table_id "
+                "WHERE a.catalog_type='HIVE' AND a.status='在用' AND a.database_name='dimensions') tt) kk WHERE rk=1"
+            )
+            raw = self.query_download(client, base_url, token, sql, "csv")
+            try:
+                reader = csv.DictReader(
+                    io.StringIO(raw.decode("utf-8-sig"), newline="")
+                )
+                if not reader.fieldnames or not {
+                    "table_name",
+                    "database_name",
+                    "partition_name",
+                    "records",
+                    "rk",
+                }.issubset(reader.fieldnames):
+                    raise ValueError("Invalid DTB partition statistics")
+                for stat in reader:
+                    name = stat["table_name"].removeprefix("dimensions.")
+                    if stat["database_name"] != "dimensions" or name in stats:
+                        raise ValueError("Invalid DTB partition statistics")
+                    if not stat["partition_name"]:
+                        stats[name] = None
+                        continue
+                    field, sep, value = stat["partition_name"].partition("=")
+                    if (
+                        not sep
+                        or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", field)
+                        or not value
+                        or stat["rk"] != "1"
+                    ):
+                        raise ValueError("Invalid DTB partition statistics")
+                    count = int(stat["records"])
+                    if count < 0:
+                        raise ValueError("Invalid DTB partition count")
+                    stats[name] = (field, value, count)
+            except (UnicodeError, csv.Error, KeyError, TypeError) as exc:
+                raise ValueError("Invalid DTB partition statistics") from exc
         for table in tables:
             if str(table.get("catalogType", "")).upper() != "HIVE":
                 continue
@@ -213,11 +257,21 @@ class DtbPuller:
             _detail, columns = self.table_detail(
                 client, base_url, token, table["tableId"]
             )
+            if name not in stats:
+                raise ValueError("Missing DTB partition statistics")
+            stat = stats[name]
+            where = ""
+            if stat:
+                field, value, _estimated = stat
+                if field not in {col["columnName"] for col in columns}:
+                    raise ValueError("DTB partition field mismatch")
+                escaped = value.replace("'", "''")
+                where = f" WHERE {field} = '{escaped}'"
             content = self.query_download(
                 client,
                 base_url,
                 token,
-                f"SELECT * FROM hive.dimensions.{name} LIMIT 50000",
+                f"SELECT * FROM hive.dimensions.{name}{where} LIMIT 50000",
                 "csv",
                 data_source="doris_query",
             )
@@ -234,6 +288,8 @@ class DtbPuller:
                     raise ValueError("Invalid DTB dimension rows")
             except (UnicodeError, csv.Error) as exc:
                 raise ValueError("Invalid DTB dimension download") from exc
+            if stat and len(rows) != min(stat[2], 50000):
+                raise ValueError("DTB dimension row count mismatch")
             meta = {
                 "database": "dimensions",
                 "table": name,
@@ -247,6 +303,9 @@ class DtbPuller:
                     for col in columns
                 ],
                 "record_count": len(rows),
+                "partition_field": stat[0] if stat else None,
+                "latest_partition": stat[1] if stat else None,
+                "estimated_rows": stat[2] if stat else None,
                 "truncated": len(rows) >= 50000,
             }
             files[f"dimensions/{name}/meta.json"] = json.dumps(

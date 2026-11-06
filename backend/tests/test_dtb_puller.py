@@ -228,3 +228,57 @@ def test_fetch_validates_snapshot_before_returning():
     assert files["任务信息.json"] == tasks
     assert files["表信息.xlsx"] == output.getvalue()
     assert counts["tables"] == 1
+
+
+def test_partitioned_dimension_reads_only_latest_and_checks_count():
+    import io
+    import json
+
+    from openpyxl import Workbook
+
+    book = Workbook()
+    book.active.append(["database_name", "table_name", "column_name"])
+    book.active.append(["dimensions", "dim_a", "id"])
+    xlsx = io.BytesIO()
+    book.save(xlsx)
+    tasks = json.dumps(
+        {"columns": [{"name": "task_name"}, {"name": "task_src"}], "data": []}
+    ).encode()
+    obj = puller()
+    obj.list_tables = lambda *args: [
+        {"tableId": 1, "tableName": "dim_a", "catalogType": "HIVE"}
+    ]
+    obj.table_detail = lambda *args: (
+        {},
+        [
+            {"columnName": "id", "columnType": "string"},
+            {"columnName": "day_num", "columnType": "string", "seqNo": 10000},
+        ],
+    )
+    sqls = []
+
+    def query(client, base, token, sql, format, **kwargs):
+        sqls.append(sql)
+        if format == "xlsx":
+            return xlsx.getvalue()
+        if format == "json":
+            return tasks
+        if "metadata_partition" in sql:
+            return b"table_name,database_name,partition_name,records,rk\ndim_a,dimensions,day_num=20261105,2,1\n"
+        return b"id,day_num\n1,20261105\n2,20261105\n"
+
+    obj.query_download = query
+    with httpx.Client() as client:
+        files, _ = obj.fetch(client, "http://dtb", "secret")
+    assert any("WHERE day_num = '20261105'" in sql for sql in sqls)
+    assert len(files["dimensions/dim_a/current/rows.jsonl"].splitlines()) == 2
+
+    def incomplete(*args, **kwargs):
+        result = query(*args, **kwargs)
+        return (
+            b"id,day_num\n1,20261105\n" if result.startswith(b"id,day_num") else result
+        )
+
+    obj.query_download = incomplete
+    with httpx.Client() as client, pytest.raises(ValueError, match="count"):
+        obj.fetch(client, "http://dtb", "secret")
