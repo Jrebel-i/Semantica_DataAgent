@@ -23,6 +23,9 @@ class ParseResult:
     status: Literal["success", "failed", "unsupported"]
     reason: str | None = None
     edges: list[tuple[str, str]] | None = None
+    column_edges: list[tuple[str, str, str, str]] | None = None
+    column_status: str = "unsupported"
+    column_reason: str | None = None
 
 
 class TaskParser(Protocol):
