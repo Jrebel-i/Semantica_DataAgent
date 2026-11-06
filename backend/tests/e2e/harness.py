@@ -49,6 +49,7 @@ import httpx
 
 ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_SOURCE = ROOT / "samples" / "demo"
+CLEANUP_BATCH_SIZE = 2000
 GENERATION_RE = re.compile(r"[A-Za-z][A-Za-z0-9_]{0,63}")
 DEV_ENDPOINTS = {
     ("172.16.242.124", 31601),
@@ -1075,11 +1076,18 @@ def _cleanup_neo4j(runtime: Runtime) -> dict[str, Any]:
                 generations=list(_owned_generations(runtime)),
             )
             count = before[0]["n"] if before else 0
-            if count:
-                driver.execute_query(
-                    query + " DETACH DELETE n",
-                    generations=list(_owned_generations(runtime)),
-                )
+            for deletion in (
+                " MATCH (n)-[batch_relationship]-() WITH DISTINCT batch_relationship LIMIT $batch_size DELETE batch_relationship RETURN count(*) AS n",
+                " WITH n LIMIT $batch_size DETACH DELETE n RETURN count(*) AS n",
+            ):
+                while True:
+                    deleted, _, _ = driver.execute_query(
+                        query + deletion,
+                        generations=list(_owned_generations(runtime)),
+                        batch_size=CLEANUP_BATCH_SIZE,
+                    )
+                    if not deleted[0]["n"]:
+                        break
             after, _, _ = driver.execute_query(
                 query + " RETURN count(n) AS n",
                 generations=list(_owned_generations(runtime)),

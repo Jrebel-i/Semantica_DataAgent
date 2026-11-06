@@ -5,6 +5,8 @@ from urllib.parse import quote
 
 from .stage_contract import StageResult
 
+WRITE_BATCH_SIZE = 2000
+
 
 def prepare(records, limit):
     groups = defaultdict(list)
@@ -106,12 +108,22 @@ def write(records, generation, storage):
         {},
     )
     storage.execute("CALL db.awaitIndex('sda_dimension_values', 120)", {})
-    storage.execute(
-        "UNWIND $rows AS row MATCH (f:SDAField {generation:$generation, database:row.database, table:row.table, name:row.field}) SET f.dimension_count = row.count, f.dimension_too_many = row.too_many, f.dimension_samples = row.samples",
-        {"rows": statuses, "generation": generation},
-    )
-    storage.execute(
-        "UNWIND $rows AS row CREATE (v:SDAEntity:SDADimensionValue) SET v = row, v.generation = $generation",
-        {"rows": values, "generation": generation},
-    )
+    for rows, query in (
+        (
+            statuses,
+            "UNWIND $rows AS row MATCH (f:SDAField {generation:$generation, database:row.database, table:row.table, name:row.field}) SET f.dimension_count = row.count, f.dimension_too_many = row.too_many, f.dimension_samples = row.samples",
+        ),
+        (
+            values,
+            "UNWIND $rows AS row CREATE (v:SDAEntity:SDADimensionValue) SET v = row, v.generation = $generation",
+        ),
+    ):
+        for offset in range(0, len(rows), WRITE_BATCH_SIZE):
+            storage.execute(
+                query,
+                {
+                    "rows": rows[offset : offset + WRITE_BATCH_SIZE],
+                    "generation": generation,
+                },
+            )
     return StageResult(counts={"dimension_value": len(values)})

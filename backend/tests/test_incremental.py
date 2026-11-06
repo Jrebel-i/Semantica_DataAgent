@@ -182,3 +182,82 @@ def test_legacy_build_migration_preserves_existing_rows(tmp_path, monkeypatch):
             text("SELECT status, source_hashes, build_type FROM builds")
         ).one()
     assert tuple(row) == ("succeeded", None, None)
+
+
+def test_graph_row_writes_are_split_without_losing_rows(monkeypatch):
+    from semantica_dataagent.stage_contract import StorageHandles
+
+    calls = []
+
+    def execute(graph, query, parameters):
+        calls.append(parameters["rows"])
+        return []
+
+    monkeypatch.setattr(knowledge, "execute", execute)
+    monkeypatch.setattr(
+        "semantica_dataagent.stage_contract.WRITE_BATCH_SIZE", 2, raising=False
+    )
+    storage = StorageHandles("test", object(), object(), {})
+    storage.execute(
+        "UNWIND $rows AS row CREATE (n) SET n = row",
+        {"rows": [{"n": i} for i in range(5)]},
+    )
+    assert calls == [[{"n": 0}, {"n": 1}], [{"n": 2}, {"n": 3}], [{"n": 4}]]
+
+
+def test_reconcile_limits_relationship_writes(monkeypatch):
+    from semantica_dataagent import relationships
+
+    class Storage:
+        build_id = 1
+
+        def __init__(self):
+            self.linked = []
+
+        def execute(self, query, params):
+            if "RETURN count(*) AS deleted" in query:
+                return [{"deleted": 0}]
+            if "RETURN elementId(n) AS id" in query:
+                return (
+                    [{"id": str(i)} for i in range(5)]
+                    if ":SDADimensionValue" in query
+                    else []
+                )
+            if "HAS_VALUE" in query:
+                self.linked.extend(params["ids"])
+                assert len(params["ids"]) <= 2
+            return []
+
+    monkeypatch.setattr(relationships, "RELATIONSHIP_BATCH_SIZE", 2, raising=False)
+    storage = Storage()
+    relationships.reconcile(storage, [], "generation")
+    assert storage.linked == ["0", "1", "2", "3", "4"]
+
+
+def test_deletions_are_limited_and_keep_filter_parameters(monkeypatch):
+    from semantica_dataagent import stage_contract
+
+    remaining = list(range(5))
+    batches = []
+
+    def execute(query, params):
+        assert params["files"] == ["changed.json"]
+        if "DELETE batch_relationship" in query:
+            batches.append("relationships")
+            return [{"deleted": 0}]
+        assert batches and batches[0] == "relationships"
+        assert "WITH n LIMIT $batch_size DETACH DELETE n" in query
+        removed = remaining[: params["batch_size"]]
+        del remaining[: params["batch_size"]]
+        batches.append(removed)
+        return [{"deleted": len(removed)}]
+
+    monkeypatch.setattr(stage_contract, "DELETE_BATCH_SIZE", 2, raising=False)
+    stage_contract.delete_batches(
+        execute,
+        "MATCH (n:SDAEntity) WHERE n.source_file IN $files",
+        "n",
+        {"files": ["changed.json"]},
+        detach=True,
+    )
+    assert batches == ["relationships", [0, 1], [2, 3], [4], []]

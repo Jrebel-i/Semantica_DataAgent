@@ -2,6 +2,30 @@
 
 from dataclasses import dataclass, field
 
+WRITE_BATCH_SIZE = 2000
+DELETE_BATCH_SIZE = 2000
+
+
+def delete_batches(execute, match_query, variable, parameters, *, detach=False):
+    queries = []
+    if detach:
+        queries.append(
+            f"{match_query} MATCH ({variable})-[batch_relationship]-() "
+            "WITH DISTINCT batch_relationship LIMIT $batch_size "
+            "DELETE batch_relationship RETURN count(*) AS deleted"
+        )
+    clause = "DETACH DELETE" if detach else "DELETE"
+    queries.append(
+        f"{match_query} WITH {variable} LIMIT $batch_size {clause} {variable} RETURN count(*) AS deleted"
+    )
+    for query in queries:
+        while True:
+            rows = execute(query, {**parameters, "batch_size": DELETE_BATCH_SIZE})
+            if not rows:
+                raise RuntimeError("Batch deletion returned no count")
+            if not rows[0]["deleted"]:
+                break
+
 
 @dataclass
 class StorageHandles:
@@ -17,7 +41,23 @@ class StorageHandles:
     def execute(self, query, parameters):
         from .knowledge import execute
 
-        return execute(self._graph, query, parameters)
+        rows = parameters.get("rows")
+        if (
+            "UNWIND $rows AS row" not in query
+            or rows is None
+            or len(rows) <= WRITE_BATCH_SIZE
+        ):
+            return execute(self._graph, query, parameters)
+        result = []
+        for offset in range(0, len(rows), WRITE_BATCH_SIZE):
+            result.extend(
+                execute(
+                    self._graph,
+                    query,
+                    {**parameters, "rows": rows[offset : offset + WRITE_BATCH_SIZE]},
+                )
+            )
+        return result
 
     def add_vectors(self, ids, texts, metadata):
         from .knowledge import embed

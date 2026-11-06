@@ -1,5 +1,9 @@
 """Reconcile relationships after writing or removing source-owned nodes."""
 
+from .stage_contract import delete_batches
+
+RELATIONSHIP_BATCH_SIZE = 2000
+
 
 def reconcile(storage, records, generation):
     categories = {}
@@ -20,25 +24,53 @@ def reconcile(storage, records, generation):
                 "source_files": list(owner.source_files),
             }
         )
-    storage.execute(
-        "MATCH (c:SDACategory {generation:$generation}) WHERE c.name IN $categories WITH c ORDER BY elementId(c) WITH c.name AS name, collect(c) AS nodes UNWIND nodes[1..] AS duplicate DETACH DELETE duplicate",
+    delete_batches(
+        storage.execute,
+        "MATCH (c:SDACategory {generation:$generation}) WHERE c.name IN $categories WITH c ORDER BY elementId(c) WITH c.name AS name, collect(c) AS nodes UNWIND nodes[1..] AS duplicate",
+        "duplicate",
         {"generation": generation, "categories": list(categories)},
+        detach=True,
     )
-    storage.execute(
-        "MATCH (c:SDACategory {generation:$generation}) WHERE NOT c.name IN $categories DETACH DELETE c",
+    delete_batches(
+        storage.execute,
+        "MATCH (c:SDACategory {generation:$generation}) WHERE NOT c.name IN $categories",
+        "c",
         {"generation": generation, "categories": list(categories)},
+        detach=True,
     )
     storage.execute(
         "UNWIND $rows AS row MERGE (c:SDAEntity:SDACategory {generation:$generation, name:row.name}) ON CREATE SET c.ref = row.ref, c.source_file = row.source_file, c.source_key = row.source_key, c.source_files = row.source_files, c.build_id = $build_id WITH c, row WHERE c.source_file <> row.source_file OR c.source_key <> row.source_key OR c.source_files <> row.source_files SET c.source_file = row.source_file, c.source_key = row.source_key, c.source_files = row.source_files, c.build_id = $build_id",
         {"generation": generation, "rows": rows, "build_id": storage.build_id},
     )
-    queries = [
-        "MATCH (t:SDATable {generation:$generation}), (f:SDAField {generation:$generation}) WHERE t.database = f.database AND t.name = f.table MERGE (t)-[:HAS_FIELD]->(f)",
-        "MATCH (f:SDAField {generation:$generation}), (v:SDADimensionValue {generation:$generation}) WHERE f.database = v.database AND f.table = v.table AND f.name = v.field MERGE (f)-[:HAS_VALUE]->(v)",
-        "MATCH (c:SDACategory {generation:$generation}), (d:SDADocument {generation:$generation}) WHERE c.name = d.category MERGE (c)-[:HAS_DOCUMENT]->(d)",
+    relationships = [
+        (
+            "SDAField",
+            "MATCH (t:SDATable {generation:$generation, database:n.database, name:n.table}) MERGE (t)-[:HAS_FIELD]->(n)",
+        ),
+        (
+            "SDADimensionValue",
+            "MATCH (f:SDAField {generation:$generation, database:n.database, table:n.table, name:n.field}) MERGE (f)-[:HAS_VALUE]->(n)",
+        ),
+        (
+            "SDADocument",
+            "MATCH (c:SDACategory {generation:$generation, name:n.category}) MERGE (c)-[:HAS_DOCUMENT]->(n)",
+        ),
     ]
-    for query in queries:
-        storage.execute(query, {"generation": generation})
+    for label, link_query in relationships:
+        nodes = storage.execute(
+            f"MATCH (n:{label} {{generation:$generation}}) RETURN elementId(n) AS id",
+            {"generation": generation},
+        )
+        ids = [node["id"] for node in nodes]
+        for offset in range(0, len(ids), RELATIONSHIP_BATCH_SIZE):
+            storage.execute(
+                f"MATCH (n:{label} {{generation:$generation}}) WHERE elementId(n) IN $ids "
+                + link_query,
+                {
+                    "generation": generation,
+                    "ids": ids[offset : offset + RELATIONSHIP_BATCH_SIZE],
+                },
+            )
     import re
 
     from .markdown import doc_ref, table_name

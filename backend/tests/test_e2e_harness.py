@@ -277,3 +277,48 @@ def test_remove_run_dir_refuses_paths_outside_its_scratch(harness, tmp_path):
     outside.mkdir()
     assert harness._remove_run_dir(config, outside)["status"] == "refused"
     assert outside.is_dir()
+
+
+def test_cleanup_neo4j_deletes_large_generations_in_batches(
+    harness, monkeypatch, tmp_path
+):
+    from types import SimpleNamespace
+
+    import neo4j
+
+    class Driver:
+        remaining = 5
+        relationships_cleared = False
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def execute_query(self, query, **params):
+            assert params["generations"] == ["e2e_owned"]
+            if "DELETE batch_relationship" in query:
+                self.relationships_cleared = True
+                return ([{"n": 0}], None, None)
+            if "DETACH DELETE" in query:
+                assert self.relationships_cleared
+                assert "LIMIT $batch_size" in query
+                removed = min(self.remaining, params["batch_size"])
+                self.remaining -= removed
+                return ([{"n": removed}], None, None)
+            return ([{"n": self.remaining}], None, None)
+
+    driver = Driver()
+    monkeypatch.setattr(neo4j.GraphDatabase, "driver", lambda *a, **kw: driver)
+    monkeypatch.setattr(harness, "_owned_generations", lambda runtime: {"e2e_owned"})
+    monkeypatch.setattr(harness, "CLEANUP_BATCH_SIZE", 2, raising=False)
+    runtime = SimpleNamespace(
+        config=SimpleNamespace(neo4j_uri="bolt://test", neo4j_user="neo4j"),
+        password="test",
+    )
+    assert harness._cleanup_neo4j(runtime) == {
+        "status": "deleted",
+        "deleted": 5,
+        "remaining": 0,
+    }

@@ -3,7 +3,7 @@
 from urllib.parse import quote
 
 from .plugins import parse_task
-from .stage_contract import StageResult
+from .stage_contract import StageResult, delete_batches
 
 
 def rank_task_hits(hits):
@@ -73,28 +73,43 @@ def write(records, generation, storage):
     )
     if rebuild_all:
         tasks = all_tasks
-        storage.execute(
-            "MATCH (t:SDATask {generation:$generation}) DETACH DELETE t",
+        delete_batches(
+            storage.execute,
+            "MATCH (t:SDATask {generation:$generation})",
+            "t",
             {"generation": generation},
+            detach=True,
         )
-        storage.execute(
-            "MATCH (:SDALineageTable {generation:$generation})-[r:DEPENDS_ON]->(:SDALineageTable {generation:$generation}) DELETE r",
+        delete_batches(
+            storage.execute,
+            "MATCH (:SDALineageTable {generation:$generation})-[r:DEPENDS_ON]->(:SDALineageTable {generation:$generation})",
+            "r",
             {"generation": generation},
+            detach=False,
         )
-        storage.execute(
-            "MATCH (:SDATable {generation:$generation})-[r:DEPENDS_ON]->(:SDATable {generation:$generation}) DELETE r",
+        delete_batches(
+            storage.execute,
+            "MATCH (:SDATable {generation:$generation})-[r:DEPENDS_ON]->(:SDATable {generation:$generation})",
+            "r",
             {"generation": generation},
+            detach=False,
         )
     else:
         tasks = [r for r in records if r.kind == "task"]
         names = [r.data["name"] for r in tasks]
-        storage.execute(
-            "MATCH (:SDALineageTable {generation:$generation})-[r:DEPENDS_ON]->(:SDALineageTable {generation:$generation}) WHERE r.task_id IN $names DELETE r",
+        delete_batches(
+            storage.execute,
+            "MATCH (:SDALineageTable {generation:$generation})-[r:DEPENDS_ON]->(:SDALineageTable {generation:$generation}) WHERE r.task_id IN $names",
+            "r",
             {"generation": generation, "names": names},
+            detach=False,
         )
-        storage.execute(
-            "MATCH (:SDATable {generation:$generation})-[r:DEPENDS_ON]->(:SDATable {generation:$generation}) WHERE r.task_id IN $names DELETE r",
+        delete_batches(
+            storage.execute,
+            "MATCH (:SDATable {generation:$generation})-[r:DEPENDS_ON]->(:SDATable {generation:$generation}) WHERE r.task_id IN $names",
+            "r",
             {"generation": generation, "names": names},
+            detach=False,
         )
     names = [r.data["name"] for r in tasks]
     if len(names) != len(set(names)):
@@ -332,9 +347,12 @@ def write_column_lineage(records, tasks, parsed_tasks, schema, generation, stora
                 downstream, []
             ):
                 rows.append({**record.data, **_provenance(record, storage.build_id)})
-    storage.execute(
-        "MATCH (:SDAField {generation:$generation})-[r:FIELD_DEPENDS_ON]->(:SDAField {generation:$generation}) DELETE r",
+    delete_batches(
+        storage.execute,
+        "MATCH (:SDAField {generation:$generation})-[r:FIELD_DEPENDS_ON]->(:SDAField {generation:$generation})",
+        "r",
         {"generation": generation},
+        detach=False,
     )
     storage.execute(
         """UNWIND $rows AS row
