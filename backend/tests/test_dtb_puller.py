@@ -416,3 +416,49 @@ def test_pagination_falls_back_to_total_when_total_elements_is_null():
 def test_bounded_pull_without_total_uses_page_size_as_end(table_list):
     calls = _bounded_pull_with_table_page(None, table_list)
     assert "dim_a" in calls[0]
+
+
+@pytest.mark.parametrize("status_code", [401, 415, 503])
+def test_dtb_puller_recognizes_http_authentication_failure(status_code):
+    def reply(request):
+        return httpx.Response(status_code)
+
+    with (
+        httpx.Client(transport=httpx.MockTransport(reply)) as client,
+        pytest.raises(ValueError, match="authentication") as error,
+    ):
+        puller().list_tables(client, "http://dtb", "secret", "dimensions")
+    assert str(status_code) in str(error.value)
+
+
+@pytest.mark.parametrize("body_status", ["401", "415", "503"])
+def test_dtb_puller_recognizes_body_authentication_failure(body_status):
+    def reply(request):
+        return httpx.Response(
+            200,
+            json={
+                "status": body_status,
+                "message": "未登录或token过期",
+                "data": None,
+            },
+        )
+
+    with (
+        httpx.Client(transport=httpx.MockTransport(reply)) as client,
+        pytest.raises(ValueError, match="authentication") as error,
+    ):
+        puller().list_tables(client, "http://dtb", "secret", "dimensions")
+    assert body_status in str(error.value)
+
+
+def test_query_download_recognizes_body_authentication_failure():
+    def reply(request):
+        return httpx.Response(200, json={"status": "503", "data": None})
+
+    with (
+        httpx.Client(transport=httpx.MockTransport(reply)) as client,
+        pytest.raises(ValueError, match="authentication"),
+    ):
+        puller().query_download(
+            client, "http://dtb", "secret", "select 1", "json", poll_interval=0
+        )

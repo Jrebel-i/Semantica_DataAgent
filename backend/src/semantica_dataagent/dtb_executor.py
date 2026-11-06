@@ -7,6 +7,7 @@ from urllib.parse import quote
 
 import httpx
 
+from .dtb_auth import authentication_failed
 from .plugins import ExecutorAuthenticationError, ExecutorError
 
 
@@ -114,7 +115,7 @@ class DtbExecutor:
                     response = await client.request(
                         method, self.base_url + path, headers=headers, **kwargs
                     )
-                if response.status_code in (401, 415, 503):
+                if authentication_failed(response.status_code, None):
                     raise DtbAuthenticationError("DTB token 失效，请在个人设置中更新")
                 response.raise_for_status()
                 if raw:
@@ -125,7 +126,7 @@ class DtbExecutor:
                 if not isinstance(payload, dict):
                     raise DtbError("DTB 响应格式错误")
                 status = str(payload.get("status", ""))
-                if status in ("401", "415", "503"):
+                if authentication_failed(response.status_code, payload):
                     raise DtbAuthenticationError("DTB token 失效，请在个人设置中更新")
                 if status != "200" or not isinstance(payload.get("data"), dict):
                     raise DtbError("DTB 响应失败")

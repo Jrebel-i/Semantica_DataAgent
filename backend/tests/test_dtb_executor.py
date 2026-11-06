@@ -65,6 +65,19 @@ def test_dtb_recognizes_auth_and_query_errors():
     async def run():
         for response, expected in [
             (httpx.Response(401), DtbAuthenticationError),
+            (httpx.Response(415), DtbAuthenticationError),
+            (httpx.Response(503), DtbAuthenticationError),
+            (
+                httpx.Response(
+                    200,
+                    json={
+                        "status": "503",
+                        "message": "未登录或token过期",
+                        "data": None,
+                    },
+                ),
+                DtbAuthenticationError,
+            ),
             (
                 httpx.Response(
                     200,

@@ -14,6 +14,8 @@ import httpx
 import sqlglot
 from sqlglot import exp
 
+from .dtb_auth import authentication_failed
+
 TASK_SQL = "select version_id,\nversion_code,message,committer,task_id,task_name,\n(case when task_type_id=1 then 'shell'\nwhen task_type_id=2 then 'merge onself'\nwhen task_type_id=3 then 'spark sql'\nelse '' end) as task_type\n,task_conf,task_src,project_name,upstream_tasks,output_table_name,a.create_time,a.modify_time\n from(\n    select *,rank() over(partition by task_id order by modify_time desc) rk  from mysql.data_tool_box_emr.task_version\n    where status!=1 and task_type_id!=4\n) a\nleft join  mysql.data_tool_box_emr.project b\non a.project_id=b.project_id\nwhere rk=1 and status=2"
 TABLE_SQL = "select a.*,b.column_name,b.seq_no,b.column_type,b.column_comment,b.column_business_comment from\n(\n    select table_id,table_name,database_name,create_time,modify_time,\n    comment,output_task_id,output_task_name,use_direction\n    from mysql.data_tool_box_emr.metadata_table where catalog_type='HIVE' and status='在用'\n) a\n left join mysql.data_tool_box_emr.metadata_column b on a.table_id=b.table_id"
 
@@ -110,12 +112,12 @@ class DtbPuller:
             response = checked_request(
                 client, "GET", base_url, token, endpoint, params=params
             )
-            if response.status_code == 401:
-                raise ValueError("DTB authentication failed (401)")
+            if authentication_failed(response.status_code, None):
+                raise ValueError(f"DTB authentication failed ({response.status_code})")
             response.raise_for_status()
             payload = response.json()
-            if str(payload.get("status")) == "401":
-                raise ValueError("DTB authentication failed (401)")
+            if authentication_failed(response.status_code, payload):
+                raise ValueError(f"DTB authentication failed ({payload.get('status')})")
             if str(payload.get("status")) != "200" or not isinstance(
                 payload.get("data"), dict
             ):
@@ -223,12 +225,12 @@ class DtbPuller:
                     "defaultLimit": 100,
                 },
             )
-            if response.status_code == 401:
-                raise ValueError("DTB authentication failed (401)")
+            if authentication_failed(response.status_code, None):
+                raise ValueError(f"DTB authentication failed ({response.status_code})")
             response.raise_for_status()
             payload = response.json()
-            if str(payload.get("status")) == "401":
-                raise ValueError("DTB authentication failed (401)")
+            if authentication_failed(response.status_code, payload):
+                raise ValueError(f"DTB authentication failed ({payload.get('status')})")
             if str(payload.get("status")) != "200":
                 raise ValueError("DTB query submission failed")
             data = payload["data"]
@@ -256,7 +258,19 @@ class DtbPuller:
                 "/api/data-query/download/" + key,
                 params={"format": format},
             )
+            if authentication_failed(response.status_code, None):
+                raise ValueError(f"DTB authentication failed ({response.status_code})")
             response.raise_for_status()
+            if "json" in response.headers.get("content-type", "").lower():
+                try:
+                    payload = response.json()
+                except ValueError:
+                    pass
+                else:
+                    if authentication_failed(response.status_code, payload):
+                        raise ValueError(
+                            f"DTB authentication failed ({payload.get('status')})"
+                        )
             return response.content
         except httpx.TimeoutException as exc:
             raise ValueError("DTB query timeout") from exc

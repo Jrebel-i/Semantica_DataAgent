@@ -60,7 +60,13 @@ def check_dtb_pull(ctx):
         def do_GET(self):
             state["paths"].append(self.path)
             if state["failure"]:
-                self.send({}, status=401)
+                self.send(
+                    {
+                        "status": "503",
+                        "message": "未登录或token过期",
+                        "data": None,
+                    }
+                )
             elif self.path.startswith("/api/data-map/table"):
                 self.send(
                     {
@@ -185,8 +191,10 @@ def check_dtb_pull(ctx):
         state["failure"] = True
         failed = ctx.rest.post("/api/v1/pulls/dtb").json()
         ctx.require(
-            failed["status"] == "failed" and "401" in failed["error"],
-            f"401 not recorded: {failed}",
+            failed["status"] == "failed"
+            and "authentication" in failed["error"]
+            and "503" in failed["error"],
+            f"authentication failure not recorded: {failed}",
         )
         ctx.require(
             git("rev-parse", "HEAD") == record["commit"],
