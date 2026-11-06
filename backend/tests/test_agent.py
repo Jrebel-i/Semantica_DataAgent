@@ -356,12 +356,22 @@ def test_agent_mcp_credential_is_bound_to_running_turn(client, monkeypatch):
 def test_confirmed_query_resumes_agent_and_respects_interpretation_setting(
     client, monkeypatch, interpret
 ):
-    from semantica_dataagent import agent_runner, knowledge, query_api, sql_validation
+    from semantica_dataagent import (
+        agent_runner,
+        knowledge,
+        query_api,
+        sql_validation,
+        telemetry,
+    )
     from semantica_dataagent.auth import Requester
     from semantica_dataagent.db import Token, sessions
     from semantica_dataagent.mcp_context import bind_mcp_context
 
     executions = []
+    traces = []
+    monkeypatch.setattr(
+        telemetry, "submit", lambda kind, payload, secrets: traces.append(payload)
+    )
 
     class Executor:
         def bind(self, config, token):
@@ -454,6 +464,7 @@ def test_confirmed_query_resumes_agent_and_respects_interpretation_setting(
     assert len(executions) == 1
     assert "sales" in runner.requests[1].prompt
     assert ("private-value-81" in runner.requests[1].prompt) is interpret
+    assert all("private-value-81" not in json.dumps(trace) for trace in traces)
     assert c.post(path, headers=headers).status_code == 409
     detail = c.get(f"/api/v1/conversations/{conversation_id}", headers=headers).json()
     assert detail["turns"][0]["answer"] == "结论"
@@ -538,6 +549,7 @@ def test_deleting_conversation_removes_its_query_results(client, monkeypatch):
         "rows": [[123]],
     }
     from io import BytesIO
+
     from openpyxl import load_workbook
 
     workbook = load_workbook(
