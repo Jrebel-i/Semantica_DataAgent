@@ -1038,6 +1038,43 @@ legend {
   max-width: 460px;
   background: var(--panel);
 }
+.query-plan-card,
+.query-result-preview {
+  margin: 10px 0;
+  padding: 14px 16px;
+}
+
+.query-plan-card h3 {
+  margin: 0 0 8px;
+  font-size: 14px;
+}
+
+.query-plan-card pre {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.context-section pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.query-result-preview table,
+.context-section table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+.query-result-preview th,
+.query-result-preview td,
+.context-section th,
+.context-section td {
+  padding: 6px 8px;
+  border-bottom: 1px solid #e5eae8;
+  text-align: left;
+}
+
 .plan-placeholder .ant-card-head {
   min-height: 38px;
 }
