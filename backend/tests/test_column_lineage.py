@@ -130,3 +130,54 @@ def test_field_lineage_query_returns_upstream_task_and_evidence(monkeypatch):
     assert result[0]["upstream_field"] == "id"
     assert result[0]["task_id"] == "load"
     assert result[0]["evidence"] == "parsed"
+
+
+def test_lineage_directions_depth_empty_and_table_compatibility(monkeypatch):
+    from semantica_dataagent import task_api
+
+    monkeypatch.setattr(
+        task_api.knowledge, "settings", lambda: {"knowledge_generation": "g"}
+    )
+    monkeypatch.setattr(task_api.knowledge, "read_graph", lambda _: object())
+    field_edges = [
+        {"upstream_field": "a", "downstream_field": "b", "task_id": "first"},
+        {"upstream_field": "b", "downstream_field": "c", "task_id": "second"},
+    ]
+
+    def execute(_graph, query, params):
+        if "FIELD_DEPENDS_ON" not in query:
+            return [
+                {
+                    "edge": {
+                        "upstream": "src.t",
+                        "downstream": "dst.t",
+                        "task_id": "load",
+                    }
+                }
+            ]
+        if params["column"] == "absent":
+            return []
+        if "<-[\u003aFIELD_DEPENDS_ON*1..2]-" in query:
+            return [{"edge": edge, "task_type": "spark"} for edge in field_edges]
+        if "-[\u003aFIELD_DEPENDS_ON*1..1]->" in query:
+            return [{"edge": field_edges[0], "task_type": "spark"}]
+        raise AssertionError(f"unexpected query: {query}")
+
+    monkeypatch.setattr(task_api.knowledge, "execute", execute)
+    assert [e["task_id"] for e in task_api.get_lineage("dst.t", "up", 2, "c")] == [
+        "first",
+        "second",
+    ]
+    assert [e["task_id"] for e in task_api.get_lineage("src.t", "down", 1, "a")] == [
+        "first"
+    ]
+    assert task_api.get_lineage("dst.t", column="absent") == []
+    table = task_api.get_lineage("dst.t")
+    assert table == [
+        {
+            "upstream": "src.t",
+            "downstream": "dst.t",
+            "task_id": "load",
+            "ref": "lineage:load:src.t:dst.t",
+        }
+    ]
