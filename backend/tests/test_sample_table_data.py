@@ -263,6 +263,29 @@ def test_sample_defaults_to_all_columns_and_caps_them_at_thirty(client, monkeypa
         fake.close()
 
 
+def test_sample_select_list_does_not_include_partition_predicate_columns(
+    client, table_metadata
+):
+    import sqlglot
+
+    fake = FakeDtb().start()
+    try:
+        configure_executor(client, fake.url)
+        set_token(client, "caller-token")
+        result = call(
+            client,
+            "sample_table_data",
+            {"table": "shop.orders", "columns": ["id"], "limit": 1},
+        )
+        assert not result.isError, result.model_dump()
+        sql = fake.calls[-1][1]["sql"]
+        tree = sqlglot.parse_one(sql, read="doris")
+        assert [expression.name for expression in tree.expressions] == ["id"]
+        assert "`dt` = '2025-01-03'" in sql
+    finally:
+        fake.close()
+
+
 def test_sample_without_dtb_token_is_invalid_input(client, table_metadata):
     fake = FakeDtb().start()
     try:
