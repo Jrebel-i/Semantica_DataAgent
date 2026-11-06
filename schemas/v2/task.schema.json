@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://semantica-dataagent.org/schemas/v2/task.schema.json",
+  "title": "task",
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "sql": {
+      "type": "string"
+    },
+    "type": {
+      "type": "string"
+    },
+    "description": {
+      "type": "string"
+    },
+    "parameters": {
+      "type": "object"
+    },
+    "dialect": {
+      "enum": [
+        "hive",
+        "spark",
+        "doris"
+      ]
+    }
+  },
+  "required": [
+    "name",
+    "sql"
+  ],
+  "additionalProperties": false
+}

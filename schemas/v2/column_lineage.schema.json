@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://semantica-dataagent.org/schemas/v2/column_lineage.schema.json",
+  "title": "column lineage",
+  "type": "object",
+  "properties": {
+    "upstream_table": {"type": "string", "minLength": 1},
+    "upstream_field": {"type": "string", "minLength": 1},
+    "downstream_table": {"type": "string", "minLength": 1},
+    "downstream_field": {"type": "string", "minLength": 1},
+    "task_id": {"type": "string", "minLength": 1},
+    "evidence": {"enum": ["declared", "parsed", "both"]},
+    "parse_status": {"enum": ["success", "failed", "unsupported"]}
+  },
+  "required": ["upstream_table", "upstream_field", "downstream_table", "downstream_field", "task_id", "evidence", "parse_status"],
+  "additionalProperties": false
+}

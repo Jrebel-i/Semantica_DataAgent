@@ -1,4 +1,4 @@
-"""Read version 1 canonical records from files named after their entity type."""
+"""Read canonical records from files named after their entity type."""
 
 import csv
 import hashlib
@@ -16,12 +16,13 @@ KINDS = {
     "fields": "field",
     "tasks": "task",
     "lineage": "lineage",
+    "column_lineage": "column_lineage",
     "dimension_values": "dimension_value",
     "documents": "document",
 }
-SCHEMAS = Path(__file__).resolve().parent / "schemas" / "v1"
+SCHEMAS = Path(__file__).resolve().parent / "schemas" / "v2"
 if not SCHEMAS.exists():
-    SCHEMAS = Path(__file__).resolve().parents[3] / "schemas" / "v1"
+    SCHEMAS = Path(__file__).resolve().parents[3] / "schemas" / "v2"
 
 
 @dataclass(frozen=True)

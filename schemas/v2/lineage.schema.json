@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://semantica-dataagent.org/schemas/v2/lineage.schema.json",
+  "title": "lineage",
+  "type": "object",
+  "properties": {
+    "upstream": {
+      "type": "string",
+      "minLength": 1
+    },
+    "downstream": {
+      "type": "string",
+      "minLength": 1
+    },
+    "evidence": {
+      "enum": [
+        "declared",
+        "parsed",
+        "both"
+      ]
+    },
+    "parse_status": {
+      "enum": [
+        "success",
+        "failed",
+        "unsupported"
+      ]
+    },
+    "task_id": {
+      "type": "string",
+      "minLength": 1
+    }
+  },
+  "required": [
+    "upstream",
+    "downstream",
+    "evidence",
+    "parse_status"
+  ],
+  "additionalProperties": false
+}
