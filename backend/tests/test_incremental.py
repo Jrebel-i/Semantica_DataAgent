@@ -203,3 +203,30 @@ def test_graph_row_writes_are_split_without_losing_rows(monkeypatch):
         {"rows": [{"n": i} for i in range(5)]},
     )
     assert calls == [[{"n": 0}, {"n": 1}], [{"n": 2}, {"n": 3}], [{"n": 4}]]
+
+
+def test_reconcile_limits_relationship_writes(monkeypatch):
+    from semantica_dataagent import relationships
+
+    class Storage:
+        build_id = 1
+
+        def __init__(self):
+            self.linked = []
+
+        def execute(self, query, params):
+            if "RETURN elementId(n) AS id" in query:
+                return (
+                    [{"id": str(i)} for i in range(5)]
+                    if ":SDADimensionValue" in query
+                    else []
+                )
+            if "HAS_VALUE" in query:
+                self.linked.extend(params["ids"])
+                assert len(params["ids"]) <= 2
+            return []
+
+    monkeypatch.setattr(relationships, "RELATIONSHIP_BATCH_SIZE", 2, raising=False)
+    storage = Storage()
+    relationships.reconcile(storage, [], "generation")
+    assert storage.linked == ["0", "1", "2", "3", "4"]
