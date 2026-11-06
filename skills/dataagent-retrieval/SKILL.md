@@ -23,8 +23,9 @@ Use this skill when a question needs warehouse knowledge or SQL. Retrieve before
    - `describe_tables` for exact table and field definitions.
    - `sample_table_data` when you are unsure about a field's values, format, or
      partition literal. Ask for a few real rows before writing SQL; the server
-     generates the SQL, reads the latest partition from knowledge metadata, and
-     never accepts caller-written SQL. It requires the caller's DTB token.
+     generates the SQL, reads the latest partition from DTB partition metadata
+     (falling back to knowledge metadata), and never accepts caller-written
+     SQL. It requires the caller's DTB token.
    - `lookup_dim_values` to resolve a business term to an indexed dimension value; give `table`, `keyword`, and `field` when known.
    - `get_lineage` with `direction` `up` or `down` and `depth` 1-3 to understand dependencies.
    - `find_join_path` for two to four tables when a join is not already supported.
