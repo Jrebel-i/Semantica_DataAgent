@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Button, Input, Modal, Table, Tree, Typography } from "antd";
 import type { paths } from "./api";
 import { TaskLineage, type TableLineage } from "./TaskLineage";
@@ -372,43 +372,57 @@ export function KnowledgePage({
                   </thead>
                   <tbody>
                     {selected.fields.map((field) => (
-                      <tr key={field.name}>
-                        <td>
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setExpandedColumn(
-                                expandedColumn === field.name ? "" : field.name,
-                              )
-                            }
-                          >
-                            {field.name}
-                          </button>
-                          {expandedColumn === field.name && (
-                            <ColumnLineage
-                              table={`${selected.database}.${selected.name}`}
-                              column={field.name}
-                              token={token}
+                      <Fragment key={field.name}>
+                        <tr>
+                          <td>
+                            <button
+                              type="button"
+                              aria-expanded={
+                                expandedColumn ===
+                                `${selected.database}.${selected.name}.${field.name}`
+                              }
+                              onClick={() => {
+                                const key = `${selected.database}.${selected.name}.${field.name}`;
+                                setExpandedColumn(
+                                  expandedColumn === key ? "" : key,
+                                );
+                              }}
+                            >
+                              {field.name}
+                            </button>
+                          </td>
+                          <td>{field.type}</td>
+                          <td>{field.comment}</td>
+                          <td>
+                            <DimensionStatus
+                              count={field.dimension_count}
+                              tooMany={field.dimension_too_many}
+                              messages={messages}
                             />
-                          )}
-                        </td>
-                        <td>{field.type}</td>
-                        <td>{field.comment}</td>
-                        <td>
-                          <DimensionStatus
-                            count={field.dimension_count}
-                            tooMany={field.dimension_too_many}
-                            messages={messages}
-                          />
-                          {field.dimension_samples?.length ? (
-                            <span className="subtle">
-                              {" "}
-                              {field.dimension_samples.join(", ")}
-                            </span>
-                          ) : null}
-                        </td>
-                        <td>{field.partition ? messages.yes : messages.no}</td>
-                      </tr>
+                            {field.dimension_samples?.length ? (
+                              <span className="subtle">
+                                {" "}
+                                {field.dimension_samples.join(", ")}
+                              </span>
+                            ) : null}
+                          </td>
+                          <td>
+                            {field.partition ? messages.yes : messages.no}
+                          </td>
+                        </tr>
+                        {expandedColumn ===
+                          `${selected.database}.${selected.name}.${field.name}` && (
+                          <tr>
+                            <td colSpan={5}>
+                              <ColumnLineage
+                                table={`${selected.database}.${selected.name}`}
+                                column={field.name}
+                                token={token}
+                              />
+                            </td>
+                          </tr>
+                        )}
+                      </Fragment>
                     ))}
                   </tbody>
                 </table>
