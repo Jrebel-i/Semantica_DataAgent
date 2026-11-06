@@ -29,6 +29,22 @@ class ParseResult:
     column_reason: str | None = None
 
 
+class QueryExecutor(Protocol):
+    async def submit(self, sql: str, limit: int) -> str: ...
+
+    async def poll(self, key: str) -> dict: ...
+
+    async def wait(self, key: str) -> dict: ...
+
+    async def download(self, key: str, format: str) -> tuple[bytes, str | None]: ...
+
+    async def estimate(self, sql: str) -> dict: ...
+
+
+class ExecutorPlugin(Protocol):
+    def bind(self, parameters: dict, token: str) -> QueryExecutor: ...
+
+
 class TaskParser(Protocol):
     task_types: list[str]
 

@@ -22,7 +22,25 @@ class DtbExecutor:
     parameters_schema: ClassVar[dict] = {
         "type": "object",
         "properties": {
-            "base_url": {"type": "string", "format": "uri", "title": "DTB 地址"}
+            "base_url": {"type": "string", "format": "uri", "title": "DTB 地址"},
+            "row_limit": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 1000,
+                "title": "返回行数上限",
+            },
+            "download_limit": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 100000,
+                "title": "下载行数上限",
+            },
+            "timeout_seconds": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 300,
+                "title": "超时秒数",
+            },
         },
         "required": ["base_url"],
         "additionalProperties": False,
@@ -42,6 +60,9 @@ class DtbExecutor:
         self.client = client
         self.retry_delays = retry_delays
         self.poll_interval = poll_interval
+
+    def bind(self, parameters, token):
+        return DtbExecutor(parameters["base_url"], token)
 
     async def _request(self, method, path, *, raw=False, **kwargs):
         headers = {

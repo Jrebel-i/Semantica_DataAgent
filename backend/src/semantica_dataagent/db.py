@@ -191,3 +191,27 @@ class PersonalDtbToken(Base):
     __tablename__ = "personal_dtb_tokens"
     owner_id: Mapped[str] = mapped_column(primary_key=True)
     encrypted_token: Mapped[str]
+
+
+class QueryExecution(Base):
+    __tablename__ = "query_executions"
+    id: Mapped[str] = mapped_column(primary_key=True, default=lambda: uuid.uuid4().hex)
+    owner_id: Mapped[str]
+    sql: Mapped[str]
+    status: Mapped[str]
+    rows: Mapped[str | None]
+    query_key: Mapped[str | None]
+    row_count: Mapped[int | None]
+    elapsed_ms: Mapped[int | None]
+    created_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC))
+
+
+class QueryAudit(Base):
+    __tablename__ = "query_audit"
+    id: Mapped[str] = mapped_column(primary_key=True, default=lambda: uuid.uuid4().hex)
+    owner_id: Mapped[str]
+    sql: Mapped[str]
+    status: Mapped[str]
+    row_count: Mapped[int | None]
+    elapsed_ms: Mapped[int]
+    created_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC))

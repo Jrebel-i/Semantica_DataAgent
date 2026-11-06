@@ -501,6 +501,33 @@
         "title": "DocumentView",
         "type": "object"
       },
+      "DtbTokenInput": {
+        "properties": {
+          "token": {
+            "maxLength": 8192,
+            "title": "Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "token"
+        ],
+        "title": "DtbTokenInput",
+        "type": "object"
+      },
+      "DtbTokenStatus": {
+        "properties": {
+          "configured": {
+            "title": "Configured",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "configured"
+        ],
+        "title": "DtbTokenStatus",
+        "type": "object"
+      },
       "EdgeView": {
         "properties": {
           "downstream": {
@@ -561,6 +588,18 @@
           "data"
         ],
         "title": "EventView",
+        "type": "object"
+      },
+      "ExecuteInput": {
+        "properties": {
+          "limit": {
+            "default": 1000,
+            "minimum": 1.0,
+            "title": "Limit",
+            "type": "integer"
+          }
+        },
+        "title": "ExecuteInput",
         "type": "object"
       },
       "FieldView": {
@@ -794,6 +833,21 @@
           }
         },
         "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "PlanInput": {
+        "properties": {
+          "sql": {
+            "maxLength": 100000,
+            "minLength": 1,
+            "title": "Sql",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sql"
+        ],
+        "title": "PlanInput",
         "type": "object"
       },
       "PluginUpdate": {
@@ -2599,6 +2653,70 @@
         "summary": "Me"
       }
     },
+    "/api/v1/me/dtb-token": {
+      "get": {
+        "operationId": "token_status_api_v1_me_dtb_token_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DtbTokenStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Token Status"
+      },
+      "put": {
+        "operationId": "save_token_api_v1_me_dtb_token_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DtbTokenInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DtbTokenStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Save Token"
+      }
+    },
     "/api/v1/plugins": {
       "get": {
         "operationId": "list_plugins_api_v1_plugins_get",
@@ -2844,6 +2962,219 @@
           }
         ],
         "summary": "Update Provider"
+      }
+    },
+    "/api/v1/queries/plan": {
+      "post": {
+        "operationId": "plan_api_v1_queries_plan_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlanInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Plan"
+      }
+    },
+    "/api/v1/queries/{query_id}": {
+      "get": {
+        "operationId": "get_result_api_v1_queries__query_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "query_id",
+            "required": true,
+            "schema": {
+              "title": "Query Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Result"
+      }
+    },
+    "/api/v1/queries/{query_id}/download": {
+      "get": {
+        "operationId": "download_api_v1_queries__query_id__download_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "query_id",
+            "required": true,
+            "schema": {
+              "title": "Query Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "format",
+            "required": false,
+            "schema": {
+              "default": "csv",
+              "enum": [
+                "csv",
+                "xlsx",
+                "json"
+              ],
+              "title": "Format",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Download"
+      }
+    },
+    "/api/v1/queries/{query_id}/execute": {
+      "post": {
+        "operationId": "execute_api_v1_queries__query_id__execute_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "query_id",
+            "required": true,
+            "schema": {
+              "title": "Query Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExecuteInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Execute"
+      }
+    },
+    "/api/v1/query-audit": {
+      "get": {
+        "operationId": "audit_api_v1_query_audit_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Audit"
       }
     },
     "/api/v1/search": {

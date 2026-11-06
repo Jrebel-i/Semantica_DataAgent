@@ -574,6 +574,9 @@ from .task_api import router as task_router
 
 from .personal_settings import router as personal_settings_router
 
+from .query_api import router as query_router
+
+app.include_router(query_router)
 app.include_router(personal_settings_router)
 app.include_router(table_router)
 app.include_router(task_router)
