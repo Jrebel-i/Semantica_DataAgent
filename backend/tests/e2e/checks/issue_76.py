@@ -194,11 +194,13 @@ def check_dtb_pull(ctx):
             key = key_for(sql)
             limit = request.get("defaultLimit")
             allowed = (
-                limit in {0}
-                if key in {"metadata", "task", "table", "stats"}
-                else limit in {100, 50000}
-                if key.startswith("dim_")
-                else False
+                isinstance(limit, int)
+                and not isinstance(limit, bool)
+                and limit >= 0
+                and (
+                    key in {"metadata", "task", "table", "stats"}
+                    or limit in {100, 50000}
+                )
             )
             if not allowed or request.get("dataSource") != "doris_ai":
                 self.send({}, status=400)
