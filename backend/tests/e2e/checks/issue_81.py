@@ -6,6 +6,32 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Thread
 
 
+def screenshot(ctx, result=False):
+    if not os.environ.get("ISSUE81_SCREENSHOTS"):
+        return
+    from pathlib import Path
+
+    from playwright.sync_api import sync_playwright
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        try:
+            page = browser.new_page(viewport={"width": 1440, "height": 900})
+            page.goto(ctx.runtime.base_url, wait_until="domcontentloaded")
+            page.evaluate("token => localStorage.setItem('token', token)", ctx.token)
+            page.goto(ctx.runtime.base_url + "/chat", wait_until="networkidle")
+            page.locator(
+                ".query-result-preview" if result else ".query-plan-card"
+            ).wait_for(timeout=15000)
+            output = Path(os.environ["ISSUE81_SCREENSHOTS"])
+            output.mkdir(parents=True, exist_ok=True)
+            page.screenshot(
+                path=str(output / ("result-1440.png" if result else "plan-1440.png"))
+            )
+        finally:
+            browser.close()
+
+
 def events(body):
     found = []
     for block in body.split("\n\n"):
@@ -108,6 +134,7 @@ def check_online_query_confirmation(ctx):
             return [call for call in calls if "_dataagent_query" in call.get("sql", "")]
 
         ctx.require(not executions(), f"query ran before confirmation: {calls}")
+        screenshot(ctx)
         info = next(data for name, data in initial if name == "conversation")
         plan = plan_events[0]
         path = f"/api/v1/conversations/{info['conversation_id']}/turns/{info['turn_id']}/queries/{plan['id']}/execute"
@@ -154,6 +181,7 @@ def check_online_query_confirmation(ctx):
             == b"sales\n12345\n",
             "download failed",
         )
+        screenshot(ctx, result=True)
         return {
             "conversation_id": info["conversation_id"],
             "rows": result["rows"],
