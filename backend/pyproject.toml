@@ -30,6 +30,11 @@ dtb = "semantica_dataagent.dtb_tasks:DtbTaskParser"
 [project.entry-points."semantica_dataagent.executors"]
 dtb = "semantica_dataagent.dtb_executor:DtbExecutor"
 
+[project.entry-points."semantica_dataagent.agent_runners"]
+pi = "semantica_dataagent.pi_runner:PiRunner"
+claude = "semantica_dataagent.claude_runner:ClaudeRunner"
+codex = "semantica_dataagent.codex_runner:CodexRunner"
+
 [project.scripts]
 semantica-dataagent = "semantica_dataagent.cli:main"
 [dependency-groups]

@@ -4,6 +4,8 @@ The REST layer only knows about this module. Each adapter (pi today, Claude and
 Codex later) turns its own wire protocol into the same stream of events.
 """
 
+from importlib.metadata import entry_points
+
 from .agent_types import (
     CLARIFICATION,
     DONE,
@@ -17,6 +19,7 @@ from .agent_types import (
     AgentTurnRequest,
     ProviderConfig,
 )
+from .plugins import AGENT_RUNNER_GROUP
 
 __all__ = [
     "CLARIFICATION",
@@ -33,15 +36,37 @@ __all__ = [
 ]
 
 
-def _make_runners() -> dict[str, AgentRunner]:
-    from .claude_runner import ClaudeRunner
-    from .codex_runner import CodexRunner
-    from .pi_runner import PiRunner
+def discover_runners(registered=None) -> dict[str, AgentRunner]:
+    """Load agent runners from the same entry-point registry as other plugins.
 
-    return {"pi": PiRunner(), "claude": ClaudeRunner(), "codex": CodexRunner()}
+    ``registered`` is injectable so tests can register a throwaway runner
+    without adding it to the package metadata.
+    """
+
+    if registered is None:
+        registered = entry_points(group=AGENT_RUNNER_GROUP)
+    found: dict[str, AgentRunner] = {}
+    for entry_point in registered:
+        runner = entry_point.load()()
+        agent_id = getattr(runner, "agent_id", None)
+        if not isinstance(agent_id, str) or not agent_id:
+            raise TypeError(f"Agent runner {entry_point.name!r} has no agent_id")
+        if agent_id != entry_point.name:
+            raise ValueError(
+                f"Agent runner entry point {entry_point.name!r} returned "
+                f"agent_id {agent_id!r}"
+            )
+        if not callable(getattr(runner, "available", None)):
+            raise TypeError(f"Agent runner {agent_id!r} has no available()")
+        if not callable(getattr(runner, "run", None)):
+            raise TypeError(f"Agent runner {agent_id!r} has no run()")
+        if agent_id in found:
+            raise ValueError(f"Duplicate agent runner: {agent_id}")
+        found[agent_id] = runner
+    return found
 
 
-RUNNERS: dict[str, AgentRunner] = _make_runners()
+RUNNERS: dict[str, AgentRunner] = discover_runners()
 
 
 def get_runner(agent_id: str) -> AgentRunner | None:
