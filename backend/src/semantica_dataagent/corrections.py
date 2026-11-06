@@ -12,7 +12,7 @@ from pydantic import Field
 from . import knowledge
 from .clarification import _owned_conversation
 from .db import CorrectionProposal, sessions
-from .mcp_context import current_conversation_id, current_requester
+from .mcp_context import bind_mcp_context, current_conversation_id, current_requester
 
 Text = Annotated[str, Field(min_length=1, max_length=20000, pattern=r"\S")]
 
@@ -106,7 +106,7 @@ from pydantic import BaseModel
 from sqlalchemy import text
 
 from .api_time import UtcDatetime
-from .auth import admin
+from .auth import Requester, admin
 from .auth import current_requester as rest_requester
 from .build_queue import add_queued_build, build_queue
 from .db import MetadataOverride, Token
@@ -135,6 +135,23 @@ class ProposalView(BaseModel):
 
 class Approval(BaseModel):
     patch: Text | None = None
+
+
+class ProposalCreate(BaseModel):
+    target: Text
+    patch: Text
+    reason: Text
+
+
+@router.post("/api/v1/corrections", status_code=201)
+def create_proposal(
+    body: ProposalCreate, requester: Annotated[Requester, Depends(rest_requester)]
+):
+    try:
+        with bind_mcp_context(requester):
+            return propose_correction(body.target, body.patch, body.reason)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
 
 
 @router.get("/api/v1/corrections", response_model=list[ProposalView])

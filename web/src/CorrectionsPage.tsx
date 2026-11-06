@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { Alert } from "antd";
 import type { Messages } from "./i18n";
 
 type Proposal = {
@@ -67,60 +68,111 @@ export function CorrectionsPage({
     }
   }
   return (
-    <section>
-      <h2>{gaps ? t.gapTitle : t.correctionTitle}</h2>
-      {error && <p role="alert">{error}</p>}
+    <section className="stack">
+      <div className="page-header">
+        <div>
+          <h1 className="page-title">
+            {gaps ? t.gapTitle : t.correctionTitle}
+          </h1>
+          <p className="page-subtitle">{gaps ? t.gapHint : t.correctionHint}</p>
+        </div>
+        <button type="button" onClick={() => void refresh()}>
+          {t.refresh}
+        </button>
+      </div>
+      {error && <Alert type="error" title={error} />}
       {gaps ? (
-        missing.map((g) => (
-          <article key={g.id}>
-            <h3>{g.question}</h3>
-            <p>{g.missing}</p>
-          </article>
-        ))
-      ) : (
-        <>
-          <ul>
-            {rows.map((row) => (
-              <li key={row.id}>
-                <button
-                  onClick={() => {
-                    setSelected(row);
-                    setPatch(row.patch);
-                  }}
-                >
-                  {row.target} — {row.status}
-                </button>
-              </li>
-            ))}
-          </ul>
-          {selected && (
-            <article>
-              <h3>{selected.target}</h3>
-              <p>{selected.reason}</p>
-              <pre>{selected.diff}</pre>
-              {selected.status === "pending" && (
-                <>
-                  <label>
-                    {t.correctionPatch}
-                    <textarea
-                      value={patch}
-                      onChange={(e) => setPatch(e.target.value)}
-                    />
-                  </label>
-                  <button onClick={() => void review("approve")}>
-                    {t.correctionApprove}
-                  </button>
-                  <button onClick={() => void review("approve", true)}>
-                    {t.correctionApproveEdited}
-                  </button>
-                  <button onClick={() => void review("reject")}>
-                    {t.correctionReject}
-                  </button>
-                </>
-              )}
+        missing.length === 0 ? (
+          <div className="empty-state">{t.emptyContext}</div>
+        ) : (
+          missing.map((gap) => (
+            <article className="gap-card" key={gap.id}>
+              <h3>{gap.question}</h3>
+              <p>{gap.missing}</p>
             </article>
-          )}
-        </>
+          ))
+        )
+      ) : (
+        <div className="correction-layout">
+          <section className="card section-card">
+            <div className="card-title-row">
+              <h2 className="card-title">{t.correctionTitle}</h2>
+              <span className="muted">{rows.length}</span>
+            </div>
+            {rows.length === 0 ? (
+              <div className="empty-state">{t.emptyContext}</div>
+            ) : (
+              <ul className="correction-list">
+                {rows.map((row) => (
+                  <li key={row.id}>
+                    <button
+                      className={selected?.id === row.id ? "active" : ""}
+                      onClick={() => {
+                        setSelected(row);
+                        setPatch(row.patch);
+                      }}
+                    >
+                      <span className="mono">{row.target}</span>
+                      <span className="subtle"> — {row.status}</span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+          <section className="card section-card">
+            {selected ? (
+              <>
+                <div className="card-title-row">
+                  <h2 className="card-title mono">{selected.target}</h2>
+                </div>
+                <p className="muted">{selected.reason}</p>
+                <pre className="diff-block">{selected.diff}</pre>
+                {selected.status === "pending" && (
+                  <>
+                    <div className="field">
+                      <label className="field-label" htmlFor="review-patch">
+                        {t.correctionPatch}
+                      </label>
+                      <textarea
+                        id="review-patch"
+                        aria-label={t.correctionPatch}
+                        rows={6}
+                        value={patch}
+                        onChange={(event) => setPatch(event.target.value)}
+                      />
+                      <p className="field-hint">{t.correctionPatchHint}</p>
+                    </div>
+                    <div className="save-bar">
+                      <button
+                        type="button"
+                        className="primary"
+                        onClick={() => void review("approve")}
+                      >
+                        {t.correctionApprove}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void review("approve", true)}
+                      >
+                        {t.correctionApproveEdited}
+                      </button>
+                      <button
+                        type="button"
+                        className="danger"
+                        onClick={() => void review("reject")}
+                      >
+                        {t.correctionReject}
+                      </button>
+                    </div>
+                  </>
+                )}
+              </>
+            ) : (
+              <div className="empty-state">{t.noSelection}</div>
+            )}
+          </section>
+        </div>
       )}
     </section>
   );

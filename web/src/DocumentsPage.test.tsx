@@ -11,6 +11,14 @@ afterEach(() => {
 
 test("browses categories, generated index and numbered document", async () => {
   vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  );
+  vi.stubGlobal(
     "fetch",
     vi.fn(async (url: string) => {
       if (url === "/api/v1/categories")

@@ -286,9 +286,20 @@ async def ask(
                 raise HTTPException(
                     409, "Conversation session expired and cannot be resumed"
                 )
-            agent_id = body.agent or conversation.agent
-            provider_id = body.provider_id or conversation.provider_id
-            model = body.model or conversation.model
+            if any(
+                requested is not None and requested != saved
+                for requested, saved in (
+                    (body.agent, conversation.agent),
+                    (body.provider_id, conversation.provider_id),
+                    (body.model, conversation.model),
+                )
+            ):
+                raise HTTPException(
+                    409, "Start a new conversation to change agent or model"
+                )
+            agent_id = conversation.agent
+            provider_id = conversation.provider_id
+            model = conversation.model
             sequence = (
                 db.query(func.max(Turn.sequence))
                 .filter(Turn.conversation_id == conversation.id)

@@ -1,8 +1,16 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
-import { Alert, Button, Input, Space, Tag, Typography } from "antd";
+import { Alert, Button, Input, Space, Tag, Tabs } from "antd";
 import type { components, paths } from "./api";
 import type { Messages } from "./i18n";
+import { TaskLineage } from "./TaskLineage";
+import {
+  CloseOutlined,
+  MenuFoldOutlined,
+  MenuUnfoldOutlined,
+} from "@ant-design/icons";
+import { parseAgentProfiles, type AgentProfiles } from "./agentProfiles";
+import { HighlightedSql, Markdown } from "./Markdown";
 
 type Agent = components["schemas"]["AgentView"];
 type Provider = components["schemas"]["ProviderView"];
@@ -22,6 +30,7 @@ type ToolCall = {
   name: string;
   summary: string;
   status: "running" | "done" | "error";
+  input?: string;
   result?: string;
 };
 type Clarification = {
@@ -108,6 +117,7 @@ function applyToolStart(
       name: String(data.name ?? "tool"),
       summary: String(data.summary ?? ""),
       status: "running",
+      input: String(data.summary ?? ""),
     },
   ];
 }
@@ -225,32 +235,45 @@ function ToolList({
 }) {
   if (tools.length === 0) return null;
   return (
-    <section aria-label={messages.toolCalls}>
-      <Typography.Title level={5}>{messages.toolCalls}</Typography.Title>
-      <ul>
-        {tools.map((tool) => (
-          <li key={tool.id}>
-            <Tag
-              color={
-                tool.status === "running"
-                  ? "processing"
-                  : tool.status === "error"
-                    ? "error"
-                    : "success"
-              }
-            >
+    <section aria-label={messages.toolCalls} className="tool-log">
+      {tools.map((tool) => (
+        <details className="tool-step" key={tool.id}>
+          <summary title={`${tool.name} ${tool.summary}`}>
+            <span className="tool-name">{toolLabel(tool.name)}</span>
+            <code className="tool-raw">{tool.name}</code>
+            <span className="tool-summary">{tool.summary || "—"}</span>
+            <span className={`tool-status ${tool.status}`}>
               {tool.status === "running"
                 ? messages.toolRunning
                 : tool.status === "error"
                   ? messages.toolFailed
                   : messages.toolDone}
-            </Tag>
-            <code>{tool.name}</code> {tool.summary}
-          </li>
-        ))}
-      </ul>
+            </span>
+          </summary>
+          <dl className="tool-detail">
+            <dt>{messages.parameters}</dt>
+            <dd>{tool.input || tool.summary || "—"}</dd>
+            <dt>{messages.result}</dt>
+            <dd>{tool.result || tool.summary || "—"}</dd>
+          </dl>
+        </details>
+      ))}
     </section>
   );
+}
+
+function toolLabel(name: string) {
+  const base = name.replace(/^mcp__[^_]+__/, "");
+  const labels: Record<string, string> = {
+    search_knowledge: "检索知识",
+    describe_tables: "查看表结构",
+    get_lineage: "查看血缘",
+    validate_sql: "校验 SQL",
+    run_sql: "执行查询",
+    get_capabilities: "读取能力",
+    ask_dataagent: "委托问答",
+  };
+  return labels[base] ?? base.replace(/_/g, " ");
 }
 
 function SqlList({
@@ -267,16 +290,20 @@ function SqlList({
   if (blocks.length === 0) return null;
   return (
     <section aria-label={messages.sqlBlocks}>
-      <Typography.Title level={5}>{messages.sqlBlocks}</Typography.Title>
       {blocks.map((block, index) => (
-        <div key={`${index}-${block.sql.slice(0, 40)}`}>
-          {block.dialect && <Tag>{block.dialect}</Tag>}
+        <div className="sql-block" key={`${index}-${block.sql.slice(0, 40)}`}>
+          <div className="sql-block-head">
+            <span>{block.dialect || messages.sqlBlocks}</span>
+            <Button type="text" onClick={() => onCopy(block.sql)}>
+              {copied === block.sql ? messages.sqlCopied : messages.copySql}
+            </Button>
+          </div>
           <pre aria-label={messages.sqlBlocks}>
-            <code>{block.sql}</code>
+            <code>
+              <HighlightedSql sql={block.sql} />
+            </code>
           </pre>
-          <Button onClick={() => onCopy(block.sql)}>
-            {copied === block.sql ? messages.sqlCopied : messages.copySql}
-          </Button>
+          <span className="sr-only">{block.sql}</span>
         </div>
       ))}
     </section>
@@ -292,21 +319,47 @@ function CitationList({
   messages: Messages;
   onOpen: (ref: string) => void;
 }) {
+  const [expanded, setExpanded] = useState(false);
   if (citations.length === 0) return null;
+  const visible = expanded ? citations : citations.slice(0, 6);
+  const countOf = (citation: Citation) =>
+    citation.type === "table" || citation.ref.startsWith("table:")
+      ? messages.dataTables
+      : citation.type === "field" || citation.ref.startsWith("field:")
+        ? messages.fields
+        : messages.knowledgeDocuments;
+  const shortOf = (citation: Citation) => {
+    const value = citation.ref.slice(citation.ref.indexOf(":") + 1);
+    return value.length > 34 ? `${value.slice(0, 32)}…` : value;
+  };
   return (
     <section aria-label={messages.citations}>
-      <Typography.Title level={5}>{messages.citations}</Typography.Title>
-      <Space wrap>
-        {citations.map((citation) => (
-          <Button
+      <div className="citation-list">
+        {visible.map((citation) => (
+          <button
+            type="button"
+            className={`citation-chip ${citation.type}`}
             key={citation.ref}
-            type="link"
+            aria-label={citation.ref}
+            title={citation.ref}
             onClick={() => onOpen(citation.ref)}
           >
-            {citation.ref}
-          </Button>
+            <span className="citation-kind">{countOf(citation)}</span>
+            <span className="citation-label">{shortOf(citation)}</span>
+          </button>
         ))}
-      </Space>
+        {citations.length > 6 && (
+          <button
+            type="button"
+            className="citation-chip citation-more"
+            onClick={() => setExpanded((value) => !value)}
+          >
+            {expanded
+              ? messages.close
+              : `${messages.showMore} ${citations.length - 6} ${messages.moreCount}`}
+          </button>
+        )}
+      </div>
     </section>
   );
 }
@@ -328,8 +381,8 @@ function ClarificationList({
   if (groups.length === 0) return null;
   return (
     <section aria-label={messages.clarification}>
-      <Typography.Title level={5}>{messages.clarification}</Typography.Title>
-      <p>{messages.clarificationHint}</p>
+      <h4 className="context-section-title">{messages.clarification}</h4>
+      <p className="muted">{messages.clarificationHint}</p>
       {groups.map((questions, index) => (
         <div key={index}>
           {questions.map((question, questionIndex) => (
@@ -386,27 +439,90 @@ function TurnBlock({
   const tools = toolsOfTurn(turn.events ?? []);
   const clarifications = clarificationsOfTurn(turn.events ?? []);
   return (
-    <article>
-      <Typography.Title level={4}>{turn.question}</Typography.Title>
-      <ToolList tools={tools} messages={messages} />
-      <Typography.Paragraph style={{ whiteSpace: "pre-wrap" }}>
-        {turn.answer}
-      </Typography.Paragraph>
-      {turn.error && <Alert type="error" title={turn.error} />}
-      <SqlList
-        blocks={sql}
-        messages={messages}
-        copied={copied}
-        onCopy={onCopy}
-      />
-      <CitationList citations={citations} messages={messages} onOpen={onOpen} />
-      <ClarificationList
-        groups={clarifications}
-        messages={messages}
-        disabled={false}
-        onSelect={onClarify}
-      />
+    <article className="turn">
+      <div className="message">
+        <span className="avatar user" aria-hidden="true">
+          我
+        </span>
+        <div className="message-body">
+          <QuestionText text={turn.question} messages={messages} />
+        </div>
+      </div>
+      <div className="message">
+        <span className="avatar ai" aria-hidden="true">
+          AI
+        </span>
+        <div className="message-body">
+          <ToolList tools={tools} messages={messages} />
+          <div className="answer">
+            <Markdown text={turn.answer} />
+          </div>
+          {turn.error && <Alert type="error" title={turn.error} />}
+          <SqlList
+            blocks={sql}
+            messages={messages}
+            copied={copied}
+            onCopy={onCopy}
+          />
+          <CitationList
+            citations={citations}
+            messages={messages}
+            onOpen={onOpen}
+          />
+          <ClarificationList
+            groups={clarifications}
+            messages={messages}
+            disabled={false}
+            onSelect={onClarify}
+          />
+        </div>
+      </div>
     </article>
+  );
+}
+
+function QuestionText({
+  text,
+  messages,
+}: {
+  text: string;
+  messages: Messages;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const [overflowing, setOverflowing] = useState(text.split("\n").length > 6);
+  const textRef = useRef<HTMLParagraphElement>(null);
+  useEffect(() => {
+    setExpanded(false);
+    setOverflowing(text.split("\n").length > 6);
+  }, [text]);
+  useEffect(() => {
+    const element = textRef.current;
+    if (!element || expanded) return;
+    const measure = () => {
+      if (element.scrollHeight > element.clientHeight + 1) setOverflowing(true);
+    };
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [text, expanded]);
+  return (
+    <>
+      <p ref={textRef} className={`question-text${expanded ? "" : " clamped"}`}>
+        {text}
+      </p>
+      {(overflowing || expanded) && (
+        <button
+          type="button"
+          className="question-toggle"
+          aria-expanded={expanded}
+          onClick={() => setExpanded((value) => !value)}
+        >
+          {expanded ? messages.collapseMessage : messages.expandMessage}
+        </button>
+      )}
+    </>
   );
 }
 
@@ -414,12 +530,25 @@ export function ChatPage({
   token,
   role,
   messages: t,
+  settingsOnly = false,
 }: {
   token: string;
   role: string;
   messages: Messages;
+  settingsOnly?: boolean;
 }) {
   const [agents, setAgents] = useState<Agent[]>([]);
+  const [profiles, setProfiles] = useState<AgentProfiles>({});
+  const openedRecent = useRef(false);
+  const selectionTouched = useRef(false);
+  const askSequence = useRef(0);
+  const [defaults, setDefaults] = useState({
+    agent: "pi",
+    provider: "",
+    model: "",
+  });
+  const [contextOpen, setContextOpen] = useState(true);
+  const [contextTab, setContextTab] = useState("plan");
   const [providers, setProviders] = useState<Provider[]>([]);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [agentId, setAgentId] = useState("pi");
@@ -435,6 +564,7 @@ export function ChatPage({
   const [error, setError] = useState("");
   const [copied, setCopied] = useState("");
   const [citationRef, setCitationRef] = useState("");
+  const citationSequence = useRef(0);
   const [citationDetail, setCitationDetail] = useState<CitationDetail | null>(
     null,
   );
@@ -451,17 +581,29 @@ export function ChatPage({
   const [providerError, setProviderError] = useState("");
   const [providerNotice, setProviderNotice] = useState("");
 
+  useEffect(() => {
+    if (citationDetail) setContextTab("schema");
+  }, [citationDetail]);
+
   const refreshConversations = useCallback(async () => {
     try {
       const response = await fetch("/api/v1/conversations", {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (!response.ok) throw new Error();
-      setConversations((await response.json()) as Conversation[]);
+      const rows = (await response.json()) as Conversation[];
+      if (!Array.isArray(rows)) throw new Error("Invalid conversation list");
+      setConversations(rows);
+      if (!openedRecent.current && !settingsOnly) {
+        if (rows.length) {
+          openedRecent.current = true;
+          void openConversation(rows[0].id);
+        }
+      }
     } catch {
       setError(t.askError);
     }
-  }, [token, t.askError]);
+  }, [token, t.askError, settingsOnly]);
 
   const loadProviders = useCallback(async () => {
     try {
@@ -494,9 +636,16 @@ export function ChatPage({
         if (!agentsResponse.ok || !providersResponse.ok) throw new Error();
         const agentRows = (await agentsResponse.json()) as Agent[];
         const providerRows = (await providersResponse.json()) as Provider[];
+        if (!Array.isArray(agentRows) || !Array.isArray(providerRows))
+          throw new Error("Invalid agent or provider list");
         setAgents(agentRows);
         const available = agentRows.find((agent) => agent.available);
-        if (available) setAgentId(available.id);
+        if (available && !selectionTouched.current)
+          setAgentId((current) =>
+            agentRows.some((agent) => agent.id === current && agent.available)
+              ? current
+              : available.id,
+          );
         setProviders(providerRows);
         setProviderId((current) => current || providerRows[0]?.id || "");
         setModel((current) => current || providerRows[0]?.models[0] || "");
@@ -511,9 +660,82 @@ export function ChatPage({
     void refreshConversations();
   }, [refreshConversations]);
 
+  useEffect(() => {
+    void fetch("/api/v1/assistant-defaults", {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then(async (response) => {
+        if (!response.ok) return;
+        const data = (await response.json()) as {
+          assistant_agent?: string | null;
+          assistant_provider_id?: string | null;
+          assistant_model?: string | null;
+          assistant_agent_profiles?: string | null;
+        };
+        const parsedProfiles = parseAgentProfiles(
+          data.assistant_agent_profiles,
+        );
+        setProfiles(parsedProfiles);
+        const agent = data.assistant_agent || "pi";
+        const profile = parsedProfiles[agent];
+        const next = {
+          agent,
+          provider:
+            profile?.default_provider || data.assistant_provider_id || "",
+          model: profile?.default_model || data.assistant_model || "",
+        };
+        setDefaults(next);
+        if (!openedRecent.current && !selectionTouched.current) {
+          setAgentId(next.agent);
+          if (next.provider) setProviderId(next.provider);
+          if (next.model) setModel(next.model);
+        }
+      })
+      .catch(() => {});
+  }, [token]);
+
+  useEffect(() => {
+    if (selectionTouched.current || openedRecent.current || !providers.length)
+      return;
+    const profile = profiles[defaults.agent];
+    const options = providers.filter(
+      (provider) =>
+        !profile?.providers.length || profile.providers.includes(provider.id),
+    );
+    const chosen =
+      options.find((provider) => provider.id === defaults.provider) ??
+      options[0];
+    setProviderId(chosen?.id || "");
+    setModel(
+      chosen?.models.includes(defaults.model)
+        ? defaults.model
+        : chosen?.models[0] || "",
+    );
+  }, [providers, profiles, defaults]);
+
   const activeProvider = providers.find((item) => item.id === providerId);
 
+  function selectAgent(value: string) {
+    selectionTouched.current = true;
+    setAgentId(value);
+    const profile = profiles[value];
+    const options = providers.filter(
+      (provider) =>
+        !profile?.providers.length || profile.providers.includes(provider.id),
+    );
+    const chosen =
+      options.find((provider) => provider.id === profile?.default_provider) ??
+      options[0];
+    setProviderId(chosen?.id || "");
+    setModel(
+      profile?.default_model && chosen?.models.includes(profile.default_model)
+        ? profile.default_model
+        : chosen?.models[0] || "",
+    );
+  }
+
   function selectProvider(value: string) {
+    selectionTouched.current = true;
     setProviderId(value);
     const provider = providers.find((item) => item.id === value);
     setModel(provider?.models[0] || "");
@@ -526,6 +748,12 @@ export function ChatPage({
   async function submitPrompt(prompt: string) {
     const trimmed = prompt.trim();
     if (!trimmed || !providerId || !model || sending) return;
+    selectionTouched.current = true;
+    const sequence = ++askSequence.current;
+    let conversationId = currentConversationId;
+    citationSequence.current += 1;
+    setCitationRef("");
+    setCitationDetail(null);
     setSending(true);
     setError("");
     setLive({
@@ -565,6 +793,10 @@ export function ChatPage({
           name === "conversation" &&
           typeof data.conversation_id === "string"
         ) {
+          // Keep the live answer mounted; reloading the list must not replace
+          // it with a partially persisted turn.
+          openedRecent.current = true;
+          conversationId = data.conversation_id;
           setCurrentConversationId(data.conversation_id);
         } else if (name === "text_delta" && typeof data.text === "string") {
           updateLive((current) => ({
@@ -605,6 +837,9 @@ export function ChatPage({
         }
       });
       await refreshConversations();
+      if (conversationId) {
+        await loadCompletedConversation(conversationId, sequence);
+      }
     } catch (caught) {
       const message = caught instanceof Error ? caught.message : t.askError;
       setError(message);
@@ -650,13 +885,7 @@ export function ChatPage({
       });
       if (!response.ok) throw new Error();
       const detail = (await response.json()) as ConversationDetail;
-      setCurrentConversationId(detail.id);
-      setResumable(detail.resumable !== false);
-      setTurns(detail.turns);
-      setLive(null);
-      setAgentId(detail.agent);
-      setProviderId(detail.provider_id);
-      setModel(detail.model);
+      applyConversation(detail);
     } catch {
       setError(t.askError);
     } finally {
@@ -664,15 +893,85 @@ export function ChatPage({
     }
   }
 
+  function applyConversation(detail: ConversationDetail) {
+    selectionTouched.current = true;
+    setCurrentConversationId(detail.id);
+    setResumable(detail.resumable !== false);
+    setTurns(detail.turns);
+    citationSequence.current += 1;
+    setCitationRef("");
+    setCitationDetail(null);
+    setLive(null);
+    setAgentId(detail.agent);
+    setProviderId(detail.provider_id);
+    setModel(detail.model);
+  }
+
+  async function loadCompletedConversation(id: string, sequence: number) {
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      try {
+        const response = await fetch(`/api/v1/conversations/${id}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!response.ok) return;
+        const detail = (await response.json()) as ConversationDetail;
+        if (sequence !== askSequence.current) return;
+        const last = detail.turns.at(-1);
+        if (last && last.status !== "running") {
+          applyConversation(detail);
+          return;
+        }
+      } catch {
+        return;
+      }
+      await new Promise((resolve) =>
+        window.setTimeout(resolve, 100 * (attempt + 1)),
+      );
+    }
+  }
+
   function newConversation() {
+    selectionTouched.current = true;
     setCurrentConversationId("");
+    setAgentId(defaults.agent);
+    const profile = profiles[defaults.agent];
+    const options = providers.filter(
+      (provider) =>
+        !profile?.providers.length || profile.providers.includes(provider.id),
+    );
+    const chosen =
+      options.find((provider) => provider.id === defaults.provider) ??
+      options[0];
+    setProviderId(chosen?.id || "");
+    setModel(
+      chosen?.models.includes(defaults.model)
+        ? defaults.model
+        : chosen?.models[0] || "",
+    );
     setResumable(true);
     setTurns([]);
+    citationSequence.current += 1;
+    setCitationRef("");
+    setCitationDetail(null);
     setLive(null);
     setError("");
   }
 
+  useEffect(() => {
+    const citations = live
+      ? live.citations
+      : citationsOf(turns.at(-1)?.citations);
+    const ref = citations.find(
+      (citation) =>
+        citation.type === "table" || citation.ref.startsWith("table:"),
+    )?.ref;
+    if (ref && ref !== citationRef) void openCitation(ref);
+    // Follow the latest answer; manual citation choices remain until the answer changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [live?.citations, turns]);
+
   async function openCitation(ref: string) {
+    const sequence = ++citationSequence.current;
     setCitationRef(ref);
     setCitationDetail(null);
     setCitationError("");
@@ -683,16 +982,17 @@ export function ChatPage({
       if (type === "table" || type === "field") {
         const tableName =
           type === "field" ? value.split(".").slice(0, 2).join(".") : value;
+        const [database, ...nameParts] = tableName.split(".");
         const response = await fetch(
-          `/api/v1/tables?${new URLSearchParams({ search: tableName })}`,
+          `/api/v1/tables?${new URLSearchParams({ database, search: nameParts.join(".") })}`,
           { headers: { Authorization: `Bearer ${token}` } },
         );
         if (!response.ok) throw new Error();
         const rows = (await response.json()) as TableRow[];
+        if (sequence !== citationSequence.current) return;
         const table =
           rows.find((row) => row.ref === ref) ??
-          rows.find((row) => `${row.database}.${row.name}` === tableName) ??
-          rows[0];
+          rows.find((row) => `${row.database}.${row.name}` === tableName);
         if (!table) {
           setCitationDetail({
             kind: "message",
@@ -703,17 +1003,15 @@ export function ChatPage({
           setCitationDetail({ kind: "table", ref, table });
         }
       } else if (type === "document") {
-        const docId = value.split("#", 1)[0];
+        const docId = `document:${value.split("#", 1)[0]}`;
         const response = await fetch(
           `/api/v1/document?${new URLSearchParams({ doc_id: docId })}`,
           { headers: { Authorization: `Bearer ${token}` } },
         );
         if (!response.ok) throw new Error();
-        setCitationDetail({
-          kind: "document",
-          ref,
-          document: (await response.json()) as DocumentView,
-        });
+        const document = (await response.json()) as DocumentView;
+        if (sequence !== citationSequence.current) return;
+        setCitationDetail({ kind: "document", ref, document });
       } else {
         setCitationDetail({
           kind: "message",
@@ -722,9 +1020,10 @@ export function ChatPage({
         });
       }
     } catch {
-      setCitationError(t.citationNotFound);
+      if (sequence === citationSequence.current)
+        setCitationError(t.citationNotFound);
     } finally {
-      setCitationLoading(false);
+      if (sequence === citationSequence.current) setCitationLoading(false);
     }
   }
 
@@ -823,340 +1122,608 @@ export function ChatPage({
     question.trim() && providerId && model && !sending && resumable,
   );
 
-  return (
-    <section>
-      <Typography.Title level={2}>{t.chat}</Typography.Title>
-      {error && <Alert type="error" title={error} />}
-      <Space wrap>
-        <Button onClick={newConversation} disabled={sending}>
-          {t.newConversation}
-        </Button>
-        <Button
-          onClick={() => void refreshConversations()}
-          disabled={sending || loadingConversation}
-        >
-          {t.refresh}
-        </Button>
-      </Space>
-      <div>
-        <Typography.Title level={4}>{t.conversationList}</Typography.Title>
-        {conversations.length === 0 ? (
-          <p>{t.noConversations}</p>
-        ) : (
-          <ul>
-            {conversations.map((conversation) => (
-              <li key={conversation.id}>
-                <Button
-                  type="link"
-                  onClick={() => void openConversation(conversation.id)}
-                  disabled={sending}
-                >
-                  {conversation.title}
-                  {conversation.resumable === false && ` (${t.sessionExpired})`}
-                </Button>
-                <span>
-                  {" "}
-                  {conversation.turn_count} {t.turnCount}
-                </span>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
-      <form onSubmit={(event) => void ask(event)}>
-        <Space wrap>
-          <label>
-            {t.askAgent}{" "}
-            <select
-              aria-label={t.askAgent}
-              value={agentId}
-              onChange={(event) => setAgentId(event.target.value)}
-            >
-              {agents.map((agent) => (
-                <option
-                  key={agent.id}
-                  value={agent.id}
-                  disabled={!agent.available}
-                >
-                  {agent.name}
-                  {agent.available ? "" : ` (${t.unavailable})`}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            {t.askProvider}{" "}
-            <select
-              aria-label={t.askProvider}
-              value={providerId}
-              onChange={(event) => selectProvider(event.target.value)}
-            >
-              {providers.length === 0 && (
-                <option value="">{t.noProviders}</option>
-              )}
-              {providers.map((provider) => (
-                <option key={provider.id} value={provider.id}>
-                  {provider.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            {t.askModel}{" "}
-            <select
-              aria-label={t.askModel}
-              value={model}
-              onChange={(event) => setModel(event.target.value)}
-              disabled={!activeProvider}
-            >
-              {(activeProvider?.models ?? []).map((item) => (
-                <option key={item} value={item}>
-                  {item}
-                </option>
-              ))}
-            </select>
-          </label>
-        </Space>
-        {!resumable && <Alert type="info" title={t.sessionExpired} />}
-        <label style={{ display: "block", marginTop: 12 }}>
-          {t.askQuestion}
-          <Input.TextArea
-            aria-label={t.askQuestion}
-            value={question}
-            onChange={(event) => setQuestion(event.target.value)}
-            rows={3}
-            disabled={!resumable}
-          />
-        </label>
-        <Button
-          htmlType="submit"
-          type="primary"
-          disabled={!canAsk}
-          style={{ marginTop: 8 }}
-        >
-          {sending ? t.asking : t.askSubmit}
-        </Button>
-      </form>
-
-      {loadingConversation && <p>{t.loadingConversation}</p>}
-      {turns.map((turn) => (
-        <TurnBlock
-          key={turn.id}
-          turn={turn}
+  const currentConversation = conversations.find(
+    (conversation) => conversation.id === currentConversationId,
+  );
+  const selectedTable =
+    citationDetail?.kind === "table" ? citationDetail.table : null;
+  const shortTime = (value: string) => {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return "—";
+    return date.toLocaleString(undefined, {
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  };
+  const closeCitation = () => {
+    citationSequence.current += 1;
+    setCitationRef("");
+    setCitationDetail(null);
+    setCitationError("");
+  };
+  const contextItems = [
+    {
+      key: "plan",
+      label: t.queryPlan,
+      children: (
+        <div className="empty-state">
+          <strong>{t.noPlan}</strong>
+          <span>
+            SQL — · {t.planPartitions} — · {t.planRows} —
+          </span>
+          <Button size="small" disabled>
+            {t.executePlan}
+          </Button>
+        </div>
+      ),
+    },
+    {
+      key: "results",
+      label: t.queryResults,
+      children: <div className="empty-state">{t.emptyContext}</div>,
+    },
+    {
+      key: "lineage",
+      label: t.contextLineage,
+      children: selectedTable ? (
+        <TaskLineage
+          token={token}
           messages={t}
-          copied={copied}
-          onCopy={(sql) => void copySql(sql)}
-          onOpen={(ref) => void openCitation(ref)}
-          onClarify={chooseClarification}
+          table={`${selectedTable.database}.${selectedTable.name}`}
+          showTasks={false}
         />
-      ))}
-      {live && (
-        <article>
-          <Typography.Title level={4}>{live.question}</Typography.Title>
-          <ToolList tools={live.tools} messages={t} />
-          <Typography.Paragraph style={{ whiteSpace: "pre-wrap" }}>
-            {live.text || (live.status === "running" ? t.asking : "")}
-          </Typography.Paragraph>
-          <SqlList
-            blocks={live.sql}
-            messages={t}
-            copied={copied}
-            onCopy={(sql) => void copySql(sql)}
-          />
-          <CitationList
-            citations={live.citations}
-            messages={t}
-            onOpen={(ref) => void openCitation(ref)}
-          />
-          <ClarificationList
-            groups={live.clarifications}
-            messages={t}
-            disabled={sending}
-            onSelect={chooseClarification}
-          />
-          {live.error && <Alert type="error" title={live.error} />}
-        </article>
-      )}
-
-      {citationRef && (
-        <section aria-label={t.citationPanel}>
-          <Typography.Title level={5}>{t.citationPanel}</Typography.Title>
-          <Space>
-            <code>{citationRef}</code>
-            <Button
-              size="small"
-              onClick={() => {
-                setCitationRef("");
-                setCitationDetail(null);
-                setCitationError("");
-              }}
-            >
-              {t.close}
-            </Button>
-          </Space>
-          {citationLoading && <p>{t.loadingCitation}</p>}
-          {citationError && <Alert type="error" title={citationError} />}
-          {citationDetail?.kind === "table" && (
-            <article>
-              <Typography.Title level={5}>
-                {citationDetail.table.database}.{citationDetail.table.name}
-              </Typography.Title>
-              <p>{citationDetail.table.comment}</p>
-              <ul>
-                {citationDetail.table.fields.map((field) => (
-                  <li key={field.name}>
-                    <code>{field.name}</code> {field.type} {field.comment}
-                  </li>
-                ))}
-              </ul>
-            </article>
-          )}
-          {citationDetail?.kind === "document" && (
-            <article>
-              <Typography.Title level={5}>
-                {citationDetail.document.path}
-              </Typography.Title>
-              <pre style={{ whiteSpace: "pre-wrap" }}>
-                {citationDetail.document.content}
-              </pre>
-            </article>
-          )}
-          {citationDetail?.kind === "message" && (
-            <Alert type="info" title={citationDetail.message} />
-          )}
-        </section>
-      )}
-
-      <section>
-        <Typography.Title level={3}>{t.providerSettings}</Typography.Title>
-        {providerError && <Alert type="error" title={providerError} />}
-        {providerNotice && <Alert type="success" title={providerNotice} />}
-        {providers.length === 0 ? (
-          <p>{t.noProviders}</p>
-        ) : (
-          <ul>
-            {providers.map((provider) => (
-              <li key={provider.id}>
-                <strong>{provider.name}</strong> ({provider.type}){" "}
-                <code>{provider.base_url}</code>{" "}
-                <Tag color={provider.has_api_key ? "green" : "default"}>
-                  {provider.has_api_key
-                    ? t.providerConfigured
-                    : t.providerNotConfigured}
-                </Tag>
-                {role === "admin" && (
-                  <>
-                    <Button type="link" onClick={() => editProvider(provider)}>
-                      {t.providerEdit}
-                    </Button>
-                    <Button
-                      type="link"
-                      danger
-                      onClick={() => void deleteProvider(provider)}
-                    >
-                      {t.providerDelete}
-                    </Button>
-                  </>
-                )}
-              </li>
-            ))}
-          </ul>
-        )}
-        {role === "admin" && (
-          <form onSubmit={(event) => void saveProvider(event)}>
-            <Typography.Title level={5}>
-              {editingProviderId ? t.providerEdit : t.providerAdd}
-            </Typography.Title>
-            <Space wrap>
-              <label>
-                {t.providerName}{" "}
-                <Input
-                  aria-label={t.providerName}
-                  value={providerForm.name}
-                  onChange={(event) =>
-                    setProviderForm({
-                      ...providerForm,
-                      name: event.target.value,
-                    })
-                  }
-                  required
-                />
-              </label>
-              <label>
-                {t.providerType}{" "}
-                <select
-                  aria-label={t.providerType}
-                  value={providerForm.type}
-                  onChange={(event) =>
-                    setProviderForm({
-                      ...providerForm,
-                      type: event.target.value,
-                    })
-                  }
-                >
-                  {PROVIDER_TYPES.map((type) => (
-                    <option key={type} value={type}>
-                      {type}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </Space>
-            <label style={{ display: "block", marginTop: 8 }}>
-              {t.providerBaseUrl}
-              <Input
-                aria-label={t.providerBaseUrl}
-                value={providerForm.base_url}
-                onChange={(event) =>
-                  setProviderForm({
-                    ...providerForm,
-                    base_url: event.target.value,
-                  })
-                }
-                required
-              />
-            </label>
-            <label style={{ display: "block", marginTop: 8 }}>
-              {t.providerApiKey}
-              <Input.Password
-                aria-label={t.providerApiKey}
-                value={providerForm.api_key}
-                onChange={(event) =>
-                  setProviderForm({
-                    ...providerForm,
-                    api_key: event.target.value,
-                  })
-                }
-              />
-            </label>
-            <Typography.Paragraph type="secondary">
-              {t.providerApiKeyHint}
-            </Typography.Paragraph>
-            <label style={{ display: "block" }}>
-              {t.providerModels}
-              <Input
-                aria-label={t.providerModels}
-                value={providerForm.models}
-                onChange={(event) =>
-                  setProviderForm({
-                    ...providerForm,
-                    models: event.target.value,
-                  })
-                }
-                required
-              />
-            </label>
-            <Space style={{ marginTop: 8 }}>
-              <Button htmlType="submit">
-                {editingProviderId ? t.providerSave : t.providerAdd}
-              </Button>
-              {editingProviderId && (
-                <Button onClick={resetProviderForm}>{t.cancel}</Button>
+      ) : (
+        <div className="empty-state">{t.emptyContext}</div>
+      ),
+    },
+    {
+      key: "schema",
+      label: t.contextSchema,
+      children: selectedTable ? (
+        <div className="context-schema">
+          <div className="context-schema-head">
+            <div className="context-schema-title">
+              <strong>
+                {selectedTable.database}.{selectedTable.name}
+              </strong>
+              {selectedTable.comment && (
+                <span className="muted">{selectedTable.comment}</span>
               )}
-            </Space>
-          </form>
-        )}
-      </section>
+            </div>
+            <Button
+              type="text"
+              size="small"
+              aria-label={t.close}
+              title={t.close}
+              onClick={closeCitation}
+            >
+              <CloseOutlined />
+            </Button>
+          </div>
+          <table className="schema-table">
+            <thead>
+              <tr>
+                <th>{t.field}</th>
+                <th>{t.dataType}</th>
+                <th>{t.comment}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {selectedTable.fields.map((field) => (
+                <tr key={field.name}>
+                  <td>{field.name}</td>
+                  <td>{field.type}</td>
+                  <td>
+                    {field.comment}
+                    {field.partition ? ` · ${t.partition}` : ""}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : citationDetail?.kind === "document" ? (
+        <article>
+          <div className="context-ref">{citationDetail.document.path}</div>
+          <div className="doc-content">
+            <pre>{citationDetail.document.content}</pre>
+          </div>
+        </article>
+      ) : (
+        <div className="empty-state">{t.emptyContext}</div>
+      ),
+    },
+  ];
+  const contextTabs = contextItems.map(({ key, label }) => ({ key, label }));
+  const contextContent = contextItems.find(
+    (item) => item.key === contextTab,
+  )?.children;
+
+  return (
+    <section style={{ height: "100%", minHeight: 0 }}>
+      {!settingsOnly && (
+        <div
+          className={`chat-layout${contextOpen ? "" : " context-collapsed"}`}
+        >
+          <aside className="chat-sessions">
+            <div className="session-head">
+              <h1 className="session-title">{t.chat}</h1>
+              <Button
+                size="small"
+                type="primary"
+                onClick={newConversation}
+                disabled={sending}
+              >
+                {t.newConversation}
+              </Button>
+            </div>
+            <div className="session-list">
+              {conversations.length === 0 ? (
+                <div className="session-empty">{t.noConversations}</div>
+              ) : (
+                conversations.map((conversation) => {
+                  const active = conversation.id === currentConversationId;
+                  return (
+                    <div
+                      className={`session-item${active ? " active" : ""}`}
+                      key={conversation.id}
+                    >
+                      <button
+                        type="button"
+                        title={conversation.title}
+                        onClick={() => void openConversation(conversation.id)}
+                        disabled={sending}
+                      >
+                        {conversation.title}
+                        {conversation.resumable === false &&
+                          ` (${t.sessionExpired})`}
+                      </button>
+                      <span className="session-meta">
+                        <span>{shortTime(conversation.updated_at)}</span>
+                        <span>
+                          {conversation.turn_count} {t.turnCount}
+                        </span>
+                      </span>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+            <div style={{ padding: "0 10px 10px" }}>
+              <Button
+                size="small"
+                type="text"
+                onClick={() => void refreshConversations()}
+                disabled={sending || loadingConversation}
+              >
+                {t.refresh}
+              </Button>
+            </div>
+          </aside>
+          <div className="chat-conversation">
+            <header className="chat-header">
+              <div className="chat-header-title">
+                <strong>
+                  {currentConversation?.title || t.newConversation}
+                </strong>
+                <span>
+                  {agentId} · {activeProvider?.name || providerId || "—"} ·{" "}
+                  {model || "—"}
+                </span>
+              </div>
+              <div className="chat-selectors">
+                <label>
+                  {t.askAgent}
+                  <select
+                    aria-label={t.askAgent}
+                    value={agentId}
+                    disabled={Boolean(currentConversationId)}
+                    onChange={(event) => selectAgent(event.target.value)}
+                  >
+                    {agents.map((agent) => (
+                      <option
+                        key={agent.id}
+                        value={agent.id}
+                        disabled={!agent.available}
+                      >
+                        {agent.name}
+                        {agent.available ? "" : ` (${t.unavailable})`}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  {t.askProvider}
+                  <select
+                    aria-label={t.askProvider}
+                    value={providerId}
+                    disabled={Boolean(currentConversationId)}
+                    onChange={(event) => selectProvider(event.target.value)}
+                  >
+                    {providers.length === 0 && (
+                      <option value="">{t.noProviders}</option>
+                    )}
+                    {providers
+                      .filter(
+                        (provider) =>
+                          !profiles[agentId]?.providers.length ||
+                          profiles[agentId].providers.includes(provider.id),
+                      )
+                      .map((provider) => (
+                        <option key={provider.id} value={provider.id}>
+                          {provider.name}
+                        </option>
+                      ))}
+                  </select>
+                </label>
+                <label>
+                  {t.askModel}
+                  <select
+                    aria-label={t.askModel}
+                    value={model}
+                    onChange={(event) => {
+                      selectionTouched.current = true;
+                      setModel(event.target.value);
+                    }}
+                    disabled={!activeProvider || Boolean(currentConversationId)}
+                  >
+                    {(activeProvider?.models ?? []).map((item) => (
+                      <option key={item} value={item}>
+                        {item}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+            </header>
+            <div className="chat-scroll">
+              {error && <Alert type="error" title={error} />}
+              {!resumable && <Alert type="info" title={t.sessionExpired} />}
+              {loadingConversation && (
+                <p className="muted">{t.loadingConversation}</p>
+              )}
+              {!loadingConversation && turns.length === 0 && !live && (
+                <div className="chat-examples">
+                  <span className="example-title">{t.exampleQuestions}</span>
+                  <div className="example-chips">
+                    {t.examples.map((example) => (
+                      <Button
+                        key={example}
+                        onClick={() => setQuestion(example)}
+                      >
+                        {example}
+                      </Button>
+                    ))}
+                  </div>
+                  <div className="card plan-placeholder">
+                    <div className="card-title-row">
+                      <h3 className="card-title">{t.queryPlan}</h3>
+                      <span className="subtle">
+                        {t.planPartitions} — · {t.planRows} —
+                      </span>
+                    </div>
+                    <p className="muted">{t.noPlan}</p>
+                    <Button size="small" disabled>
+                      {t.executePlan}
+                    </Button>
+                  </div>
+                </div>
+              )}
+              {turns.map((turn) => (
+                <TurnBlock
+                  key={turn.id}
+                  turn={turn}
+                  messages={t}
+                  copied={copied}
+                  onCopy={(sql) => void copySql(sql)}
+                  onOpen={(ref) => void openCitation(ref)}
+                  onClarify={chooseClarification}
+                />
+              ))}
+              {live && (
+                <article className="turn">
+                  <div className="message">
+                    <span className="avatar user" aria-hidden="true">
+                      我
+                    </span>
+                    <div className="message-body">
+                      <QuestionText text={live.question} messages={t} />
+                    </div>
+                  </div>
+                  <div className="message">
+                    <span className="avatar ai" aria-hidden="true">
+                      AI
+                    </span>
+                    <div className="message-body">
+                      <ToolList tools={live.tools} messages={t} />
+                      <div className="answer">
+                        {live.text ? (
+                          <Markdown text={live.text} />
+                        ) : (
+                          <p className="muted">
+                            {live.status === "running" ? t.asking : ""}
+                          </p>
+                        )}
+                      </div>
+                      <SqlList
+                        blocks={live.sql}
+                        messages={t}
+                        copied={copied}
+                        onCopy={(sql) => void copySql(sql)}
+                      />
+                      <CitationList
+                        citations={live.citations}
+                        messages={t}
+                        onOpen={(ref) => void openCitation(ref)}
+                      />
+                      <ClarificationList
+                        groups={live.clarifications}
+                        messages={t}
+                        disabled={sending}
+                        onSelect={chooseClarification}
+                      />
+                      {live.error && <Alert type="error" title={live.error} />}
+                    </div>
+                  </div>
+                </article>
+              )}
+            </div>
+            <div className="chat-composer">
+              <form
+                className="composer-box"
+                onSubmit={(event) => void ask(event)}
+              >
+                <Input.TextArea
+                  aria-label={t.askQuestion}
+                  value={question}
+                  placeholder={t.askQuestion}
+                  autoSize={{ minRows: 1, maxRows: 5 }}
+                  onChange={(event) => setQuestion(event.target.value)}
+                  disabled={!resumable}
+                />
+                <Button htmlType="submit" type="primary" disabled={!canAsk}>
+                  {sending ? t.asking : t.askSubmit}
+                </Button>
+              </form>
+            </div>
+          </div>
+          <aside className="chat-context">
+            {contextOpen ? (
+              <>
+                <div className="context-tabs">
+                  <Tabs
+                    activeKey={contextTab}
+                    onChange={setContextTab}
+                    items={contextTabs}
+                    tabBarExtraContent={
+                      <Button
+                        type="text"
+                        aria-label={t.collapseContext}
+                        title={t.collapseContext}
+                        onClick={() => setContextOpen(false)}
+                      >
+                        <MenuFoldOutlined />
+                      </Button>
+                    }
+                  />
+                </div>
+                <div
+                  className={`context-body${
+                    contextTab === "schema" && selectedTable
+                      ? " context-body--schema"
+                      : ""
+                  }`}
+                >
+                  {contextContent}
+                  {citationRef && !selectedTable && (
+                    <section className="context-section">
+                      <div className="context-ref">
+                        <code>{citationRef}</code>
+                        <Button
+                          size="small"
+                          type="text"
+                          onClick={closeCitation}
+                        >
+                          {t.close}
+                        </Button>
+                      </div>
+                      {citationLoading && (
+                        <p className="muted">{t.loadingCitation}</p>
+                      )}
+                      {citationError && (
+                        <Alert type="error" title={citationError} />
+                      )}
+                    </section>
+                  )}
+                  {citationDetail?.kind === "message" && (
+                    <Alert type="info" title={citationDetail.message} />
+                  )}
+                </div>
+              </>
+            ) : (
+              <Button
+                type="text"
+                aria-label={t.expandContext}
+                title={t.expandContext}
+                onClick={() => setContextOpen(true)}
+              >
+                <MenuUnfoldOutlined />
+              </Button>
+            )}
+          </aside>
+        </div>
+      )}
+      {settingsOnly && (
+        <div className="stack">
+          <div className="page-header">
+            <div>
+              <h1 className="page-title">{t.providerSettings}</h1>
+              <p className="page-subtitle">{t.providerApiKeyHint}</p>
+            </div>
+          </div>
+          {providerError && <Alert type="error" title={providerError} />}
+          {providerNotice && <Alert type="success" title={providerNotice} />}
+          <section className="card section-card">
+            <div className="card-title-row">
+              <h2 className="card-title">{t.providerSettings}</h2>
+              <span className="muted">{providers.length}</span>
+            </div>
+            {providers.length === 0 ? (
+              <p className="muted">{t.noProviders}</p>
+            ) : (
+              <div className="provider-list">
+                {providers.map((provider) => (
+                  <div className="provider-card" key={provider.id}>
+                    <div className="provider-line">
+                      <strong>{provider.name}</strong>
+                      <span className="subtle">{provider.type}</span>
+                      <Tag color={provider.has_api_key ? "green" : "default"}>
+                        {provider.has_api_key
+                          ? t.providerConfigured
+                          : t.providerNotConfigured}
+                      </Tag>
+                      <code className="muted">{provider.base_url}</code>
+                      {role === "admin" && (
+                        <>
+                          <Button
+                            type="link"
+                            onClick={() => editProvider(provider)}
+                          >
+                            {t.providerEdit}
+                          </Button>
+                          <Button
+                            type="link"
+                            danger
+                            onClick={() => void deleteProvider(provider)}
+                          >
+                            {t.providerDelete}
+                          </Button>
+                        </>
+                      )}
+                    </div>
+                    <div className="subtle mono">
+                      {provider.models.join(" · ")}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+          {role === "admin" && (
+            <section className="card section-card">
+              <form onSubmit={(event) => void saveProvider(event)}>
+                <div className="card-title-row">
+                  <h2 className="card-title">
+                    {editingProviderId ? t.providerEdit : t.providerAdd}
+                  </h2>
+                </div>
+                <div className="grid-2">
+                  <div className="field">
+                    <label className="field-label" htmlFor="provider-name">
+                      {t.providerName}
+                    </label>
+                    <Input
+                      id="provider-name"
+                      aria-label={t.providerName}
+                      value={providerForm.name}
+                      onChange={(event) =>
+                        setProviderForm({
+                          ...providerForm,
+                          name: event.target.value,
+                        })
+                      }
+                      required
+                    />
+                  </div>
+                  <div className="field">
+                    <label className="field-label" htmlFor="provider-type">
+                      {t.providerType}
+                    </label>
+                    <select
+                      id="provider-type"
+                      aria-label={t.providerType}
+                      value={providerForm.type}
+                      onChange={(event) =>
+                        setProviderForm({
+                          ...providerForm,
+                          type: event.target.value,
+                        })
+                      }
+                    >
+                      {PROVIDER_TYPES.map((type) => (
+                        <option key={type} value={type}>
+                          {type}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="field">
+                    <label className="field-label" htmlFor="provider-url">
+                      {t.providerBaseUrl}
+                    </label>
+                    <Input
+                      id="provider-url"
+                      aria-label={t.providerBaseUrl}
+                      value={providerForm.base_url}
+                      onChange={(event) =>
+                        setProviderForm({
+                          ...providerForm,
+                          base_url: event.target.value,
+                        })
+                      }
+                      required
+                    />
+                  </div>
+                  <div className="field">
+                    <label className="field-label" htmlFor="provider-key">
+                      {t.providerApiKey}
+                    </label>
+                    <Input.Password
+                      id="provider-key"
+                      aria-label={t.providerApiKey}
+                      value={providerForm.api_key}
+                      onChange={(event) =>
+                        setProviderForm({
+                          ...providerForm,
+                          api_key: event.target.value,
+                        })
+                      }
+                    />
+                    <span className="field-hint">{t.providerApiKeyHint}</span>
+                  </div>
+                  <div className="field" style={{ gridColumn: "1 / -1" }}>
+                    <label className="field-label" htmlFor="provider-models">
+                      {t.providerModels}
+                    </label>
+                    <Input
+                      id="provider-models"
+                      aria-label={t.providerModels}
+                      value={providerForm.models}
+                      onChange={(event) =>
+                        setProviderForm({
+                          ...providerForm,
+                          models: event.target.value,
+                        })
+                      }
+                      required
+                    />
+                  </div>
+                </div>
+                <div className="save-bar">
+                  <Button htmlType="submit" type="primary">
+                    {editingProviderId ? t.providerSave : t.providerAdd}
+                  </Button>
+                  {editingProviderId && (
+                    <Button onClick={resetProviderForm}>{t.cancel}</Button>
+                  )}
+                </div>
+              </form>
+            </section>
+          )}
+        </div>
+      )}
     </section>
   );
 }

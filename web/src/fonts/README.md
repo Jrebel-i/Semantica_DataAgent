@@ -1,0 +1,1 @@
+工作台离线字体来自 Fontsource 的 `@fontsource/ibm-plex-sans` 5.3.0、`@fontsource/ibm-plex-mono` 5.3.0 和 `@fontsource/noto-sans-sc` 5.3.1。只保留工作台需要的 WOFF2 字体及 Noto Sans SC 的 Unicode 分段样式；各字体的 SIL Open Font License 随文件附带。下载包通过 npm registry 的 SHA-512 完整性校验。

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Alert, Button, Input, Space, Typography } from "antd";
+import { Alert, Button, Input, Space } from "antd";
 import type { Messages } from "./i18n";
 
 const SERVER_NAME = "semantica-dataagent";
@@ -85,55 +85,83 @@ export function McpAccessPage({
   }
 
   return (
-    <section>
-      <Typography.Title level={2}>{t.mcpAccess}</Typography.Title>
-      <Typography.Paragraph>{t.mcpIntro}</Typography.Paragraph>
-      <label>
-        {t.mcpUrl}
-        <Input
-          aria-label={t.mcpUrl}
-          value={url}
-          onChange={(event) => setUrl(event.target.value)}
-        />
-      </label>
-      <Typography.Paragraph type="secondary">
-        {t.mcpUrlHint}
-      </Typography.Paragraph>
-
-      <Typography.Title level={4}>{t.currentToken}</Typography.Title>
-      <Space wrap>
-        <Button onClick={() => setRevealed((value) => !value)}>
-          {revealed ? t.hideToken : t.showToken}
-        </Button>
-        <Button onClick={() => void copy(token, t.tokenCopied)}>
-          {t.copyToken}
-        </Button>
-      </Space>
-      <pre aria-label={t.currentToken}>
-        <code>{revealed ? token : MASK}</code>
-      </pre>
-
-      <Typography.Title level={4}>{t.claudeCommand}</Typography.Title>
-      <pre aria-label={t.claudeCommand}>
-        <code>{masked(claudeCommand)}</code>
-      </pre>
-      <Button onClick={() => void copy(claudeCommand, t.claudeCopied)}>
-        {t.copyClaude}
-      </Button>
-
-      <Typography.Title level={4}>{t.codexConfig}</Typography.Title>
-      <pre aria-label={t.codexConfig}>
-        <code>{masked(codexConfig)}</code>
-      </pre>
-      <Button onClick={() => void copy(codexConfig, t.codexCopied)}>
-        {t.copyCodex}
-      </Button>
-
-      <div>
-        <Button onClick={() => void downloadSkill()}>{t.downloadSkill}</Button>
+    <section className="stack">
+      <div className="page-header">
+        <div>
+          <h1 className="page-title">{t.mcpAccess}</h1>
+          <p className="page-subtitle">{t.mcpIntro}</p>
+        </div>
       </div>
       {notice && <Alert type="success" title={notice} />}
       {error && <Alert type="error" title={error} />}
+      <div className="mcp-grid">
+        <section className="card section-card">
+          <div className="field">
+            <label className="field-label" htmlFor="mcp-url">
+              {t.mcpUrl}
+            </label>
+            <Input
+              id="mcp-url"
+              aria-label={t.mcpUrl}
+              value={url}
+              onChange={(event) => setUrl(event.target.value)}
+            />
+            <p className="field-hint">{t.mcpUrlHint}</p>
+          </div>
+        </section>
+        <section className="card section-card">
+          <div className="card-title-row">
+            <h2 className="card-title">{t.currentToken}</h2>
+            <Space wrap>
+              <Button onClick={() => setRevealed((value) => !value)}>
+                {revealed ? t.hideToken : t.showToken}
+              </Button>
+              <Button onClick={() => void copy(token, t.tokenCopied)}>
+                {t.copyToken}
+              </Button>
+            </Space>
+          </div>
+          <div className="code-panel">
+            <pre aria-label={t.currentToken}>
+              <code>{revealed ? token : MASK}</code>
+            </pre>
+          </div>
+        </section>
+      </div>
+      <div className="mcp-grid">
+        <section className="card section-card">
+          <div className="card-title-row">
+            <h2 className="card-title">{t.claudeCommand}</h2>
+            <Button onClick={() => void copy(claudeCommand, t.claudeCopied)}>
+              {t.copyClaude}
+            </Button>
+          </div>
+          <div className="code-panel">
+            <pre aria-label={t.claudeCommand}>
+              <code>{masked(claudeCommand)}</code>
+            </pre>
+          </div>
+        </section>
+        <section className="card section-card">
+          <div className="card-title-row">
+            <h2 className="card-title">{t.codexConfig}</h2>
+            <Button onClick={() => void copy(codexConfig, t.codexCopied)}>
+              {t.copyCodex}
+            </Button>
+          </div>
+          <div className="code-panel">
+            <pre aria-label={t.codexConfig}>
+              <code>{masked(codexConfig)}</code>
+            </pre>
+          </div>
+        </section>
+      </div>
+      <section className="card section-card">
+        <div className="card-title-row">
+          <h2 className="card-title">{t.downloadSkill}</h2>
+        </div>
+        <Button onClick={() => void downloadSkill()}>{t.downloadSkill}</Button>
+      </section>
     </section>
   );
 }

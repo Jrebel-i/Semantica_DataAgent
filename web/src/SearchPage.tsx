@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
-import { Alert, Button, Typography } from "antd";
+import { Alert, Button } from "antd";
 import type { paths } from "./api";
 import type { Messages } from "./i18n";
 
@@ -86,22 +86,29 @@ export function SearchPage({
     low: t.confidenceLow,
   };
   return (
-    <section>
-      <Typography.Title level={2}>{t.searchDebug}</Typography.Title>
+    <section className="stack">
+      <div className="page-header">
+        <div>
+          <h1 className="page-title">{t.searchDebug}</h1>
+          <p className="page-subtitle">{t.searchHint}</p>
+        </div>
+      </div>
       {categoryError && <Alert type="error" title={t.categoryError} />}
       {error && <Alert type="error" title={t.searchError} />}
-      <form onSubmit={(event) => void submit(event)}>
-        <label>
-          {t.queryText}{" "}
+      <form className="search-form" onSubmit={(event) => void submit(event)}>
+        <label className="field">
+          <span className="field-label">{t.queryText}</span>
           <input
+            aria-label={t.queryText}
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             required
           />
-        </label>{" "}
-        <label>
-          {t.searchScope}{" "}
+        </label>
+        <label className="field">
+          <span className="field-label">{t.searchScope}</span>
           <select
+            aria-label={t.searchScope}
             value={scope}
             onChange={(event) => {
               const value = event.target.value as Scope;
@@ -115,10 +122,11 @@ export function SearchPage({
             <option value="tasks">{t.scopeTasks}</option>
             <option value="docs">{t.scopeDocs}</option>
           </select>
-        </label>{" "}
-        <label>
-          {t.categories}{" "}
+        </label>
+        <label className="field">
+          <span className="field-label">{t.categories}</span>
           <select
+            aria-label={t.categories}
             value={category}
             onChange={(event) => setCategory(event.target.value)}
             disabled={scope !== "all" && scope !== "docs"}
@@ -130,21 +138,25 @@ export function SearchPage({
               </option>
             ))}
           </select>
-        </label>{" "}
-        <Button htmlType="submit" disabled={loading || !query.trim()}>
+        </label>
+        <Button
+          htmlType="submit"
+          type="primary"
+          disabled={loading || !query.trim()}
+        >
           {loading ? t.searching : t.searchSubmit}
         </Button>
       </form>
       {results &&
         (results.length === 0 ? (
-          <p>{t.noResults}</p>
+          <div className="empty-state">{t.noResults}</div>
         ) : (
-          <ol>
+          <ol className="search-results">
             {results.map((hit) => (
               <li key={hit.ref}>
-                <article>
+                <article className="search-result">
                   <h3>{hit.name || hit.path || hit.ref}</h3>
-                  <p>
+                  <p className="ref">
                     {hit.ref} ({hit.type})
                   </p>
                   {(hit.content || hit.comment || hit.description) && (
@@ -162,7 +174,7 @@ export function SearchPage({
                     <strong>{confidence[hit.confidence]}</strong>
                   </p>
                   {hit.ambiguous && (
-                    <>
+                    <div className="search-ambiguity">
                       <strong>{t.possibleAmbiguity}</strong>
                       <p>{t.ambiguityRefs}</p>
                       <ul>
@@ -170,7 +182,7 @@ export function SearchPage({
                           <li key={ref}>{ref}</li>
                         ))}
                       </ul>
-                    </>
+                    </div>
                   )}
                 </article>
               </li>
