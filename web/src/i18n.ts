@@ -2,6 +2,13 @@ export type Language = "zh" | "en";
 
 const messages = {
   zh: {
+    layerRaw: "原始层",
+    layerDetail: "明细层",
+    layerSummary: "汇总层",
+    layerMart: "集市层",
+    layerApplication: "应用层",
+    layerDimension: "维度层",
+    layerTemporary: "临时层",
     otherLayer: "其他层",
     pullRecords: "拉取记录",
     pullFailure: "失败原因",
@@ -355,6 +362,13 @@ const messages = {
     downloadError: "下载失败，请重试",
   },
   en: {
+    layerRaw: "Raw layer",
+    layerDetail: "Detail layer",
+    layerSummary: "Summary layer",
+    layerMart: "Mart layer",
+    layerApplication: "Application layer",
+    layerDimension: "Dimension layer",
+    layerTemporary: "Temporary layer",
     otherLayer: "Other layers",
     pullRecords: "Pull history",
     pullFailure: "Failure reason",

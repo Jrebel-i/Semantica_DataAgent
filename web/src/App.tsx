@@ -27,6 +27,16 @@ import {
   LogoutOutlined,
 } from "@ant-design/icons";
 
+function formatGenerationTime(value: string | null | undefined) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const pad = (part: number) => String(part).padStart(2, "0");
+  return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(
+    date.getHours(),
+  )}:${pad(date.getMinutes())}`;
+}
+
 export function App() {
   const [lang, setLang] = useState<Language>(() =>
     localStorage.getItem("language") === "en" ? "en" : "zh",
@@ -54,7 +64,10 @@ export function App() {
   const [path, setPath] = useState(window.location.pathname);
   const [error, setError] = useState("");
   const [health, setHealth] = useState<Health | null>(null);
-  const [generation, setGeneration] = useState("");
+  const [generation, setGeneration] = useState<{
+    name: string;
+    createdAt: string | null;
+  } | null>(null);
   const [dtbConfigured, setDtbConfigured] = useState<boolean | null>(null);
   const t = getMessages(lang);
   const authenticate = useCallback(async (value: string) => {
@@ -105,12 +118,23 @@ export function App() {
       const headers = { Authorization: `Bearer ${token}` };
       void fetch("/api/v1/generations", { headers })
         .then((r) => (r.ok ? r.json() : Promise.reject()))
-        .then((data: { generations: { name: string; current: boolean }[] }) =>
-          setGeneration(
-            data.generations.find((row) => row.current)?.name || "",
-          ),
+        .then(
+          (data: {
+            generations: {
+              name: string;
+              current: boolean;
+              created_at?: string | null;
+            }[];
+          }) => {
+            const current = data.generations.find((row) => row.current);
+            setGeneration(
+              current
+                ? { name: current.name, createdAt: current.created_at ?? null }
+                : null,
+            );
+          },
         )
-        .catch(() => setGeneration(""));
+        .catch(() => setGeneration(null));
       void fetch("/api/v1/me/dtb-token", { headers })
         .then((r) => (r.ok ? r.json() : Promise.reject()))
         .then((data: { configured: boolean }) =>
@@ -188,8 +212,16 @@ export function App() {
       ];
     return [];
   })();
-  const shortGeneration =
-    generation.length > 26 ? `${generation.slice(0, 24)}…` : generation || "—";
+  const generationName = generation?.name ?? "";
+  const shortGeneration = generationName
+    ? generationName.length > 8
+      ? `…${generationName.slice(-8)}`
+      : generationName
+    : "—";
+  const generationTime = formatGenerationTime(generation?.createdAt);
+  const generationLabel = generationTime
+    ? `${shortGeneration} · ${generationTime}`
+    : shortGeneration;
   const isChat = path === "/chat" || path === "/";
   const isFill = path === "/knowledge";
   const content =
@@ -415,13 +447,16 @@ export function App() {
                     </span>
                   </span>
                 ))}
-                <span className="status-item" title={generation || undefined}>
+                <span
+                  className="status-item"
+                  title={generationName || undefined}
+                >
                   <span
-                    className={`status-dot ${generation ? "" : "unknown"}`}
+                    className={`status-dot ${generationName ? "" : "unknown"}`}
                   />
                   <span>
                     {t.generationCurrent}:{" "}
-                    <span className="mono">{shortGeneration}</span>
+                    <span className="mono">{generationLabel}</span>
                   </span>
                 </span>
                 <span className="status-item is-muted">

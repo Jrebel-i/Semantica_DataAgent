@@ -1,6 +1,12 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { KnowledgePage } from "./KnowledgePage";
 import { getMessages } from "./i18n";
 
@@ -40,7 +46,7 @@ function installFetch(tables: TableRow[], categories: unknown[] = []) {
 }
 
 function treeTitles(container: HTMLElement): string[] {
-  return [...container.querySelectorAll(".ant-tree-title")].map(
+  return Array.from(container.querySelectorAll(".ant-tree-title")).map(
     (node) => node.textContent?.trim() ?? "",
   );
 }
@@ -94,6 +100,7 @@ test("按数仓层次分组，层和库都显示表数", async () => {
   );
 
   expect(await screen.findByText("数据表 (10)")).toBeTruthy();
+  await waitFor(() => expect(treeTitles(container)).toContain("ods (2)"));
   const titles = treeTitles(container);
   expect(titles).toEqual(
     expect.arrayContaining([
@@ -137,7 +144,9 @@ test("默认只展开选中表所在的库，折叠的库不渲染子节点", as
     <KnowledgePage token="token" messages={getMessages("zh")} />,
   );
 
-  expect(await screen.findByRole("button", { name: "ods_selected" })).toBeTruthy();
+  expect(
+    await screen.findByRole("button", { name: "ods_selected" }),
+  ).toBeTruthy();
   expect(screen.queryByRole("button", { name: "app_hidden" })).toBeNull();
 
   fireEvent.click(screen.getByText("app (1)"));
@@ -185,7 +194,9 @@ test("搜索在树数据层过滤，并展开命中的库", async () => {
     <KnowledgePage token="token" messages={getMessages("zh")} />,
   );
 
-  expect(await screen.findByRole("button", { name: "quick_orders" })).toBeTruthy();
+  expect(
+    await screen.findByRole("button", { name: "quick_orders" }),
+  ).toBeTruthy();
   fireEvent.change(screen.getByLabelText("搜索表或文档"), {
     target: { value: "customer" },
   });
