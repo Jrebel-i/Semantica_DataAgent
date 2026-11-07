@@ -2,15 +2,13 @@ import { createPortal } from "react-dom";
 import { ColumnLineage } from "./ColumnLineage";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
-import { Alert, Button, Input, Space, Tag, Tabs } from "antd";
+import { Alert, Button, Input, Space, Tag } from "antd";
 import type { components, paths } from "./api";
 import type { Language, Messages } from "./i18n";
 import { TaskLineage } from "./TaskLineage";
 import {
   ArrowUpOutlined,
   CloseOutlined,
-  MenuFoldOutlined,
-  MenuUnfoldOutlined,
   PlusOutlined,
 } from "@ant-design/icons";
 import { parseAgentProfiles, type AgentProfiles } from "./agentProfiles";
@@ -293,31 +291,53 @@ function ToolList({
   tools: ToolCall[];
   messages: Messages;
 }) {
+  const [expanded, setExpanded] = useState(false);
+  const failures = tools.filter((tool) => tool.status === "error").length;
+  useEffect(() => {
+    if (failures) setExpanded(true);
+  }, [failures]);
   if (tools.length === 0) return null;
+  const running = tools.find((tool) => tool.status === "running");
   return (
     <section aria-label={messages.toolCalls} className="tool-log">
-      {tools.map((tool) => (
-        <details className="tool-step" key={tool.id}>
-          <summary title={`${tool.name} ${tool.summary}`}>
-            <span className="tool-name">{toolLabel(tool.name)}</span>
-            <code className="tool-raw">{tool.name}</code>
-            <span className="tool-summary">{tool.summary || "—"}</span>
-            <span className={`tool-status ${tool.status}`}>
-              {tool.status === "running"
-                ? messages.toolRunning
-                : tool.status === "error"
-                  ? messages.toolFailed
-                  : messages.toolDone}
-            </span>
-          </summary>
-          <dl className="tool-detail">
-            <dt>{messages.parameters}</dt>
-            <dd>{tool.input || tool.summary || "—"}</dd>
-            <dt>{messages.result}</dt>
-            <dd>{tool.result || tool.summary || "—"}</dd>
-          </dl>
-        </details>
-      ))}
+      <button
+        type="button"
+        onClick={() => setExpanded(!expanded)}
+        aria-expanded={expanded}
+      >
+        已使用 {tools.length} 个工具 {expanded ? "▾" : "▸"}
+      </button>
+      {running && <span>正在{toolLabel(running.name)}…</span>}
+      {expanded && (
+        <>
+          {tools.map((tool) => (
+            <details
+              className="tool-step"
+              key={tool.id}
+              open={tool.status === "error" ? true : undefined}
+            >
+              <summary title={`${tool.name} ${tool.summary}`}>
+                <span className="tool-name">{toolLabel(tool.name)}</span>
+                <code className="tool-raw">{tool.name}</code>
+                <span className="tool-summary">{tool.summary || "—"}</span>
+                <span className={`tool-status ${tool.status}`}>
+                  {tool.status === "running"
+                    ? messages.toolRunning
+                    : tool.status === "error"
+                      ? messages.toolFailed
+                      : messages.toolDone}
+                </span>
+              </summary>
+              <dl className="tool-detail">
+                <dt>{messages.parameters}</dt>
+                <dd>{tool.input || tool.summary || "—"}</dd>
+                <dt>{messages.result}</dt>
+                <dd>{tool.result || tool.summary || "—"}</dd>
+              </dl>
+            </details>
+          ))}
+        </>
+      )}
     </section>
   );
 }
@@ -390,6 +410,15 @@ function CitationList({
         : messages.knowledgeDocuments;
   const shortOf = (citation: Citation) => {
     const value = citation.ref.slice(citation.ref.indexOf(":") + 1);
+    if (citation.type === "document" || citation.ref.startsWith("document:")) {
+      const path = value.split("#", 1)[0];
+      const name = path.split("/").at(-1) || path;
+      try {
+        return decodeURIComponent(name);
+      } catch {
+        return name;
+      }
+    }
     return value.length > 34 ? `${value.slice(0, 32)}…` : value;
   };
   return (
@@ -401,7 +430,16 @@ function CitationList({
             className={`citation-chip ${citation.type}`}
             key={citation.ref}
             aria-label={citation.ref}
-            title={citation.ref}
+            title={citation.ref
+              .split("/")
+              .map((part) => {
+                try {
+                  return decodeURIComponent(part);
+                } catch {
+                  return part;
+                }
+              })
+              .join("/")}
             onClick={() => onOpen(citation.ref)}
           >
             <span className="citation-kind">{countOf(citation)}</span>
@@ -484,7 +522,8 @@ function TurnBlock({
   onOpen,
   onClarify,
   onExecute,
-  onShowResult,
+  onDownload,
+  onCopyLink,
   executing,
 }: {
   turn: Turn;
@@ -497,7 +536,8 @@ function TurnBlock({
     option: NonNullable<Clarification["options"]>[number],
   ) => void;
   onExecute: (turn: Turn, plan: QueryPlan) => void;
-  onShowResult: (id: string) => void;
+  onDownload: (id: string, format: string) => void;
+  onCopyLink: (id: string) => void;
   executing: boolean;
 }) {
   const sql = sqlBlocks(turn.sql);
@@ -543,10 +583,26 @@ function TurnBlock({
           )}
           {result && (
             <div className="card query-result-preview">
-              <ResultTable result={result} limit={5} />
-              <Button type="link" onClick={() => onShowResult(result.id)}>
-                查看完整结果
-              </Button>
+              <ResultTable result={result} limit={20} />
+              <p>共 {result.row_count} 行，已显示前 20 行</p>
+              {plan &&
+                result.row_count >=
+                  Math.min(
+                    plan.row_limit,
+                    plan.execution_limit ?? plan.row_limit,
+                  ) && <p>结果可能被截断</p>}
+              <Space wrap>
+                {[
+                  ["csv", "CSV"],
+                  ["xlsx", "Excel"],
+                  ["json", "JSON"],
+                ].map(([fmt, label]) => (
+                  <Button key={fmt} onClick={() => onDownload(result.id, fmt)}>
+                    下载 {label}
+                  </Button>
+                ))}
+                <Button onClick={() => onCopyLink(result.id)}>复制链接</Button>
+              </Space>
             </div>
           )}
           <div className="answer">
@@ -629,7 +685,6 @@ export function ChatPage({
   sessionTarget,
   newTarget,
   onNavigateChat,
-  initialContextOpen = true,
   refreshKey = 0,
 }: {
   token: string;
@@ -639,7 +694,6 @@ export function ChatPage({
   sessionTarget?: HTMLElement | null;
   newTarget?: HTMLElement | null;
   onNavigateChat?: () => void;
-  initialContextOpen?: boolean;
   language?: Language;
   onChangeLanguage?: () => void;
   refreshKey?: number;
@@ -654,10 +708,6 @@ export function ChatPage({
     provider: "",
     model: "",
   });
-  const [contextOpen, setContextOpen] = useState(initialContextOpen);
-  const [contextTab, setContextTab] = useState("plan");
-  const contextTouched = useRef(false);
-  const [selectedQueryId, setSelectedQueryId] = useState("");
   const [providers, setProviders] = useState<Provider[]>([]);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [agentId, setAgentId] = useState("pi");
@@ -689,30 +739,6 @@ export function ChatPage({
   const [editingProviderId, setEditingProviderId] = useState("");
   const [providerError, setProviderError] = useState("");
   const [providerNotice, setProviderNotice] = useState("");
-
-  const queryTurns = [...turns]
-    .reverse()
-    .filter((turn) =>
-      (turn.events ?? []).some((event) => event.type === "query_plan"),
-    );
-  const latestTurn =
-    queryTurns.find(
-      (turn) =>
-        queryEvent<QueryPlan>(turn.events ?? [], "query_plan")?.id ===
-        selectedQueryId,
-    ) ?? queryTurns[0];
-  const latestPlan = queryEvent<QueryPlan>(
-    latestTurn?.events ?? [],
-    "query_plan",
-  );
-  const latestResult = queryEvent<QueryResult>(
-    latestTurn?.events ?? [],
-    "query_result",
-  );
-  useEffect(() => {
-    if (!contextTouched.current && latestPlan)
-      setContextTab(latestResult ? "results" : "plan");
-  }, [latestPlan?.id, latestResult?.id]);
 
   async function executePlan(turn: Turn, plan: QueryPlan) {
     if (sending || !currentConversationId) return;
@@ -770,30 +796,33 @@ export function ChatPage({
     }
   }
 
+  async function downloadLinks(id: string): Promise<Record<string, string>> {
+    const response = await fetch(
+      `/api/v1/queries/${encodeURIComponent(id)}/download-links`,
+      { method: "POST", headers: { Authorization: `Bearer ${token}` } },
+    );
+    if (!response.ok) throw new Error(t.askError);
+    return (await response.json()) as Record<string, string>;
+  }
   async function downloadQuery(id: string, format: string) {
     try {
-      const response = await fetch(
-        `/api/v1/queries/${encodeURIComponent(id)}/download?format=${format}`,
-        {
-          headers: { Authorization: `Bearer ${token}` },
-        },
-      );
-      if (!response.ok) throw new Error(t.askError);
-      const url = URL.createObjectURL(await response.blob());
+      const links = await downloadLinks(id);
       const anchor = document.createElement("a");
-      anchor.href = url;
-      anchor.download = `query.${format}`;
+      anchor.href = links[format];
+      anchor.rel = "noreferrer";
       anchor.click();
-      URL.revokeObjectURL(url);
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : t.askError);
+    } catch {
+      setError(t.askError);
     }
   }
-
-  useEffect(() => {
-    if (citationDetail && !latestPlan && !contextTouched.current)
-      setContextTab("schema");
-  }, [citationDetail, latestPlan]);
+  async function copyDownloadLink(id: string) {
+    try {
+      const links = await downloadLinks(id);
+      await copyText(links.csv);
+    } catch {
+      setError(t.copyError);
+    }
+  }
 
   const refreshConversations = useCallback(async () => {
     try {
@@ -1106,8 +1135,6 @@ export function ChatPage({
   function applyConversation(detail: ConversationDetail) {
     selectionTouched.current = true;
     if (detail.id !== currentConversationId) {
-      setSelectedQueryId("");
-      contextTouched.current = false;
     }
     setCurrentConversationId(detail.id);
     setResumable(detail.resumable !== false);
@@ -1145,8 +1172,6 @@ export function ChatPage({
   }
 
   function newConversation() {
-    contextTouched.current = false;
-    setSelectedQueryId("");
     selectionTouched.current = true;
     setCurrentConversationId("");
     setAgentId(defaults.agent);
@@ -1172,19 +1197,6 @@ export function ChatPage({
     setLive(null);
     setError("");
   }
-
-  useEffect(() => {
-    const citations = live
-      ? live.citations
-      : citationsOf(turns.at(-1)?.citations);
-    const ref = citations.find(
-      (citation) =>
-        citation.type === "table" || citation.ref.startsWith("table:"),
-    )?.ref;
-    if (ref && ref !== citationRef) void openCitation(ref);
-    // Follow the latest answer; manual citation choices remain until the answer changes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [live?.citations, turns]);
 
   async function openCitation(ref: string) {
     const sequence = ++citationSequence.current;
@@ -1342,158 +1354,13 @@ export function ChatPage({
     setCitationDetail(null);
     setCitationError("");
   };
-  const contextItems = [
-    {
-      key: "plan",
-      label: t.queryPlan,
-      children: latestPlan ? (
-        <div className="context-section">
-          <pre>{latestPlan.sql}</pre>
-          <p>{latestPlan.data_source}</p>
-          <p>{latestPlan.tables?.join(", ")}</p>
-          <p>
-            {t.planPartitions}: {latestPlan.estimated_partitions ?? "—"} ·{" "}
-            {t.planRows}: {latestPlan.estimated_rows ?? "—"}
-          </p>
-          <p>行数上限: {latestPlan.execution_limit ?? latestPlan.row_limit}</p>
-        </div>
-      ) : (
-        <div className="empty-state">
-          <strong>{t.noPlan}</strong>
-          <span>
-            SQL — · {t.planPartitions} — · {t.planRows} —
-          </span>
-          <Button size="small" disabled>
-            {t.executePlan}
-          </Button>
-        </div>
-      ),
-    },
-    {
-      key: "results",
-      label: t.queryResults,
-      children: latestResult ? (
-        <div className="context-section">
-          <ResultTable result={latestResult} />
-          {latestPlan &&
-            latestResult.row_count >=
-              Math.min(
-                latestPlan.row_limit,
-                latestPlan.execution_limit ?? latestPlan.row_limit,
-              ) && <p>结果可能被截断</p>}
-          <Space>
-            {[
-              ["csv", "CSV"],
-              ["xlsx", "Excel"],
-              ["json", "JSON"],
-            ].map(([format, label]) => (
-              <Button
-                key={format}
-                onClick={() => void downloadQuery(latestResult.id, format)}
-              >
-                {label}
-              </Button>
-            ))}
-          </Space>
-        </div>
-      ) : (
-        <div className="empty-state">{t.emptyContext}</div>
-      ),
-    },
-    {
-      key: "lineage",
-      label: t.contextLineage,
-      children: selectedTable ? (
-        citationRef.startsWith("field:") ? (
-          <ColumnLineage
-            token={token}
-            table={`${selectedTable.database}.${selectedTable.name}`}
-            column={citationRef.slice(6).split(".").slice(2).join(".")}
-          />
-        ) : (
-          <TaskLineage
-            token={token}
-            messages={t}
-            table={`${selectedTable.database}.${selectedTable.name}`}
-            showTasks={false}
-          />
-        )
-      ) : (
-        <div className="empty-state">{t.emptyContext}</div>
-      ),
-    },
-    {
-      key: "schema",
-      label: t.contextSchema,
-      children: selectedTable ? (
-        <div className="context-schema">
-          <div className="context-schema-head">
-            <div className="context-schema-title">
-              <strong>
-                {selectedTable.database}.{selectedTable.name}
-              </strong>
-              {selectedTable.comment && (
-                <span className="muted">{selectedTable.comment}</span>
-              )}
-            </div>
-            <Button
-              type="text"
-              size="small"
-              aria-label={t.close}
-              title={t.close}
-              onClick={closeCitation}
-            >
-              <CloseOutlined />
-            </Button>
-          </div>
-          <table className="schema-table">
-            <thead>
-              <tr>
-                <th>{t.field}</th>
-                <th>{t.dataType}</th>
-                <th>{t.comment}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {selectedTable.fields.map((field) => (
-                <tr key={field.name}>
-                  <td>{field.name}</td>
-                  <td>{field.type}</td>
-                  <td>
-                    {field.comment}
-                    {field.partition ? ` · ${t.partition}` : ""}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      ) : citationDetail?.kind === "document" ? (
-        <article>
-          <div className="context-ref">{citationDetail.document.path}</div>
-          <div className="doc-content">
-            <pre>{citationDetail.document.content}</pre>
-          </div>
-        </article>
-      ) : (
-        <div className="empty-state">{t.emptyContext}</div>
-      ),
-    },
-  ];
-  const hasContext = Boolean(
-    latestPlan || latestResult || citationRef || citationDetail,
-  );
   const emptyConversation = !loadingConversation && turns.length === 0 && !live;
-  const contextTabs = contextItems.map(({ key, label }) => ({ key, label }));
-  const contextContent = contextItems.find(
-    (item) => item.key === contextTab,
-  )?.children;
 
   return (
     <section style={{ height: "100%", minHeight: 0 }}>
       {!settingsOnly && (
         <div
-          className={`chat-layout${!hasContext ? " context-hidden" : contextOpen ? "" : " context-collapsed"}${emptyConversation ? " chat-layout--empty" : ""}`}
+          className={`chat-layout${!citationRef ? " context-hidden" : ""}${emptyConversation ? " chat-layout--empty" : ""}`}
         >
           {newTarget &&
             createPortal(
@@ -1596,18 +1463,12 @@ export function ChatPage({
                   copied={copied}
                   onCopy={(sql) => void copySql(sql)}
                   onOpen={(ref) => {
-                    contextTouched.current = true;
-                    setContextTab("schema");
                     void openCitation(ref);
                   }}
                   onClarify={chooseClarification}
                   onExecute={(turn, plan) => void executePlan(turn, plan)}
-                  onShowResult={(id) => {
-                    contextTouched.current = true;
-                    setSelectedQueryId(id);
-                    setContextTab("results");
-                    setContextOpen(true);
-                  }}
+                  onDownload={(id, format) => void downloadQuery(id, format)}
+                  onCopyLink={(id) => void copyDownloadLink(id)}
                   executing={sending}
                 />
               ))}
@@ -1646,8 +1507,6 @@ export function ChatPage({
                         citations={live.citations}
                         messages={t}
                         onOpen={(ref) => {
-                          contextTouched.current = true;
-                          setContextTab("schema");
                           void openCitation(ref);
                         }}
                       />
@@ -1775,73 +1634,93 @@ export function ChatPage({
               )}
             </div>
           </div>
-          {hasContext && (
+          {citationRef && (
             <aside className="chat-context">
-              {contextOpen ? (
-                <>
-                  <div className="context-tabs">
-                    <Tabs
-                      activeKey={contextTab}
-                      onChange={(tab) => {
-                        contextTouched.current = true;
-                        setContextTab(tab);
-                      }}
-                      items={contextTabs}
-                      tabBarExtraContent={
-                        <Button
-                          type="text"
-                          aria-label={t.collapseContext}
-                          title={t.collapseContext}
-                          onClick={() => setContextOpen(false)}
-                        >
-                          <MenuFoldOutlined />
-                        </Button>
-                      }
-                    />
-                  </div>
-                  <div
-                    className={`context-body${
-                      contextTab === "schema" && selectedTable
-                        ? " context-body--schema"
-                        : ""
-                    }`}
-                  >
-                    {contextContent}
-                    {citationRef && !selectedTable && (
-                      <section className="context-section">
-                        <div className="context-ref">
-                          <code>{citationRef}</code>
-                          <Button
-                            size="small"
-                            type="text"
-                            onClick={closeCitation}
-                          >
-                            {t.close}
-                          </Button>
-                        </div>
-                        {citationLoading && (
-                          <p className="muted">{t.loadingCitation}</p>
-                        )}
-                        {citationError && (
-                          <Alert type="error" title={citationError} />
-                        )}
-                      </section>
-                    )}
-                    {citationDetail?.kind === "message" && (
-                      <Alert type="info" title={citationDetail.message} />
-                    )}
-                  </div>
-                </>
-              ) : (
+              <div className="context-body">
                 <Button
                   type="text"
-                  aria-label={t.expandContext}
-                  title={t.expandContext}
-                  onClick={() => setContextOpen(true)}
+                  aria-label={t.close}
+                  onClick={closeCitation}
                 >
-                  <MenuUnfoldOutlined />
+                  <CloseOutlined />
                 </Button>
-              )}
+                {citationLoading && <p>{t.loadingCitation}</p>}
+                {citationError && <Alert type="error" title={citationError} />}
+                {selectedTable ? (
+                  <div className="context-schema">
+                    <div className="context-schema-head">
+                      <div className="context-schema-title">
+                        <strong>
+                          {selectedTable.database}.{selectedTable.name}
+                        </strong>
+                        {selectedTable.comment && (
+                          <span className="muted">{selectedTable.comment}</span>
+                        )}
+                      </div>
+                    </div>
+                    <table className="schema-table">
+                      <thead>
+                        <tr>
+                          <th>{t.field}</th>
+                          <th>{t.dataType}</th>
+                          <th>{t.comment}</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {selectedTable.fields.map((field) => (
+                          <tr key={field.name}>
+                            <td>{field.name}</td>
+                            <td>{field.type}</td>
+                            <td>
+                              {field.comment}
+                              {field.partition ? ` · ${t.partition}` : ""}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : citationDetail?.kind === "document" ? (
+                  <article>
+                    <div className="context-ref">
+                      {citationDetail.document.path}
+                    </div>
+                    <div className="doc-content">
+                      {citationDetail.document.path
+                        .toLowerCase()
+                        .endsWith(".md") ? (
+                        <Markdown text={citationDetail.document.content} />
+                      ) : (
+                        <pre>{citationDetail.document.content}</pre>
+                      )}
+                    </div>
+                  </article>
+                ) : (
+                  <div className="empty-state">{t.emptyContext}</div>
+                )}
+                {selectedTable &&
+                  (citationRef.startsWith("field:") ? (
+                    <ColumnLineage
+                      token={token}
+                      table={`${selectedTable.database}.${selectedTable.name}`}
+                      column={citationRef
+                        .slice(6)
+                        .split(".")
+                        .slice(2)
+                        .join(".")}
+                    />
+                  ) : (
+                    <TaskLineage
+                      token={token}
+                      messages={t}
+                      table={`${selectedTable.database}.${selectedTable.name}`}
+                      showTasks={false}
+                    />
+                  ))}
+                {citationDetail?.kind === "message" && (
+                  <Alert type="info" title={citationDetail.message} />
+                )}
+              </div>
             </aside>
           )}
         </div>

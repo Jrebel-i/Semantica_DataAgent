@@ -2558,3 +2558,14 @@ code {
 .status-bar .mono {
   font-family: inherit;
 }
+
+.chat-context {
+  animation: citation-drawer-enter 180ms ease-out;
+}
+@keyframes citation-drawer-enter {
+  from { transform: translateX(24px); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .chat-context { animation: none; }
+}

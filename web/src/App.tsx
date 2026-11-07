@@ -519,7 +519,6 @@ export function App() {
                     token={token}
                     role={role}
                     messages={t}
-                    initialContextOpen={false}
                     language={lang}
                     onChangeLanguage={changeLanguage}
                     refreshKey={refreshKey}
