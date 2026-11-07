@@ -19,11 +19,13 @@
   --green: #1f6b3a;
   --red: #9f1c1c;
   --amber: #c2410c;
-  --mono: "IBM Plex Mono", monospace;
+  --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas,
+    monospace;
   --radius: 10px;
-  --font-serif: "Noto Serif SC", Georgia, serif;
-  --font-sans:
-    -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", sans-serif;
+  --font-serif: "Newsreader Variable", "Noto Serif SC", "Source Han Serif SC",
+    "Songti SC", "STSong", "SimSun", serif;
+  --font-sans: system-ui, -apple-system, "Segoe UI", "PingFang SC",
+    "Noto Sans SC", "Microsoft YaHei", sans-serif;
   font-family: var(--font-sans);
   color: var(--ink);
   background: var(--page);
@@ -135,7 +137,7 @@ button {
   min-height: 44px;
   margin-bottom: 6px;
   color: var(--ink);
-  font: 600 12px var(--mono);
+  font: 600 12px var(--font-mono);
   letter-spacing: 0.02em;
   white-space: nowrap;
 }
@@ -223,7 +225,7 @@ button {
   padding: 0 16px;
   background: var(--nav);
   color: var(--nav-dim);
-  font: 11.5px var(--mono);
+  font: 11.5px var(--font-mono);
   white-space: nowrap;
   overflow: hidden;
 }
@@ -387,7 +389,7 @@ button {
   padding: 11px 12px;
   overflow-x: auto;
   color: var(--ink);
-  font: 12.5px/1.65 var(--mono);
+  font: 12.5px/1.65 var(--font-mono);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
@@ -412,7 +414,7 @@ button {
   color: var(--ink-3);
 }
 .mono {
-  font-family: var(--mono);
+  font-family: var(--font-mono);
 }
 .stack {
   display: flex;
@@ -713,7 +715,7 @@ legend {
 }
 .ant-tag {
   border-radius: 4px;
-  font-family: var(--mono);
+  font-family: var(--font-mono);
   font-size: 11px;
 }
 .ant-table-wrapper .ant-table {
@@ -784,7 +786,7 @@ legend {
 }
 .login .ant-typography {
   margin: 0 0 8px;
-  font-family: var(--mono);
+  font-family: var(--font-mono);
 }
 .login form {
   margin-top: 18px;
@@ -865,7 +867,7 @@ legend {
 }
 .session-meta {
   color: var(--ink-3);
-  font: 11px var(--mono);
+  font: 11px var(--font-mono);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -911,7 +913,7 @@ legend {
 }
 .chat-header-title span {
   color: var(--ink-2);
-  font: 11.5px var(--mono);
+  font: 11.5px var(--font-mono);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1094,7 +1096,7 @@ legend {
   gap: 12px;
   margin: 4px 0 10px;
   color: var(--ink-2);
-  font: 11.5px var(--mono);
+  font: 11.5px var(--font-mono);
 }
 
 /* Tool steps */
@@ -1124,7 +1126,7 @@ legend {
 .tool-step summary::before {
   content: "›";
   color: var(--ink-3);
-  font-family: var(--mono);
+  font-family: var(--font-mono);
   transform: rotate(0deg);
   transition: transform 0.12s ease;
 }
@@ -1140,7 +1142,7 @@ legend {
 .tool-raw {
   flex: none;
   color: var(--ink-3);
-  font: 10px var(--mono);
+  font: 10px var(--font-mono);
 }
 .tool-summary {
   min-width: 0;
@@ -1149,7 +1151,7 @@ legend {
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--ink-2);
-  font: 11px var(--mono);
+  font: 11px var(--font-mono);
 }
 .tool-status {
   flex: none;
@@ -1189,7 +1191,7 @@ legend {
 }
 .tool-detail dd {
   margin: 0;
-  font-family: var(--mono);
+  font-family: var(--font-mono);
   font-size: 11.5px;
   overflow-wrap: anywhere;
 }
@@ -1203,8 +1205,9 @@ legend {
 .markdown {
   min-width: 0;
   color: var(--ink);
-  font-size: 14px;
-  line-height: 1.65;
+  font-family: var(--font-serif);
+  font-size: 16px;
+  line-height: 1.7;
 }
 .markdown > :first-child {
   margin-top: 0;
@@ -1217,31 +1220,32 @@ legend {
 .markdown h3,
 .markdown h4 {
   margin: 16px 0 8px;
+  font-family: var(--font-serif);
   line-height: 1.35;
   font-weight: 600;
 }
 .markdown h1 {
-  font-size: 20px;
+  font-size: 24px;
 }
 .markdown h2 {
-  font-size: 17px;
+  font-size: 19px;
 }
 .markdown h3 {
-  font-size: 15px;
+  font-size: 17px;
 }
 .markdown h4 {
-  font-size: 14px;
+  font-size: 16px;
 }
 .markdown p {
-  margin: 0 0 9px;
+  margin: 0 0 0.9em;
 }
 .markdown ul,
 .markdown ol {
-  margin: 4px 0 10px;
+  margin: 4px 0 1em;
   padding-left: 22px;
 }
 .markdown li {
-  margin: 2px 0;
+  margin: 3px 0;
 }
 .markdown li > ul,
 .markdown li > ol {
@@ -1258,7 +1262,7 @@ legend {
   padding: 1px 5px;
   border-radius: 4px;
   background: var(--panel);
-  font: 12px var(--mono);
+  font: 12px var(--font-mono);
   overflow-wrap: anywhere;
 }
 .markdown .code-block {
@@ -1276,7 +1280,7 @@ legend {
   padding: 5px 10px;
   border-bottom: 1px solid var(--line);
   color: var(--nav-dim);
-  font: 10.5px var(--mono);
+  font: 10.5px var(--font-mono);
   letter-spacing: 0.04em;
   text-transform: uppercase;
 }
@@ -1295,7 +1299,7 @@ legend {
   padding: 11px 12px;
   overflow-x: auto;
   color: var(--ink);
-  font: 12.5px/1.65 var(--mono);
+  font: 12.5px/1.65 var(--font-mono);
   white-space: pre;
 }
 .markdown pre code {
@@ -1314,7 +1318,9 @@ legend {
 .md-table {
   width: 100%;
   border-collapse: collapse;
+  font-family: var(--font-sans);
   font-size: 13px;
+  line-height: 1.55;
 }
 .md-table th,
 .md-table td {
@@ -1375,7 +1381,7 @@ legend {
   padding: 5px 10px;
   border-bottom: 1px solid var(--line);
   color: var(--nav-dim);
-  font: 10.5px var(--mono);
+  font: 10.5px var(--font-mono);
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
@@ -1388,7 +1394,7 @@ legend {
   padding: 11px 12px;
   overflow-x: auto;
   color: var(--ink);
-  font: 12.5px/1.65 var(--mono);
+  font: 12.5px/1.65 var(--font-mono);
 }
 
 /* Citations */
@@ -1409,7 +1415,7 @@ legend {
   border-radius: 999px;
   background: var(--white);
   color: var(--ink-2);
-  font: 11px var(--mono);
+  font: 11px var(--font-mono);
   cursor: pointer;
 }
 .citation-chip:hover {
@@ -1498,7 +1504,7 @@ legend {
 }
 .context-schema-title strong {
   flex: none;
-  font: 12px var(--mono);
+  font: 12px var(--font-mono);
 }
 .context-schema-title .muted {
   min-width: 0;
@@ -1545,7 +1551,7 @@ legend {
   gap: 6px;
   margin-bottom: 8px;
   overflow-wrap: anywhere;
-  font: 11.5px var(--mono);
+  font: 11.5px var(--font-mono);
   color: var(--ink-2);
 }
 .schema-table,
@@ -1572,7 +1578,7 @@ legend {
 }
 .schema-table td:first-child,
 .data-table td:first-child {
-  font-family: var(--mono);
+  font-family: var(--font-mono);
   font-size: 11.5px;
 }
 .schema-table tr:last-child td,
@@ -1668,7 +1674,7 @@ legend {
 }
 .detail-section-title .count {
   color: var(--ink-3);
-  font: 10.5px var(--mono);
+  font: 10.5px var(--font-mono);
   font-weight: 400;
 }
 .doc-link-list {
@@ -1694,7 +1700,7 @@ legend {
 .doc-content pre {
   margin: 0;
   white-space: pre-wrap;
-  font: 12px/1.65 var(--mono);
+  font: 12px/1.65 var(--font-mono);
 }
 .category-tree-description {
   min-width: 0;
@@ -1723,7 +1729,7 @@ legend {
 }
 .tree-table-link > span:first-child,
 .tree-doc-link {
-  font-family: var(--mono);
+  font-family: var(--font-mono);
   font-size: 12px;
 }
 .tree-table-name,
@@ -1760,7 +1766,7 @@ legend {
   border-radius: var(--radius);
   background: var(--white);
   color: var(--ink);
-  font: 13px var(--mono);
+  font: 13px var(--font-mono);
   line-height: 1.4;
   box-shadow: 0 1px 2px var(--shadow-small);
 }
@@ -1775,7 +1781,7 @@ legend {
 }
 .lineage-canvas .react-flow__edge-text {
   fill: var(--ink-2);
-  font: 10px var(--mono);
+  font: 10px var(--font-mono);
 }
 .lineage-canvas .react-flow__edge-textbg {
   fill: var(--panel);
@@ -1798,7 +1804,7 @@ legend {
   font-size: 11.5px;
 }
 .lineage-edge code {
-  font-family: var(--mono);
+  font-family: var(--font-mono);
   font-size: 11px;
 }
 .lineage-edge .muted {
@@ -1969,7 +1975,7 @@ legend {
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--panel);
-  font: 12px/1.6 var(--mono);
+  font: 12px/1.6 var(--font-mono);
   white-space: pre-wrap;
 }
 .source-history {
@@ -1984,7 +1990,7 @@ legend {
   padding: 6px 8px;
   border-radius: 4px;
   background: var(--panel);
-  font: 11.5px var(--mono);
+  font: 11.5px var(--font-mono);
 }
 .source-compare {
   display: flex;
@@ -2023,7 +2029,7 @@ legend {
 }
 .search-result .ref {
   color: var(--ink-3);
-  font: 11px var(--mono);
+  font: 11px var(--font-mono);
 }
 .search-results {
   list-style: none;
@@ -2078,7 +2084,7 @@ legend {
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--surface);
-  font: 11.5px/1.6 var(--mono);
+  font: 11.5px/1.6 var(--font-mono);
   white-space: pre-wrap;
   overflow: auto;
 }
@@ -2147,7 +2153,7 @@ legend {
   border: 0;
 }
 code {
-  font-family: var(--mono);
+  font-family: var(--font-mono);
 }
 
 /* Shared conversation navigation */
@@ -2232,10 +2238,14 @@ code {
 .chat-header {
   border-bottom: 0;
 }
-.chat-header-title strong,
 .chat-greeting,
-.page-content h1 {
+.page-content h1,
+.page-content h2,
+.page-content h3 {
   font-family: var(--font-serif);
+}
+.chat-sessions .session-title {
+  font-family: var(--font-sans);
 }
 .chat-scroll {
   padding: 24px max(24px, calc((100% - 760px) / 2));
@@ -2437,6 +2447,16 @@ code {
   max-height: 35vh;
   padding-left: 12px;
 }
+.management-toggle .management-caret {
+  margin-left: auto;
+  color: var(--ink-3);
+  font-size: 16px;
+  line-height: 1;
+  transition: transform 0.12s ease;
+}
+.management-toggle[aria-expanded="true"] .management-caret {
+  transform: rotate(90deg);
+}
 .account-name {
   display: flex;
   flex-direction: column;
@@ -2491,9 +2511,33 @@ code {
 .composer-controls .chat-selectors select {
   border: 1px solid transparent;
   border-radius: 16px;
-  background: transparent;
+  appearance: none;
+  background-color: transparent;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='9' height='6' viewBox='0 0 9 6'%3E%3Cpath d='M1 1l3.5 3.5L8 1' fill='none' stroke='%236F6B64' stroke-width='1.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 7px center;
+  background-size: 9px 6px;
+  color: var(--ink-2);
+  cursor: pointer;
   font-size: 12px;
-  padding: 4px 20px 4px 8px;
+  padding: 4px 22px 4px 9px;
+  transition:
+    background-color 0.12s ease,
+    border-color 0.12s ease,
+    color 0.12s ease;
+}
+.composer-controls .chat-selectors select:not(:disabled):hover {
+  border-color: var(--line);
+  background-color: var(--panel);
+  color: var(--ink);
+}
+.composer-controls .chat-selectors select:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+.composer-controls .chat-selectors select:disabled {
+  cursor: default;
+  opacity: 0.55;
 }
 .composer-controls .send-button {
   width: 36px;

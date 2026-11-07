@@ -313,8 +313,7 @@ export function App() {
           colorBgLayout: "#FAF9F5",
           borderRadius: 10,
           controlHeight: 38,
-          fontFamily:
-            "-apple-system, BlinkMacSystemFont, Segoe UI, Noto Sans SC, sans-serif",
+          fontFamily: "var(--font-sans)",
           fontSize: 14,
         },
         components: {
@@ -409,12 +408,15 @@ export function App() {
                       <>
                         <Button
                           type="text"
-                          className="nav-item"
+                          className="nav-item management-toggle"
                           aria-label={t.management}
                           aria-expanded={managementOpen}
                           onClick={() => setManagementOpen(!managementOpen)}
                         >
-                          {t.management} ▸
+                          {t.management}
+                          <span className="management-caret" aria-hidden="true">
+                            ›
+                          </span>
                         </Button>
                         {managementOpen && (
                           <div className="management-links">
@@ -475,7 +477,10 @@ export function App() {
                   icon={<UserOutlined />}
                   aria-label={t.accountMenu}
                   aria-expanded={personalOpen}
-                  onClick={() => setPersonalOpen(!personalOpen)}
+                  onClick={() => {
+                    if (!personalOpen) setManagementOpen(false);
+                    setPersonalOpen(!personalOpen);
+                  }}
                 >
                   {expanded && (
                     <span className="account-name">

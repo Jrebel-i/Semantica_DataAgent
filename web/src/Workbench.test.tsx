@@ -48,9 +48,19 @@ test("工作台提供独立的问答、知识、构建与审批和配置入口",
   expect(await screen.findByRole("button", { name: "新对话" })).toBeTruthy();
   expect(screen.getByRole("link", { name: "知识库" })).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "用户菜单" }));
-  fireEvent.click(screen.getByRole("button", { name: "管理" }));
+  const management = screen.getByRole("button", { name: "管理" });
+  expect(management.getAttribute("aria-expanded")).toBe("false");
+  expect(screen.queryByRole("link", { name: "构建记录" })).toBeNull();
+  fireEvent.click(management);
+  expect(management.getAttribute("aria-expanded")).toBe("true");
   expect(screen.getByRole("link", { name: "构建记录" })).toBeTruthy();
   expect(screen.getByRole("link", { name: "配置" })).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "用户菜单" }));
+  fireEvent.click(screen.getByRole("button", { name: "用户菜单" }));
+  expect(
+    screen.getByRole("button", { name: "管理" }).getAttribute("aria-expanded"),
+  ).toBe("false");
+  expect(screen.queryByRole("link", { name: "构建记录" })).toBeNull();
 });
 
 test("普通用户只能看到问答、知识和个人设置，导航展开状态可恢复", async () => {

@@ -11,6 +11,9 @@ importers:
       '@ant-design/icons':
         specifier: 6.3.4
         version: 6.3.4(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
+      '@fontsource-variable/newsreader':
+        specifier: 5.3.0
+        version: 5.3.0
       '@xyflow/react':
         specifier: 12.10.1
         version: 12.10.1(@types/react@19.2.14)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
@@ -181,6 +184,9 @@ packages:
     peerDependenciesMeta:
       '@noble/hashes':
         optional: true
+
+  '@fontsource-variable/newsreader@5.3.0':
+    resolution: {integrity: sha512-rrzYi43qMpbzwuFtf9OkWH8sxAPVPcQQQEwXpPtwaKYeJ8yVg5aLs5kawmo1f2Q1t1M38TLmEKCkGVDsYwgdFw==}
 
   '@jridgewell/resolve-uri@3.1.2':
     resolution: {integrity: sha512-bRISgCIjP20/tbWSPWMEi54QVPRZExkuD9lJL+UIxUKtwVJA8wW1Trb1jMs1RFXo1CBTNZ/5hpC9QvmKWdopKw==}
@@ -1408,6 +1414,8 @@ snapshots:
   '@emotion/unitless@0.7.5': {}
 
   '@exodus/bytes@1.16.0': {}
+
+  '@fontsource-variable/newsreader@5.3.0': {}
 
   '@jridgewell/resolve-uri@3.1.2': {}
 
