@@ -29,6 +29,7 @@ def write(records, generation, storage):
     from .knowledge import reference
     from .stage_contract import StageResult
 
+    truncations = {}
     storage.execute(
         "CREATE FULLTEXT INDEX sda_knowledge IF NOT EXISTS FOR (n:SDATable|SDAField|SDATask|SDAChunk) ON EACH [n.name, n.comment, n.description, n.content] OPTIONS {indexConfig: {`fulltext.analyzer`: 'cjk'}}",
         {},
@@ -37,7 +38,7 @@ def write(records, generation, storage):
     tables = [
         dict(
             r.data,
-            ref=reference(r.kind, r.data),
+            ref=reference(r.kind, r.data, truncations),
             source_file=r.source_file,
             build_id=storage.build_id,
         )
@@ -47,7 +48,7 @@ def write(records, generation, storage):
     fields = [
         dict(
             r.data,
-            ref=reference(r.kind, r.data),
+            ref=reference(r.kind, r.data, truncations),
             source_file=r.source_file,
             build_id=storage.build_id,
         )
@@ -81,4 +82,6 @@ def write(records, generation, storage):
         [f"{x['name']} {x['comment']}" for _, x in entities],
         [{"scope": kind + "s", **x} for kind, x in entities],
     )
-    return StageResult(counts={"table": len(tables), "field": len(fields)})
+    return StageResult(
+        counts={"table": len(tables), "field": len(fields), **truncations}
+    )

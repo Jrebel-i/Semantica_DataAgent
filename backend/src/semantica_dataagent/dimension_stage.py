@@ -3,10 +3,10 @@
 from collections import defaultdict
 from urllib.parse import quote
 
+from .refs import MAX_REF_BYTES
 from .stage_contract import StageResult
 
 WRITE_BATCH_SIZE = 2000
-MAX_REF_BYTES = 2048
 MAX_VALUE_CHARS = 512
 MAX_SAMPLE_CHARS = 200
 

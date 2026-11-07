@@ -9,10 +9,12 @@ from urllib.parse import quote
 from jsonschema import validate
 
 from .canonical import ReadResult, Record
+from .refs import bounded_ref
 
 
-def doc_ref(category, path):
-    return "document:" + quote(category, safe="") + "/" + quote(path, safe="/")
+def doc_ref(category, path, counts=None):
+    value = "document:" + quote(category, safe="") + "/" + quote(path, safe="/")
+    return bounded_ref(value, counts)
 
 
 def table_name(path):

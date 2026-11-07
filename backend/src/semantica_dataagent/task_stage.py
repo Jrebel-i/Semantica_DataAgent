@@ -3,6 +3,7 @@
 from urllib.parse import quote
 
 from .plugins import parse_task
+from .refs import bounded_ref
 from .stage_contract import StageResult, delete_batches
 
 
@@ -121,9 +122,10 @@ def write(records, generation, storage):
             pair = (record.data["upstream"], record.data["downstream"])
             declarations.setdefault(task_id, {}).setdefault(pair, []).append(record)
     rows, edges, failures = [], [], []
+    truncations = {}
     for task in tasks:
         name = task.data["name"]
-        ref = "task:" + quote(name, safe="")
+        ref = bounded_ref("task:" + quote(name, safe=""), truncations)
         declared = list(declarations.get(name, {}))
         result, resolved = resolve_task(task, declared, parsed_tasks[name])
         reads = sorted(set(result.reads) | {u for u, _ in declared})
@@ -173,7 +175,10 @@ def write(records, generation, storage):
                 "parse_status": record.data["parse_status"],
                 "task_id": record.data.get("task_id", ""),
                 "ref": (
-                    "task:" + quote(record.data["task_id"], safe="")
+                    bounded_ref(
+                        "task:" + quote(record.data["task_id"], safe=""),
+                        truncations,
+                    )
                     if record.data.get("task_id")
                     else ""
                 ),
@@ -281,6 +286,7 @@ def write(records, generation, storage):
             "lineage": len(edges),
             "column_lineage": column_count,
             "column_failures": column_failure_tasks,
+            **truncations,
         },
         failures=failures,
     )

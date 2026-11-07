@@ -5,6 +5,9 @@ from .stage_contract import StageResult
 
 
 def write(records, generation, storage):
+    from .refs import bounded_ref
+
+    truncations = {}
     docs = [
         {
             **r.data,
@@ -22,7 +25,7 @@ def write(records, generation, storage):
     categories = sorted({d["category"] for d in docs})
     rows, parts, links = [], [], []
     for d in docs:
-        ref = doc_ref(d["category"], d["path"])
+        ref = doc_ref(d["category"], d["path"], truncations)
         index = d["path"] == "index.md"
         rows.append(
             {**d, "ref": ref, "generated": d.get("generated", False), "is_index": index}
@@ -33,7 +36,7 @@ def write(records, generation, storage):
                     {
                         **part,
                         "section": " / ".join(part["section"]),
-                        "ref": f"{ref}#chunk-{number + 1}",
+                        "ref": bounded_ref(f"{ref}#chunk-{number + 1}", truncations),
                         "doc_id": ref,
                         "category": d["category"],
                         "path": d["path"],
@@ -66,5 +69,10 @@ def write(records, generation, storage):
             [{"scope": "docs", **part} for part in batch],
         )
     return StageResult(
-        counts={"document": len(docs), "chunk": len(parts), "category": len(categories)}
+        counts={
+            "document": len(docs),
+            "chunk": len(parts),
+            "category": len(categories),
+            **truncations,
+        }
     )

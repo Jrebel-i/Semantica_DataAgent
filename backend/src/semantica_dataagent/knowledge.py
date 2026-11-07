@@ -36,6 +36,7 @@ from .embedding_client import EmbeddingStats
 from .embedding_client import embed as embedding_embed
 from .filters import filter_records, get_filters
 from .plugins import configured
+from .refs import bounded_ref
 from .stage_contract import WRITE_BATCH_SIZE, delete_batches
 from .storage_errors import StorageUnavailable
 
@@ -332,14 +333,14 @@ def milvus(values):
     return store
 
 
-def reference(kind, data):
+def reference(kind, data, counts=None):
     key = ".".join(
         quote(str(data[k]), safe="").replace(".", "%2E")
         for k in (
             ("database", "name") if kind == "table" else ("database", "table", "name")
         )
     )
-    return f"{kind}:{key}"
+    return bounded_ref(f"{kind}:{key}", counts)
 
 
 def ensure_build_indexes(store):
