@@ -88,6 +88,13 @@ class StorageHandles:
                     dimension=self._embedding_dimension,
                 )
             self._cache_initialized = True
+            if self._embedding_dimension is None:
+                raw = self._settings.get("_embedding_dimension")
+                if raw not in (None, ""):
+                    try:
+                        self._embedding_dimension = int(raw)
+                    except (TypeError, ValueError):
+                        self._embedding_dimension = None
             cache = self._embedding_cache
             if cache is None or not cache.enabled:
                 return None

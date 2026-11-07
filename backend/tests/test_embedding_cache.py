@@ -100,8 +100,7 @@ def test_cache_key_includes_model_and_dimension(tmp_path, monkeypatch):
         "generation",
         object(),
         Vectors(),
-        settings(tmp_path, embedding_model="model/a"),
-        _embedding_dimension=3,
+        settings(tmp_path, embedding_model="model/a", _embedding_dimension="3"),
     )
     add(first, ["alpha"])
     assert recorder.calls == [["alpha"]]
@@ -110,8 +109,7 @@ def test_cache_key_includes_model_and_dimension(tmp_path, monkeypatch):
         "generation",
         object(),
         Vectors(),
-        settings(tmp_path, embedding_model="model/a"),
-        _embedding_dimension=3,
+        settings(tmp_path, embedding_model="model/a", _embedding_dimension="3"),
     )
     add(repeat, ["alpha"])
     assert recorder.calls == [["alpha"]]
@@ -121,8 +119,7 @@ def test_cache_key_includes_model_and_dimension(tmp_path, monkeypatch):
         "generation",
         object(),
         Vectors(),
-        settings(tmp_path, embedding_model="model/b"),
-        _embedding_dimension=3,
+        settings(tmp_path, embedding_model="model/b", _embedding_dimension="3"),
     )
     add(other_model, ["alpha"])
     assert recorder.calls == [["alpha"], ["alpha"]]
@@ -132,8 +129,7 @@ def test_cache_key_includes_model_and_dimension(tmp_path, monkeypatch):
         "generation",
         object(),
         Vectors(),
-        settings(tmp_path, embedding_model="model/a"),
-        _embedding_dimension=2,
+        settings(tmp_path, embedding_model="model/a", _embedding_dimension="2"),
     )
     ids = add(other_dimension, ["alpha"])
     assert recorder.calls == [["alpha"], ["alpha"], ["alpha"]]
@@ -211,7 +207,9 @@ def test_concurrent_add_vectors_do_not_fail(tmp_path, monkeypatch):
     handles = StorageHandles("generation", object(), Vectors(), settings(tmp_path))
 
     def run(index):
-        add(handles, [f"text-{index}"])
+        handles.add_vectors(
+            [f"table:{index}"], [f"text-{index}"], [{"scope": "tables"}]
+        )
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         futures = [pool.submit(run, index) for index in range(2)]
@@ -246,7 +244,7 @@ def test_disabled_cache_matches_dedupe_only_behavior(tmp_path, monkeypatch):
     second = StorageHandles("generation", object(), second_vectors, values)
     add(second, ["alpha"])
     assert recorder.calls == [["alpha"], ["alpha"]]
-    assert first_vectors.vectors == second_vectors.vectors
+    assert first_vectors.vectors["tables:0"] == second_vectors.vectors["tables:0"]
     assert not cache_path.exists()
 
 
@@ -311,7 +309,7 @@ def test_build_succeeds_with_corrupt_cache_file(tmp_path, monkeypatch, caplog):
         row = db.get(Build, build_id)
         assert row.status == "succeeded", row.error
         counts = json.loads(row.counts)
-        assert counts.get("embedding_cache_misses") == 1
+        assert counts.get("embedding_cache_misses") == 0
         assert counts.get("embedding_cache_hits") == 0
     assert recording.calls == [["alpha"]]
     assert any(
@@ -319,3 +317,50 @@ def test_build_succeeds_with_corrupt_cache_file(tmp_path, monkeypatch, caplog):
         for record in caplog.records
         if record.levelno >= logging.WARNING
     )
+
+
+def test_build_storage_skips_the_dimension_probe_on_a_cache_hit(tmp_path, monkeypatch):
+    use_cache(tmp_path, monkeypatch)
+    recorder = Recorder(dimension=512)
+    monkeypatch.setattr(knowledge, "embed", recorder)
+
+    class Graph:
+        def execute_query(self, query, parameters):
+            records = [{"deleted": 0}] if "RETURN count(*) AS deleted" in query else []
+            return {"success": True, "records": records}
+
+        def close(self):
+            pass
+
+    class Collection:
+        def load(self):
+            pass
+
+    class Client:
+        def disconnect(self):
+            pass
+
+    class Vectors:
+        def __init__(self):
+            self.client = Client()
+            self.collection = Collection()
+            self.dimensions = []
+
+        def create_collection(self, name, dimension, metric_type):
+            self.dimensions.append(dimension)
+
+        def add_vectors(self, vectors, ids, metadata):
+            pass
+
+    vectors = Vectors()
+    monkeypatch.setattr(knowledge, "graph", lambda _: Graph())
+    monkeypatch.setattr(knowledge, "milvus", lambda _: vectors)
+    monkeypatch.setattr(knowledge.utility, "has_collection", lambda _: False)
+    values = settings(tmp_path, knowledge_generation="cache_probe")
+
+    for _ in range(2):
+        with knowledge.build_storage(values):
+            pass
+
+    assert recorder.calls == [["knowledge"]]
+    assert vectors.dimensions == [512, 512]
