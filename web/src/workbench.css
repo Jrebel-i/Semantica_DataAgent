@@ -850,7 +850,15 @@ legend {
   background: var(--nav-3);
   border-color: var(--line);
 }
-.session-item button {
+.session-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.session-item .session-open {
+  flex: 1 1 auto;
+  min-width: 0;
   width: 100%;
   padding: 0;
   border: 0;
@@ -864,8 +872,78 @@ legend {
   text-overflow: ellipsis;
   cursor: pointer;
 }
-.session-item.active button {
+.session-item.active .session-open {
   color: var(--white);
+}
+.session-delete {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--ink-3);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    opacity 0.12s ease,
+    color 0.12s ease,
+    background 0.12s ease;
+}
+.session-item:hover .session-delete,
+.session-item:focus-within .session-delete,
+.session-delete.visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+.session-delete:hover,
+.session-delete:focus-visible {
+  background: var(--surface);
+  color: var(--red);
+}
+.session-delete-actions {
+  flex: none;
+  display: flex;
+  gap: 4px;
+}
+.session-delete-confirm,
+.session-delete-cancel {
+  padding: 1px 6px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--ink-2);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.session-delete-confirm {
+  border-color: var(--danger-border);
+  color: var(--red);
+}
+.session-delete-confirm:hover {
+  background: var(--mint-soft);
+}
+.session-delete-cancel:hover {
+  background: var(--nav-2);
+}
+.session-delete-error {
+  padding: 2px 12px 6px;
+  color: var(--red);
+  font-size: 12px;
+}
+@media (hover: none), (pointer: coarse) {
+  .session-delete {
+    opacity: 1;
+    pointer-events: auto;
+  }
 }
 .session-meta {
   color: var(--ink-3);
@@ -2186,7 +2264,7 @@ code {
   background: var(--nav-3);
   border-color: transparent;
 }
-.sidebar-sessions .session-item.active button {
+.sidebar-sessions .session-item.active .session-open {
   color: var(--ink);
 }
 .sidebar-sessions .session-item.active .session-meta {
@@ -2486,7 +2564,7 @@ code {
   padding: 6px 10px;
   border: 0;
 }
-.sidebar-sessions .session-item button {
+.sidebar-sessions .session-item .session-open {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

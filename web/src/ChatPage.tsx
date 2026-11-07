@@ -9,6 +9,7 @@ import { TaskLineage } from "./TaskLineage";
 import {
   ArrowUpOutlined,
   CloseOutlined,
+  DeleteOutlined,
   PlusOutlined,
 } from "@ant-design/icons";
 import { parseAgentProfiles, type AgentProfiles } from "./agentProfiles";
@@ -699,6 +700,11 @@ export function ChatPage({
   });
   const [providers, setProviders] = useState<Provider[]>([]);
   const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [hoveredConversationId, setHoveredConversationId] = useState("");
+  const [focusedConversationId, setFocusedConversationId] = useState("");
+  const [confirmingDeleteId, setConfirmingDeleteId] = useState("");
+  const [deletingConversationId, setDeletingConversationId] = useState("");
+  const [sessionError, setSessionError] = useState("");
   const [agentId, setAgentId] = useState("pi");
   const [providerId, setProviderId] = useState("");
   const [model, setModel] = useState("");
@@ -1324,6 +1330,38 @@ export function ChatPage({
     }
   }
 
+  async function deleteConversation(id: string) {
+    if (deletingConversationId) return;
+    setDeletingConversationId(id);
+    setSessionError("");
+    try {
+      const response = await fetch(
+        `/api/v1/conversations/${encodeURIComponent(id)}`,
+        {
+          method: "DELETE",
+          headers: { Authorization: `Bearer ${token}` },
+        },
+      );
+      if (response.status === 409) {
+        setSessionError(t.deleteConversationRunning);
+        return;
+      }
+      if (!response.ok) {
+        setSessionError(t.deleteConversationFailed);
+        return;
+      }
+      setConversations((current) =>
+        current.filter((conversation) => conversation.id !== id),
+      );
+      if (id === currentConversationId) newConversation();
+    } catch {
+      setSessionError(t.deleteConversationFailed);
+    } finally {
+      setDeletingConversationId("");
+      setConfirmingDeleteId("");
+    }
+  }
+
   const canAsk = Boolean(
     question.trim() && providerId && model && !sending && resumable,
   );
@@ -1393,30 +1431,90 @@ export function ChatPage({
                     </Button>
                   )}
                 </div>
+                {sessionError && (
+                  <div className="session-delete-error" role="alert">
+                    {sessionError}
+                  </div>
+                )}
                 <div className="session-list">
                   {conversations.length === 0 ? (
                     <div className="session-empty">{t.noConversations}</div>
                   ) : (
                     conversations.map((conversation) => {
                       const active = conversation.id === currentConversationId;
+                      const revealed =
+                        hoveredConversationId === conversation.id ||
+                        focusedConversationId === conversation.id;
+                      const confirming = confirmingDeleteId === conversation.id;
+                      const deleting =
+                        deletingConversationId === conversation.id;
                       return (
                         <div
                           className={`session-item${active ? " active" : ""}`}
                           key={conversation.id}
+                          onMouseEnter={() =>
+                            setHoveredConversationId(conversation.id)
+                          }
+                          onMouseLeave={() => setHoveredConversationId("")}
+                          onFocus={() =>
+                            setFocusedConversationId(conversation.id)
+                          }
+                          onBlur={() => setFocusedConversationId("")}
                         >
-                          <button
-                            type="button"
-                            title={conversation.title}
-                            onClick={() => {
-                              onNavigateChat?.();
-                              void openConversation(conversation.id);
-                            }}
-                            disabled={sending}
-                          >
-                            {conversation.title}
-                            {conversation.resumable === false &&
-                              ` (${t.sessionExpired})`}
-                          </button>
+                          <div className="session-row">
+                            {confirming ? (
+                              <span className="session-delete-actions">
+                                <button
+                                  type="button"
+                                  className="session-delete-confirm"
+                                  onClick={() =>
+                                    void deleteConversation(conversation.id)
+                                  }
+                                  disabled={deleting}
+                                >
+                                  {t.confirmDeleteConversation}
+                                </button>
+                                <button
+                                  type="button"
+                                  className="session-delete-cancel"
+                                  onClick={() => setConfirmingDeleteId("")}
+                                  disabled={deleting}
+                                >
+                                  {t.cancelDeleteConversation}
+                                </button>
+                              </span>
+                            ) : (
+                              <>
+                                <button
+                                  type="button"
+                                  className="session-open"
+                                  title={conversation.title}
+                                  onClick={() => {
+                                    onNavigateChat?.();
+                                    void openConversation(conversation.id);
+                                  }}
+                                  disabled={sending}
+                                >
+                                  {conversation.title}
+                                  {conversation.resumable === false &&
+                                    ` (${t.sessionExpired})`}
+                                </button>
+                                <button
+                                  type="button"
+                                  className={`session-delete${revealed ? " visible" : ""}`}
+                                  aria-label={t.deleteConversation}
+                                  title={t.deleteConversation}
+                                  onClick={() => {
+                                    setSessionError("");
+                                    setConfirmingDeleteId(conversation.id);
+                                  }}
+                                  disabled={sending && active}
+                                >
+                                  <DeleteOutlined />
+                                </button>
+                              </>
+                            )}
+                          </div>
                           <span className="session-meta">
                             <span>{shortTime(conversation.updated_at)}</span>
                           </span>
