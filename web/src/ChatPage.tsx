@@ -209,6 +209,10 @@ export function citationLabel(ref: string): CitationLabel {
   };
 }
 
+export function citationDisplayName(label: CitationLabel): string {
+  return label.category ? `${label.category} · ${label.label}` : label.label;
+}
+
 function citationKey(ref: string): string {
   const separator = ref.indexOf(":");
   const type = separator >= 0 ? ref.slice(0, separator) : "";
@@ -728,24 +732,34 @@ function ClarificationList({
             <article key={question.id ?? questionIndex}>
               <p>{question.question}</p>
               <Space wrap>
-                {(question.options ?? []).map((option, optionIndex) => (
-                  <Button
-                    key={
-                      option.id ??
-                      `${option.label}-${option.ref}-${optionIndex}`
-                    }
-                    disabled={disabled}
-                    onClick={() => onSelect(question, option)}
-                  >
-                    <span>{option.label}</span>
-                    {option.ref && (
-                      <>
-                        {" "}
-                        <code>{safeDecodePath(option.ref)}</code>
-                      </>
-                    )}
-                  </Button>
-                ))}
+                {(question.options ?? []).map((option, optionIndex) => {
+                  const source = option.ref
+                    ? citationLabel(option.ref)
+                    : undefined;
+                  return (
+                    <Button
+                      key={
+                        option.id ??
+                        `${option.label}-${option.ref}-${optionIndex}`
+                      }
+                      disabled={disabled}
+                      onClick={() => onSelect(question, option)}
+                    >
+                      <span>{option.label}</span>
+                      {source && (
+                        <>
+                          {" "}
+                          <span
+                            className="clarification-source"
+                            title={source.title}
+                          >
+                            {citationDisplayName(source)}
+                          </span>
+                        </>
+                      )}
+                    </Button>
+                  );
+                })}
               </Space>
             </article>
           ))}

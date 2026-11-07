@@ -4,6 +4,7 @@ import { Alert, Button } from "antd";
 import type { paths } from "./api";
 import type { Messages } from "./i18n";
 import { safeDecodePath } from "./paths";
+import { citationDisplayName, citationLabel } from "./ChatPage";
 
 type Category =
   paths["/api/v1/categories"]["get"]["responses"][200]["content"]["application/json"][number];
@@ -153,43 +154,54 @@ export function SearchPage({
           <div className="empty-state">{t.noResults}</div>
         ) : (
           <ol className="search-results">
-            {results.map((hit) => (
-              <li key={hit.ref}>
-                <article className="search-result">
-                  <h3>
-                    {hit.name || safeDecodePath(hit.path || hit.ref || "")}
-                  </h3>
-                  <p className="ref">
-                    {hit.ref} ({hit.type})
-                  </p>
-                  {(hit.content || hit.comment || hit.description) && (
-                    <p>{hit.content || hit.comment || hit.description}</p>
-                  )}
-                  <p>
-                    {t.score}: {hit.score.toFixed(4)}
-                  </p>
-                  <p>
-                    {t.sources}:{" "}
-                    {hit.sources.map((source) => sources[source]).join(", ")}
-                  </p>
-                  <p>
-                    {t.confidence}:{" "}
-                    <strong>{confidence[hit.confidence]}</strong>
-                  </p>
-                  {hit.ambiguous && (
-                    <div className="search-ambiguity">
-                      <strong>{t.possibleAmbiguity}</strong>
-                      <p>{t.ambiguityRefs}</p>
-                      <ul>
-                        {hit.ambiguity_refs.map((ref) => (
-                          <li key={ref}>{ref}</li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-                </article>
-              </li>
-            ))}
+            {results.map((hit) => {
+              const citation = citationLabel(hit.ref);
+              return (
+                <li key={hit.ref}>
+                  <article className="search-result">
+                    <h3>
+                      {hit.name ||
+                        (hit.path
+                          ? safeDecodePath(hit.path)
+                          : citationDisplayName(citation))}
+                    </h3>
+                    <p className="ref" title={citation.title}>
+                      {citationDisplayName(citation)} ({hit.type})
+                    </p>
+                    {(hit.content || hit.comment || hit.description) && (
+                      <p>{hit.content || hit.comment || hit.description}</p>
+                    )}
+                    <p>
+                      {t.score}: {hit.score.toFixed(4)}
+                    </p>
+                    <p>
+                      {t.sources}:{" "}
+                      {hit.sources.map((source) => sources[source]).join(", ")}
+                    </p>
+                    <p>
+                      {t.confidence}:{" "}
+                      <strong>{confidence[hit.confidence]}</strong>
+                    </p>
+                    {hit.ambiguous && (
+                      <div className="search-ambiguity">
+                        <strong>{t.possibleAmbiguity}</strong>
+                        <p>{t.ambiguityRefs}</p>
+                        <ul>
+                          {hit.ambiguity_refs.map((ref) => {
+                            const label = citationLabel(ref);
+                            return (
+                              <li key={ref} title={label.title}>
+                                {citationDisplayName(label)}
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      </div>
+                    )}
+                  </article>
+                </li>
+              );
+            })}
           </ol>
         ))}
     </section>

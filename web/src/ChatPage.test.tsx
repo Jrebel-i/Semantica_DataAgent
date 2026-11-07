@@ -768,6 +768,79 @@ test("a clarification option continues the same conversation with its evidence",
   expect(followUp.question).toContain("不要把它作为全局规则");
 });
 
+test("含中文编码 ref 的澄清选项显示友好名称并提交原 ref", async () => {
+  const encodedRef =
+    "document:%E6%8C%87%E6%A0%87/%E8%AE%A2%E5%8D%95/variant_001.md#chunk-1";
+  const tableRef = "table:shop.orders";
+  const firstSse = [
+    'event: conversation\ndata: {"conversation_id":"conv-encoded","turn_id":1}',
+    `event: clarification\ndata: ${JSON.stringify({
+      questions: [
+        {
+          id: "q1",
+          question: "销售额按哪个口径统计？",
+          options: [
+            { id: "o1", label: "支付销售额（支付成功时间）", ref: encodedRef },
+            { id: "o2", label: "订单明细", ref: tableRef },
+          ],
+        },
+      ],
+    })}`,
+    'event: done\ndata: {"text":"请选择口径。","sql":[],"citations":[]}',
+  ].join("\n\n");
+  const secondSse = [
+    'event: conversation\ndata: {"conversation_id":"conv-encoded","turn_id":2}',
+    'event: done\ndata: {"text":"按支付口径。","sql":[],"citations":[]}',
+  ].join("\n\n");
+  const askBodies: string[] = [];
+  const fetcher = vi.fn(
+    async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/v1/agents")
+        return json([{ id: "pi", name: "pi", available: true }]);
+      if (url === "/api/v1/providers") return json([provider]);
+      if (url === "/api/v1/conversations") return json([]);
+      if (url === "/api/v1/conversations/ask") {
+        askBodies.push(String(init?.body));
+        return new Response(askBodies.length === 1 ? firstSse : secondSse, {
+          status: 200,
+          headers: { "Content-Type": "text/event-stream" },
+        });
+      }
+      return new Response("", { status: 404 });
+    },
+  );
+  vi.stubGlobal("fetch", fetcher);
+  render(
+    <ChatPage
+      token="personal-token"
+      role="user"
+      messages={getMessages("zh")}
+    />,
+  );
+
+  await waitFor(() =>
+    expect((screen.getByLabelText("模型") as HTMLSelectElement).value).toBe(
+      provider.models[0],
+    ),
+  );
+  fireEvent.change(screen.getByLabelText("问题"), {
+    target: { value: "上个月销售额是多少？" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: /提\s*问/ }));
+  const option = await screen.findByRole("button", {
+    name: /支付销售额（支付成功时间）/,
+  });
+  expect(screen.getByText("指标 · 订单 · 口径 1")).toBeTruthy();
+  expect(screen.getByText("shop.orders")).toBeTruthy();
+  expect(screen.getByTitle("指标/订单/variant_001.md")).toBeTruthy();
+  fireEvent.click(option);
+
+  await waitFor(() => expect(askBodies).toHaveLength(2));
+  const followUp = JSON.parse(askBodies[1]) as { question: string };
+  expect(followUp.question).toContain(encodedRef);
+});
+
 test("新会话发送所选 agent 与模型并在建立后锁定", async () => {
   const fetcher = vi.fn(
     async (input: RequestInfo | URL, init?: RequestInit) => {
