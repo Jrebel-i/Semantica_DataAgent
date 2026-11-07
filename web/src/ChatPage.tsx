@@ -13,6 +13,7 @@ import {
 } from "@ant-design/icons";
 import { parseAgentProfiles, type AgentProfiles } from "./agentProfiles";
 import { HighlightedSql, Markdown } from "./Markdown";
+import { safeDecodePath } from "./paths";
 import {
   loadTableDetail,
   tablePartsFromRef,
@@ -411,15 +412,12 @@ function CitationList({
   const shortOf = (citation: Citation) => {
     const value = citation.ref.slice(citation.ref.indexOf(":") + 1);
     if (citation.type === "document" || citation.ref.startsWith("document:")) {
-      const path = value.split("#", 1)[0];
+      const path = safeDecodePath(value.split("#", 1)[0]);
       const name = path.split("/").at(-1) || path;
-      try {
-        return decodeURIComponent(name);
-      } catch {
-        return name;
-      }
+      return name;
     }
-    return value.length > 34 ? `${value.slice(0, 32)}…` : value;
+    const label = safeDecodePath(value);
+    return label.length > 34 ? `${label.slice(0, 32)}…` : label;
   };
   return (
     <section aria-label={messages.citations}>
@@ -430,16 +428,7 @@ function CitationList({
             className={`citation-chip ${citation.type}`}
             key={citation.ref}
             aria-label={citation.ref}
-            title={citation.ref
-              .split("/")
-              .map((part) => {
-                try {
-                  return decodeURIComponent(part);
-                } catch {
-                  return part;
-                }
-              })
-              .join("/")}
+            title={safeDecodePath(citation.ref)}
             onClick={() => onOpen(citation.ref)}
           >
             <span className="citation-kind">{countOf(citation)}</span>
@@ -500,7 +489,7 @@ function ClarificationList({
                     {option.ref && (
                       <>
                         {" "}
-                        <code>{option.ref}</code>
+                        <code>{safeDecodePath(option.ref)}</code>
                       </>
                     )}
                   </Button>
@@ -1644,20 +1633,18 @@ export function ChatPage({
             <aside className="chat-context">
               <div className="context-body">
                 <div className="context-header">
-                  <strong title={citationRef}>
+                  <strong title={safeDecodePath(citationRef)}>
                     {citationDetail?.kind === "document"
                       ? (() => {
-                          const name =
-                            citationDetail.document.path.split("/").at(-1) ||
-                            citationDetail.document.path;
-                          try {
-                            return decodeURIComponent(name);
-                          } catch {
-                            return name;
-                          }
+                          const path = safeDecodePath(
+                            citationDetail.document.path,
+                          );
+                          return path.split("/").at(-1) || path;
                         })()
                       : selectedTable
-                        ? `${selectedTable.database}.${selectedTable.name}`
+                        ? safeDecodePath(
+                            `${selectedTable.database}.${selectedTable.name}`,
+                          )
                         : t.citations}
                   </strong>
                   <Button
@@ -1675,7 +1662,9 @@ export function ChatPage({
                     <div className="context-schema-head">
                       <div className="context-schema-title">
                         <strong>
-                          {selectedTable.database}.{selectedTable.name}
+                          {safeDecodePath(
+                            `${selectedTable.database}.${selectedTable.name}`,
+                          )}
                         </strong>
                         {selectedTable.comment && (
                           <span className="muted">{selectedTable.comment}</span>
@@ -1707,10 +1696,10 @@ export function ChatPage({
                 ) : citationDetail?.kind === "document" ? (
                   <article>
                     <div className="context-ref">
-                      {citationDetail.document.path}
+                      {safeDecodePath(citationDetail.document.path)}
                     </div>
                     <div className="doc-content">
-                      {citationDetail.document.path
+                      {safeDecodePath(citationDetail.document.path)
                         .toLowerCase()
                         .endsWith(".md") ? (
                         <Markdown text={citationDetail.document.content} />

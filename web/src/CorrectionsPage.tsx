@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Alert } from "antd";
 import type { Messages } from "./i18n";
+import { safeDecodePath } from "./paths";
 
 type Proposal = {
   id: string;
@@ -112,7 +113,7 @@ export function CorrectionsPage({
                         setPatch(row.patch);
                       }}
                     >
-                      <span className="mono">{row.target}</span>
+                      <span className="mono">{safeDecodePath(row.target)}</span>
                       <span className="subtle"> — {row.status}</span>
                     </button>
                   </li>
@@ -124,7 +125,9 @@ export function CorrectionsPage({
             {selected ? (
               <>
                 <div className="card-title-row">
-                  <h2 className="card-title mono">{selected.target}</h2>
+                  <h2 className="card-title mono">
+                    {safeDecodePath(selected.target)}
+                  </h2>
                 </div>
                 <p className="muted">{selected.reason}</p>
                 <pre className="diff-block">{selected.diff}</pre>

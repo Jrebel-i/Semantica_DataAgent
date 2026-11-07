@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Alert, Button, Tree, Typography } from "antd";
 import type { paths } from "./api";
 import type { Messages } from "./i18n";
+import { safeDecodePath } from "./paths";
 
 type Category =
   paths["/api/v1/categories"]["get"]["responses"][200]["content"]["application/json"][number];
@@ -85,7 +86,7 @@ export function DocumentsPage({
                   )
                 }
               >
-                {d.path}
+                {safeDecodePath(d.path)}
               </Button>
             ),
           })),
@@ -99,7 +100,8 @@ export function DocumentsPage({
       {doc && (
         <>
           <Typography.Title level={4}>
-            {doc.path} {doc.generated && `(${messages.generated})`}
+            {safeDecodePath(doc.path)}{" "}
+            {doc.generated && `(${messages.generated})`}
           </Typography.Title>
           <pre style={{ whiteSpace: "pre-wrap" }}>
             {doc.content

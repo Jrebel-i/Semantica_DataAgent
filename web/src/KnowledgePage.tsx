@@ -5,6 +5,7 @@ import { TaskLineage, type TableLineage } from "./TaskLineage";
 import type { Messages } from "./i18n";
 import { ColumnLineage } from "./ColumnLineage";
 import { DimensionStatus } from "./DimensionStatus";
+import { safeDecodePath } from "./paths";
 import {
   loadTableDetail,
   summaryFromDetail,
@@ -487,10 +488,10 @@ export function KnowledgePage({
           <button
             type="button"
             className="tree-doc-link"
-            aria-label={document.path}
+            aria-label={safeDecodePath(document.path)}
             onClick={() => void openDocument(document.ref)}
           >
-            {document.path}
+            {safeDecodePath(document.path)}
           </button>
         ),
       })),
@@ -693,14 +694,16 @@ export function KnowledgePage({
                             key={doc.ref}
                             onClick={() => void openLinkedDocument(doc.ref)}
                           >
-                            {doc.path}
+                            {safeDecodePath(doc.path)}
                           </Button>
                         ))}
                       </div>
                     )}
                     {linkedDocument && (
                       <div className="doc-content">
-                        <div className="context-ref">{linkedDocument.path}</div>
+                        <div className="context-ref">
+                          {safeDecodePath(linkedDocument.path)}
+                        </div>
                         <pre>{linkedDocument.content}</pre>
                       </div>
                     )}
@@ -725,7 +728,9 @@ export function KnowledgePage({
             <>
               <div className="detail-header">
                 <div>
-                  <h1 className="detail-title">{readingDoc.path}</h1>
+                  <h1 className="detail-title">
+                    {safeDecodePath(readingDoc.path)}
+                  </h1>
                   <p className="detail-subtitle">
                     {readingDoc.category}
                     {readingDoc.generated ? ` · ${messages.generated}` : ""}

@@ -1186,7 +1186,8 @@ test("示例问题只填入输入框而不发送请求", async () => {
 });
 
 test("文档引用解码文件名并在抽屉渲染 Markdown，失败工具自动展开", async () => {
-  const ref = "document:指标/%E9%94%80%E5%94%AE%20%23%E6%8A%A5%E5%91%8A.md";
+  const name = "销售 50% #报告.md";
+  const ref = `document:指标/${encodeURIComponent(name)}#chunk-1`;
   const response = sse
     .replace('"is_error":false', '"is_error":true')
     .replace("document:metrics/definitions/sales.md#chunk-1", ref);
@@ -1205,7 +1206,7 @@ test("文档引用解码文件名并在抽屉渲染 Markdown，失败工具自�
       if (url.startsWith("/api/v1/document?"))
         return json({
           ...document,
-          path: "销售 #报告.md",
+          path: `definitions/${encodeURIComponent(name)}`,
           content: "# 销售标题\n\n**重要内容**",
         });
       return new Response("", { status: 404 });
@@ -1224,7 +1225,8 @@ test("文档引用解码文件名并在抽屉渲染 Markdown，失败工具自�
   });
   fireEvent.click(screen.getByRole("button", { name: /提\s*问/ }));
   const chip = await screen.findByRole("button", { name: ref });
-  expect(chip.textContent).toContain("销售 #报告.md");
+  expect(chip.textContent).toContain(name);
+  expect(chip.getAttribute("title")).toBe(`document:指标/${name}#chunk-1`);
   expect(container.querySelector(".chat-context")).toBeNull();
   expect(container.querySelector(".tool-step")?.hasAttribute("open")).toBe(
     true,
@@ -1234,7 +1236,65 @@ test("文档引用解码文件名并在抽屉渲染 Markdown，失败工具自�
     (await screen.findByRole("heading", { name: "销售标题" })).tagName,
   ).toBe("H1");
   expect(screen.getByText("重要内容").tagName).toBe("STRONG");
+  expect(container.querySelector(".context-header strong")?.textContent).toBe(
+    name,
+  );
+  expect(container.querySelector(".context-ref")?.textContent).toBe(
+    `definitions/${name}`,
+  );
   fireEvent.click(screen.getByRole("button", { name: "关闭" }));
   expect(container.querySelector(".chat-context")).toBeNull();
   expect(container.querySelector(".chat-layout.context-hidden")).toBeTruthy();
+});
+
+test("文档路径编码非法时抽屉和悬停提示原样显示", async () => {
+  const path = "definitions/%E9%94.md";
+  const ref = `document:${path}#chunk-1`;
+  const response = sse
+    .replace('"is_error":false', '"is_error":true')
+    .replace("document:metrics/definitions/sales.md#chunk-1", ref);
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/v1/agents")
+        return json([{ id: "pi", available: true }]);
+      if (url === "/api/v1/providers") return json([provider]);
+      if (url === "/api/v1/conversations") return json([]);
+      if (url === "/api/v1/conversations/ask")
+        return new Response(response, {
+          headers: { "Content-Type": "text/event-stream" },
+        });
+      if (url.startsWith("/api/v1/document?"))
+        return json({
+          ...document,
+          path,
+          content: "# 非法编码\n\n文件仍可查看。",
+        });
+      return new Response("", { status: 404 });
+    }),
+  );
+  const { container } = render(
+    <ChatPage token="token" role="user" messages={getMessages("zh")} />,
+  );
+  await waitFor(() =>
+    expect((screen.getByLabelText("模型") as HTMLSelectElement).value).toBe(
+      provider.models[0],
+    ),
+  );
+  fireEvent.change(screen.getByLabelText("问题"), {
+    target: { value: "查看" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: /提\s*问/ }));
+  const chip = await screen.findByRole("button", { name: ref });
+  expect(chip.textContent).toContain("%E9%94.md");
+  expect(chip.getAttribute("title")).toBe(ref);
+  fireEvent.click(chip);
+  expect(
+    (await screen.findByRole("heading", { name: "非法编码" })).tagName,
+  ).toBe("H1");
+  expect(container.querySelector(".context-header strong")?.textContent).toBe(
+    "%E9%94.md",
+  );
+  expect(container.querySelector(".context-ref")?.textContent).toBe(path);
 });
