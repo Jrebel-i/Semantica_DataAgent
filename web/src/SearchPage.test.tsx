@@ -59,7 +59,8 @@ test("searches selected scope and category and displays fusion evidence", async 
   expect(screen.getByText(/全文.*向量/)).toBeTruthy();
   expect(screen.getByText("高")).toBeTruthy();
   expect(screen.getByText("可能存在歧义")).toBeTruthy();
-  expect(screen.getByText("document:metrics/b#chunk-1")).toBeTruthy();
+  expect(screen.getByText("metrics · b")).toBeTruthy();
+  expect(screen.queryByText(/document:metrics/)).toBeNull();
   await waitFor(() =>
     expect(fetcher).toHaveBeenCalledWith(
       expect.stringContaining("scope=docs&category=metrics"),

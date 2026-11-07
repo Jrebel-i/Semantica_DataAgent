@@ -422,7 +422,7 @@ test("streams tools and text, copies SQL, and opens table and document citations
     return new Response("", { status: 404 });
   });
   vi.stubGlobal("fetch", fetcher);
-  render(
+  const { container } = render(
     <ChatPage
       token="personal-token"
       role="user"
@@ -464,6 +464,9 @@ test("streams tools and text, copies SQL, and opens table and document citations
   const schemaHead = window.document.querySelector(".context-schema-head");
   expect(schemaHead?.textContent).toContain("shop.payments");
   expect(schemaHead?.textContent).toContain("支付流水");
+  expect(
+    window.document.querySelector(".context-schema-body .schema-table"),
+  ).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "关闭" }));
   expect(window.document.querySelector(".context-schema-head")).toBeNull();
   expect(fetcher).toHaveBeenCalledWith("/api/v1/tables/shop/payments", {
@@ -560,7 +563,7 @@ test("restores conversation history and renders its SQL and citations", async ()
       return new Response("", { status: 404 });
     }),
   );
-  render(
+  const { container } = render(
     <ChatPage
       token="personal-token"
       role="user"
@@ -583,6 +586,16 @@ test("restores conversation history and renders its SQL and citations", async ()
   fireEvent.click(screen.getByRole("button", { name: /已使用 1 个工具/ }));
   expect(screen.getByText("mcp__dataagent__search_knowledge")).toBeTruthy();
   expect(screen.getByText("按支付日还是下单日？")).toBeTruthy();
+  const citationList = container.querySelector(".citation-list");
+  const clarificationCard = container.querySelector(".clarification-card");
+  expect(clarificationCard).toBeTruthy();
+  expect(citationList).toBeTruthy();
+  expect(citationList!.compareDocumentPosition(clarificationCard!)).toBe(
+    Node.DOCUMENT_POSITION_FOLLOWING,
+  );
+  expect(
+    clarificationCard!.querySelector(".context-section-title")?.textContent,
+  ).toBe("Clarification needed");
 });
 
 test("admins configure providers without sending a blank API key", async () => {
@@ -753,6 +766,79 @@ test("a clarification option continues the same conversation with its evidence",
     "document:metrics/definitions/sales.md#chunk-1",
   );
   expect(followUp.question).toContain("不要把它作为全局规则");
+});
+
+test("含中文编码 ref 的澄清选项显示友好名称并提交原 ref", async () => {
+  const encodedRef =
+    "document:%E6%8C%87%E6%A0%87/%E8%AE%A2%E5%8D%95/variant_001.md#chunk-1";
+  const tableRef = "table:shop.orders";
+  const firstSse = [
+    'event: conversation\ndata: {"conversation_id":"conv-encoded","turn_id":1}',
+    `event: clarification\ndata: ${JSON.stringify({
+      questions: [
+        {
+          id: "q1",
+          question: "销售额按哪个口径统计？",
+          options: [
+            { id: "o1", label: "支付销售额（支付成功时间）", ref: encodedRef },
+            { id: "o2", label: "订单明细", ref: tableRef },
+          ],
+        },
+      ],
+    })}`,
+    'event: done\ndata: {"text":"请选择口径。","sql":[],"citations":[]}',
+  ].join("\n\n");
+  const secondSse = [
+    'event: conversation\ndata: {"conversation_id":"conv-encoded","turn_id":2}',
+    'event: done\ndata: {"text":"按支付口径。","sql":[],"citations":[]}',
+  ].join("\n\n");
+  const askBodies: string[] = [];
+  const fetcher = vi.fn(
+    async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/v1/agents")
+        return json([{ id: "pi", name: "pi", available: true }]);
+      if (url === "/api/v1/providers") return json([provider]);
+      if (url === "/api/v1/conversations") return json([]);
+      if (url === "/api/v1/conversations/ask") {
+        askBodies.push(String(init?.body));
+        return new Response(askBodies.length === 1 ? firstSse : secondSse, {
+          status: 200,
+          headers: { "Content-Type": "text/event-stream" },
+        });
+      }
+      return new Response("", { status: 404 });
+    },
+  );
+  vi.stubGlobal("fetch", fetcher);
+  render(
+    <ChatPage
+      token="personal-token"
+      role="user"
+      messages={getMessages("zh")}
+    />,
+  );
+
+  await waitFor(() =>
+    expect((screen.getByLabelText("模型") as HTMLSelectElement).value).toBe(
+      provider.models[0],
+    ),
+  );
+  fireEvent.change(screen.getByLabelText("问题"), {
+    target: { value: "上个月销售额是多少？" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: /提\s*问/ }));
+  const option = await screen.findByRole("button", {
+    name: /支付销售额（支付成功时间）/,
+  });
+  expect(screen.getByText("指标 · 订单 · 口径 1")).toBeTruthy();
+  expect(screen.getByText("shop.orders")).toBeTruthy();
+  expect(screen.getByTitle("指标/订单/variant_001.md")).toBeTruthy();
+  fireEvent.click(option);
+
+  await waitFor(() => expect(askBodies).toHaveLength(2));
+  const followUp = JSON.parse(askBodies[1]) as { question: string };
+  expect(followUp.question).toContain(encodedRef);
 });
 
 test("新会话发送所选 agent 与模型并在建立后锁定", async () => {
@@ -1264,6 +1350,13 @@ test("文档引用解码文件名并在抽屉渲染 Markdown，失败工具自�
   expect(container.querySelector(".context-ref")?.textContent).toBe(
     `definitions/${name}`,
   );
+  const drawer = container.querySelector(".chat-context");
+  const header = drawer?.querySelector(":scope > .context-header");
+  const body = drawer?.querySelector(":scope > .context-body");
+  expect(header).toBeTruthy();
+  expect(body).toBeTruthy();
+  expect(header?.contains(container.querySelector(".context-ref"))).toBe(true);
+  expect(container.querySelector(".context-body .doc-content")).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "关闭" }));
   expect(container.querySelector(".chat-context")).toBeNull();
   expect(container.querySelector(".chat-layout.context-hidden")).toBeTruthy();
@@ -1598,9 +1691,15 @@ test("citationLabel 生成文档与数据表的友好名称", () => {
   });
   expect(citationLabel("document:指标/订单/variant_001.md#chunk-2")).toEqual({
     kind: "document",
-    label: "订单 · 口径 001",
+    label: "订单 · 口径 1",
     category: "指标",
     title: "指标/订单/variant_001.md",
+  });
+  expect(citationLabel("document:指标/订单/variant_012.md#chunk-2")).toEqual({
+    kind: "document",
+    label: "订单 · 口径 12",
+    category: "指标",
+    title: "指标/订单/variant_012.md",
   });
   const tricky = citationLabel(
     `document:指标/${encodeURIComponent("销售 50% #报告.md")}#chunk-1`,

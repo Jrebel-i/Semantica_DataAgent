@@ -1532,8 +1532,11 @@ legend {
 .chat-context {
   display: flex;
   flex-direction: column;
+  flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
+  height: 100%;
+  overflow: hidden;
   background: var(--panel);
 }
 .context-tabs {
@@ -1560,7 +1563,7 @@ legend {
 .context-body {
   flex: 1 1 auto;
   min-height: 0;
-  overflow-y: auto;
+  overflow: auto;
   padding: 14px 16px;
 }
 .context-body--schema {
@@ -1577,6 +1580,9 @@ legend {
   padding: 9px 16px;
   border-bottom: 1px solid var(--line-soft);
   background: var(--surface);
+}
+.context-schema-body {
+  min-width: 0;
 }
 .context-schema-title {
   display: flex;
@@ -1635,6 +1641,30 @@ legend {
   overflow-wrap: anywhere;
   font: 11.5px var(--font-mono);
   color: var(--ink-2);
+}
+.context-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.context-heading .context-ref {
+  margin-bottom: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.clarification-card {
+  margin-top: 14px;
+}
+.clarification-source {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink-2);
+  font-size: 10.5px;
+  font-weight: 400;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .schema-table,
 .data-table {
@@ -2702,10 +2732,13 @@ code {
   color: var(--ink);
 }
 .context-header {
+  flex: none;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  padding: 14px 16px 10px;
+  border-bottom: 1px solid var(--line-soft);
 }
 .context-header strong {
   min-width: 0;
@@ -2716,12 +2749,16 @@ code {
 .context-schema {
   min-width: 0;
   max-width: 100%;
-  overflow-x: auto;
 }
 .context-body pre,
 .context-body table {
   max-width: 100%;
   overflow-x: auto;
+}
+.chat-context .doc-content {
+  max-height: none;
+  margin-top: 0;
+  overflow: visible;
 }
 .doc-content .markdown {
   color: var(--ink);

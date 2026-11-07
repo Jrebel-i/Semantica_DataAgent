@@ -183,9 +183,8 @@ export function citationLabel(ref: string): CitationLabel {
     } else {
       const variant = /^variant_(\d+)$/i.exec(stem);
       if (variant) {
-        label = parent
-          ? `${parent} · 口径 ${variant[1]}`
-          : `口径 ${variant[1]}`;
+        const number = variant[1].replace(/^0+(?=\d)/, "");
+        label = parent ? `${parent} · 口径 ${number}` : `口径 ${number}`;
       }
     }
     return { kind: "document", label, category, title: fullPath };
@@ -208,6 +207,10 @@ export function citationLabel(ref: string): CitationLabel {
     label: middleEllipsis(decoded || ref),
     title: decoded || ref,
   };
+}
+
+export function citationDisplayName(label: CitationLabel): string {
+  return label.category ? `${label.category} · ${label.label}` : label.label;
 }
 
 function citationKey(ref: string): string {
@@ -720,7 +723,7 @@ function ClarificationList({
 }) {
   if (groups.length === 0) return null;
   return (
-    <section aria-label={messages.clarification}>
+    <section className="clarification-card" aria-label={messages.clarification}>
       <h4 className="context-section-title">{messages.clarification}</h4>
       <p className="muted">{messages.clarificationHint}</p>
       {groups.map((questions, index) => (
@@ -729,24 +732,34 @@ function ClarificationList({
             <article key={question.id ?? questionIndex}>
               <p>{question.question}</p>
               <Space wrap>
-                {(question.options ?? []).map((option, optionIndex) => (
-                  <Button
-                    key={
-                      option.id ??
-                      `${option.label}-${option.ref}-${optionIndex}`
-                    }
-                    disabled={disabled}
-                    onClick={() => onSelect(question, option)}
-                  >
-                    <span>{option.label}</span>
-                    {option.ref && (
-                      <>
-                        {" "}
-                        <code>{safeDecodePath(option.ref)}</code>
-                      </>
-                    )}
-                  </Button>
-                ))}
+                {(question.options ?? []).map((option, optionIndex) => {
+                  const source = option.ref
+                    ? citationLabel(option.ref)
+                    : undefined;
+                  return (
+                    <Button
+                      key={
+                        option.id ??
+                        `${option.label}-${option.ref}-${optionIndex}`
+                      }
+                      disabled={disabled}
+                      onClick={() => onSelect(question, option)}
+                    >
+                      <span>{option.label}</span>
+                      {source && (
+                        <>
+                          {" "}
+                          <span
+                            className="clarification-source"
+                            title={source.title}
+                          >
+                            {citationDisplayName(source)}
+                          </span>
+                        </>
+                      )}
+                    </Button>
+                  );
+                })}
               </Space>
             </article>
           ))}
@@ -2023,19 +2036,26 @@ export function ChatPage({
           </div>
           {citationRef && (
             <aside className="chat-context">
-              <div className="context-body">
-                <div className="context-header">
+              <div className="context-header">
+                <div className="context-heading">
                   <strong title={citationHeading?.title}>
                     {citationHeading?.label ?? t.citations}
                   </strong>
-                  <Button
-                    type="text"
-                    aria-label={t.close}
-                    onClick={closeCitation}
-                  >
-                    <CloseOutlined />
-                  </Button>
+                  {citationDetail?.kind === "document" && (
+                    <div className="context-ref">
+                      {safeDecodePath(citationDetail.document.path)}
+                    </div>
+                  )}
                 </div>
+                <Button
+                  type="text"
+                  aria-label={t.close}
+                  onClick={closeCitation}
+                >
+                  <CloseOutlined />
+                </Button>
+              </div>
+              <div className="context-body">
                 {citationLoading && <p>{t.loadingCitation}</p>}
                 {citationError && <Alert type="error" title={citationError} />}
                 {selectedTable ? (
@@ -2052,33 +2072,50 @@ export function ChatPage({
                         )}
                       </div>
                     </div>
-                    <table className="schema-table">
-                      <thead>
-                        <tr>
-                          <th>{t.field}</th>
-                          <th>{t.dataType}</th>
-                          <th>{t.comment}</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {selectedTable.fields.map((field) => (
-                          <tr key={field.name}>
-                            <td>{field.name}</td>
-                            <td>{field.type}</td>
-                            <td>
-                              {field.comment}
-                              {field.partition ? ` · ${t.partition}` : ""}
-                            </td>
+                    <div className="context-schema-body">
+                      <table className="schema-table">
+                        <thead>
+                          <tr>
+                            <th>{t.field}</th>
+                            <th>{t.dataType}</th>
+                            <th>{t.comment}</th>
                           </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                        </thead>
+                        <tbody>
+                          {selectedTable.fields.map((field) => (
+                            <tr key={field.name}>
+                              <td>{field.name}</td>
+                              <td>{field.type}</td>
+                              <td>
+                                {field.comment}
+                                {field.partition ? ` · ${t.partition}` : ""}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                      {citationRef.startsWith("field:") ? (
+                        <ColumnLineage
+                          token={token}
+                          table={`${selectedTable.database}.${selectedTable.name}`}
+                          column={citationRef
+                            .slice(6)
+                            .split(".")
+                            .slice(2)
+                            .join(".")}
+                        />
+                      ) : (
+                        <TaskLineage
+                          token={token}
+                          messages={t}
+                          table={`${selectedTable.database}.${selectedTable.name}`}
+                          showTasks={false}
+                        />
+                      )}
+                    </div>
                   </div>
                 ) : citationDetail?.kind === "document" ? (
-                  <article>
-                    <div className="context-ref">
-                      {safeDecodePath(citationDetail.document.path)}
-                    </div>
+                  <article className="context-document">
                     <div className="doc-content">
                       {safeDecodePath(citationDetail.document.path)
                         .toLowerCase()
@@ -2092,25 +2129,6 @@ export function ChatPage({
                 ) : (
                   <div className="empty-state">{t.emptyContext}</div>
                 )}
-                {selectedTable &&
-                  (citationRef.startsWith("field:") ? (
-                    <ColumnLineage
-                      token={token}
-                      table={`${selectedTable.database}.${selectedTable.name}`}
-                      column={citationRef
-                        .slice(6)
-                        .split(".")
-                        .slice(2)
-                        .join(".")}
-                    />
-                  ) : (
-                    <TaskLineage
-                      token={token}
-                      messages={t}
-                      table={`${selectedTable.database}.${selectedTable.name}`}
-                      showTasks={false}
-                    />
-                  ))}
                 {citationDetail?.kind === "message" && (
                   <Alert type="info" title={citationDetail.message} />
                 )}
