@@ -49,7 +49,7 @@ PYTHONPYCACHEPREFIX="$(mktemp -d)" uv run --directory backend pytest -p no:cache
 
 ## 运行应用
 
-设置 `DATAAGENT_DB_PATH`（SQLite 文件路径）、`DATAAGENT_ENCRYPTION_KEY`（Fernet 密钥，使用 `python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'` 生成）和可选的 `DATAAGENT_LISTEN`（默认 `127.0.0.1:8000`）。在线问答的 agent 工作目录由 `DATAAGENT_AGENT_ROOT` 指定（默认是数据库文件同目录下的 `agent-workspaces`）；MCP 地址由 `DATAAGENT_PUBLIC_URL` 指定（默认从监听地址推导）。`uv run --directory backend semantica-dataagent init` 建库并仅输出一次管理员 token，妥善保存；再运行 `uv run --directory backend semantica-dataagent serve`。前端开发使用 `pnpm --dir web dev`。管理员通过 `/api/v1/settings` 的 PUT 写入 `values`；键为 `neo4j_uri`、`neo4j_user`、`neo4j_password`、`milvus_uri`、`embedding_url`、`embedding_model`、`embedding_concurrency`、`embedding_timeout_seconds`、`embedding_timeout_per_input_seconds`、`embedding_retries`、`embedding_backoff_seconds`、`source_directory`、`knowledge_generation`、`generation_retention`、`schedule_interval_seconds`、`assistant_agent`、`assistant_provider_id`、`assistant_model`、`assistant_timeout_seconds`，空字符串或 null 删除。GET 不回显密码；连接地址不得包含用户信息、查询参数或片段，Neo4j 密码使用专用字段。配置修改对下一次健康检查生效；embedding 并发、超时、重试与退避参数在下一次构建开始时读取，检索请求则每次读取当前值。
+设置 `DATAAGENT_DB_PATH`（SQLite 文件路径）、`DATAAGENT_ENCRYPTION_KEY`（Fernet 密钥，使用 `python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'` 生成）和可选的 `DATAAGENT_LISTEN`（默认 `127.0.0.1:8000`）。在线问答的 agent 工作目录由 `DATAAGENT_AGENT_ROOT` 指定（默认是数据库文件同目录下的 `agent-workspaces`）；MCP 地址由 `DATAAGENT_PUBLIC_URL` 指定（默认从监听地址推导）。`uv run --directory backend semantica-dataagent init` 建库并仅输出一次管理员 token，妥善保存；再运行 `uv run --directory backend semantica-dataagent serve`。前端开发使用 `pnpm --dir web dev`。管理员通过 `/api/v1/settings` 的 PUT 写入 `values`；键为 `neo4j_uri`、`neo4j_user`、`neo4j_password`、`milvus_uri`、`embedding_url`、`embedding_model`、`embedding_concurrency`、`embedding_timeout_seconds`、`embedding_timeout_per_input_seconds`、`embedding_retries`、`embedding_backoff_seconds`、`embedding_cache_max_mb`、`source_directory`、`knowledge_generation`、`generation_retention`、`schedule_interval_seconds`、`assistant_agent`、`assistant_provider_id`、`assistant_model`、`assistant_timeout_seconds`，空字符串或 null 删除。GET 不回显密码；连接地址不得包含用户信息、查询参数或片段，Neo4j 密码使用专用字段。配置修改对下一次健康检查生效；embedding 并发、超时、重试与退避参数在下一次构建开始时读取，检索请求则每次读取当前值。
 ## 真实使用
 
 真实集群连接使用 [infrastructure.md](infrastructure.md) 的测试命名空间与凭据。健康检查只读；其他基础设施检查脚本可能创建临时集合。只在 `semantica-dataagent` 和 `semantica-dataagent-test` 命名空间操作；不得改动其他命名空间或集群级资源。
@@ -169,6 +169,10 @@ grep -E '^E2E_(RESULT|DONE) ' "$LOG"
 ## 表检索与文档关联
 
 表检索同时检索表和知识文档，将命中文档关联的表纳入融合排序；返回结果仍只包含表。构建关系时，文档正文中形如 `数据库.表名` 且与本代已知表匹配的名称会建立关联，字典文件名关联也保留。表检索优先返回名称精确命中或全文直接命中的表，其余表按融合分数排序；图关联权重为 1.5，排序版本为 3。返回的 `score` 是融合分，跨直接命中优先组时不保证递减，应按返回顺序使用结果。已有知识代需重新构建以建立正文关联；文档提及表不代表它一定适用于查询，应结合文档口径核验。
+
+## Embedding 缓存
+
+构建时按 `(embedding_model, 向量维度, SHA-256(文本))` 复用向量，缓存文件默认与 `DATAAGENT_DB_PATH` 同目录的 `embedding-cache.sqlite`（SQLite WAL），也可用 `DATAAGENT_EMBEDDING_CACHE_PATH` 指定路径。先去重再查缓存；一次 `add_vectors` 最多查询一次、写入一个事务。`embedding_cache_max_mb` 默认 500，设为 0 关闭。缓存损坏、目录只读或写入失败时降级为不使用缓存并记录告警，构建继续。换模型名或维度时使用新的缓存键，不会命中旧向量。
 
 ## 增量构建与来源
 
