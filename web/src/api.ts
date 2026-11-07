@@ -2691,7 +2691,7 @@ export interface operations {
             path: {
                 query_id: string;
                 format: string;
-                expires: number;
+                expires: string;
                 signature: string;
             };
             cookie?: never;

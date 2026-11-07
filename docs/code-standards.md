@@ -199,3 +199,7 @@ Docker Desktop / WSL 下，agent 只连接 internal 网络；同一网络中的�
 ## Kubernetes 会话沙箱
 
 `DATAAGENT_AGENT_MODE=k8s` 使用独立会话 Pod；本地默认继续使用 Docker。Pod 规格、命名空间 RBAC 和 NetworkPolicy 在 `tests/test_k8s_sandbox_spec.py` 检查，真实双栈默认拒绝及允许目标还须在集群运行 `tests/e2e/checks/issue_26.py` 验证。会话出站实际由 init 容器的 iptables 限制；当前 flannel 不执行 NetworkPolicy。会话 Pod 在独立命名空间使用临时卷，轮次开始和结束时传递该对话的工作目录及会话文件；不得向 agent 容器传入 Kubernetes ServiceAccount token 或能力。运行时 Neo4j Secret 经 `DATAAGENT_NEO4J_AUTH` 注入时只用于匹配用户名的默认凭据，管理员显式保存的设置优先。
+
+## 查询结果下载链接
+
+查询所有者可通过 `POST /api/v1/queries/{id}/download-links` 获取 CSV、XLSX、JSON 的短期链接；MCP 的 `execute_query` 也返回这些链接。链接是敏感凭据，持有人在 30 分钟内无需登录即可下载绑定结果，切勿公开或记录完整链接；过期、密钥轮换或结果清理后失效。部署时代理和网关的访问日志必须对 `/download-link/` 后的路径脱敏或禁用记录。

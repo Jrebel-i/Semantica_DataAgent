@@ -95,6 +95,19 @@ def check_local_mcp_query(ctx):
                 download.status_code == 200 and download.content,
                 f"download failed: {fmt}",
             )
+            pieces = url.split("/")
+            for index, value in (
+                (-3, "invalid"),
+                (-2, "1"),
+                (-1, "0" * 64),
+                (-5, "other-query"),
+            ):
+                changed = pieces.copy()
+                changed[index] = value
+                ctx.require(
+                    httpx.get("/".join(changed)).status_code == 404,
+                    "tampered download accepted",
+                )
         ctx.require(
             ctx.rest.get(f"/api/v1/queries/{query_id}/download?format=csv").content
             == b"sales\n12345\n",

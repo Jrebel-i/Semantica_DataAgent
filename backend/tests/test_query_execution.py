@@ -763,11 +763,22 @@ def test_local_mcp_confirmation_and_download(client, monkeypatch):
 
         link = result.structuredContent["download_urls"]["csv"]
         path = urlsplit(link).path
+        with sessions().begin() as db:
+            db.add(
+                QueryExecution(
+                    id="other-query",
+                    owner_id=second.id,
+                    sql="SELECT 2",
+                    status="succeeded",
+                    rows='{"columns": ["value"], "data": [[2]]}',
+                )
+            )
         parts = path.split("/")
         for index, value in (
-            (4, "another-query"),
+            (4, "other-query"),
             (-3, "json"),
             (-2, "1"),
+            (-2, "invalid"),
             (-1, "0" * 64),
         ):
             changed = parts.copy()
@@ -780,6 +791,10 @@ def test_local_mcp_confirmation_and_download(client, monkeypatch):
             ).status_code
             == 404
         )
+        future = query_api.time.time() + 3600
+        with monkeypatch.context() as clock:
+            clock.setattr(query_api.time, "time", lambda: future)
+            assert c.get(link).status_code == 404
         with sessions()() as db:
             assert (
                 db.query(QueryAudit).filter_by(kind="download_link_created").count()
@@ -830,6 +845,8 @@ def test_mcp_and_online_use_same_execution_service(client, monkeypatch):
 
     async def service(query_id, body, user, kind="query"):
         calls.append((query_id, user.id, kind))
+        with sessions().begin() as db:
+            db.get(QueryExecution, query_id).status = "succeeded"
         return {"row_count": 0}
 
     monkeypatch.setattr(query_api, "_execute_with_audit", service)

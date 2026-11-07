@@ -3579,7 +3579,7 @@
             "required": true,
             "schema": {
               "title": "Expires",
-              "type": "integer"
+              "type": "string"
             }
           },
           {

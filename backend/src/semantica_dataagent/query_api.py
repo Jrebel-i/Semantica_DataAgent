@@ -380,8 +380,8 @@ async def execute_query(
     """Plan SQL, then execute only after the user explicitly confirms the plan.
 
     First supply only sql. Show the returned plan to the user and wait for their
-    confirmation. Then supply only confirmation_id. Downloads require the same
-    signed links are short-lived bearer credentials. Never confirm on behalf of the user.
+    confirmation. Then supply only confirmation_id. Signed download links are
+    short-lived bearer credentials. Never confirm on behalf of the user.
     """
     from .conversation_api import public_base_url
     from .mcp_context import current_conversation_id, current_requester
@@ -665,12 +665,16 @@ def create_download_links(
 
 
 @router.get("/api/v1/queries/{query_id}/download-link/{format}/{expires}/{signature}")
-async def download_link(query_id: str, format: str, expires: int, signature: str):
+async def download_link(query_id: str, format: str, expires: str, signature: str):
+    if not expires.isascii() or not expires.isdigit() or len(expires) > 12:
+        raise HTTPException(404, "查询结果不存在")
+    deadline = int(expires)
     if (
         format not in DOWNLOAD_FORMATS
-        or expires <= int(time.time())
+        or deadline <= int(time.time())
+        or not signature.isascii()
         or not hmac.compare_digest(
-            _download_signature(query_id, format, expires), signature
+            _download_signature(query_id, format, deadline), signature
         )
     ):
         raise HTTPException(404, "查询结果不存在")
