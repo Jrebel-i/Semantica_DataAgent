@@ -405,6 +405,347 @@ test("查看历史预览会打开对应查询结果", async () => {
   expect(screen.getByText("new-value")).toBeTruthy();
 });
 
+test.each([1, 20, 21])("结果预览在 %i 行时显示正确的说明", async (rowCount) => {
+  const conversation = {
+    id: `conv-preview-${rowCount}`,
+    title: "预览",
+    agent: "pi",
+    provider_id: provider.id,
+    model: provider.models[0],
+    created_at: "2026-11-05T00:00:00Z",
+    updated_at: "2026-11-05T00:00:00Z",
+    turn_count: 1,
+    resumable: true,
+  };
+  const plan = {
+    id: `query-preview-${rowCount}`,
+    sql: "SELECT value FROM shop.orders",
+    data_source: "doris_ai",
+    tables: ["shop.orders"],
+    estimated_partitions: null,
+    estimated_rows: rowCount,
+    row_limit: 1000,
+  };
+  const result = {
+    id: plan.id,
+    columns: ["value"],
+    rows: Array.from({ length: rowCount }, (_, index) => [index + 1]),
+    row_count: rowCount,
+  };
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/v1/agents")
+        return json([{ id: "pi", available: true }]);
+      if (url === "/api/v1/providers") return json([provider]);
+      if (url === "/api/v1/conversations") return json([conversation]);
+      if (url === `/api/v1/conversations/${conversation.id}`)
+        return json({
+          ...conversation,
+          turns: [
+            {
+              id: 1,
+              sequence: 1,
+              question: "预览",
+              status: "completed",
+              answer: "结论",
+              sql: [],
+              citations: [],
+              error: null,
+              started_at: conversation.created_at,
+              finished_at: conversation.updated_at,
+              events: [
+                { seq: 0, type: "query_plan", data: plan },
+                { seq: 1, type: "query_result", data: result },
+              ],
+            },
+          ],
+        });
+      return new Response("", { status: 404 });
+    }),
+  );
+  const { container } = render(
+    <ChatPage token="token" role="user" messages={getMessages("zh")} />,
+  );
+  if (rowCount <= 20) {
+    expect(await screen.findByText(`共 ${rowCount} 行`)).toBeTruthy();
+    expect(screen.queryByText(`共 ${rowCount} 行，已显示前 20 行`)).toBeNull();
+    expect(
+      screen.getByText("可下载完整结果（链接 30 分钟内有效）"),
+    ).toBeTruthy();
+    expect(
+      screen.queryByText("完整数据请通过下载链接获取（链接 30 分钟内有效）"),
+    ).toBeNull();
+  } else {
+    expect(
+      await screen.findByText(`共 ${rowCount} 行，已显示前 20 行`),
+    ).toBeTruthy();
+    expect(screen.queryByText(`共 ${rowCount} 行`)).toBeNull();
+    expect(
+      screen.getByText("完整数据请通过下载链接获取（链接 30 分钟内有效）"),
+    ).toBeTruthy();
+  }
+  expect(
+    container.querySelectorAll(".query-result-preview tbody tr"),
+  ).toHaveLength(Math.min(rowCount, 20));
+  expect(screen.getByRole("button", { name: "下载 CSV" })).toBeTruthy();
+});
+
+function toolStream(conversationId: string, ending: string) {
+  return [
+    `event: conversation\ndata: {"conversation_id":"${conversationId}","turn_id":1}`,
+    'event: tool_start\ndata: {"id":"call-1","name":"mcp__dataagent__execute_query","summary":"SELECT 1"}',
+    'event: tool_end\ndata: {"id":"call-1","name":"mcp__dataagent__execute_query","is_error":true,"summary":"invalid_input"}',
+    'event: text_delta\ndata: {"text":"正在处理"}',
+    ending,
+  ].join("\n\n");
+}
+
+function toolTurnEvents() {
+  return [
+    {
+      seq: 0,
+      type: "tool_start",
+      data: {
+        id: "call-1",
+        name: "mcp__dataagent__execute_query",
+        summary: "SELECT 1",
+      },
+    },
+    {
+      seq: 1,
+      type: "tool_end",
+      data: {
+        id: "call-1",
+        name: "mcp__dataagent__execute_query",
+        is_error: true,
+        summary: "invalid_input",
+      },
+    },
+  ];
+}
+
+test("工具失败但回答成功时列表保持折叠并提示失败数", async () => {
+  const conversation = {
+    id: "conv-tools-ok",
+    title: "工具",
+    agent: "pi",
+    provider_id: provider.id,
+    model: provider.models[0],
+    created_at: "2026-11-05T00:00:00Z",
+    updated_at: "2026-11-05T00:00:00Z",
+    turn_count: 1,
+    resumable: true,
+  };
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/v1/agents")
+        return json([{ id: "pi", available: true }]);
+      if (url === "/api/v1/providers") return json([provider]);
+      if (url === "/api/v1/conversations") return json([]);
+      if (url === "/api/v1/conversations/ask")
+        return new Response(
+          toolStream(
+            conversation.id,
+            'event: done\ndata: {"text":"这是最终回答","sql":[],"citations":[]}',
+          ),
+          { headers: { "Content-Type": "text/event-stream" } },
+        );
+      if (url === `/api/v1/conversations/${conversation.id}`)
+        return json({
+          ...conversation,
+          turns: [
+            {
+              id: 1,
+              sequence: 1,
+              question: "工具",
+              status: "completed",
+              answer: "这是最终回答",
+              sql: [],
+              citations: [],
+              error: null,
+              started_at: conversation.created_at,
+              finished_at: conversation.updated_at,
+              events: toolTurnEvents(),
+            },
+          ],
+        });
+      return new Response("", { status: 404 });
+    }),
+  );
+  const { container } = render(
+    <ChatPage token="token" role="user" messages={getMessages("zh")} />,
+  );
+  await waitFor(() =>
+    expect((screen.getByLabelText("模型") as HTMLSelectElement).value).toBe(
+      provider.models[0],
+    ),
+  );
+  fireEvent.change(screen.getByLabelText("问题"), {
+    target: { value: "查一下" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: /提\s*问/ }));
+  expect(await screen.findByText("这是最终回答")).toBeTruthy();
+  const toggle = await screen.findByRole("button", {
+    name: /已使用 1 个工具/,
+  });
+  await waitFor(() =>
+    expect(toggle.getAttribute("aria-expanded")).toBe("false"),
+  );
+  expect(screen.getByText("其中 1 个失败")).toBeTruthy();
+  expect(container.querySelectorAll(".tool-step")).toHaveLength(0);
+});
+
+test("回答整体失败时工具列表自动展开", async () => {
+  const conversation = {
+    id: "conv-tools-failed",
+    title: "工具失败",
+    agent: "pi",
+    provider_id: provider.id,
+    model: provider.models[0],
+    created_at: "2026-11-05T00:00:00Z",
+    updated_at: "2026-11-05T00:00:00Z",
+    turn_count: 1,
+    resumable: true,
+  };
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/v1/agents")
+        return json([{ id: "pi", available: true }]);
+      if (url === "/api/v1/providers") return json([provider]);
+      if (url === "/api/v1/conversations") return json([]);
+      if (url === "/api/v1/conversations/ask")
+        return new Response(
+          toolStream(
+            conversation.id,
+            'event: error\ndata: {"message":"模型超时"}',
+          ),
+          { headers: { "Content-Type": "text/event-stream" } },
+        );
+      if (url === `/api/v1/conversations/${conversation.id}`)
+        return json({
+          ...conversation,
+          turns: [
+            {
+              id: 1,
+              sequence: 1,
+              question: "工具失败",
+              status: "failed",
+              answer: "",
+              sql: [],
+              citations: [],
+              error: "模型超时",
+              started_at: conversation.created_at,
+              finished_at: conversation.updated_at,
+              events: toolTurnEvents(),
+            },
+          ],
+        });
+      return new Response("", { status: 404 });
+    }),
+  );
+  const { container } = render(
+    <ChatPage token="token" role="user" messages={getMessages("zh")} />,
+  );
+  await waitFor(() =>
+    expect((screen.getByLabelText("模型") as HTMLSelectElement).value).toBe(
+      provider.models[0],
+    ),
+  );
+  fireEvent.change(screen.getByLabelText("问题"), {
+    target: { value: "查一下" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: /提\s*问/ }));
+  expect((await screen.findAllByText("模型超时")).length).toBeGreaterThan(0);
+  const toggle = await screen.findByRole("button", {
+    name: /已使用 1 个工具/,
+  });
+  await waitFor(() =>
+    expect(toggle.getAttribute("aria-expanded")).toBe("true"),
+  );
+  expect(container.querySelectorAll(".tool-step")).toHaveLength(1);
+  expect(container.querySelector(".tool-step")?.hasAttribute("open")).toBe(
+    true,
+  );
+  expect(screen.queryByText("其中 1 个失败")).toBeNull();
+});
+
+test("确认执行返回 410 后按钮禁用并显示已过期", async () => {
+  const plan = {
+    id: "query-expired",
+    sql: "SELECT sales FROM shop.orders",
+    data_source: "doris_ai",
+    tables: ["shop.orders"],
+    estimated_partitions: null,
+    estimated_rows: null,
+    row_limit: 100,
+  };
+  const conversation = {
+    id: "conv-expired",
+    title: "过期",
+    agent: "pi",
+    provider_id: provider.id,
+    model: provider.models[0],
+    created_at: "2026-11-05T00:00:00Z",
+    updated_at: "2026-11-05T00:00:00Z",
+    turn_count: 1,
+    resumable: true,
+  };
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/v1/agents")
+        return json([{ id: "pi", available: true }]);
+      if (url === "/api/v1/providers") return json([provider]);
+      if (url === "/api/v1/conversations") return json([conversation]);
+      if (url === "/api/v1/conversations/conv-expired")
+        return json({
+          ...conversation,
+          turns: [
+            {
+              id: 1,
+              sequence: 1,
+              question: "过期",
+              status: "awaiting_confirmation",
+              answer: "",
+              sql: [],
+              citations: [],
+              error: null,
+              started_at: conversation.created_at,
+              finished_at: null,
+              events: [{ seq: 0, type: "query_plan", data: plan }],
+            },
+          ],
+        });
+      if (
+        url ===
+        "/api/v1/conversations/conv-expired/turns/1/queries/query-expired/execute"
+      )
+        return new Response(JSON.stringify({ detail: "查询确认已过期" }), {
+          status: 410,
+          headers: { "Content-Type": "application/json" },
+        });
+      return new Response("", { status: 404 });
+    }),
+  );
+  render(<ChatPage token="token" role="user" messages={getMessages("zh")} />);
+  expect(await screen.findByText("确认执行这条 SQL？")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: /确\s*认\s*执\s*行/ }));
+  expect((await screen.findAllByText("查询确认已过期")).length).toBeGreaterThan(
+    0,
+  );
+  const expired = screen.getByRole("button", {
+    name: "已过期，请重新提问",
+  }) as HTMLButtonElement;
+  expect(expired.disabled).toBe(true);
+});
+
 test("streams tools and text, copies SQL, and opens table and document citations", async () => {
   const fetcher = vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input);
@@ -1293,7 +1634,7 @@ test("示例问题只填入输入框而不发送请求", async () => {
   ).toBe(false);
 });
 
-test("文档引用解码文件名并在抽屉渲染 Markdown，失败工具自动展开", async () => {
+test("文档引用解码文件名并在抽屉渲染 Markdown", async () => {
   const name = "销售 50% #报告.md";
   const ref = `document:指标/${encodeURIComponent(name)}#chunk-1`;
   const response = sse
@@ -1336,9 +1677,12 @@ test("文档引用解码文件名并在抽屉渲染 Markdown，失败工具自�
   expect(chip.textContent).toContain(name.replace(/\.md$/, ""));
   expect(chip.getAttribute("title")).toBe(`指标/${name}`);
   expect(container.querySelector(".chat-context")).toBeNull();
-  expect(container.querySelector(".tool-step")?.hasAttribute("open")).toBe(
-    true,
-  );
+  expect(
+    container
+      .querySelector(".tool-log > button")
+      ?.getAttribute("aria-expanded"),
+  ).toBe("false");
+  expect(screen.getByText("其中 1 个失败")).toBeTruthy();
   fireEvent.click(chip);
   expect(
     (await screen.findByRole("heading", { name: "销售标题" })).tagName,

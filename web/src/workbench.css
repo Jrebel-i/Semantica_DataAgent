@@ -2702,6 +2702,12 @@ code {
 .tool-log > button:hover {
   color: var(--ink);
 }
+.tool-failures {
+  margin-left: 6px;
+  color: var(--ink-3);
+  font-size: 11px;
+  font-weight: 400;
+}
 .tool-log > .tool-step {
   margin-left: 16px;
   font-size: 12px;
