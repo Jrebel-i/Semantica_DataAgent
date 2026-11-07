@@ -202,3 +202,43 @@ def check_qualified_names_with_dots(ctx):
                 ).consume()
     finally:
         driver.close()
+
+
+def check_incremental_build_with_existing_nodes(ctx):
+    import time
+
+    driver = GraphDatabase.driver(
+        ctx.config.neo4j_uri, auth=(ctx.config.neo4j_user, ctx.runtime.password)
+    )
+    try:
+
+        def count():
+            with driver.session() as session:
+                return session.run(
+                    "MATCH (n:SDAEntity {generation:$g}) RETURN count(n) AS total",
+                    g=ctx.generation,
+                ).single()["total"]
+
+        before = count()
+        ctx.require(before > 0, "构建前没有可验证的既有节点")
+        response = ctx.rest.post("/api/v1/builds", json={"build_type": "incremental"})
+        response.raise_for_status()
+        build_id = response.json()["id"]
+        deadline = time.monotonic() + 300
+        while time.monotonic() < deadline:
+            response = ctx.rest.get(f"/api/v1/builds/{build_id}")
+            response.raise_for_status()
+            build = response.json()
+            if build["status"] in ("succeeded", "failed", "cancelled"):
+                ctx.require(
+                    build["status"] == "succeeded", f"已有节点上的增量构建失败：{build}"
+                )
+                after = count()
+                ctx.require(
+                    after == before, f"重复构建改变了节点数：{before} -> {after}"
+                )
+                return {"nodes": after, "build_id": build_id}
+            time.sleep(1)
+        raise AssertionError("已有节点上的增量构建超时")
+    finally:
+        driver.close()

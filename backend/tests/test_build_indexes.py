@@ -39,6 +39,24 @@ def test_build_prepares_indexes_before_graph_work(monkeypatch, incremental):
         pass
     indexes = [i for i, query in enumerate(calls) if query.startswith("CREATE INDEX")]
     assert indexes, "构建开始前没有创建范围索引"
+    required = {
+        ("SDAField", "n.generation, n.name"),
+        ("SDAField", "n.generation, n.database, n.table, n.name"),
+        ("SDAField", "n.generation, n.database, n.table"),
+        ("SDATable", "n.generation, n.database, n.name"),
+        ("SDATable", "n.generation, n.name"),
+        ("SDATask", "n.generation, n.ref"),
+        ("SDADocument", "n.generation, n.ref"),
+        ("SDAEntity", "n.generation, n.ref"),
+        ("SDAEntity", "n.generation"),
+        ("SDACategory", "n.generation, n.name"),
+        ("SDALineageTable", "n.generation, n.name"),
+    }
+    for label, properties in required:
+        assert any(
+            f"(n:{label}) ON ({properties})" in calls[i] and "IF NOT EXISTS" in calls[i]
+            for i in indexes
+        ), f"缺少 {label}({properties}) 索引"
     await_at = next(i for i, query in enumerate(calls) if "db.awaitIndexes" in query)
     assert max(indexes) < await_at
     assert not any("MATCH " in query for query in calls[:await_at])
