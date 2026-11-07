@@ -242,7 +242,10 @@ class EmbeddingCache:
                     "dimension = excluded.dimension, updated_at = excluded.updated_at",
                     (self.model, self.dimension, now),
                 )
-                self._evict(connection, {row[2] for row in inserted + touched})
+                self._evict(
+                    connection,
+                    {row[2] for row in inserted} | {row[3] for row in touched},
+                )
         except Exception as exc:  # noqa: BLE001 - cache degradation is intentional
             self._disable(exc)
 
