@@ -746,6 +746,216 @@ test("确认执行返回 410 后按钮禁用并显示已过期", async () => {
   expect(expired.disabled).toBe(true);
 });
 
+test.each([
+  [1, "1 row", "Download the full result above (valid for 30 minutes)."],
+  [
+    21,
+    "Showing the first 20 of 21 rows",
+    "Download the full data from the links above (valid for 30 minutes).",
+  ],
+])("英文界面显示 %i 行结果预览文案", async (rowCount, summary, hint) => {
+  const conversation = {
+    id: `conv-preview-en-${rowCount}`,
+    title: "Preview",
+    agent: "pi",
+    provider_id: provider.id,
+    model: provider.models[0],
+    created_at: "2026-11-05T00:00:00Z",
+    updated_at: "2026-11-05T00:00:00Z",
+    turn_count: 1,
+    resumable: true,
+  };
+  const plan = {
+    id: `query-preview-en-${rowCount}`,
+    sql: "SELECT value FROM shop.orders",
+    data_source: "doris_ai",
+    tables: ["shop.orders"],
+    estimated_partitions: null,
+    estimated_rows: rowCount,
+    row_limit: 1000,
+  };
+  const result = {
+    id: plan.id,
+    columns: ["value"],
+    rows: Array.from({ length: rowCount }, (_, index) => [index + 1]),
+    row_count: rowCount,
+  };
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/v1/agents")
+        return json([{ id: "pi", available: true }]);
+      if (url === "/api/v1/providers") return json([provider]);
+      if (url === "/api/v1/conversations") return json([conversation]);
+      if (url === `/api/v1/conversations/${conversation.id}`)
+        return json({
+          ...conversation,
+          turns: [
+            {
+              id: 1,
+              sequence: 1,
+              question: "Preview",
+              status: "completed",
+              answer: "Done",
+              sql: [],
+              citations: [],
+              error: null,
+              started_at: conversation.created_at,
+              finished_at: conversation.updated_at,
+              events: [
+                { seq: 0, type: "query_plan", data: plan },
+                { seq: 1, type: "query_result", data: result },
+              ],
+            },
+          ],
+        });
+      return new Response("", { status: 404 });
+    }),
+  );
+  render(<ChatPage token="token" role="user" messages={getMessages("en")} />);
+  expect(await screen.findByText(summary)).toBeTruthy();
+  expect(screen.getByText(hint)).toBeTruthy();
+});
+
+test("英文界面折叠工具行显示失败数", async () => {
+  const conversation = {
+    id: "conv-tools-en",
+    title: "Tools",
+    agent: "pi",
+    provider_id: provider.id,
+    model: provider.models[0],
+    created_at: "2026-11-05T00:00:00Z",
+    updated_at: "2026-11-05T00:00:00Z",
+    turn_count: 1,
+    resumable: true,
+  };
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/v1/agents")
+        return json([{ id: "pi", available: true }]);
+      if (url === "/api/v1/providers") return json([provider]);
+      if (url === "/api/v1/conversations") return json([]);
+      if (url === "/api/v1/conversations/ask")
+        return new Response(
+          toolStream(
+            conversation.id,
+            'event: done\ndata: {"text":"Final answer","sql":[],"citations":[]}',
+          ),
+          { headers: { "Content-Type": "text/event-stream" } },
+        );
+      if (url === `/api/v1/conversations/${conversation.id}`)
+        return json({
+          ...conversation,
+          turns: [
+            {
+              id: 1,
+              sequence: 1,
+              question: "Tools",
+              status: "completed",
+              answer: "Final answer",
+              sql: [],
+              citations: [],
+              error: null,
+              started_at: conversation.created_at,
+              finished_at: conversation.updated_at,
+              events: toolTurnEvents(),
+            },
+          ],
+        });
+      return new Response("", { status: 404 });
+    }),
+  );
+  render(<ChatPage token="token" role="user" messages={getMessages("en")} />);
+  await waitFor(() =>
+    expect((screen.getByLabelText("Model") as HTMLSelectElement).value).toBe(
+      provider.models[0],
+    ),
+  );
+  fireEvent.change(screen.getByLabelText("Question"), {
+    target: { value: "Query" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Ask" }));
+  expect(await screen.findByText("Final answer")).toBeTruthy();
+  const toggle = await screen.findByRole("button", {
+    name: /已使用 1 个工具/,
+  });
+  await waitFor(() =>
+    expect(toggle.getAttribute("aria-expanded")).toBe("false"),
+  );
+  expect(screen.getByText("1 failed")).toBeTruthy();
+});
+
+test("英文界面 410 后显示过期文案", async () => {
+  const plan = {
+    id: "query-expired-en",
+    sql: "SELECT sales FROM shop.orders",
+    data_source: "doris_ai",
+    tables: ["shop.orders"],
+    estimated_partitions: null,
+    estimated_rows: null,
+    row_limit: 100,
+  };
+  const conversation = {
+    id: "conv-expired-en",
+    title: "Expired",
+    agent: "pi",
+    provider_id: provider.id,
+    model: provider.models[0],
+    created_at: "2026-11-05T00:00:00Z",
+    updated_at: "2026-11-05T00:00:00Z",
+    turn_count: 1,
+    resumable: true,
+  };
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/v1/agents")
+        return json([{ id: "pi", available: true }]);
+      if (url === "/api/v1/providers") return json([provider]);
+      if (url === "/api/v1/conversations") return json([conversation]);
+      if (url === "/api/v1/conversations/conv-expired-en")
+        return json({
+          ...conversation,
+          turns: [
+            {
+              id: 1,
+              sequence: 1,
+              question: "Expired",
+              status: "awaiting_confirmation",
+              answer: "",
+              sql: [],
+              citations: [],
+              error: null,
+              started_at: conversation.created_at,
+              finished_at: null,
+              events: [{ seq: 0, type: "query_plan", data: plan }],
+            },
+          ],
+        });
+      if (
+        url ===
+        "/api/v1/conversations/conv-expired-en/turns/1/queries/query-expired-en/execute"
+      )
+        return new Response(JSON.stringify({ detail: "查询确认已过期" }), {
+          status: 410,
+          headers: { "Content-Type": "application/json" },
+        });
+      return new Response("", { status: 404 });
+    }),
+  );
+  render(<ChatPage token="token" role="user" messages={getMessages("en")} />);
+  expect(await screen.findByText("Confirm running this SQL?")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Confirm and run" }));
+  const expired = (await screen.findByRole("button", {
+    name: "Expired; please ask again.",
+  })) as HTMLButtonElement;
+  expect(expired.disabled).toBe(true);
+});
+
 test("streams tools and text, copies SQL, and opens table and document citations", async () => {
   const fetcher = vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input);
