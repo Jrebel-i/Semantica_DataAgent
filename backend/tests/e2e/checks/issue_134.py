@@ -43,9 +43,7 @@ def check_chat_ui_bundle(ctx):
         "assistant answer typography missing from UI bundle",
     )
 
-    font_urls = re.findall(
-        r"url\(([^)]*newsreader[^)]*)\)", css.text, re.IGNORECASE
-    )
+    font_urls = re.findall(r"url\(([^)]*newsreader[^)]*)\)", css.text, re.IGNORECASE)
     ctx.require(len(font_urls) == 2, "Newsreader normal/italic assets missing")
     for font_url in font_urls:
         asset = ctx.rest.get(urljoin(str(css.url), font_url.strip("\"'")))
@@ -56,8 +54,7 @@ def check_chat_ui_bundle(ctx):
 
     bundle_text = script.text + css.text
     ctx.require(
-        "fonts.googleapis" not in bundle_text
-        and "fonts.gstatic" not in bundle_text,
+        "fonts.googleapis" not in bundle_text and "fonts.gstatic" not in bundle_text,
         "UI bundle references an external font CDN",
     )
     return {
