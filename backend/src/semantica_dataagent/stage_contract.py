@@ -37,6 +37,8 @@ class StorageHandles:
     build_id: int | None = None
     all_records: list | None = None
     is_incremental: bool = False
+    _embedding_inputs: int = 0
+    _embedding_unique: int = 0
 
     def execute(self, query, parameters):
         from .knowledge import execute
@@ -59,6 +61,12 @@ class StorageHandles:
             )
         return result
 
+    def embedding_counts(self) -> dict[str, int]:
+        return {
+            "embedding_inputs": self._embedding_inputs,
+            "embedding_unique": self._embedding_unique,
+        }
+
     def add_vectors(self, ids, texts, metadata):
         from .knowledge import embed
 
@@ -66,10 +74,24 @@ class StorageHandles:
             raise ValueError("Vector ids, texts and metadata must have equal lengths")
         if any(not item.get("scope") for item in metadata):
             raise ValueError("Each vector must have a scope")
+        texts = list(texts)
+        self._embedding_inputs += len(texts)
+        vectors_by_text = {}
         for offset in range(0, len(texts), 32):
             batch = slice(offset, offset + 32)
+            pending = list(
+                dict.fromkeys(
+                    text for text in texts[batch] if text not in vectors_by_text
+                )
+            )
+            if pending:
+                embedded = embed(self._settings, pending, self._embedding_stats)
+                if len(embedded) != len(pending):
+                    raise ValueError("Embedding response has a different length")
+                vectors_by_text.update(zip(pending, embedded, strict=True))
+                self._embedding_unique += len(pending)
             self._vectors.add_vectors(
-                embed(self._settings, texts[batch], self._embedding_stats),
+                [vectors_by_text[text] for text in texts[batch]],
                 ids=ids[batch],
                 metadata=[
                     {
