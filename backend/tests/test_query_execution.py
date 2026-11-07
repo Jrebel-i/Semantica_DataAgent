@@ -143,6 +143,11 @@ def test_latest_partition_subquery_is_accepted(client, monkeypatch, sql):
             "WITH latest AS (SELECT MAX(dt) AS dt FROM shop.orders) "
             "SELECT * FROM shop.orders WHERE dt = (SELECT dt FROM latest)"
         ),
+        (
+            "SELECT * FROM shop.orders WHERE dt = (WITH latest AS "
+            "(SELECT MAX(dt) AS dt FROM shop.orders) "
+            "SELECT MAX(dt) FROM shop.orders)"
+        ),
         "SELECT * FROM shop.orders WHERE dt = (SELECT MAX(amount) FROM shop.orders)",
         "SELECT * FROM shop.orders WHERE dt = (SELECT MAX(dt) FROM shop.customers)",
         (
