@@ -8,6 +8,7 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { App } from "./App";
+import { clearTableDetailCache } from "./tableDetail";
 
 beforeEach(() => {
   vi.stubGlobal(
@@ -36,6 +37,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   cleanup();
+  clearTableDetailCache();
   vi.restoreAllMocks();
 });
 
@@ -159,6 +161,31 @@ test("browse tables and view field details", async () => {
         return Response.json({ upstream: [], downstream: [], tasks: [] });
       if (url.startsWith("/api/v1/column-lineage"))
         return Response.json({ upstream: [], downstream: [] });
+      if (url === "/api/v1/tables/shop/orders")
+        return new Response(
+          JSON.stringify({
+            database: "shop",
+            name: "orders",
+            comment: "交易订单",
+            ref: "table:shop.orders",
+            documents: [
+              {
+                ref: "document:metrics/sales.md",
+                category: "metrics",
+                path: "sales.md",
+              },
+            ],
+            fields: [
+              {
+                name: "dt",
+                type: "string",
+                comment: "日期分区",
+                partition: true,
+              },
+            ],
+          }),
+          { status: 200 },
+        );
       if (url.startsWith("/api/v1/tables"))
         return new Response(
           JSON.stringify([
@@ -167,21 +194,9 @@ test("browse tables and view field details", async () => {
               name: "orders",
               comment: "交易订单",
               ref: "table:shop.orders",
-              documents: [
-                {
-                  ref: "document:metrics/sales.md",
-                  category: "metrics",
-                  path: "sales.md",
-                },
-              ],
-              fields: [
-                {
-                  name: "dt",
-                  type: "string",
-                  comment: "日期分区",
-                  partition: true,
-                },
-              ],
+              field_count: 1,
+              document_count: 1,
+              has_partition: true,
             },
           ]),
           { status: 200 },

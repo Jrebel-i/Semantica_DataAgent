@@ -5,9 +5,13 @@ import { TaskLineage, type TableLineage } from "./TaskLineage";
 import type { Messages } from "./i18n";
 import { ColumnLineage } from "./ColumnLineage";
 import { DimensionStatus } from "./DimensionStatus";
+import {
+  loadTableDetail,
+  summaryFromDetail,
+  type TableDetail,
+  type TableSummary,
+} from "./tableDetail";
 
-type WarehouseTable =
-  paths["/api/v1/tables"]["get"]["responses"][200]["content"]["application/json"][number];
 type Category =
   paths["/api/v1/categories"]["get"]["responses"][200]["content"]["application/json"][number];
 type Document =
@@ -58,9 +62,13 @@ export function KnowledgePage({
   token: string;
   messages: Messages;
 }) {
-  const [tables, setTables] = useState<WarehouseTable[]>([]);
+  const [tables, setTables] = useState<TableSummary[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
-  const [selected, setSelected] = useState<WarehouseTable | null>(null);
+  const [selected, setSelected] = useState<TableSummary | null>(null);
+  const [detail, setDetail] = useState<TableDetail | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState(false);
+  const [detailRetry, setDetailRetry] = useState(0);
   const [readingDoc, setReadingDoc] = useState<Document | null>(null);
   const [linkedDocument, setLinkedDocument] = useState<Document | null>(null);
   const [expandedColumn, setExpandedColumn] = useState("");
@@ -92,13 +100,14 @@ export function KnowledgePage({
     const params = new URLSearchParams();
     if (database) params.set("database", database);
     if (search) params.set("search", search);
+    params.set("view", "summary");
     fetch(`/api/v1/tables?${params}`, {
       headers: { Authorization: `Bearer ${token}` },
       signal: controller.signal,
     })
       .then((response) => {
         if (!response.ok) throw new Error();
-        return response.json() as Promise<WarehouseTable[]>;
+        return response.json() as Promise<TableSummary[]>;
       })
       .then((data) => {
         setTables(data);
@@ -112,6 +121,32 @@ export function KnowledgePage({
     // The selection is intentionally read once when a result set arrives.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, database, search]);
+
+  useEffect(() => {
+    if (!selected) {
+      setDetail(null);
+      setDetailLoading(false);
+      setDetailError(false);
+      return;
+    }
+    let cancelled = false;
+    setDetail(null);
+    setDetailLoading(true);
+    setDetailError(false);
+    loadTableDetail(token, selected.database, selected.name)
+      .then((row) => {
+        if (!cancelled) setDetail(row);
+      })
+      .catch(() => {
+        if (!cancelled) setDetailError(true);
+      })
+      .finally(() => {
+        if (!cancelled) setDetailLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [token, selected?.database, selected?.name, detailRetry]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -191,21 +226,17 @@ export function KnowledgePage({
       setReadingDoc(null);
       return;
     }
+    const separator = name.indexOf(".");
+    if (separator < 1) return;
     try {
-      const response = await fetch(
-        `/api/v1/tables?${new URLSearchParams({
-          database: name.split(".")[0],
-          search: name.split(".").slice(1).join("."),
-        })}`,
-        { headers: { Authorization: `Bearer ${token}` } },
+      const row = await loadTableDetail(
+        token,
+        name.slice(0, separator),
+        name.slice(separator + 1),
       );
-      if (!response.ok) throw new Error();
-      const rows = (await response.json()) as WarehouseTable[];
-      const match = rows.find((row) => `${row.database}.${row.name}` === name);
-      if (match) {
-        setSelected(match);
-        setReadingDoc(null);
-      }
+      setSelected(summaryFromDetail(row));
+      setReadingDoc(null);
+      setError(false);
     } catch {
       setError(true);
     }
@@ -266,11 +297,10 @@ export function KnowledgePage({
     [categories, needle],
   );
   const tableLayers = useMemo(() => {
-    const grouped = new Map<LayerId, Map<string, WarehouseTable[]>>();
+    const grouped = new Map<LayerId, Map<string, TableSummary[]>>();
     for (const row of visibleTables) {
       const layer = warehouseLayer(row.database);
-      const databases =
-        grouped.get(layer) ?? new Map<string, WarehouseTable[]>();
+      const databases = grouped.get(layer) ?? new Map<string, TableSummary[]>();
       grouped.set(layer, databases);
       const rows = databases.get(row.database) ?? [];
       rows.push(row);
@@ -542,132 +572,153 @@ export function KnowledgePage({
                   title={proposalStatus}
                 />
               )}
-              <section className="detail-section">
-                <h2 className="detail-section-title">
-                  {messages.fields}
-                  <span className="count">{selected.fields.length}</span>
-                </h2>
-                <table className="data-table">
-                  <thead>
-                    <tr>
-                      <th>{messages.field}</th>
-                      <th>{messages.dataType}</th>
-                      <th>{messages.comment}</th>
-                      <th>{messages.dimStatus}</th>
-                      <th>{messages.partition}</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {selected.fields.map((field) => (
-                      <Fragment key={field.name}>
-                        <tr>
-                          <td>
-                            <button
-                              type="button"
-                              aria-expanded={
-                                expandedColumn ===
-                                `${selected.database}.${selected.name}.${field.name}`
-                              }
-                              onClick={() => {
-                                const key = `${selected.database}.${selected.name}.${field.name}`;
-                                setExpandedColumn(
-                                  expandedColumn === key ? "" : key,
-                                );
-                              }}
-                            >
-                              {field.name}
-                            </button>
-                          </td>
-                          <td>{field.type}</td>
-                          <td>{field.comment}</td>
-                          <td>
-                            <DimensionStatus
-                              count={field.dimension_count}
-                              tooMany={field.dimension_too_many}
-                              messages={messages}
-                            />
-                            {field.dimension_samples?.length ? (
-                              <span className="subtle">
-                                {" "}
-                                {field.dimension_samples.join(", ")}
-                              </span>
-                            ) : null}
-                          </td>
-                          <td>
-                            {field.partition ? messages.yes : messages.no}
-                          </td>
-                        </tr>
-                        {expandedColumn ===
-                          `${selected.database}.${selected.name}.${field.name}` && (
-                          <tr>
-                            <td colSpan={5}>
-                              <ColumnLineage
-                                table={`${selected.database}.${selected.name}`}
-                                column={field.name}
-                                token={token}
-                              />
-                            </td>
-                          </tr>
-                        )}
-                      </Fragment>
-                    ))}
-                  </tbody>
-                </table>
-              </section>
-              <section className="detail-section">
-                <h2 className="detail-section-title">
-                  {messages.contextLineage}
-                </h2>
-                <TaskLineage
-                  table={`${selected.database}.${selected.name}`}
-                  token={token}
-                  messages={messages}
-                  showTasks={false}
-                  onData={setLineage}
-                  onSelect={(name) => void selectTableByName(name)}
+              {detailError && (
+                <Alert
+                  type="error"
+                  title={messages.error}
+                  action={
+                    <Button
+                      size="small"
+                      onClick={() => setDetailRetry((value) => value + 1)}
+                    >
+                      {messages.retry}
+                    </Button>
+                  }
                 />
-              </section>
-              <section className="detail-section">
-                <h2 className="detail-section-title">
-                  {messages.linkedDocuments}
-                  <span className="count">
-                    {(selected.documents ?? []).length}
-                  </span>
-                </h2>
-                {(selected.documents ?? []).length === 0 ? (
-                  <p className="muted">{messages.noLinkedDocuments}</p>
-                ) : (
-                  <div className="doc-link-list">
-                    {(selected.documents ?? []).map((doc) => (
-                      <Button
-                        type="link"
-                        key={doc.ref}
-                        onClick={() => void openLinkedDocument(doc.ref)}
-                      >
-                        {doc.path}
-                      </Button>
-                    ))}
-                  </div>
-                )}
-                {linkedDocument && (
-                  <div className="doc-content">
-                    <div className="context-ref">{linkedDocument.path}</div>
-                    <pre>{linkedDocument.content}</pre>
-                  </div>
-                )}
-              </section>
-              {lineage && lineage.tasks.length > 0 && (
-                <section className="detail-section">
-                  <h2 className="detail-section-title">
-                    {messages.producingTasks}
-                    <span className="count">{lineage.tasks.length}</span>
-                  </h2>
-                  <ul>
-                    {lineage.tasks.map((task) => (
-                      <li key={task.ref}>{task.name}</li>
-                    ))}
-                  </ul>
-                </section>
+              )}
+              {detailLoading && !detail && (
+                <p className="muted">{messages.loadingTable}</p>
+              )}
+              {detail && (
+                <>
+                  <section className="detail-section">
+                    <h2 className="detail-section-title">
+                      {messages.fields}
+                      <span className="count">{detail.fields.length}</span>
+                    </h2>
+                    <table className="data-table">
+                      <thead>
+                        <tr>
+                          <th>{messages.field}</th>
+                          <th>{messages.dataType}</th>
+                          <th>{messages.comment}</th>
+                          <th>{messages.dimStatus}</th>
+                          <th>{messages.partition}</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {detail.fields.map((field) => (
+                          <Fragment key={field.name}>
+                            <tr>
+                              <td>
+                                <button
+                                  type="button"
+                                  aria-expanded={
+                                    expandedColumn ===
+                                    `${selected.database}.${selected.name}.${field.name}`
+                                  }
+                                  onClick={() => {
+                                    const key = `${selected.database}.${selected.name}.${field.name}`;
+                                    setExpandedColumn(
+                                      expandedColumn === key ? "" : key,
+                                    );
+                                  }}
+                                >
+                                  {field.name}
+                                </button>
+                              </td>
+                              <td>{field.type}</td>
+                              <td>{field.comment}</td>
+                              <td>
+                                <DimensionStatus
+                                  count={field.dimension_count}
+                                  tooMany={field.dimension_too_many}
+                                  messages={messages}
+                                />
+                                {field.dimension_samples?.length ? (
+                                  <span className="subtle">
+                                    {" "}
+                                    {field.dimension_samples.join(", ")}
+                                  </span>
+                                ) : null}
+                              </td>
+                              <td>
+                                {field.partition ? messages.yes : messages.no}
+                              </td>
+                            </tr>
+                            {expandedColumn ===
+                              `${selected.database}.${selected.name}.${field.name}` && (
+                              <tr>
+                                <td colSpan={5}>
+                                  <ColumnLineage
+                                    table={`${selected.database}.${selected.name}`}
+                                    column={field.name}
+                                    token={token}
+                                  />
+                                </td>
+                              </tr>
+                            )}
+                          </Fragment>
+                        ))}
+                      </tbody>
+                    </table>
+                  </section>
+                  <section className="detail-section">
+                    <h2 className="detail-section-title">
+                      {messages.contextLineage}
+                    </h2>
+                    <TaskLineage
+                      table={`${selected.database}.${selected.name}`}
+                      token={token}
+                      messages={messages}
+                      showTasks={false}
+                      onData={setLineage}
+                      onSelect={(name) => void selectTableByName(name)}
+                    />
+                  </section>
+                  <section className="detail-section">
+                    <h2 className="detail-section-title">
+                      {messages.linkedDocuments}
+                      <span className="count">
+                        {(detail.documents ?? []).length}
+                      </span>
+                    </h2>
+                    {(detail.documents ?? []).length === 0 ? (
+                      <p className="muted">{messages.noLinkedDocuments}</p>
+                    ) : (
+                      <div className="doc-link-list">
+                        {(detail.documents ?? []).map((doc) => (
+                          <Button
+                            type="link"
+                            key={doc.ref}
+                            onClick={() => void openLinkedDocument(doc.ref)}
+                          >
+                            {doc.path}
+                          </Button>
+                        ))}
+                      </div>
+                    )}
+                    {linkedDocument && (
+                      <div className="doc-content">
+                        <div className="context-ref">{linkedDocument.path}</div>
+                        <pre>{linkedDocument.content}</pre>
+                      </div>
+                    )}
+                  </section>
+                  {lineage && lineage.tasks.length > 0 && (
+                    <section className="detail-section">
+                      <h2 className="detail-section-title">
+                        {messages.producingTasks}
+                        <span className="count">{lineage.tasks.length}</span>
+                      </h2>
+                      <ul>
+                        {lineage.tasks.map((task) => (
+                          <li key={task.ref}>{task.name}</li>
+                        ))}
+                      </ul>
+                    </section>
+                  )}
+                </>
               )}
             </>
           ) : readingDoc ? (

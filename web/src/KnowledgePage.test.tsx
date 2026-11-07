@@ -9,14 +9,27 @@ import {
 } from "@testing-library/react";
 import { KnowledgePage, warehouseLayer } from "./KnowledgePage";
 import { getMessages } from "./i18n";
+import { clearTableDetailCache } from "./tableDetail";
 
 type TableRow = {
   database: string;
   name: string;
   comment: string;
   ref: string;
-  documents: never[];
-  fields: never[];
+  field_count: number;
+  document_count: number;
+  has_partition: boolean;
+  documents: {
+    ref: string;
+    path: string;
+    category: string;
+  }[];
+  fields: {
+    name: string;
+    type: string;
+    comment: string;
+    partition: boolean;
+  }[];
 };
 
 function table(database: string, name: string): TableRow {
@@ -25,17 +38,41 @@ function table(database: string, name: string): TableRow {
     name,
     comment: `${name} 说明`,
     ref: `table:${database}.${name}`,
+    field_count: 1,
+    document_count: 0,
+    has_partition: false,
     documents: [],
-    fields: [],
+    fields: [
+      {
+        name: "dt",
+        type: "string",
+        comment: "日期分区",
+        partition: true,
+      },
+    ],
   };
 }
 
-function installFetch(tables: TableRow[], categories: unknown[] = []) {
+function installFetch(
+  tables: TableRow[],
+  categories: unknown[] = [],
+  detailFailure?: () => boolean,
+) {
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url: string) => {
       if (url === "/api/v1/categories") return Response.json(categories);
-      if (url.startsWith("/api/v1/tables")) return Response.json(tables);
+      if (url.startsWith("/api/v1/tables?")) return Response.json(tables);
+      const detail = url.match(/^\/api\/v1\/tables\/([^/]+)\/([^/]+)$/);
+      if (detail) {
+        if (detailFailure?.()) return new Response("", { status: 500 });
+        const database = decodeURIComponent(detail[1]);
+        const name = decodeURIComponent(detail[2]);
+        const row = tables.find(
+          (item) => item.database === database && item.name === name,
+        );
+        return row ? Response.json(row) : new Response("", { status: 404 });
+      }
       if (url.startsWith("/api/v1/table-lineage"))
         return Response.json({ upstream: [], downstream: [], tasks: [] });
       if (url.startsWith("/api/v1/column-lineage"))
@@ -87,6 +124,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  clearTableDetailCache();
 });
 
 test("按数仓层次分组，层和库都显示表数", async () => {
@@ -261,4 +299,75 @@ test("文档分组仍可展开并打开文档", async () => {
     await screen.findByRole("button", { name: "metrics/sales.md" }),
   );
   expect(await screen.findByText(/订单定义/)).toBeTruthy();
+});
+
+test("列表请求带 summary 视图，点击表后请求详情并按 ref 缓存", async () => {
+  const tables = [table("shop", "orders"), table("shop", "customers")];
+  installFetch(tables);
+  const fetcher = fetch as unknown as ReturnType<typeof vi.fn>;
+  render(<KnowledgePage token="token" messages={getMessages("zh")} />);
+
+  expect(await screen.findByRole("button", { name: "orders" })).toBeTruthy();
+  await waitFor(() =>
+    expect(
+      fetcher.mock.calls.some(([url]) =>
+        String(url).includes("/api/v1/tables?view=summary"),
+      ),
+    ).toBe(true),
+  );
+  await screen.findByText("日期分区");
+  const detailCalls = () =>
+    fetcher.mock.calls.filter(
+      ([url]) =>
+        String(url) === "/api/v1/tables/shop/orders" ||
+        String(url) === "/api/v1/tables/shop/customers",
+    );
+  await waitFor(() => expect(detailCalls()).toHaveLength(1));
+
+  fireEvent.click(screen.getByRole("button", { name: "customers" }));
+  await waitFor(() => expect(detailCalls()).toHaveLength(2));
+  fireEvent.click(screen.getByRole("button", { name: "orders" }));
+  fireEvent.click(screen.getByRole("button", { name: "customers" }));
+  await waitFor(() => expect(detailCalls()).toHaveLength(2));
+});
+
+test("详情请求失败显示错误，重试后恢复", async () => {
+  let fail = true;
+  installFetch([table("shop", "orders")], [], () => fail);
+  render(<KnowledgePage token="token" messages={getMessages("zh")} />);
+
+  expect(await screen.findByText("无法获取状态")).toBeTruthy();
+  expect(screen.getByRole("button", { name: /重\s*试/ })).toBeTruthy();
+  fail = false;
+  fireEvent.click(screen.getByRole("button", { name: /重\s*试/ }));
+  expect(await screen.findByText("日期分区")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: /重\s*试/ })).toBeNull();
+});
+
+test("搜索仍按表名过滤，并继续使用 summary 视图", async () => {
+  const tables = [table("quick", "quick_orders"), table("dm", "dm_customers")];
+  installFetch(tables);
+  const fetcher = fetch as unknown as ReturnType<typeof vi.fn>;
+  render(<KnowledgePage token="token" messages={getMessages("zh")} />);
+
+  expect(
+    await screen.findByRole("button", { name: "quick_orders" }),
+  ).toBeTruthy();
+  fireEvent.change(screen.getByLabelText("搜索表或文档"), {
+    target: { value: "customer" },
+  });
+  expect(
+    await screen.findByRole("button", { name: "dm_customers" }),
+  ).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "quick_orders" })).toBeNull();
+  await waitFor(() =>
+    expect(
+      fetcher.mock.calls.some(([url]) => {
+        const value = String(url);
+        return (
+          value.includes("search=customer") && value.includes("view=summary")
+        );
+      }),
+    ).toBe(true),
+  );
 });

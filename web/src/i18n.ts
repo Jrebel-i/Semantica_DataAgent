@@ -97,6 +97,8 @@ const messages = {
     moreCount: "个",
     noDescription: "暂无说明",
     noLinkedDocuments: "暂无关联文档",
+    loadingTable: "正在加载表详情…",
+    retry: "重试",
     correctionPatchHint: "填写表说明的完整替换文本，审批通过后覆盖原说明。",
     correctionReasonHint: "说明为什么要修改，便于审批人核对依据。",
     correctionTitle: "纠错审批",
@@ -464,6 +466,8 @@ const messages = {
     moreCount: "items",
     noDescription: "No description",
     noLinkedDocuments: "No linked documents",
+    loadingTable: "Loading table details…",
+    retry: "Retry",
     correctionPatchHint:
       "Enter the complete replacement for the table description. It replaces the current text after approval.",
     correctionReasonHint:

@@ -10,6 +10,7 @@ import {
 } from "@testing-library/react";
 import { ChatPage } from "./ChatPage";
 import { getMessages } from "./i18n";
+import { clearTableDetailCache } from "./tableDetail";
 
 const provider = {
   id: "provider-1",
@@ -85,6 +86,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  clearTableDetailCache();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   Object.defineProperty(navigator, "clipboard", {
@@ -192,7 +194,7 @@ test("查询计划可确认执行，结果和下载显示在右侧面板", async
           },
         );
       }
-      if (url.startsWith("/api/v1/tables?")) return json([table]);
+      if (url.startsWith("/api/v1/tables/")) return json(table);
       if (url.startsWith("/api/v1/queries/query-81/download?")) {
         return new Response("download", { status: 200 });
       }
@@ -225,7 +227,7 @@ test("查询计划可确认执行，结果和下载显示在右侧面板", async
   await waitFor(() =>
     expect(
       fetcher.mock.calls.some(([input]) =>
-        String(input).startsWith("/api/v1/tables?"),
+        String(input).startsWith("/api/v1/tables/"),
       ),
     ).toBe(true),
   );
@@ -410,7 +412,7 @@ test("streams tools and text, copies SQL, and opens table and document citations
         status: 200,
         headers: { "Content-Type": "text/event-stream" },
       });
-    if (url.startsWith("/api/v1/tables?")) return json([table]);
+    if (url.startsWith("/api/v1/tables/")) return json(table);
     if (url.startsWith("/api/v1/document?")) return json(document);
     return new Response("", { status: 404 });
   });
@@ -457,10 +459,9 @@ test("streams tools and text, copies SQL, and opens table and document citations
   expect(schemaHead?.textContent).toContain("支付流水");
   fireEvent.click(screen.getByRole("button", { name: "关闭" }));
   expect(window.document.querySelector(".context-schema-head")).toBeNull();
-  expect(fetcher).toHaveBeenCalledWith(
-    "/api/v1/tables?database=shop&search=payments",
-    { headers: { Authorization: "Bearer personal-token" } },
-  );
+  expect(fetcher).toHaveBeenCalledWith("/api/v1/tables/shop/payments", {
+    headers: { Authorization: "Bearer personal-token" },
+  });
 
   fireEvent.click(
     screen.getByRole("button", {
@@ -957,7 +958,7 @@ test("后打开的引用不会被较晚返回的旧请求覆盖", async () => {
       return new Response(sse, {
         headers: { "Content-Type": "text/event-stream" },
       });
-    if (url.startsWith("/api/v1/tables?")) return delayedTable;
+    if (url.startsWith("/api/v1/tables/")) return delayedTable;
     if (url.startsWith("/api/v1/document?")) return json(document);
     return new Response("", { status: 404 });
   });
@@ -983,7 +984,7 @@ test("后打开的引用不会被较晚返回的旧请求覆盖", async () => {
   await waitFor(() =>
     expect(
       fetcher.mock.calls.some(([url]) =>
-        String(url).startsWith("/api/v1/tables?"),
+        String(url).startsWith("/api/v1/tables/"),
       ),
     ).toBe(true),
   );
@@ -1155,7 +1156,7 @@ test("字段引用的血缘标签显示字段血缘", async () => {
         status: 200,
         headers: { "Content-Type": "text/event-stream" },
       });
-    if (url.startsWith("/api/v1/tables?")) return json([table]);
+    if (url.startsWith("/api/v1/tables/")) return json(table);
     if (url.startsWith("/api/v1/column-lineage?"))
       return json({ upstream: [], downstream: [] });
     return new Response("", { status: 404 });

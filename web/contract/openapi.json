@@ -1649,6 +1649,49 @@
         "title": "TableLineageView",
         "type": "object"
       },
+      "TableSummary": {
+        "properties": {
+          "comment": {
+            "title": "Comment",
+            "type": "string"
+          },
+          "database": {
+            "title": "Database",
+            "type": "string"
+          },
+          "document_count": {
+            "title": "Document Count",
+            "type": "integer"
+          },
+          "field_count": {
+            "title": "Field Count",
+            "type": "integer"
+          },
+          "has_partition": {
+            "title": "Has Partition",
+            "type": "boolean"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "ref": {
+            "title": "Ref",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "database",
+          "comment",
+          "ref",
+          "field_count",
+          "document_count",
+          "has_partition"
+        ],
+        "title": "TableSummary",
+        "type": "object"
+      },
       "TableView": {
         "properties": {
           "comment": {
@@ -4087,6 +4130,20 @@
               ],
               "title": "Search"
             }
+          },
+          {
+            "in": "query",
+            "name": "view",
+            "required": false,
+            "schema": {
+              "default": "full",
+              "enum": [
+                "summary",
+                "full"
+              ],
+              "title": "View",
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -4095,7 +4152,14 @@
               "application/json": {
                 "schema": {
                   "items": {
-                    "$ref": "#/components/schemas/TableView"
+                    "anyOf": [
+                      {
+                        "$ref": "#/components/schemas/TableView"
+                      },
+                      {
+                        "$ref": "#/components/schemas/TableSummary"
+                      }
+                    ]
                   },
                   "title": "Response Tables Api V1 Tables Get",
                   "type": "array"
@@ -4121,6 +4185,59 @@
           }
         ],
         "summary": "Tables"
+      }
+    },
+    "/api/v1/tables/{database}/{table}": {
+      "get": {
+        "operationId": "table_detail_api_v1_tables__database___table__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "database",
+            "required": true,
+            "schema": {
+              "title": "Database",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "table",
+            "required": true,
+            "schema": {
+              "title": "Table",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TableView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Table Detail"
       }
     },
     "/api/v1/tokens": {

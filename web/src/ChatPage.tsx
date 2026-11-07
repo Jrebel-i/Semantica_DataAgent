@@ -12,6 +12,11 @@ import {
 } from "@ant-design/icons";
 import { parseAgentProfiles, type AgentProfiles } from "./agentProfiles";
 import { HighlightedSql, Markdown } from "./Markdown";
+import {
+  loadTableDetail,
+  tablePartsFromRef,
+  type TableDetail,
+} from "./tableDetail";
 
 type Agent = components["schemas"]["AgentView"];
 type Provider = components["schemas"]["ProviderView"];
@@ -19,8 +24,6 @@ type Conversation = components["schemas"]["ConversationView"];
 type ConversationDetail = components["schemas"]["ConversationDetail"];
 type Turn = components["schemas"]["TurnView"];
 type EventView = components["schemas"]["EventView"];
-type TableRow =
-  paths["/api/v1/tables"]["get"]["responses"][200]["content"]["application/json"][number];
 type DocumentView =
   paths["/api/v1/document"]["get"]["responses"][200]["content"]["application/json"];
 
@@ -66,7 +69,7 @@ type LiveTurn = {
   error?: string;
 };
 type CitationDetail =
-  | { kind: "table"; ref: string; table: TableRow }
+  | { kind: "table"; ref: string; table: TableDetail }
   | { kind: "document"; ref: string; document: DocumentView }
   | { kind: "message"; ref: string; message: string };
 
@@ -1178,28 +1181,11 @@ export function ChatPage({
     const value = ref.slice(ref.indexOf(":") + 1);
     try {
       if (type === "table" || type === "field") {
-        const tableName =
-          type === "field" ? value.split(".").slice(0, 2).join(".") : value;
-        const [database, ...nameParts] = tableName.split(".");
-        const response = await fetch(
-          `/api/v1/tables?${new URLSearchParams({ database, search: nameParts.join(".") })}`,
-          { headers: { Authorization: `Bearer ${token}` } },
-        );
-        if (!response.ok) throw new Error();
-        const rows = (await response.json()) as TableRow[];
+        const parts = tablePartsFromRef(ref);
+        if (!parts) throw new Error();
+        const table = await loadTableDetail(token, parts.database, parts.name);
         if (sequence !== citationSequence.current) return;
-        const table =
-          rows.find((row) => row.ref === ref) ??
-          rows.find((row) => `${row.database}.${row.name}` === tableName);
-        if (!table) {
-          setCitationDetail({
-            kind: "message",
-            ref,
-            message: t.citationNotFound,
-          });
-        } else {
-          setCitationDetail({ kind: "table", ref, table });
-        }
+        setCitationDetail({ kind: "table", ref, table });
       } else if (type === "document") {
         const docId = `document:${value.split("#", 1)[0]}`;
         const response = await fetch(
