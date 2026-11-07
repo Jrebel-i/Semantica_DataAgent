@@ -25,6 +25,7 @@ import {
   MenuFoldOutlined,
   MenuUnfoldOutlined,
   LogoutOutlined,
+  SearchOutlined,
 } from "@ant-design/icons";
 
 function formatGenerationTime(value: string | null | undefined) {
@@ -46,7 +47,7 @@ export function App() {
   const [role, setRole] = useState("");
   const [expanded, setExpanded] = useState(() => {
     try {
-      return localStorage.getItem("navigationExpanded") === "true";
+      return localStorage.getItem("navigationExpanded") !== "false";
     } catch {
       return false;
     }
@@ -61,6 +62,11 @@ export function App() {
       return !value;
     });
   };
+  const [sessionTarget, setSessionTarget] = useState<HTMLDivElement | null>(
+    null,
+  );
+  const [newTarget, setNewTarget] = useState<HTMLDivElement | null>(null);
+  const [managementOpen, setManagementOpen] = useState(false);
   const [path, setPath] = useState(window.location.pathname);
   const [error, setError] = useState("");
   const [health, setHealth] = useState<Health | null>(null);
@@ -159,22 +165,22 @@ export function App() {
     setPath(next);
   };
   const navigation = [
-    { path: "/chat", label: t.workbenchChat, icon: <MessageOutlined /> },
+    { path: "/search", label: t.sidebarSearch, icon: <SearchOutlined /> },
     {
       path: "/knowledge",
-      label: t.workbenchKnowledge,
+      label: t.sidebarKnowledge,
       icon: <DatabaseOutlined />,
     },
-    ...(role === "admin"
-      ? [
-          { path: "/builds", label: t.workbenchBuild, icon: <BuildOutlined /> },
-          {
-            path: "/config",
-            label: t.workbenchConfig,
-            icon: <SettingOutlined />,
-          },
-        ]
-      : []),
+  ];
+  const management = [
+    { path: "/builds", label: t.builds },
+    { path: "/source", label: t.source },
+    { path: "/corrections", label: t.correctionTitle },
+    { path: "/config", label: t.workbenchConfig },
+    { path: "/plugins", label: t.plugins },
+    { path: "/tokens", label: t.tokens },
+    { path: "/mcp-access", label: t.mcpAccess },
+    { path: "/status", label: t.status },
   ];
   const subNavigation = (() => {
     if (path === "/knowledge" || path === "/search")
@@ -233,9 +239,7 @@ export function App() {
       ) : (
         <Alert title={t.forbidden} type="warning" />
       )
-    ) : path === "/chat" || path === "/" ? (
-      <ChatPage token={token} role={role} messages={t} />
-    ) : path === "/builds" ? (
+    ) : path === "/chat" || path === "/" ? null : path === "/builds" ? (
       role === "admin" ? (
         <BuildPage token={token} messages={t} />
       ) : (
@@ -361,6 +365,7 @@ export function App() {
               >
                 {expanded ? <MenuFoldOutlined /> : <MenuUnfoldOutlined />}
               </Button>
+              <div ref={setNewTarget} />
               {navigation.map((item) => (
                 <a
                   key={item.path}
@@ -382,6 +387,7 @@ export function App() {
                   <span>{item.label}</span>
                 </a>
               ))}
+              <div ref={setSessionTarget} className="sidebar-sessions" />
               <div className="personal-menu">
                 <a
                   className="nav-item"
@@ -400,6 +406,36 @@ export function App() {
                   </span>
                   <span>{t.personalSettings}</span>
                 </a>
+                {role === "admin" && (
+                  <>
+                    <Button
+                      type="text"
+                      className="nav-item"
+                      aria-expanded={managementOpen}
+                      onClick={() => setManagementOpen(!managementOpen)}
+                    >
+                      {t.management}
+                    </Button>
+                    {managementOpen && (
+                      <div className="management-links">
+                        {management.map((item) => (
+                          <a
+                            key={item.path}
+                            href={item.path}
+                            className="nav-item"
+                            onClick={(event) => {
+                              event.preventDefault();
+                              navigate(item.path);
+                              setManagementOpen(false);
+                            }}
+                          >
+                            {item.label}
+                          </a>
+                        ))}
+                      </div>
+                    )}
+                  </>
+                )}
                 <Button
                   type="text"
                   className="nav-item"
@@ -435,7 +471,22 @@ export function App() {
                     ))}
                   </nav>
                 )}
-                {isFill ? <div className="page-fill">{content}</div> : content}
+                <div className="chat-page-host" hidden={!isChat}>
+                  <ChatPage
+                    token={token}
+                    role={role}
+                    messages={t}
+                    sessionTarget={sessionTarget}
+                    newTarget={newTarget}
+                    onNavigateChat={() => navigate("/chat")}
+                  />
+                </div>
+                {!isChat &&
+                  (isFill ? (
+                    <div className="page-fill">{content}</div>
+                  ) : (
+                    content
+                  ))}
               </div>
               <footer className="status-bar">
                 {Object.entries(health || {}).map(([name, value]) => (

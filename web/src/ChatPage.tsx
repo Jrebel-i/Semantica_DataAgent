@@ -1,3 +1,4 @@
+import { createPortal } from "react-dom";
 import { ColumnLineage } from "./ColumnLineage";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
@@ -623,11 +624,17 @@ export function ChatPage({
   role,
   messages: t,
   settingsOnly = false,
+  sessionTarget,
+  newTarget,
+  onNavigateChat,
 }: {
   token: string;
   role: string;
   messages: Messages;
   settingsOnly?: boolean;
+  sessionTarget?: HTMLElement | null;
+  newTarget?: HTMLElement | null;
+  onNavigateChat?: () => void;
 }) {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [profiles, setProfiles] = useState<AgentProfiles>({});
@@ -852,8 +859,8 @@ export function ChatPage({
   }, [token, t.askError]);
 
   useEffect(() => {
-    void refreshConversations();
-  }, [refreshConversations]);
+    if (!settingsOnly) void refreshConversations();
+  }, [refreshConversations, settingsOnly]);
 
   useEffect(() => {
     void fetch("/api/v1/assistant-defaults", {
@@ -1476,61 +1483,88 @@ export function ChatPage({
         <div
           className={`chat-layout${contextOpen ? "" : " context-collapsed"}`}
         >
-          <aside className="chat-sessions">
-            <div className="session-head">
-              <h1 className="session-title">{t.chat}</h1>
+          {newTarget &&
+            createPortal(
               <Button
-                size="small"
-                type="primary"
-                onClick={newConversation}
+                type="text"
+                className="nav-item new-conversation"
+                onClick={() => {
+                  newConversation();
+                  onNavigateChat?.();
+                }}
                 disabled={sending}
               >
                 {t.newConversation}
-              </Button>
-            </div>
-            <div className="session-list">
-              {conversations.length === 0 ? (
-                <div className="session-empty">{t.noConversations}</div>
-              ) : (
-                conversations.map((conversation) => {
-                  const active = conversation.id === currentConversationId;
-                  return (
-                    <div
-                      className={`session-item${active ? " active" : ""}`}
-                      key={conversation.id}
+              </Button>,
+              newTarget,
+            )}
+          {(() => {
+            const sessions = (
+              <aside className="chat-sessions">
+                <div className="session-head">
+                  <h1 className="session-title">{t.chat}</h1>
+                  {!sessionTarget && (
+                    <Button
+                      size="small"
+                      type="primary"
+                      onClick={newConversation}
+                      disabled={sending}
                     >
-                      <button
-                        type="button"
-                        title={conversation.title}
-                        onClick={() => void openConversation(conversation.id)}
-                        disabled={sending}
-                      >
-                        {conversation.title}
-                        {conversation.resumable === false &&
-                          ` (${t.sessionExpired})`}
-                      </button>
-                      <span className="session-meta">
-                        <span>{shortTime(conversation.updated_at)}</span>
-                        <span>
-                          {conversation.turn_count} {t.turnCount}
-                        </span>
-                      </span>
-                    </div>
-                  );
-                })
-              )}
-            </div>
-            <div style={{ padding: "0 10px 10px" }}>
-              <Button
-                size="small"
-                type="text"
-                onClick={() => void refreshConversations()}
-                disabled={sending || loadingConversation}
-              >
-                {t.refresh}
-              </Button>
-            </div>
-          </aside>
+                      {t.newConversation}
+                    </Button>
+                  )}
+                </div>
+                <div className="session-list">
+                  {conversations.length === 0 ? (
+                    <div className="session-empty">{t.noConversations}</div>
+                  ) : (
+                    conversations.map((conversation) => {
+                      const active = conversation.id === currentConversationId;
+                      return (
+                        <div
+                          className={`session-item${active ? " active" : ""}`}
+                          key={conversation.id}
+                        >
+                          <button
+                            type="button"
+                            title={conversation.title}
+                            onClick={() => {
+                              onNavigateChat?.();
+                              void openConversation(conversation.id);
+                            }}
+                            disabled={sending}
+                          >
+                            {conversation.title}
+                            {conversation.resumable === false &&
+                              ` (${t.sessionExpired})`}
+                          </button>
+                          <span className="session-meta">
+                            <span>{shortTime(conversation.updated_at)}</span>
+                            <span>
+                              {conversation.turn_count} {t.turnCount}
+                            </span>
+                          </span>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+                <div style={{ padding: "0 10px 10px" }}>
+                  <Button
+                    size="small"
+                    type="text"
+                    onClick={() => void refreshConversations()}
+                    disabled={sending || loadingConversation}
+                  >
+                    {t.refresh}
+                  </Button>
+                </div>
+              </aside>
+            );
+            return sessionTarget
+              ? createPortal(sessions, sessionTarget)
+              : sessions;
+          })()}
           <div className="chat-conversation">
             <header className="chat-header">
               <div className="chat-header-title">

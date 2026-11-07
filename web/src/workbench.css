@@ -2137,3 +2137,26 @@ legend {
 code {
   font-family: var(--mono);
 }
+
+/* Shared conversation navigation */
+.chat-page-host { flex: 1 1 auto; min-height: 0; }
+.chat-page-host[hidden] { display: none; }
+.sidebar-sessions { flex: 1 1 auto; min-height: 0; display: flex; }
+.sidebar-sessions .chat-sessions { flex: 1; min-width: 0; background: transparent; border: 0; }
+.sidebar-sessions .session-head { padding: 12px 12px 4px; border: 0; color: var(--ink-2); }
+.sidebar-sessions .session-item.active { background: var(--nav-3); border-color: transparent; }
+.sidebar-sessions .session-item.active button { color: var(--ink); }
+.sidebar-sessions .session-item.active .session-meta { color: var(--ink-2); }
+.sidebar-sessions .session-item:hover { background: var(--nav-2); }
+.side-nav:not(.expanded) .sidebar-sessions { visibility: hidden; }
+.side-nav.expanded { width: 240px; }
+.side-nav .new-conversation { width: 100%; }
+.side-nav .personal-menu { flex: none; min-height: 0; }
+.management-links { overflow-y: auto; max-height: 35vh; }
+.management-links .nav-item { min-height: 32px; }
+.chat-page-host .chat-layout { grid-template-columns: minmax(0, 1fr) minmax(340px, 410px); }
+.chat-page-host .chat-layout.context-collapsed { grid-template-columns: minmax(0, 1fr) 52px; }
+@media (max-width: 1000px) {
+  .side-nav.expanded { width: 200px; }
+  .chat-page-host .chat-layout { grid-template-columns: minmax(0, 1fr) minmax(250px, 32%); }
+}

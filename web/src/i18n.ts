@@ -39,6 +39,9 @@ const messages = {
     correctionReplacement: "替换后的说明",
     correctionReason: "纠错理由",
     correctionSubmitted: "纠错提案已提交",
+    sidebarSearch: "搜索",
+    sidebarKnowledge: "知识库",
+    management: "管理",
     exampleQuestions: "试着问",
     examples: [
       "有哪些订单相关的表？",
@@ -406,6 +409,9 @@ const messages = {
     correctionReplacement: "Replacement description",
     correctionReason: "Reason for correction",
     correctionSubmitted: "Correction submitted",
+    sidebarSearch: "Search",
+    sidebarKnowledge: "Knowledge base",
+    management: "Manage",
     exampleQuestions: "Try asking",
     examples: [
       "Which tables describe orders?",
