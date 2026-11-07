@@ -452,3 +452,156 @@ def test_search_embeds_the_query_at_the_configured_dimension(
     assert knowledge.search("query", "tables", 5) == []
     assert len(vectors.queries) == 1
     assert len(vectors.queries[0]) == dimension
+
+
+def test_add_vectors_embeds_each_distinct_text_once(monkeypatch):
+    from semantica_dataagent import knowledge
+    from semantica_dataagent.stage_contract import StorageHandles
+
+    calls = []
+
+    def fake_embed(values, texts, stats=None):
+        calls.append(list(texts))
+        return [
+            [float(len(text)), float(sum(ord(char) for char in text) % 97)]
+            for text in texts
+        ]
+
+    class Vectors:
+        def __init__(self):
+            self.rows = []
+
+        def add_vectors(self, vectors, ids, metadata):
+            self.rows.append((vectors, ids, metadata))
+
+    monkeypatch.setattr(knowledge, "embed", fake_embed)
+    vectors = Vectors()
+    handles = StorageHandles("generation", object(), vectors, {})
+    ids = [f"table:{index}" for index in range(40)]
+    texts = [f"text-{index}" for index in range(40)]
+    texts[10] = "shared"
+    texts[11] = "shared"
+    texts[32] = texts[0]
+    texts[34] = "shared"
+    metadata = [{"scope": "tables", "position": index} for index in range(40)]
+
+    handles.add_vectors(ids, texts, metadata)
+
+    embedded = [text for call in calls for text in call]
+    assert all(len(call) <= 32 for call in calls)
+    assert len(embedded) == len(set(texts))
+    assert sorted(embedded) == sorted(set(texts))
+
+    written_ids = [item for _, row_ids, _ in vectors.rows for item in row_ids]
+    assert written_ids == ids
+    expected = {
+        identifier: [
+            float(len(text)),
+            float(sum(ord(char) for char in text) % 97),
+        ]
+        for identifier, text in zip(ids, texts, strict=True)
+    }
+    position = 0
+    for row_vectors, row_ids, row_metadata in vectors.rows:
+        for vector, identifier, item in zip(
+            row_vectors, row_ids, row_metadata, strict=True
+        ):
+            assert vector == expected[identifier]
+            assert item == {
+                "scope": "tables",
+                "position": position,
+                "generation": "generation",
+            }
+            position += 1
+    assert handles.embedding_counts() == {
+        "embedding_inputs": 40,
+        "embedding_unique": len(set(texts)),
+    }
+
+
+def test_build_counts_and_stage_log_record_embedding_dedupe(
+    tmp_path, monkeypatch, server
+):
+    from contextlib import contextmanager
+
+    from cryptography.fernet import Fernet
+
+    from semantica_dataagent import knowledge, relationships, stages
+    from semantica_dataagent.cli import initialize
+    from semantica_dataagent.db import Build, sessions
+    from semantica_dataagent.stage_contract import StageResult, StorageHandles
+
+    monkeypatch.setenv("DATAAGENT_DB_PATH", str(tmp_path / "app.db"))
+    monkeypatch.setenv("DATAAGENT_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    initialize()
+    monkeypatch.setattr(knowledge, "configured", list)
+    monkeypatch.setattr(
+        knowledge,
+        "settings",
+        lambda: values(
+            server.url,
+            embedding_retries=0,
+            embedding_backoff_seconds=0,
+            knowledge_generation="generated",
+            source_directory=str(tmp_path),
+            neo4j_uri="bolt://localhost",
+            neo4j_user="neo4j",
+            milvus_uri="http://localhost",
+        ),
+    )
+
+    class Vectors:
+        def __init__(self):
+            self.rows = []
+
+        def add_vectors(self, vectors, ids, metadata):
+            self.rows.append((vectors, ids, metadata))
+
+    vectors = Vectors()
+
+    @contextmanager
+    def storage(vals, stats=None):
+        yield StorageHandles(
+            "generated", object(), vectors, vals, _embedding_stats=stats
+        )
+
+    monkeypatch.setattr(knowledge, "build_storage", storage)
+    monkeypatch.setattr(relationships, "reconcile", lambda *args: None)
+    monkeypatch.setattr(knowledge, "read_graph", lambda vals: None)
+    monkeypatch.setattr(knowledge, "read_vectors", lambda vals: None)
+
+    def stage(records, generation, handles):
+        identifiers = [f"table:{index}" for index in range(40)]
+        texts = ["repeated" if index < 30 else "other" for index in range(40)]
+        handles.add_vectors(
+            identifiers,
+            texts,
+            [{"scope": "tables"} for _ in identifiers],
+        )
+        return StageResult(counts={"table": len(identifiers)})
+
+    monkeypatch.setattr(stages, "STAGES", [stage])
+    with sessions().begin() as db:
+        row = Build(status="running", started_at="now", counts="{}")
+        db.add(row)
+        db.flush()
+        build_id = row.id
+    knowledge.run_build(build_id)
+    with sessions()() as db:
+        row = db.get(Build, build_id)
+        counts = json.loads(row.counts)
+        logs = json.loads(row.logs)
+        assert row.status == "succeeded", row.error
+        assert counts["embedding_inputs"] == 40
+        assert counts["embedding_unique"] == 2
+        assert counts["embedding_requests"] == 1
+    completed = [
+        log["message"]
+        for log in logs
+        if log["level"] == "info" and log["message"].startswith("Completed")
+    ]
+    assert any(
+        "embedding_inputs=40" in message and "embedding_unique=2" in message
+        for message in completed
+    ), completed
+    assert len(vectors.rows) == 2
