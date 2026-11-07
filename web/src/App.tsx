@@ -534,30 +534,30 @@ export function App() {
                     content
                   ))}
               </div>
-              <footer className="status-bar">
-                {Object.entries(health || {}).map(([name, value]) => (
-                  <span className="status-item" key={name}>
+              {role === "admin" && (
+                <footer className="status-bar">
+                  {Object.entries(health || {}).map(([name, value]) => (
+                    <span className="status-item" key={name}>
+                      <span
+                        className={`status-dot ${value.status === "up" ? "" : "down"}`}
+                      />
+                      <span>
+                        {name}: {t[value.status]} · {value.elapsed_ms} ms
+                      </span>
+                    </span>
+                  ))}
+                  <span
+                    className="status-item"
+                    title={generationName || undefined}
+                  >
                     <span
-                      className={`status-dot ${value.status === "up" ? "" : "down"}`}
+                      className={`status-dot ${generationName ? "" : "unknown"}`}
                     />
                     <span>
-                      {name}: {t[value.status]} · {value.elapsed_ms} ms
+                      {t.generationCurrent}:{" "}
+                      <span className="mono">{generationLabel}</span>
                     </span>
                   </span>
-                ))}
-                <span
-                  className="status-item"
-                  title={generationName || undefined}
-                >
-                  <span
-                    className={`status-dot ${generationName ? "" : "unknown"}`}
-                  />
-                  <span>
-                    {t.generationCurrent}:{" "}
-                    <span className="mono">{generationLabel}</span>
-                  </span>
-                </span>
-                {role === "admin" && (
                   <span className="status-item is-muted">
                     <span
                       className={`status-dot ${
@@ -577,8 +577,8 @@ export function App() {
                           : t.providerNotConfigured}
                     </span>
                   </span>
-                )}
-              </footer>
+                </footer>
+              )}
             </div>
           </div>
         )}
