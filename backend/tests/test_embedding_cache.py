@@ -3,6 +3,7 @@
 import json
 import logging
 import os
+import sqlite3
 import stat
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -179,6 +180,47 @@ def test_read_only_cache_directory_degrades_and_logs(tmp_path, monkeypatch, capl
 
     assert recorder.calls == [["alpha"]]
     assert not cache_path.exists()
+    assert any(
+        "embedding cache" in record.message.lower()
+        for record in caplog.records
+        if record.levelno >= logging.WARNING
+    )
+
+
+def test_write_failure_degrades_and_logs(tmp_path, monkeypatch, caplog):
+    use_cache(tmp_path, monkeypatch)
+    recorder = Recorder()
+    monkeypatch.setattr(knowledge, "embed", recorder)
+    handles = StorageHandles("generation", object(), Vectors(), settings(tmp_path))
+    add(handles, ["alpha"])
+    assert recorder.calls == [["alpha"]]
+
+    cache = getattr(handles, "_embedding_cache", None)
+    if cache is not None:
+        original = cache._connect
+
+        def denying_connect():
+            connection = original()
+
+            def authorizer(action, *args):
+                if action in (
+                    sqlite3.SQLITE_INSERT,
+                    sqlite3.SQLITE_UPDATE,
+                    sqlite3.SQLITE_DELETE,
+                ):
+                    return sqlite3.SQLITE_DENY
+                return sqlite3.SQLITE_OK
+
+            connection.set_authorizer(authorizer)
+            return connection
+
+        cache._connect = denying_connect
+
+    with caplog.at_level(logging.WARNING):
+        handles.add_vectors(["table:beta"], ["beta"], [{"scope": "tables"}])
+
+    assert recorder.calls == [["alpha"], ["beta"]]
+    assert handles._vectors.vectors["table:beta"]
     assert any(
         "embedding cache" in record.message.lower()
         for record in caplog.records
