@@ -42,6 +42,8 @@ export function App() {
   const [token, setToken] = useState(() => localStorage.getItem("token") || "");
   const [loggedIn, setLoggedIn] = useState(false);
   const [role, setRole] = useState("");
+  const [userName, setUserName] = useState("");
+  const [refreshKey, setRefreshKey] = useState(0);
   const [expanded, setExpanded] = useState(() => {
     try {
       return localStorage.getItem("navigationExpanded") !== "false";
@@ -89,7 +91,12 @@ export function App() {
         return;
       }
       localStorage.setItem("token", value);
-      const user = (await response.json()) as { role: string };
+      const user = (await response.json()) as {
+        role: string;
+        username?: string;
+        name?: string;
+      };
+      setUserName(user.username || user.name || user.role);
       setRole(user.role);
       setToken(value);
       setLoggedIn(true);
@@ -341,28 +348,20 @@ export function App() {
               className={`side-nav ${expanded ? "expanded" : ""}`}
               aria-label={t.navigation}
             >
-              <div className="side-brand" aria-hidden="true">
-                {expanded ? (
-                  <>
-                    semantica<span className="brand-slash">/</span>workbench
-                  </>
-                ) : (
-                  <>
-                    S<span className="brand-slash">/</span>W
-                  </>
-                )}
+              <div className="side-heading">
+                {expanded && <div className="side-brand">Semantica</div>}
+                <Button
+                  type="text"
+                  className="nav-toggle"
+                  aria-label={
+                    expanded ? t.collapseNavigation : t.expandNavigation
+                  }
+                  title={expanded ? t.collapseNavigation : t.expandNavigation}
+                  onClick={toggleNavigation}
+                >
+                  {expanded ? <MenuFoldOutlined /> : <MenuUnfoldOutlined />}
+                </Button>
               </div>
-              <Button
-                type="text"
-                className="nav-toggle"
-                aria-label={
-                  expanded ? t.collapseNavigation : t.expandNavigation
-                }
-                title={expanded ? t.collapseNavigation : t.expandNavigation}
-                onClick={toggleNavigation}
-              >
-                {expanded ? <MenuFoldOutlined /> : <MenuUnfoldOutlined />}
-              </Button>
               <div ref={setNewTarget} />
               {navigation.map((item) => (
                 <a
@@ -388,7 +387,7 @@ export function App() {
               <div ref={setSessionTarget} className="sidebar-sessions" />
               <div className="personal-menu">
                 {personalOpen && (
-                  <>
+                  <div className="account-popover">
                     <a
                       className="nav-item"
                       href="/personal-settings"
@@ -411,10 +410,11 @@ export function App() {
                         <Button
                           type="text"
                           className="nav-item"
+                          aria-label={t.management}
                           aria-expanded={managementOpen}
                           onClick={() => setManagementOpen(!managementOpen)}
                         >
-                          {t.management}
+                          {t.management} ▸
                         </Button>
                         {managementOpen && (
                           <div className="management-links">
@@ -423,10 +423,14 @@ export function App() {
                                 key={item.path}
                                 href={item.path}
                                 className="nav-item"
+                                aria-current={
+                                  path === item.path ? "page" : undefined
+                                }
                                 onClick={(event) => {
                                   event.preventDefault();
                                   navigate(item.path);
                                   setManagementOpen(false);
+                                  setPersonalOpen(false);
                                 }}
                               >
                                 {item.label}
@@ -439,6 +443,23 @@ export function App() {
                     <Button
                       type="text"
                       className="nav-item"
+                      onClick={changeLanguage}
+                    >
+                      {lang === "zh" ? "English" : "中文"}
+                    </Button>
+                    <Button
+                      type="text"
+                      className="nav-item"
+                      onClick={() => {
+                        void refresh();
+                        setRefreshKey((value) => value + 1);
+                      }}
+                    >
+                      {t.refresh}
+                    </Button>
+                    <Button
+                      type="text"
+                      className="nav-item"
                       aria-label={t.logout}
                       title={t.logout}
                       icon={<LogoutOutlined />}
@@ -446,7 +467,7 @@ export function App() {
                     >
                       {expanded && t.logout}
                     </Button>
-                  </>
+                  </div>
                 )}
                 <Button
                   type="text"
@@ -456,7 +477,12 @@ export function App() {
                   aria-expanded={personalOpen}
                   onClick={() => setPersonalOpen(!personalOpen)}
                 >
-                  {expanded && t.accountMenu}
+                  {expanded && (
+                    <span className="account-name">
+                      {userName}
+                      <small>{role}</small>
+                    </span>
+                  )}
                 </Button>
               </div>
             </nav>
@@ -491,6 +517,7 @@ export function App() {
                     initialContextOpen={false}
                     language={lang}
                     onChangeLanguage={changeLanguage}
+                    refreshKey={refreshKey}
                     sessionTarget={sessionTarget}
                     newTarget={newTarget}
                     onNavigateChat={() => navigate("/chat")}
@@ -526,27 +553,27 @@ export function App() {
                     <span className="mono">{generationLabel}</span>
                   </span>
                 </span>
-                <span className="status-item is-muted">
-                  <span
-                    className={`status-dot ${
-                      dtbConfigured === null
-                        ? "unknown"
+                {role === "admin" && (
+                  <span className="status-item is-muted">
+                    <span
+                      className={`status-dot ${
+                        dtbConfigured === null
+                          ? "unknown"
+                          : dtbConfigured
+                            ? ""
+                            : "down"
+                      }`}
+                    />
+                    <span>
+                      DTB token:{" "}
+                      {dtbConfigured === null
+                        ? "—"
                         : dtbConfigured
-                          ? ""
-                          : "down"
-                    }`}
-                  />
-                  <span>
-                    DTB token:{" "}
-                    {dtbConfigured === null
-                      ? "—"
-                      : dtbConfigured
-                        ? t.providerConfigured
-                        : t.providerNotConfigured}
+                          ? t.providerConfigured
+                          : t.providerNotConfigured}
+                    </span>
                   </span>
-                </span>
-                <span className="status-spacer" />
-                <button onClick={() => void refresh()}>{t.refresh}</button>
+                )}
               </footer>
             </div>
           </div>

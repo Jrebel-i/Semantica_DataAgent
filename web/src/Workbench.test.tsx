@@ -119,3 +119,35 @@ test("侧栏会话可从搜索页切换且只加载一次列表", async () => {
     fetcher.mock.calls.filter(([url]) => url === "/api/v1/conversations"),
   ).toHaveLength(1);
 });
+
+test("用户菜单可切换语言和刷新会话", async () => {
+  localStorage.setItem("token", "user");
+  const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url === "/api/v1/me") return Response.json({ role: "user" });
+    if (
+      ["/api/v1/agents", "/api/v1/providers", "/api/v1/conversations"].includes(
+        url,
+      )
+    )
+      return Response.json([]);
+    return Response.json({});
+  });
+  vi.stubGlobal("fetch", fetcher);
+  render(<App />);
+  await screen.findByRole("button", { name: "新对话" });
+  expect(screen.queryByRole("link", { name: "个人设置" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "用户菜单" }));
+  expect(screen.getByRole("link", { name: "个人设置" })).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "刷新" }));
+  await vi.waitFor(() =>
+    expect(
+      fetcher.mock.calls.filter(([url]) => url === "/api/v1/conversations")
+        .length,
+    ).toBeGreaterThan(1),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "English" }));
+  expect(
+    await screen.findByRole("link", { name: "Personal settings" }),
+  ).toBeTruthy();
+});

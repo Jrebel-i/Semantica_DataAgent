@@ -5,9 +5,9 @@ import type { FormEvent } from "react";
 import { Alert, Button, Input, Space, Tag, Tabs } from "antd";
 import type { components, paths } from "./api";
 import type { Language, Messages } from "./i18n";
-import { LanguageSwitcher } from "./LanguageSwitcher";
 import { TaskLineage } from "./TaskLineage";
 import {
+  ArrowUpOutlined,
   CloseOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
@@ -630,8 +630,7 @@ export function ChatPage({
   newTarget,
   onNavigateChat,
   initialContextOpen = true,
-  language,
-  onChangeLanguage,
+  refreshKey = 0,
 }: {
   token: string;
   role: string;
@@ -643,6 +642,7 @@ export function ChatPage({
   initialContextOpen?: boolean;
   language?: Language;
   onChangeLanguage?: () => void;
+  refreshKey?: number;
 }) {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [profiles, setProfiles] = useState<AgentProfiles>({});
@@ -868,7 +868,7 @@ export function ChatPage({
 
   useEffect(() => {
     if (!settingsOnly) void refreshConversations();
-  }, [refreshConversations, settingsOnly]);
+  }, [refreshConversations, settingsOnly, refreshKey]);
 
   useEffect(() => {
     void fetch("/api/v1/assistant-defaults", {
@@ -1480,6 +1480,9 @@ export function ChatPage({
       ),
     },
   ];
+  const hasContext = Boolean(
+    latestPlan || latestResult || citationRef || citationDetail,
+  );
   const emptyConversation = !loadingConversation && turns.length === 0 && !live;
   const contextTabs = contextItems.map(({ key, label }) => ({ key, label }));
   const contextContent = contextItems.find(
@@ -1490,7 +1493,7 @@ export function ChatPage({
     <section style={{ height: "100%", minHeight: 0 }}>
       {!settingsOnly && (
         <div
-          className={`chat-layout${contextOpen ? "" : " context-collapsed"}${emptyConversation ? " chat-layout--empty" : ""}`}
+          className={`chat-layout${!hasContext ? " context-hidden" : contextOpen ? "" : " context-collapsed"}${emptyConversation ? " chat-layout--empty" : ""}`}
         >
           {newTarget &&
             createPortal(
@@ -1554,24 +1557,11 @@ export function ChatPage({
                           </button>
                           <span className="session-meta">
                             <span>{shortTime(conversation.updated_at)}</span>
-                            <span>
-                              {conversation.turn_count} {t.turnCount}
-                            </span>
                           </span>
                         </div>
                       );
                     })
                   )}
-                </div>
-                <div style={{ padding: "0 10px 10px" }}>
-                  <Button
-                    size="small"
-                    type="text"
-                    onClick={() => void refreshConversations()}
-                    disabled={sending || loadingConversation}
-                  >
-                    {t.refresh}
-                  </Button>
                 </div>
               </aside>
             );
@@ -1684,7 +1674,7 @@ export function ChatPage({
                 <Input.TextArea
                   aria-label={t.askQuestion}
                   value={question}
-                  placeholder={t.askQuestion}
+                  placeholder={t.askPlaceholder}
                   autoSize={{ minRows: 1, maxRows: 5 }}
                   onChange={(event) => setQuestion(event.target.value)}
                   disabled={!resumable}
@@ -1692,9 +1682,9 @@ export function ChatPage({
                 <div className="composer-controls">
                   <div className="chat-selectors">
                     <label>
-                      {t.askAgent}
                       <select
                         aria-label={t.askAgent}
+                        title={t.askAgent}
                         value={agentId}
                         disabled={Boolean(currentConversationId)}
                         onChange={(event) => selectAgent(event.target.value)}
@@ -1712,9 +1702,9 @@ export function ChatPage({
                       </select>
                     </label>
                     <label>
-                      {t.askProvider}
                       <select
                         aria-label={t.askProvider}
+                        title={t.askProvider}
                         value={providerId}
                         disabled={Boolean(currentConversationId)}
                         onChange={(event) => selectProvider(event.target.value)}
@@ -1736,9 +1726,9 @@ export function ChatPage({
                       </select>
                     </label>
                     <label>
-                      {t.askModel}
                       <select
                         aria-label={t.askModel}
+                        title={t.askModel}
                         value={model}
                         onChange={(event) => {
                           selectionTouched.current = true;
@@ -1756,14 +1746,15 @@ export function ChatPage({
                       </select>
                     </label>
                   </div>
-                  {language && onChangeLanguage && (
-                    <LanguageSwitcher
-                      language={language}
-                      onChange={onChangeLanguage}
-                    />
-                  )}
-                  <Button htmlType="submit" type="primary" disabled={!canAsk}>
-                    {sending ? t.asking : t.askSubmit}
+                  <Button
+                    htmlType="submit"
+                    type="primary"
+                    className="send-button"
+                    aria-label={t.askSubmit}
+                    title={t.askSubmit}
+                    disabled={!canAsk}
+                  >
+                    <ArrowUpOutlined />
                   </Button>
                 </div>
               </form>
@@ -1784,73 +1775,75 @@ export function ChatPage({
               )}
             </div>
           </div>
-          <aside className="chat-context">
-            {contextOpen ? (
-              <>
-                <div className="context-tabs">
-                  <Tabs
-                    activeKey={contextTab}
-                    onChange={(tab) => {
-                      contextTouched.current = true;
-                      setContextTab(tab);
-                    }}
-                    items={contextTabs}
-                    tabBarExtraContent={
-                      <Button
-                        type="text"
-                        aria-label={t.collapseContext}
-                        title={t.collapseContext}
-                        onClick={() => setContextOpen(false)}
-                      >
-                        <MenuFoldOutlined />
-                      </Button>
-                    }
-                  />
-                </div>
-                <div
-                  className={`context-body${
-                    contextTab === "schema" && selectedTable
-                      ? " context-body--schema"
-                      : ""
-                  }`}
-                >
-                  {contextContent}
-                  {citationRef && !selectedTable && (
-                    <section className="context-section">
-                      <div className="context-ref">
-                        <code>{citationRef}</code>
+          {hasContext && (
+            <aside className="chat-context">
+              {contextOpen ? (
+                <>
+                  <div className="context-tabs">
+                    <Tabs
+                      activeKey={contextTab}
+                      onChange={(tab) => {
+                        contextTouched.current = true;
+                        setContextTab(tab);
+                      }}
+                      items={contextTabs}
+                      tabBarExtraContent={
                         <Button
-                          size="small"
                           type="text"
-                          onClick={closeCitation}
+                          aria-label={t.collapseContext}
+                          title={t.collapseContext}
+                          onClick={() => setContextOpen(false)}
                         >
-                          {t.close}
+                          <MenuFoldOutlined />
                         </Button>
-                      </div>
-                      {citationLoading && (
-                        <p className="muted">{t.loadingCitation}</p>
-                      )}
-                      {citationError && (
-                        <Alert type="error" title={citationError} />
-                      )}
-                    </section>
-                  )}
-                  {citationDetail?.kind === "message" && (
-                    <Alert type="info" title={citationDetail.message} />
-                  )}
-                </div>
-              </>
-            ) : (
-              <Button
-                type="text"
-                aria-label={t.expandContext}
-                title={t.expandContext}
-                onClick={() => setContextOpen(true)}
-              >
-                <MenuUnfoldOutlined />
-              </Button>
-            )}
-          </aside>
+                      }
+                    />
+                  </div>
+                  <div
+                    className={`context-body${
+                      contextTab === "schema" && selectedTable
+                        ? " context-body--schema"
+                        : ""
+                    }`}
+                  >
+                    {contextContent}
+                    {citationRef && !selectedTable && (
+                      <section className="context-section">
+                        <div className="context-ref">
+                          <code>{citationRef}</code>
+                          <Button
+                            size="small"
+                            type="text"
+                            onClick={closeCitation}
+                          >
+                            {t.close}
+                          </Button>
+                        </div>
+                        {citationLoading && (
+                          <p className="muted">{t.loadingCitation}</p>
+                        )}
+                        {citationError && (
+                          <Alert type="error" title={citationError} />
+                        )}
+                      </section>
+                    )}
+                    {citationDetail?.kind === "message" && (
+                      <Alert type="info" title={citationDetail.message} />
+                    )}
+                  </div>
+                </>
+              ) : (
+                <Button
+                  type="text"
+                  aria-label={t.expandContext}
+                  title={t.expandContext}
+                  onClick={() => setContextOpen(true)}
+                >
+                  <MenuUnfoldOutlined />
+                </Button>
+              )}
+            </aside>
+          )}
         </div>
       )}
       {settingsOnly && (

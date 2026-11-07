@@ -572,7 +572,6 @@ test("restores conversation history and renders its SQL and citations", async ()
   ).toBeTruthy();
   expect(screen.getByText("mcp__dataagent__search_knowledge")).toBeTruthy();
   expect(screen.getByText("按支付日还是下单日？")).toBeTruthy();
-  expect(screen.getByText("1 turns")).toBeTruthy();
 });
 
 test("admins configure providers without sending a blank API key", async () => {
@@ -869,7 +868,7 @@ test("新会话切换 agent 时使用该 agent 的 provider 和默认模型", as
   expect(screen.queryByRole("option", { name: "Local gateway" })).toBeNull();
 });
 
-test("上下文面板收起后释放空间并可重新展开", async () => {
+test("没有上下文时隐藏面板和开关", async () => {
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: RequestInfo | URL) => {
@@ -888,13 +887,9 @@ test("上下文面板收起后释放空间并可重新展开", async () => {
   const { container } = render(
     <ChatPage token="token" role="user" messages={getMessages("zh")} />,
   );
-  fireEvent.click(screen.getByRole("button", { name: "收起面板" }));
-  expect(
-    container.querySelector(".chat-layout.context-collapsed"),
-  ).toBeTruthy();
-  expect(screen.queryByRole("tab", { name: "血缘" })).toBeNull();
-  fireEvent.click(screen.getByRole("button", { name: "展开面板" }));
-  expect(screen.getByRole("tab", { name: "血缘" })).toBeTruthy();
+  expect(container.querySelector(".chat-layout.context-hidden")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "收起面板" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "展开面板" })).toBeNull();
 });
 
 test("新建会话不会恢复不允许使用的默认 provider", async () => {
