@@ -307,7 +307,8 @@ def test_fake_agent_direct_clarification_and_query_plan(monkeypatch, tmp_path):
         assert "请按以下口径回答并给出 SQL" in follow_up["question"]
         assert "按业务审定口径" in follow_up["question"]
         assert not any(
-            path.startswith("/api/v1/conversations/") and path != "/api/v1/conversations/ask"
+            path.startswith("/api/v1/conversations/")
+            and path != "/api/v1/conversations/ask"
             for path, _ in requests
         ), "evaluator called the conversation confirmation endpoint"
         assert entries[3]["agent"]["reason"] == "校验被拒"
