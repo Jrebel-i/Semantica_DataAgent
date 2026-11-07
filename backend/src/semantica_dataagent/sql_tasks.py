@@ -70,6 +70,9 @@ class SQLTaskParser:
                 column_status, column_reason = "success", None
             except (sqlglot.errors.SqlglotError, ValueError) as exc:
                 column_edges, column_status, column_reason = [], "failed", str(exc)
+            except Exception as exc:  # noqa: BLE001 - field lineage must not abort the build
+                column_edges, column_status = [], "failed"
+                column_reason = f"column_lineage_internal_error: {type(exc).__name__}"
             return ParseResult(
                 sorted(reads),
                 sorted(writes),

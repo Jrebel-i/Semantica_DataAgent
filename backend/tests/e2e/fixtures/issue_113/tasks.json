@@ -1,0 +1,17 @@
+[
+  {
+    "name": "good_orders",
+    "type": "spark",
+    "sql": "INSERT INTO dst.orders SELECT id AS order_id, amount AS total FROM src.orders"
+  },
+  {
+    "name": "good_summary",
+    "type": "spark",
+    "sql": "INSERT INTO dst.summary SELECT id AS order_id, amount AS total FROM src.orders"
+  },
+  {
+    "name": "bad_union",
+    "type": "spark",
+    "sql": "INSERT INTO dst.merged SELECT * FROM src.orders UNION ALL SELECT * FROM src.extra"
+  }
+]
