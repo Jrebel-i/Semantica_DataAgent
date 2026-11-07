@@ -117,6 +117,8 @@ test("admin issues and revokes a token", async () => {
   );
   localStorage.setItem("token", "admin");
   render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: "用户菜单" }));
+  fireEvent.click(await screen.findByRole("button", { name: "管理" }));
   fireEvent.click(await screen.findByRole("link", { name: "配置" }));
   fireEvent.click(await screen.findByRole("link", { name: "令牌管理" }));
   fireEvent.click(await screen.findByRole("button", { name: "发放令牌" }));
@@ -205,7 +207,7 @@ test("browse tables and view field details", async () => {
     }),
   );
   render(<App />);
-  fireEvent.click(await screen.findByRole("link", { name: "知识" }));
+  fireEvent.click(await screen.findByRole("link", { name: "知识库" }));
   fireEvent.click(await screen.findByText("orders"));
   expect(await screen.findByText("日期分区")).toBeTruthy();
   expect(screen.getByText("string")).toBeTruthy();
@@ -230,7 +232,7 @@ test("search debug is accessible from navigation", async () => {
     }),
   );
   render(<App />);
-  fireEvent.click(await screen.findByRole("link", { name: "知识" }));
+  fireEvent.click(await screen.findByRole("link", { name: "知识库" }));
   fireEvent.click(await screen.findByRole("link", { name: "检索调试" }));
   expect(screen.getByRole("heading", { name: "检索调试" })).toBeTruthy();
   expect(screen.getByLabelText("查询内容")).toBeTruthy();
@@ -248,6 +250,7 @@ test("MCP access page is reachable from navigation", async () => {
     ),
   );
   render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: "用户菜单" }));
   fireEvent.click(await screen.findByRole("link", { name: "个人设置" }));
   fireEvent.click(await screen.findByRole("link", { name: "MCP 接入" }));
   expect(screen.getByRole("heading", { name: "MCP 接入" })).toBeTruthy();

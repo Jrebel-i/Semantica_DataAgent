@@ -17,14 +17,12 @@ import { McpAccessPage } from "./McpAccessPage";
 import { AgentSettings } from "./AgentSettings";
 import { PlatformSettings } from "./PlatformSettings";
 import {
-  MessageOutlined,
   DatabaseOutlined,
-  BuildOutlined,
-  SettingOutlined,
   UserOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
   LogoutOutlined,
+  SearchOutlined,
 } from "@ant-design/icons";
 
 function formatGenerationTime(value: string | null | undefined) {
@@ -44,9 +42,11 @@ export function App() {
   const [token, setToken] = useState(() => localStorage.getItem("token") || "");
   const [loggedIn, setLoggedIn] = useState(false);
   const [role, setRole] = useState("");
+  const [userName, setUserName] = useState("");
+  const [refreshKey, setRefreshKey] = useState(0);
   const [expanded, setExpanded] = useState(() => {
     try {
-      return localStorage.getItem("navigationExpanded") === "true";
+      return localStorage.getItem("navigationExpanded") !== "false";
     } catch {
       return false;
     }
@@ -61,6 +61,12 @@ export function App() {
       return !value;
     });
   };
+  const [sessionTarget, setSessionTarget] = useState<HTMLDivElement | null>(
+    null,
+  );
+  const [newTarget, setNewTarget] = useState<HTMLDivElement | null>(null);
+  const [managementOpen, setManagementOpen] = useState(false);
+  const [personalOpen, setPersonalOpen] = useState(false);
   const [path, setPath] = useState(window.location.pathname);
   const [error, setError] = useState("");
   const [health, setHealth] = useState<Health | null>(null);
@@ -85,7 +91,12 @@ export function App() {
         return;
       }
       localStorage.setItem("token", value);
-      const user = (await response.json()) as { role: string };
+      const user = (await response.json()) as {
+        role: string;
+        username?: string;
+        name?: string;
+      };
+      setUserName(user.username || user.name || user.role);
       setRole(user.role);
       setToken(value);
       setLoggedIn(true);
@@ -159,22 +170,22 @@ export function App() {
     setPath(next);
   };
   const navigation = [
-    { path: "/chat", label: t.workbenchChat, icon: <MessageOutlined /> },
+    { path: "/search", label: t.sidebarSearch, icon: <SearchOutlined /> },
     {
       path: "/knowledge",
-      label: t.workbenchKnowledge,
+      label: t.sidebarKnowledge,
       icon: <DatabaseOutlined />,
     },
-    ...(role === "admin"
-      ? [
-          { path: "/builds", label: t.workbenchBuild, icon: <BuildOutlined /> },
-          {
-            path: "/config",
-            label: t.workbenchConfig,
-            icon: <SettingOutlined />,
-          },
-        ]
-      : []),
+  ];
+  const management = [
+    { path: "/builds", label: t.builds },
+    { path: "/source", label: t.source },
+    { path: "/corrections", label: t.correctionTitle },
+    { path: "/config", label: t.workbenchConfig },
+    { path: "/plugins", label: t.plugins },
+    { path: "/tokens", label: t.tokens },
+    { path: "/mcp-access", label: t.mcpAccess },
+    { path: "/status", label: t.status },
   ];
   const subNavigation = (() => {
     if (path === "/knowledge" || path === "/search")
@@ -195,7 +206,7 @@ export function App() {
           : []),
         { path: "/knowledge-gaps", label: t.gapTitle },
       ];
-    if (["/config", "/plugins", "/tokens"].includes(path))
+    if (["/config", "/plugins", "/tokens"].includes(path) && role === "admin")
       return [
         { path: "/config", label: t.workbenchConfig },
         ...(role === "admin"
@@ -233,9 +244,7 @@ export function App() {
       ) : (
         <Alert title={t.forbidden} type="warning" />
       )
-    ) : path === "/chat" || path === "/" ? (
-      <ChatPage token={token} role={role} messages={t} />
-    ) : path === "/builds" ? (
+    ) : path === "/chat" || path === "/" ? null : path === "/builds" ? (
       role === "admin" ? (
         <BuildPage token={token} messages={t} />
       ) : (
@@ -295,22 +304,22 @@ export function App() {
     <ConfigProvider
       theme={{
         token: {
-          colorPrimary: "#0B6E63",
-          colorInfo: "#0B6E63",
-          colorLink: "#0B6E63",
-          colorText: "#172021",
-          colorTextSecondary: "#5C6B69",
-          colorBorder: "#D6DEDC",
-          colorBgLayout: "#EEF1F0",
-          borderRadius: 6,
-          controlHeight: 36,
-          fontFamily: "IBM Plex Sans, Noto Sans SC, sans-serif",
+          colorPrimary: "#D97757",
+          colorInfo: "#D97757",
+          colorLink: "#D97757",
+          colorText: "#30302E",
+          colorTextSecondary: "#6F6B64",
+          colorBorder: "#DEDBD2",
+          colorBgLayout: "#FAF9F5",
+          borderRadius: 10,
+          controlHeight: 38,
+          fontFamily: "var(--font-sans)",
           fontSize: 14,
         },
         components: {
-          Table: { cellPaddingBlock: 8, headerBg: "#F1F4F3" },
+          Table: { cellPaddingBlock: 8, headerBg: "#F5F3ED" },
           Button: { primaryShadow: "none" },
-          Tabs: { itemSelectedColor: "#0B6E63", inkBarColor: "#0B6E63" },
+          Tabs: { itemSelectedColor: "#D97757", inkBarColor: "#D97757" },
         },
       }}
     >
@@ -338,28 +347,21 @@ export function App() {
               className={`side-nav ${expanded ? "expanded" : ""}`}
               aria-label={t.navigation}
             >
-              <div className="side-brand" aria-hidden="true">
-                {expanded ? (
-                  <>
-                    semantica<span className="brand-slash">/</span>workbench
-                  </>
-                ) : (
-                  <>
-                    S<span className="brand-slash">/</span>W
-                  </>
-                )}
+              <div className="side-heading">
+                {expanded && <div className="side-brand">Semantica</div>}
+                <Button
+                  type="text"
+                  className="nav-toggle"
+                  aria-label={
+                    expanded ? t.collapseNavigation : t.expandNavigation
+                  }
+                  title={expanded ? t.collapseNavigation : t.expandNavigation}
+                  onClick={toggleNavigation}
+                >
+                  {expanded ? <MenuFoldOutlined /> : <MenuUnfoldOutlined />}
+                </Button>
               </div>
-              <Button
-                type="text"
-                className="nav-toggle"
-                aria-label={
-                  expanded ? t.collapseNavigation : t.expandNavigation
-                }
-                title={expanded ? t.collapseNavigation : t.expandNavigation}
-                onClick={toggleNavigation}
-              >
-                {expanded ? <MenuFoldOutlined /> : <MenuUnfoldOutlined />}
-              </Button>
+              <div ref={setNewTarget} />
               {navigation.map((item) => (
                 <a
                   key={item.path}
@@ -381,33 +383,111 @@ export function App() {
                   <span>{item.label}</span>
                 </a>
               ))}
+              <div ref={setSessionTarget} className="sidebar-sessions" />
               <div className="personal-menu">
-                <a
-                  className="nav-item"
-                  href="/personal-settings"
-                  aria-current={
-                    path === "/personal-settings" ? "page" : undefined
-                  }
-                  title={t.personalSettings}
-                  onClick={(event) => {
-                    event.preventDefault();
-                    navigate("/personal-settings");
-                  }}
-                >
-                  <span aria-hidden="true">
-                    <UserOutlined />
-                  </span>
-                  <span>{t.personalSettings}</span>
-                </a>
+                {personalOpen && (
+                  <div className="account-popover">
+                    <a
+                      className="nav-item"
+                      href="/personal-settings"
+                      aria-current={
+                        path === "/personal-settings" ? "page" : undefined
+                      }
+                      title={t.personalSettings}
+                      onClick={(event) => {
+                        event.preventDefault();
+                        navigate("/personal-settings");
+                      }}
+                    >
+                      <span aria-hidden="true">
+                        <UserOutlined />
+                      </span>
+                      <span>{t.personalSettings}</span>
+                    </a>
+                    {role === "admin" && (
+                      <>
+                        <Button
+                          type="text"
+                          className="nav-item management-toggle"
+                          aria-label={t.management}
+                          aria-expanded={managementOpen}
+                          onClick={() => setManagementOpen(!managementOpen)}
+                        >
+                          {t.management}
+                          <span className="management-caret" aria-hidden="true">
+                            ›
+                          </span>
+                        </Button>
+                        {managementOpen && (
+                          <div className="management-links">
+                            {management.map((item) => (
+                              <a
+                                key={item.path}
+                                href={item.path}
+                                className="nav-item"
+                                aria-current={
+                                  path === item.path ? "page" : undefined
+                                }
+                                onClick={(event) => {
+                                  event.preventDefault();
+                                  navigate(item.path);
+                                  setManagementOpen(false);
+                                  setPersonalOpen(false);
+                                }}
+                              >
+                                {item.label}
+                              </a>
+                            ))}
+                          </div>
+                        )}
+                      </>
+                    )}
+                    <Button
+                      type="text"
+                      className="nav-item"
+                      onClick={changeLanguage}
+                    >
+                      {lang === "zh" ? "English" : "中文"}
+                    </Button>
+                    <Button
+                      type="text"
+                      className="nav-item"
+                      onClick={() => {
+                        void refresh();
+                        setRefreshKey((value) => value + 1);
+                      }}
+                    >
+                      {t.refresh}
+                    </Button>
+                    <Button
+                      type="text"
+                      className="nav-item"
+                      aria-label={t.logout}
+                      title={t.logout}
+                      icon={<LogoutOutlined />}
+                      onClick={logout}
+                    >
+                      {expanded && t.logout}
+                    </Button>
+                  </div>
+                )}
                 <Button
                   type="text"
-                  className="nav-item"
-                  aria-label={t.logout}
-                  title={t.logout}
-                  icon={<LogoutOutlined />}
-                  onClick={logout}
+                  className="nav-item account-toggle"
+                  icon={<UserOutlined />}
+                  aria-label={t.accountMenu}
+                  aria-expanded={personalOpen}
+                  onClick={() => {
+                    if (!personalOpen) setManagementOpen(false);
+                    setPersonalOpen(!personalOpen);
+                  }}
                 >
-                  {expanded && t.logout}
+                  {expanded && (
+                    <span className="account-name">
+                      {userName}
+                      <small>{role}</small>
+                    </span>
+                  )}
                 </Button>
               </div>
             </nav>
@@ -434,7 +514,26 @@ export function App() {
                     ))}
                   </nav>
                 )}
-                {isFill ? <div className="page-fill">{content}</div> : content}
+                <div className="chat-page-host" hidden={!isChat}>
+                  <ChatPage
+                    token={token}
+                    role={role}
+                    messages={t}
+                    initialContextOpen={false}
+                    language={lang}
+                    onChangeLanguage={changeLanguage}
+                    refreshKey={refreshKey}
+                    sessionTarget={sessionTarget}
+                    newTarget={newTarget}
+                    onNavigateChat={() => navigate("/chat")}
+                  />
+                </div>
+                {!isChat &&
+                  (isFill ? (
+                    <div className="page-fill">{content}</div>
+                  ) : (
+                    content
+                  ))}
               </div>
               <footer className="status-bar">
                 {Object.entries(health || {}).map(([name, value]) => (
@@ -459,27 +558,27 @@ export function App() {
                     <span className="mono">{generationLabel}</span>
                   </span>
                 </span>
-                <span className="status-item is-muted">
-                  <span
-                    className={`status-dot ${
-                      dtbConfigured === null
-                        ? "unknown"
+                {role === "admin" && (
+                  <span className="status-item is-muted">
+                    <span
+                      className={`status-dot ${
+                        dtbConfigured === null
+                          ? "unknown"
+                          : dtbConfigured
+                            ? ""
+                            : "down"
+                      }`}
+                    />
+                    <span>
+                      DTB token:{" "}
+                      {dtbConfigured === null
+                        ? "—"
                         : dtbConfigured
-                          ? ""
-                          : "down"
-                    }`}
-                  />
-                  <span>
-                    DTB token:{" "}
-                    {dtbConfigured === null
-                      ? "—"
-                      : dtbConfigured
-                        ? t.providerConfigured
-                        : t.providerNotConfigured}
+                          ? t.providerConfigured
+                          : t.providerNotConfigured}
+                    </span>
                   </span>
-                </span>
-                <span className="status-spacer" />
-                <button onClick={() => void refresh()}>{t.refresh}</button>
+                )}
               </footer>
             </div>
           </div>

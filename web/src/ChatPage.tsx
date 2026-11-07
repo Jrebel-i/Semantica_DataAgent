@@ -1,14 +1,17 @@
+import { createPortal } from "react-dom";
 import { ColumnLineage } from "./ColumnLineage";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { Alert, Button, Input, Space, Tag, Tabs } from "antd";
 import type { components, paths } from "./api";
-import type { Messages } from "./i18n";
+import type { Language, Messages } from "./i18n";
 import { TaskLineage } from "./TaskLineage";
 import {
+  ArrowUpOutlined,
   CloseOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
+  PlusOutlined,
 } from "@ant-design/icons";
 import { parseAgentProfiles, type AgentProfiles } from "./agentProfiles";
 import { HighlightedSql, Markdown } from "./Markdown";
@@ -623,11 +626,23 @@ export function ChatPage({
   role,
   messages: t,
   settingsOnly = false,
+  sessionTarget,
+  newTarget,
+  onNavigateChat,
+  initialContextOpen = true,
+  refreshKey = 0,
 }: {
   token: string;
   role: string;
   messages: Messages;
   settingsOnly?: boolean;
+  sessionTarget?: HTMLElement | null;
+  newTarget?: HTMLElement | null;
+  onNavigateChat?: () => void;
+  initialContextOpen?: boolean;
+  language?: Language;
+  onChangeLanguage?: () => void;
+  refreshKey?: number;
 }) {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [profiles, setProfiles] = useState<AgentProfiles>({});
@@ -639,7 +654,7 @@ export function ChatPage({
     provider: "",
     model: "",
   });
-  const [contextOpen, setContextOpen] = useState(true);
+  const [contextOpen, setContextOpen] = useState(initialContextOpen);
   const [contextTab, setContextTab] = useState("plan");
   const contextTouched = useRef(false);
   const [selectedQueryId, setSelectedQueryId] = useState("");
@@ -852,8 +867,8 @@ export function ChatPage({
   }, [token, t.askError]);
 
   useEffect(() => {
-    void refreshConversations();
-  }, [refreshConversations]);
+    if (!settingsOnly) void refreshConversations();
+  }, [refreshConversations, settingsOnly, refreshKey]);
 
   useEffect(() => {
     void fetch("/api/v1/assistant-defaults", {
@@ -1465,6 +1480,10 @@ export function ChatPage({
       ),
     },
   ];
+  const hasContext = Boolean(
+    latestPlan || latestResult || citationRef || citationDetail,
+  );
+  const emptyConversation = !loadingConversation && turns.length === 0 && !live;
   const contextTabs = contextItems.map(({ key, label }) => ({ key, label }));
   const contextContent = contextItems.find(
     (item) => item.key === contextTab,
@@ -1474,63 +1493,82 @@ export function ChatPage({
     <section style={{ height: "100%", minHeight: 0 }}>
       {!settingsOnly && (
         <div
-          className={`chat-layout${contextOpen ? "" : " context-collapsed"}`}
+          className={`chat-layout${!hasContext ? " context-hidden" : contextOpen ? "" : " context-collapsed"}${emptyConversation ? " chat-layout--empty" : ""}`}
         >
-          <aside className="chat-sessions">
-            <div className="session-head">
-              <h1 className="session-title">{t.chat}</h1>
+          {newTarget &&
+            createPortal(
               <Button
-                size="small"
-                type="primary"
-                onClick={newConversation}
+                type="text"
+                className="nav-item new-conversation"
+                icon={<PlusOutlined />}
+                aria-label={t.newConversation}
+                title={t.newConversation}
+                onClick={() => {
+                  newConversation();
+                  onNavigateChat?.();
+                }}
                 disabled={sending}
               >
                 {t.newConversation}
-              </Button>
-            </div>
-            <div className="session-list">
-              {conversations.length === 0 ? (
-                <div className="session-empty">{t.noConversations}</div>
-              ) : (
-                conversations.map((conversation) => {
-                  const active = conversation.id === currentConversationId;
-                  return (
-                    <div
-                      className={`session-item${active ? " active" : ""}`}
-                      key={conversation.id}
+              </Button>,
+              newTarget,
+            )}
+          {(() => {
+            const sessions = (
+              <aside className="chat-sessions">
+                <div className="session-head">
+                  <h1 className="session-title">
+                    {sessionTarget ? t.conversationHistory : t.chat}
+                  </h1>
+                  {!sessionTarget && (
+                    <Button
+                      size="small"
+                      type="primary"
+                      onClick={newConversation}
+                      disabled={sending}
                     >
-                      <button
-                        type="button"
-                        title={conversation.title}
-                        onClick={() => void openConversation(conversation.id)}
-                        disabled={sending}
-                      >
-                        {conversation.title}
-                        {conversation.resumable === false &&
-                          ` (${t.sessionExpired})`}
-                      </button>
-                      <span className="session-meta">
-                        <span>{shortTime(conversation.updated_at)}</span>
-                        <span>
-                          {conversation.turn_count} {t.turnCount}
-                        </span>
-                      </span>
-                    </div>
-                  );
-                })
-              )}
-            </div>
-            <div style={{ padding: "0 10px 10px" }}>
-              <Button
-                size="small"
-                type="text"
-                onClick={() => void refreshConversations()}
-                disabled={sending || loadingConversation}
-              >
-                {t.refresh}
-              </Button>
-            </div>
-          </aside>
+                      {t.newConversation}
+                    </Button>
+                  )}
+                </div>
+                <div className="session-list">
+                  {conversations.length === 0 ? (
+                    <div className="session-empty">{t.noConversations}</div>
+                  ) : (
+                    conversations.map((conversation) => {
+                      const active = conversation.id === currentConversationId;
+                      return (
+                        <div
+                          className={`session-item${active ? " active" : ""}`}
+                          key={conversation.id}
+                        >
+                          <button
+                            type="button"
+                            title={conversation.title}
+                            onClick={() => {
+                              onNavigateChat?.();
+                              void openConversation(conversation.id);
+                            }}
+                            disabled={sending}
+                          >
+                            {conversation.title}
+                            {conversation.resumable === false &&
+                              ` (${t.sessionExpired})`}
+                          </button>
+                          <span className="session-meta">
+                            <span>{shortTime(conversation.updated_at)}</span>
+                          </span>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              </aside>
+            );
+            return sessionTarget
+              ? createPortal(sessions, sessionTarget)
+              : sessions;
+          })()}
           <div className="chat-conversation">
             <header className="chat-header">
               <div className="chat-header-title">
@@ -1542,70 +1580,6 @@ export function ChatPage({
                   {model || "—"}
                 </span>
               </div>
-              <div className="chat-selectors">
-                <label>
-                  {t.askAgent}
-                  <select
-                    aria-label={t.askAgent}
-                    value={agentId}
-                    disabled={Boolean(currentConversationId)}
-                    onChange={(event) => selectAgent(event.target.value)}
-                  >
-                    {agents.map((agent) => (
-                      <option
-                        key={agent.id}
-                        value={agent.id}
-                        disabled={!agent.available}
-                      >
-                        {agent.name}
-                        {agent.available ? "" : ` (${t.unavailable})`}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  {t.askProvider}
-                  <select
-                    aria-label={t.askProvider}
-                    value={providerId}
-                    disabled={Boolean(currentConversationId)}
-                    onChange={(event) => selectProvider(event.target.value)}
-                  >
-                    {providers.length === 0 && (
-                      <option value="">{t.noProviders}</option>
-                    )}
-                    {providers
-                      .filter(
-                        (provider) =>
-                          !profiles[agentId]?.providers.length ||
-                          profiles[agentId].providers.includes(provider.id),
-                      )
-                      .map((provider) => (
-                        <option key={provider.id} value={provider.id}>
-                          {provider.name}
-                        </option>
-                      ))}
-                  </select>
-                </label>
-                <label>
-                  {t.askModel}
-                  <select
-                    aria-label={t.askModel}
-                    value={model}
-                    onChange={(event) => {
-                      selectionTouched.current = true;
-                      setModel(event.target.value);
-                    }}
-                    disabled={!activeProvider || Boolean(currentConversationId)}
-                  >
-                    {(activeProvider?.models ?? []).map((item) => (
-                      <option key={item} value={item}>
-                        {item}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              </div>
             </header>
             <div className="chat-scroll">
               {error && <Alert type="error" title={error} />}
@@ -1613,21 +1587,7 @@ export function ChatPage({
               {loadingConversation && (
                 <p className="muted">{t.loadingConversation}</p>
               )}
-              {!loadingConversation && turns.length === 0 && !live && (
-                <div className="chat-examples">
-                  <span className="example-title">{t.exampleQuestions}</span>
-                  <div className="example-chips">
-                    {t.examples.map((example) => (
-                      <Button
-                        key={example}
-                        onClick={() => setQuestion(example)}
-                      >
-                        {example}
-                      </Button>
-                    ))}
-                  </div>
-                </div>
-              )}
+
               {turns.map((turn) => (
                 <TurnBlock
                   key={turn.id}
@@ -1704,6 +1664,9 @@ export function ChatPage({
               )}
             </div>
             <div className="chat-composer">
+              {emptyConversation && (
+                <h1 className="chat-greeting">{t.chatGreeting}</h1>
+              )}
               <form
                 className="composer-box"
                 onSubmit={(event) => void ask(event)}
@@ -1711,84 +1674,176 @@ export function ChatPage({
                 <Input.TextArea
                   aria-label={t.askQuestion}
                   value={question}
-                  placeholder={t.askQuestion}
+                  placeholder={t.askPlaceholder}
                   autoSize={{ minRows: 1, maxRows: 5 }}
                   onChange={(event) => setQuestion(event.target.value)}
                   disabled={!resumable}
                 />
-                <Button htmlType="submit" type="primary" disabled={!canAsk}>
-                  {sending ? t.asking : t.askSubmit}
-                </Button>
+                <div className="composer-controls">
+                  <div className="chat-selectors">
+                    <label>
+                      <select
+                        aria-label={t.askAgent}
+                        title={t.askAgent}
+                        value={agentId}
+                        disabled={Boolean(currentConversationId)}
+                        onChange={(event) => selectAgent(event.target.value)}
+                      >
+                        {agents.map((agent) => (
+                          <option
+                            key={agent.id}
+                            value={agent.id}
+                            disabled={!agent.available}
+                          >
+                            {agent.name}
+                            {agent.available ? "" : ` (${t.unavailable})`}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label>
+                      <select
+                        aria-label={t.askProvider}
+                        title={t.askProvider}
+                        value={providerId}
+                        disabled={Boolean(currentConversationId)}
+                        onChange={(event) => selectProvider(event.target.value)}
+                      >
+                        {providers.length === 0 && (
+                          <option value="">{t.noProviders}</option>
+                        )}
+                        {providers
+                          .filter(
+                            (provider) =>
+                              !profiles[agentId]?.providers.length ||
+                              profiles[agentId].providers.includes(provider.id),
+                          )
+                          .map((provider) => (
+                            <option key={provider.id} value={provider.id}>
+                              {provider.name}
+                            </option>
+                          ))}
+                      </select>
+                    </label>
+                    <label>
+                      <select
+                        aria-label={t.askModel}
+                        title={t.askModel}
+                        value={model}
+                        onChange={(event) => {
+                          selectionTouched.current = true;
+                          setModel(event.target.value);
+                        }}
+                        disabled={
+                          !activeProvider || Boolean(currentConversationId)
+                        }
+                      >
+                        {(activeProvider?.models ?? []).map((item) => (
+                          <option key={item} value={item}>
+                            {item}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+                  <Button
+                    htmlType="submit"
+                    type="primary"
+                    className="send-button"
+                    aria-label={t.askSubmit}
+                    title={t.askSubmit}
+                    disabled={!canAsk}
+                  >
+                    <ArrowUpOutlined />
+                  </Button>
+                </div>
               </form>
+              {emptyConversation && (
+                <div className="chat-examples">
+                  <span className="example-title">{t.exampleQuestions}</span>
+                  <div className="example-chips">
+                    {t.examples.slice(0, 3).map((example) => (
+                      <Button
+                        key={example}
+                        onClick={() => setQuestion(example)}
+                      >
+                        {example}
+                      </Button>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
-          <aside className="chat-context">
-            {contextOpen ? (
-              <>
-                <div className="context-tabs">
-                  <Tabs
-                    activeKey={contextTab}
-                    onChange={(tab) => {
-                      contextTouched.current = true;
-                      setContextTab(tab);
-                    }}
-                    items={contextTabs}
-                    tabBarExtraContent={
-                      <Button
-                        type="text"
-                        aria-label={t.collapseContext}
-                        title={t.collapseContext}
-                        onClick={() => setContextOpen(false)}
-                      >
-                        <MenuFoldOutlined />
-                      </Button>
-                    }
-                  />
-                </div>
-                <div
-                  className={`context-body${
-                    contextTab === "schema" && selectedTable
-                      ? " context-body--schema"
-                      : ""
-                  }`}
-                >
-                  {contextContent}
-                  {citationRef && !selectedTable && (
-                    <section className="context-section">
-                      <div className="context-ref">
-                        <code>{citationRef}</code>
+          {hasContext && (
+            <aside className="chat-context">
+              {contextOpen ? (
+                <>
+                  <div className="context-tabs">
+                    <Tabs
+                      activeKey={contextTab}
+                      onChange={(tab) => {
+                        contextTouched.current = true;
+                        setContextTab(tab);
+                      }}
+                      items={contextTabs}
+                      tabBarExtraContent={
                         <Button
-                          size="small"
                           type="text"
-                          onClick={closeCitation}
+                          aria-label={t.collapseContext}
+                          title={t.collapseContext}
+                          onClick={() => setContextOpen(false)}
                         >
-                          {t.close}
+                          <MenuFoldOutlined />
                         </Button>
-                      </div>
-                      {citationLoading && (
-                        <p className="muted">{t.loadingCitation}</p>
-                      )}
-                      {citationError && (
-                        <Alert type="error" title={citationError} />
-                      )}
-                    </section>
-                  )}
-                  {citationDetail?.kind === "message" && (
-                    <Alert type="info" title={citationDetail.message} />
-                  )}
-                </div>
-              </>
-            ) : (
-              <Button
-                type="text"
-                aria-label={t.expandContext}
-                title={t.expandContext}
-                onClick={() => setContextOpen(true)}
-              >
-                <MenuUnfoldOutlined />
-              </Button>
-            )}
-          </aside>
+                      }
+                    />
+                  </div>
+                  <div
+                    className={`context-body${
+                      contextTab === "schema" && selectedTable
+                        ? " context-body--schema"
+                        : ""
+                    }`}
+                  >
+                    {contextContent}
+                    {citationRef && !selectedTable && (
+                      <section className="context-section">
+                        <div className="context-ref">
+                          <code>{citationRef}</code>
+                          <Button
+                            size="small"
+                            type="text"
+                            onClick={closeCitation}
+                          >
+                            {t.close}
+                          </Button>
+                        </div>
+                        {citationLoading && (
+                          <p className="muted">{t.loadingCitation}</p>
+                        )}
+                        {citationError && (
+                          <Alert type="error" title={citationError} />
+                        )}
+                      </section>
+                    )}
+                    {citationDetail?.kind === "message" && (
+                      <Alert type="info" title={citationDetail.message} />
+                    )}
+                  </div>
+                </>
+              ) : (
+                <Button
+                  type="text"
+                  aria-label={t.expandContext}
+                  title={t.expandContext}
+                  onClick={() => setContextOpen(true)}
+                >
+                  <MenuUnfoldOutlined />
+                </Button>
+              )}
+            </aside>
+          )}
         </div>
       )}
       {settingsOnly && (
