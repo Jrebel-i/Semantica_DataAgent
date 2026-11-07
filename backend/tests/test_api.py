@@ -1135,3 +1135,148 @@ def test_column_lineage_rejects_invalid_depth(client):
         headers={"Authorization": f"Bearer {token}"},
     )
     assert response.status_code == 422
+
+
+def test_table_list_view_summary_and_full(client, monkeypatch):
+    from semantica_dataagent import knowledge
+
+    c, token = client
+    headers = {"Authorization": f"Bearer {token}"}
+    summary = {
+        "database": "shop",
+        "name": "orders",
+        "comment": "交易订单",
+        "ref": "table:shop.orders",
+        "field_count": 12,
+        "document_count": 2,
+        "has_partition": True,
+    }
+    full = {
+        **summary,
+        "fields": [
+            {
+                "name": "dt",
+                "type": "string",
+                "comment": "日期分区",
+                "partition": True,
+            }
+        ],
+        "documents": [
+            {"ref": "document:metrics/sales.md", "path": "sales.md", "category": "metrics"}
+        ],
+    }
+    calls = []
+
+    def describe(**kwargs):
+        calls.append(kwargs)
+        if kwargs.get("summary"):
+            return [summary]
+        return [full]
+
+    monkeypatch.setattr(knowledge, "describe", describe)
+    assert c.get("/api/v1/tables", params={"view": "summary"}).status_code == 401
+    assert c.get("/api/v1/tables/shop/orders").status_code == 401
+
+    response = c.get(
+        "/api/v1/tables", params={"view": "summary"}, headers=headers
+    )
+    assert response.status_code == 200
+    assert response.json() == [summary]
+    assert calls[-1] == {
+        "database": None,
+        "search": None,
+        "summary": True,
+    }
+
+    response = c.get(
+        "/api/v1/tables",
+        params={"database": "shop", "search": "ord", "view": "full"},
+        headers=headers,
+    )
+    assert response.status_code == 200
+    assert response.json() == [full]
+    assert calls[-1] == {
+        "database": "shop",
+        "search": "ord",
+        "summary": False,
+    }
+
+    response = c.get("/api/v1/tables", headers=headers)
+    assert response.status_code == 200
+    assert response.json() == [full]
+    assert calls[-1] == {"database": None, "search": None, "summary": False}
+
+    assert (
+        c.get(
+            "/api/v1/tables",
+            params={"view": "partial"},
+            headers=headers,
+        ).status_code
+        == 422
+    )
+
+
+def test_table_detail_route_looks_up_dotted_names_and_returns_404(client, monkeypatch):
+    from semantica_dataagent import knowledge
+
+    c, token = client
+    headers = {"Authorization": f"Bearer {token}"}
+    row = {
+        "database": "db.with.dot",
+        "name": "orders.v2",
+        "comment": "含点表名",
+        "ref": "table:db%2Ewith%2Edot.orders%2Ev2",
+        "fields": [
+            {
+                "name": "dt",
+                "type": "string",
+                "comment": "日期分区",
+                "partition": True,
+            }
+        ],
+        "documents": [],
+    }
+    calls = []
+
+    def describe(**kwargs):
+        calls.append(kwargs)
+        database = kwargs.get("database")
+        names = kwargs.get("names") or []
+        return [row] if database == row["database"] and names == ["db.with.dot.orders.v2"] else []
+
+    monkeypatch.setattr(knowledge, "describe", describe)
+    response = c.get("/api/v1/tables/db.with.dot/orders.v2", headers=headers)
+    assert response.status_code == 200
+    assert response.json() == row
+    assert calls[-1] == {
+        "database": "db.with.dot",
+        "names": ["db.with.dot.orders.v2"],
+        "summary": False,
+    }
+
+    assert c.get("/api/v1/tables/shop/missing", headers=headers).status_code == 404
+
+
+def test_describe_summary_counts_without_materializing_fields(monkeypatch):
+    from semantica_dataagent import knowledge
+
+    queries = []
+
+    def execute(store, query, parameters):
+        queries.append(query)
+        return []
+
+    monkeypatch.setattr(knowledge, "settings", lambda: {"knowledge_generation": "g"})
+    monkeypatch.setattr(knowledge, "read_graph", lambda values: object())
+    monkeypatch.setattr(knowledge, "execute", execute)
+
+    assert knowledge.describe(summary=True) == []
+    assert len(queries) == 1
+    query = queries[0]
+    assert "collect(properties(f))" not in query
+    assert "count(f)" in query
+    assert "document_count" in query
+    assert "has_partition" in query
+
+    assert knowledge.describe() == []
+    assert "collect(properties(f))" in queries[-1]
