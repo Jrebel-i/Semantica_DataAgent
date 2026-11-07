@@ -141,3 +141,64 @@ def check_table_lineage_uses_location_indexes(ctx):
         return {"table_index_seeks": plans}
     finally:
         driver.close()
+
+
+def check_qualified_names_with_dots(ctx):
+    from semantica_dataagent.canonical import Record
+
+    generation = ctx.generation + "_dots"
+    driver = GraphDatabase.driver(
+        ctx.config.neo4j_uri, auth=(ctx.config.neo4j_user, ctx.runtime.password)
+    )
+    try:
+        with driver.session() as session:
+
+            class Storage:
+                build_id = 1
+
+                def execute(self, query, parameters):
+                    return [dict(row) for row in session.run(query, parameters)]
+
+            try:
+                session.run(
+                    """UNWIND $rows AS row CREATE (f:SDAEntity:SDAField)
+                    SET f = row, f.generation = $generation""",
+                    generation=generation,
+                    rows=[
+                        {"database": db, "table": table, "name": name}
+                        for db, table in [("a", "b.c"), ("a.b", "c")]
+                        for name in ("x", "y")
+                    ],
+                ).consume()
+                record = Record(
+                    "column_lineage",
+                    {
+                        "upstream_table": "a.b.c",
+                        "upstream_field": "x",
+                        "downstream_table": "a.b.c",
+                        "downstream_field": "y",
+                        "task_id": "dot",
+                        "evidence": "declared",
+                        "parse_status": "success",
+                    },
+                    "synthetic",
+                )
+                write_column_lineage(
+                    [record], [], {}, {"a.b.c": ["x", "y"]}, generation, Storage()
+                )
+                rows = session.run(
+                    """MATCH (a:SDAField {generation:$g})-[:FIELD_DEPENDS_ON]->(b:SDAField {generation:$g})
+                    RETURN a.database AS ad, a.table AS at, b.database AS bd, b.table AS bt""",
+                    g=generation,
+                )
+                actual = {(r["ad"], r["at"], r["bd"], r["bt"]) for r in rows}
+                locations = [("a", "b.c"), ("a.b", "c")]
+                expected = {(a, b, c, d) for a, b in locations for c, d in locations}
+                ctx.require(actual == expected, f"带点的限定名关系不完整：{actual}")
+                return {"relationships": len(actual)}
+            finally:
+                session.run(
+                    "MATCH (n:SDAEntity {generation:$g}) DETACH DELETE n", g=generation
+                ).consume()
+    finally:
+        driver.close()
