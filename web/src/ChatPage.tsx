@@ -719,7 +719,7 @@ function ClarificationList({
 }) {
   if (groups.length === 0) return null;
   return (
-    <section aria-label={messages.clarification}>
+    <section className="clarification-card" aria-label={messages.clarification}>
       <h4 className="context-section-title">{messages.clarification}</h4>
       <p className="muted">{messages.clarificationHint}</p>
       {groups.map((questions, index) => (

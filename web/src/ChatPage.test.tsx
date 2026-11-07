@@ -563,7 +563,7 @@ test("restores conversation history and renders its SQL and citations", async ()
       return new Response("", { status: 404 });
     }),
   );
-  render(
+  const { container } = render(
     <ChatPage
       token="personal-token"
       role="user"
@@ -586,6 +586,16 @@ test("restores conversation history and renders its SQL and citations", async ()
   fireEvent.click(screen.getByRole("button", { name: /已使用 1 个工具/ }));
   expect(screen.getByText("mcp__dataagent__search_knowledge")).toBeTruthy();
   expect(screen.getByText("按支付日还是下单日？")).toBeTruthy();
+  const citationList = container.querySelector(".citation-list");
+  const clarificationCard = container.querySelector(".clarification-card");
+  expect(clarificationCard).toBeTruthy();
+  expect(citationList).toBeTruthy();
+  expect(citationList!.compareDocumentPosition(clarificationCard!)).toBe(
+    Node.DOCUMENT_POSITION_FOLLOWING,
+  );
+  expect(
+    clarificationCard!.querySelector(".context-section-title")?.textContent,
+  ).toBe("Clarification needed");
 });
 
 test("admins configure providers without sending a blank API key", async () => {

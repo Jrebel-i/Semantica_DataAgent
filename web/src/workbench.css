@@ -1654,6 +1654,9 @@ legend {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.clarification-card {
+  margin-top: 14px;
+}
 .schema-table,
 .data-table {
   width: 100%;
