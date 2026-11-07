@@ -88,6 +88,7 @@ def test_fake_agent_direct_clarification_and_query_plan(monkeypatch, tmp_path):
 
     requests = []
     plans = {}
+    executed_sqls = []
     detail = "缺少分区条件：" + "x" * 300
     base = "SELECT id FROM shop.orders WHERE dt = '2025-01-01'"
 
@@ -214,6 +215,7 @@ def test_fake_agent_direct_clarification_and_query_plan(monkeypatch, tmp_path):
             ):
                 query_id = self.path.split("/")[4]
                 assert query_id in plans
+                executed_sqls.append(plans[query_id])
                 self._json(
                     200,
                     {
@@ -260,7 +262,8 @@ def test_fake_agent_direct_clarification_and_query_plan(monkeypatch, tmp_path):
                 "expected_tables": ["shop.orders"],
                 "expected_fields": ["id"],
                 "caliber": "失败口径",
-                "reference_sql": base,
+                "reference_sql": "SELECT bad_reference FROM shop.orders "
+                "WHERE dt = '2025-01-01'",
             },
         ]
         path = tmp_path / "questions.yaml"
@@ -314,6 +317,10 @@ def test_fake_agent_direct_clarification_and_query_plan(monkeypatch, tmp_path):
         assert entries[3]["agent"]["reason"] == "校验被拒"
         assert entries[3]["agent"]["detail"] == detail[:200]
         assert entries[3]["detail"] == detail[:200]
+        assert entries[3]["reference"]["reason"] == "校验被拒"
+        assert entries[3]["reference_detail"] == detail[:200]
+        planned = "SELECT planned FROM shop.orders WHERE dt = '2025-01-01'"
+        assert planned in executed_sqls
         markdown = (tmp_path / "report.md").read_text()
         assert detail[:200] in markdown
         assert "issue-121-secret" not in raw

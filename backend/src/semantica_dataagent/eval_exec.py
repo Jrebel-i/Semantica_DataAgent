@@ -48,6 +48,10 @@ def _sql(value):
     return None
 
 
+def _cell(value):
+    return str(value or "").replace("|", "\\|").replace("\n", " ")
+
+
 def _ask(client, payload):
     result = {
         "sql": None,
@@ -209,6 +213,7 @@ def run_cli(args):
                     "clarified": clarified,
                     "via_plan": via_plan,
                     "detail": agent.get("detail"),
+                    "reference_detail": reference.get("detail"),
                     "agent": agent,
                     "reference": reference,
                     "comparison": comparison,
@@ -254,15 +259,18 @@ def run_cli(args):
         "",
         *[f"- {k}: {v}" for k, v in failures.items()],
         "",
-        "| 题号 | 有 SQL | 澄清 | 查询计划 | agent 执行 | 参考执行 | 一致性 | detail |",
-        "| --- | --- | --- | --- | --- | --- | --- | --- |",
+        (
+            "| 题号 | 有 SQL | 澄清 | 查询计划 | agent 执行 | 参考执行 | 一致性 | "
+            "agent detail | 参考 detail |"
+        ),
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for e in entries:
-        detail = str(e["detail"] or "").replace("|", "\\|").replace("\n", " ")
         lines.append(
             f"| {e['id']} | {e['agent_sql']} | {e['clarified']} | "
             f"{e['via_plan']} | {e['agent']} | {e['reference']} | "
-            f"{e['comparison']} | {detail} |"
+            f"{e['comparison']} | {_cell(e['detail'])} | "
+            f"{_cell(e['reference_detail'])} |"
         )
     args.report.with_suffix(".md").write_text("\n".join(lines) + "\n", encoding="utf-8")
     return 0
