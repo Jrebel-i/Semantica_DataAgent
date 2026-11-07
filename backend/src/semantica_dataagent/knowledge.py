@@ -1014,25 +1014,55 @@ def existing_refs(refs):
     return {row["ref"] for row in rows if row.get("ref")}
 
 
-def describe(names=None, database=None, search=None):
+def describe(names=None, database=None, search=None, summary=False):
     values = settings()
     store = read_graph(values)
-    rows = execute(
-        store,
-        """MATCH (t:SDATable {generation:$generation})
+    filters = """MATCH (t:SDATable {generation:$generation})
             WHERE ($names IS NULL OR t.name IN $names OR t.database + '.' + t.name IN $names)
               AND ($database IS NULL OR t.database = $database)
-              AND ($search IS NULL OR toLower(t.name) CONTAINS toLower($search))
+              AND ($search IS NULL OR toLower(t.name) CONTAINS toLower($search))"""
+    parameters = {
+        "generation": values["knowledge_generation"],
+        "names": names,
+        "database": database,
+        "search": search,
+    }
+    if summary:
+        rows = execute(
+            store,
+            filters
+            + """
+            OPTIONAL MATCH (t)-[:HAS_FIELD]->(f:SDAField {generation:$generation})
+            WITH t, count(f) AS field_count,
+                 sum(CASE WHEN f.partition = true THEN 1 ELSE 0 END) AS partition_count
+            OPTIONAL MATCH (t)-[:HAS_DOCUMENT]->(d:SDADocument {generation:$generation})
+            RETURN properties(t) AS table, field_count,
+                   count(d) AS document_count,
+                   partition_count > 0 AS has_partition
+            ORDER BY table.database,table.name""",
+            parameters,
+        )
+        return [
+            {
+                "name": row["table"]["name"],
+                "database": row["table"]["database"],
+                "comment": row["table"].get("comment", ""),
+                "ref": row["table"]["ref"],
+                "field_count": row["field_count"],
+                "document_count": row["document_count"],
+                "has_partition": bool(row["has_partition"]),
+            }
+            for row in rows
+        ]
+    rows = execute(
+        store,
+        filters
+        + """
             OPTIONAL MATCH (t)-[:HAS_FIELD]->(f:SDAField {generation:$generation})
             WITH t, collect(properties(f)) AS fields
             OPTIONAL MATCH (t)-[:HAS_DOCUMENT]->(d:SDADocument {generation:$generation})
             RETURN properties(t) AS table, fields, collect({ref:d.ref, path:d.path, category:d.category}) AS documents ORDER BY table.database,table.name""",
-        {
-            "generation": values["knowledge_generation"],
-            "names": names,
-            "database": database,
-            "search": search,
-        },
+        parameters,
     )
     return [
         {

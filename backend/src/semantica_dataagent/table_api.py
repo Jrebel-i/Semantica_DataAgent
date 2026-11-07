@@ -27,6 +27,16 @@ class DocumentLink(BaseModel):
     category: str
 
 
+class TableSummary(BaseModel):
+    name: str
+    database: str
+    comment: str
+    ref: str
+    field_count: int
+    document_count: int
+    has_partition: bool
+
+
 class TableView(BaseModel):
     name: str
     database: str
@@ -36,13 +46,36 @@ class TableView(BaseModel):
     documents: list[DocumentLink]
 
 
-@router.get("/api/v1/tables", response_model=list[TableView])
+@router.get("/api/v1/tables", response_model=list[TableView | TableSummary])
 def tables(
     _: Annotated[str, Depends(current_user)],
     database: str | None = None,
     search: str | None = None,
+    view: Literal["summary", "full"] = "full",
 ):
-    return knowledge.describe(database=database, search=search)
+    return knowledge.describe(
+        database=database, search=search, summary=view == "summary"
+    )
+
+
+@router.get("/api/v1/tables/{database}/{table}", response_model=TableView)
+def table_detail(
+    _: Annotated[str, Depends(current_user)],
+    database: str,
+    table: str,
+):
+    rows = knowledge.describe(database=database, names=[f"{database}.{table}"])
+    match = next(
+        (
+            row
+            for row in rows
+            if row.get("database") == database and row.get("name") == table
+        ),
+        None,
+    )
+    if match is None:
+        raise HTTPException(status_code=404, detail="Table not found")
+    return match
 
 
 def describe_tables(names: list[str]) -> list[dict]:

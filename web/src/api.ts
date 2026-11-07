@@ -760,6 +760,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/tables/{database}/{table}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Table Detail */
+        get: operations["table_detail_api_v1_tables__database___table__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/tokens": {
         parameters: {
             query?: never;
@@ -1406,6 +1423,23 @@ export interface components {
             tasks: components["schemas"]["TaskView"][];
             /** Upstream */
             upstream: components["schemas"]["EdgeView"][];
+        };
+        /** TableSummary */
+        TableSummary: {
+            /** Comment */
+            comment: string;
+            /** Database */
+            database: string;
+            /** Document Count */
+            document_count: number;
+            /** Field Count */
+            field_count: number;
+            /** Has Partition */
+            has_partition: boolean;
+            /** Name */
+            name: string;
+            /** Ref */
+            ref: string;
         };
         /** TableView */
         TableView: {
@@ -2966,6 +3000,7 @@ export interface operations {
             query?: {
                 database?: string | null;
                 search?: string | null;
+                view?: "summary" | "full";
             };
             header?: never;
             path?: never;
@@ -2979,7 +3014,39 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["TableView"][];
+                    "application/json": (components["schemas"]["TableView"] | components["schemas"]["TableSummary"])[];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    table_detail_api_v1_tables__database___table__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                database: string;
+                table: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TableView"];
                 };
             };
             /** @description Validation Error */
