@@ -1184,3 +1184,21 @@ test("字段引用的血缘标签显示字段血缘", async () => {
     ),
   ).toBe(true);
 });
+
+test("示例问题只填入输入框而不发送请求", async () => {
+  const fetcher = vi.fn(async (_url: RequestInfo | URL) => json([]));
+  vi.stubGlobal("fetch", fetcher);
+  const messages = getMessages("zh");
+  render(<ChatPage token="token" role="user" messages={messages} />);
+  fireEvent.click(
+    await screen.findByRole("button", { name: messages.examples[0] }),
+  );
+  expect(
+    (screen.getByLabelText(messages.askQuestion) as HTMLTextAreaElement).value,
+  ).toBe(messages.examples[0]);
+  expect(
+    fetcher.mock.calls.some(
+      ([url]) => String(url) === "/api/v1/conversations/ask",
+    ),
+  ).toBe(false);
+});

@@ -10,6 +10,7 @@ import {
   CloseOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
+  PlusOutlined,
 } from "@ant-design/icons";
 import { parseAgentProfiles, type AgentProfiles } from "./agentProfiles";
 import { HighlightedSql, Markdown } from "./Markdown";
@@ -627,6 +628,7 @@ export function ChatPage({
   sessionTarget,
   newTarget,
   onNavigateChat,
+  initialContextOpen = true,
 }: {
   token: string;
   role: string;
@@ -635,6 +637,7 @@ export function ChatPage({
   sessionTarget?: HTMLElement | null;
   newTarget?: HTMLElement | null;
   onNavigateChat?: () => void;
+  initialContextOpen?: boolean;
 }) {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [profiles, setProfiles] = useState<AgentProfiles>({});
@@ -646,7 +649,7 @@ export function ChatPage({
     provider: "",
     model: "",
   });
-  const [contextOpen, setContextOpen] = useState(true);
+  const [contextOpen, setContextOpen] = useState(initialContextOpen);
   const [contextTab, setContextTab] = useState("plan");
   const contextTouched = useRef(false);
   const [selectedQueryId, setSelectedQueryId] = useState("");
@@ -1472,6 +1475,7 @@ export function ChatPage({
       ),
     },
   ];
+  const emptyConversation = !loadingConversation && turns.length === 0 && !live;
   const contextTabs = contextItems.map(({ key, label }) => ({ key, label }));
   const contextContent = contextItems.find(
     (item) => item.key === contextTab,
@@ -1481,13 +1485,16 @@ export function ChatPage({
     <section style={{ height: "100%", minHeight: 0 }}>
       {!settingsOnly && (
         <div
-          className={`chat-layout${contextOpen ? "" : " context-collapsed"}`}
+          className={`chat-layout${contextOpen ? "" : " context-collapsed"}${emptyConversation ? " chat-layout--empty" : ""}`}
         >
           {newTarget &&
             createPortal(
               <Button
                 type="text"
                 className="nav-item new-conversation"
+                icon={<PlusOutlined />}
+                aria-label={t.newConversation}
+                title={t.newConversation}
                 onClick={() => {
                   newConversation();
                   onNavigateChat?.();
@@ -1502,7 +1509,9 @@ export function ChatPage({
             const sessions = (
               <aside className="chat-sessions">
                 <div className="session-head">
-                  <h1 className="session-title">{t.chat}</h1>
+                  <h1 className="session-title">
+                    {sessionTarget ? t.conversationHistory : t.chat}
+                  </h1>
                   {!sessionTarget && (
                     <Button
                       size="small"
@@ -1576,70 +1585,6 @@ export function ChatPage({
                   {model || "—"}
                 </span>
               </div>
-              <div className="chat-selectors">
-                <label>
-                  {t.askAgent}
-                  <select
-                    aria-label={t.askAgent}
-                    value={agentId}
-                    disabled={Boolean(currentConversationId)}
-                    onChange={(event) => selectAgent(event.target.value)}
-                  >
-                    {agents.map((agent) => (
-                      <option
-                        key={agent.id}
-                        value={agent.id}
-                        disabled={!agent.available}
-                      >
-                        {agent.name}
-                        {agent.available ? "" : ` (${t.unavailable})`}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  {t.askProvider}
-                  <select
-                    aria-label={t.askProvider}
-                    value={providerId}
-                    disabled={Boolean(currentConversationId)}
-                    onChange={(event) => selectProvider(event.target.value)}
-                  >
-                    {providers.length === 0 && (
-                      <option value="">{t.noProviders}</option>
-                    )}
-                    {providers
-                      .filter(
-                        (provider) =>
-                          !profiles[agentId]?.providers.length ||
-                          profiles[agentId].providers.includes(provider.id),
-                      )
-                      .map((provider) => (
-                        <option key={provider.id} value={provider.id}>
-                          {provider.name}
-                        </option>
-                      ))}
-                  </select>
-                </label>
-                <label>
-                  {t.askModel}
-                  <select
-                    aria-label={t.askModel}
-                    value={model}
-                    onChange={(event) => {
-                      selectionTouched.current = true;
-                      setModel(event.target.value);
-                    }}
-                    disabled={!activeProvider || Boolean(currentConversationId)}
-                  >
-                    {(activeProvider?.models ?? []).map((item) => (
-                      <option key={item} value={item}>
-                        {item}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              </div>
             </header>
             <div className="chat-scroll">
               {error && <Alert type="error" title={error} />}
@@ -1647,21 +1592,7 @@ export function ChatPage({
               {loadingConversation && (
                 <p className="muted">{t.loadingConversation}</p>
               )}
-              {!loadingConversation && turns.length === 0 && !live && (
-                <div className="chat-examples">
-                  <span className="example-title">{t.exampleQuestions}</span>
-                  <div className="example-chips">
-                    {t.examples.map((example) => (
-                      <Button
-                        key={example}
-                        onClick={() => setQuestion(example)}
-                      >
-                        {example}
-                      </Button>
-                    ))}
-                  </div>
-                </div>
-              )}
+
               {turns.map((turn) => (
                 <TurnBlock
                   key={turn.id}
@@ -1738,6 +1669,9 @@ export function ChatPage({
               )}
             </div>
             <div className="chat-composer">
+              {emptyConversation && (
+                <h1 className="chat-greeting">{t.chatGreeting}</h1>
+              )}
               <form
                 className="composer-box"
                 onSubmit={(event) => void ask(event)}
@@ -1750,10 +1684,93 @@ export function ChatPage({
                   onChange={(event) => setQuestion(event.target.value)}
                   disabled={!resumable}
                 />
-                <Button htmlType="submit" type="primary" disabled={!canAsk}>
-                  {sending ? t.asking : t.askSubmit}
-                </Button>
+                <div className="composer-controls">
+                  <div className="chat-selectors">
+                    <label>
+                      {t.askAgent}
+                      <select
+                        aria-label={t.askAgent}
+                        value={agentId}
+                        disabled={Boolean(currentConversationId)}
+                        onChange={(event) => selectAgent(event.target.value)}
+                      >
+                        {agents.map((agent) => (
+                          <option
+                            key={agent.id}
+                            value={agent.id}
+                            disabled={!agent.available}
+                          >
+                            {agent.name}
+                            {agent.available ? "" : ` (${t.unavailable})`}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label>
+                      {t.askProvider}
+                      <select
+                        aria-label={t.askProvider}
+                        value={providerId}
+                        disabled={Boolean(currentConversationId)}
+                        onChange={(event) => selectProvider(event.target.value)}
+                      >
+                        {providers.length === 0 && (
+                          <option value="">{t.noProviders}</option>
+                        )}
+                        {providers
+                          .filter(
+                            (provider) =>
+                              !profiles[agentId]?.providers.length ||
+                              profiles[agentId].providers.includes(provider.id),
+                          )
+                          .map((provider) => (
+                            <option key={provider.id} value={provider.id}>
+                              {provider.name}
+                            </option>
+                          ))}
+                      </select>
+                    </label>
+                    <label>
+                      {t.askModel}
+                      <select
+                        aria-label={t.askModel}
+                        value={model}
+                        onChange={(event) => {
+                          selectionTouched.current = true;
+                          setModel(event.target.value);
+                        }}
+                        disabled={
+                          !activeProvider || Boolean(currentConversationId)
+                        }
+                      >
+                        {(activeProvider?.models ?? []).map((item) => (
+                          <option key={item} value={item}>
+                            {item}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+                  <Button htmlType="submit" type="primary" disabled={!canAsk}>
+                    {sending ? t.asking : t.askSubmit}
+                  </Button>
+                </div>
               </form>
+              {emptyConversation && (
+                <div className="chat-examples">
+                  <span className="example-title">{t.exampleQuestions}</span>
+                  <div className="example-chips">
+                    {t.examples.slice(0, 3).map((example) => (
+                      <Button
+                        key={example}
+                        onClick={() => setQuestion(example)}
+                      >
+                        {example}
+                      </Button>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
           <aside className="chat-context">

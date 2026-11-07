@@ -17,10 +17,7 @@ import { McpAccessPage } from "./McpAccessPage";
 import { AgentSettings } from "./AgentSettings";
 import { PlatformSettings } from "./PlatformSettings";
 import {
-  MessageOutlined,
   DatabaseOutlined,
-  BuildOutlined,
-  SettingOutlined,
   UserOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
@@ -476,6 +473,7 @@ export function App() {
                     token={token}
                     role={role}
                     messages={t}
+                    initialContextOpen={false}
                     sessionTarget={sessionTarget}
                     newTarget={newTarget}
                     onNavigateChat={() => navigate("/chat")}
