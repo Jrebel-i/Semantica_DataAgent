@@ -75,37 +75,51 @@ class StorageHandles:
         if any(not item.get("scope") for item in metadata):
             raise ValueError("Each vector must have a scope")
         texts = list(texts)
+        if not texts:
+            return
         self._embedding_inputs += len(texts)
-        vectors_by_text = {}
-        for offset in range(0, len(texts), 32):
-            batch = slice(offset, offset + 32)
-            pending = list(
-                dict.fromkeys(
-                    text for text in texts[batch] if text not in vectors_by_text
-                )
-            )
-            if pending:
-                embedded = embed(self._settings, pending, self._embedding_stats)
-                if len(embedded) != len(pending):
-                    raise ValueError("Embedding response has a different length")
-                vectors_by_text.update(zip(pending, embedded, strict=True))
-                self._embedding_unique += len(pending)
+        positions = {}
+        for index, text in enumerate(texts):
+            positions.setdefault(text, []).append(index)
+        unique_texts = list(positions)
+        self._embedding_unique += len(unique_texts)
+        pending_vectors, pending_ids, pending_metadata = [], [], []
+
+        def flush():
+            if not pending_ids:
+                return
             self._vectors.add_vectors(
-                [vectors_by_text[text] for text in texts[batch]],
-                ids=ids[batch],
-                metadata=[
-                    {
-                        **item,
-                        "generation": self.generation,
-                        **(
-                            {"build_id": self.build_id}
-                            if self.build_id is not None
-                            else {}
-                        ),
-                    }
-                    for item in metadata[batch]
-                ],
+                pending_vectors.copy(),
+                ids=pending_ids.copy(),
+                metadata=pending_metadata.copy(),
             )
+            pending_vectors.clear()
+            pending_ids.clear()
+            pending_metadata.clear()
+
+        for offset in range(0, len(unique_texts), 32):
+            batch = unique_texts[offset : offset + 32]
+            embedded = embed(self._settings, batch, self._embedding_stats)
+            if len(embedded) != len(batch):
+                raise ValueError("Embedding response has a different length")
+            for text, vector in zip(batch, embedded, strict=True):
+                for index in positions[text]:
+                    pending_vectors.append(vector)
+                    pending_ids.append(ids[index])
+                    pending_metadata.append(
+                        {
+                            **metadata[index],
+                            "generation": self.generation,
+                            **(
+                                {"build_id": self.build_id}
+                                if self.build_id is not None
+                                else {}
+                            ),
+                        }
+                    )
+                    if len(pending_ids) == 32:
+                        flush()
+        flush()
 
 
 @dataclass(frozen=True)

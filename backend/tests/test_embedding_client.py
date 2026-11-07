@@ -493,7 +493,8 @@ def test_add_vectors_embeds_each_distinct_text_once(monkeypatch):
     assert sorted(embedded) == sorted(set(texts))
 
     written_ids = [item for _, row_ids, _ in vectors.rows for item in row_ids]
-    assert written_ids == ids
+    assert sorted(written_ids) == sorted(ids)
+    assert all(len(row_ids) <= 32 for _, row_ids, _ in vectors.rows)
     expected = {
         identifier: [
             float(len(text)),
@@ -501,18 +502,21 @@ def test_add_vectors_embeds_each_distinct_text_once(monkeypatch):
         ]
         for identifier, text in zip(ids, texts, strict=True)
     }
-    position = 0
+    written = {}
     for row_vectors, row_ids, row_metadata in vectors.rows:
         for vector, identifier, item in zip(
             row_vectors, row_ids, row_metadata, strict=True
         ):
-            assert vector == expected[identifier]
-            assert item == {
+            written[identifier] = (vector, item)
+    for position, identifier in enumerate(ids):
+        assert written[identifier] == (
+            expected[identifier],
+            {
                 "scope": "tables",
                 "position": position,
                 "generation": "generation",
-            }
-            position += 1
+            },
+        )
     assert handles.embedding_counts() == {
         "embedding_inputs": 40,
         "embedding_unique": len(set(texts)),
