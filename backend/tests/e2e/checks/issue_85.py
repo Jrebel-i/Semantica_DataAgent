@@ -71,16 +71,17 @@ def check_execution_evaluation(ctx):
         )
         base = "SELECT id FROM shop.orders WHERE dt = '2025-01-01'"
         amount = "SELECT amount FROM shop.orders WHERE dt = '2025-01-01'"
+        calibers = ["test"] * 5 + ["业务审定口径A", "计划口径B"]
         questions = [
             {
                 "id": f"r{i}",
                 "question": f"question {i}",
                 "expected_tables": ["shop.orders"],
                 "expected_fields": ["id"],
-                "caliber": "test",
+                "caliber": calibers[i],
                 "reference_sql": base,
             }
-            for i in range(5)
+            for i in range(7)
         ]
         answers = {
             "r0": base,
@@ -88,7 +89,11 @@ def check_execution_evaluation(ctx):
             "r2": amount,
             "r3": "DELETE FROM shop.orders",
             "r4": None,
+            "r5": base,
+            "r6": base,
         }
+        asks = []
+        proxy_requests = []
 
         class AgentProxy(BaseHTTPRequestHandler):
             def log_message(self, *args):
@@ -96,14 +101,56 @@ def check_execution_evaluation(ctx):
 
             def do_POST(self):
                 body = self.rfile.read(int(self.headers["Content-Length"]))
+                proxy_requests.append((self.path, body))
                 if self.path == "/api/v1/conversations/ask":
-                    question = json.loads(body)["question"]
-                    answer = answers["r" + question.split()[-1]]
-                    payload = (
-                        "event: done\ndata: "
-                        + json.dumps({"sql": [answer] if answer else []})
-                        + "\n\n"
-                    ).encode()
+                    request = json.loads(body)
+                    asks.append(request)
+                    if request.get("conversation_id"):
+                        answer = base
+                        payload = (
+                            "event: done\ndata: "
+                            + json.dumps({"sql": [answer]})
+                            + "\n\n"
+                        ).encode()
+                    else:
+                        question = request["question"]
+                        answer = answers["r" + question.split()[-1]]
+                        if question.endswith("5"):
+                            payload = (
+                                "event: conversation\ndata: "
+                                + json.dumps({"conversation_id": "conv-r5"})
+                                + "\n\n"
+                                + "event: clarification\ndata: "
+                                + json.dumps(
+                                    {
+                                        "questions": [
+                                            {
+                                                "question": "用哪个口径？",
+                                                "options": [{"label": "口径A"}],
+                                            }
+                                        ]
+                                    }
+                                )
+                                + "\n\n"
+                                + "event: done\ndata: "
+                                + json.dumps({"text": "", "sql": []})
+                                + "\n\n"
+                            ).encode()
+                        elif question.endswith("6"):
+                            payload = (
+                                "event: conversation\ndata: "
+                                + json.dumps({"conversation_id": "conv-r6"})
+                                + "\n\n"
+                                + "event: query_plan\ndata: "
+                                + json.dumps({"id": "agent-plan", "sql": base})
+                                + "\n\n"
+                            ).encode()
+                        else:
+                            payload = (
+                                "event: done\ndata: "
+                                + json.dumps({"sql": [answer] if answer else []})
+                                + "\n\n"
+                            ).encode()
                     self.send_response(200)
                     self.end_headers()
                     self.wfile.write(payload)
@@ -146,15 +193,18 @@ def check_execution_evaluation(ctx):
             report = json.loads(raw)
             metrics = report["metrics"]
             ctx.require(
-                metrics["execution_success"] == 3 and metrics["execution_total"] == 4,
+                metrics["execution_success"] == 5 and metrics["execution_total"] == 6,
                 str(metrics),
             )
             ctx.require(
-                metrics["equal"] == 1 and metrics["comparable"] == 2, str(metrics)
+                metrics["equal"] == 3 and metrics["comparable"] == 4, str(metrics)
             )
             ctx.require(
                 metrics["no_sql"] == 1 and metrics["reference_failures"] == 0,
                 str(metrics),
+            )
+            ctx.require(
+                metrics["clarified"] == 1 and metrics["via_plan"] == 1, str(metrics)
             )
             ctx.require(
                 report["questions"][1]["comparison"] == "different"
@@ -162,16 +212,44 @@ def check_execution_evaluation(ctx):
                 str(report),
             )
             ctx.require(
-                report["questions"][3]["agent"]["reason"] == "校验被拒", str(report)
+                report["questions"][3]["agent"]["reason"] == "校验被拒"
+                and report["questions"][3]["detail"] == "仅允许 SELECT 或 WITH 查询",
+                str(report),
+            )
+            ctx.require(
+                report["questions"][5]["clarified"] is True
+                and report["questions"][5]["comparison"] == "equal",
+                str(report["questions"][5]),
+            )
+            ctx.require(
+                report["questions"][6]["via_plan"] is True
+                and report["questions"][6]["comparison"] == "equal",
+                str(report["questions"][6]),
+            )
+            follow_ups = [request for request in asks if request.get("conversation_id")]
+            ctx.require(
+                len(follow_ups) == 1
+                and follow_ups[0]["conversation_id"] == "conv-r5"
+                and "请按以下口径回答并给出 SQL" in follow_ups[0]["question"]
+                and "业务审定口径A" in follow_ups[0]["question"],
+                f"clarification follow-up was wrong: {follow_ups}",
+            )
+            ctx.require(
+                not any("/turns/" in request[0] for request in proxy_requests),
+                "evaluator called the conversation confirmation endpoint",
             )
             ctx.require(
                 ctx.token not in ctx.runtime.service_log.read_text(),
                 "token leaked to service log",
             )
+            markdown = (path / "report.md").read_text()
             ctx.require(
-                ctx.token not in raw
-                and ctx.token not in (path / "report.md").read_text(),
+                ctx.token not in raw and ctx.token not in markdown,
                 "token leaked",
+            )
+            ctx.require(
+                "仅允许 SELECT 或 WITH 查询" in markdown,
+                "failure detail missing from the markdown report",
             )
         proxy.shutdown()
         proxy.server_close()
