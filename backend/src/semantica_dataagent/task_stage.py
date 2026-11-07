@@ -226,19 +226,26 @@ def write(records, generation, storage):
     )
     storage.execute(
         """UNWIND $rows AS row MATCH (task:SDATask {generation:$generation, ref:row.ref})
-        UNWIND row.reads AS name MATCH (table:SDATable {generation:$generation})
-        WHERE table.database + '.' + table.name = name MERGE (task)-[:READS]->(table)""",
+        UNWIND row.reads AS name
+        UNWIND [i IN range(0, size(name) - 1) WHERE substring(name, i, 1) = '.' | i] AS sep
+        MATCH (table:SDATable {generation:$generation, database:substring(name, 0, sep), name:substring(name, sep + 1)})
+        MERGE (task)-[:READS]->(table)""",
         {"rows": rows, "generation": generation},
     )
     storage.execute(
         """UNWIND $rows AS row MATCH (task:SDATask {generation:$generation, ref:row.ref})
-        UNWIND row.writes AS name MATCH (table:SDATable {generation:$generation})
-        WHERE table.database + '.' + table.name = name MERGE (task)-[:PRODUCES]->(table)""",
+        UNWIND row.writes AS name
+        UNWIND [i IN range(0, size(name) - 1) WHERE substring(name, i, 1) = '.' | i] AS sep
+        MATCH (table:SDATable {generation:$generation, database:substring(name, 0, sep), name:substring(name, sep + 1)})
+        MERGE (task)-[:PRODUCES]->(table)""",
         {"rows": rows, "generation": generation},
     )
     storage.execute(
-        """UNWIND $rows AS row MATCH (a:SDATable {generation:$generation}), (b:SDATable {generation:$generation})
-        WHERE a.database + '.' + a.name = row.upstream AND b.database + '.' + b.name = row.downstream
+        """UNWIND $rows AS row
+        UNWIND [i IN range(0, size(row.upstream) - 1) WHERE substring(row.upstream, i, 1) = '.' | i] AS up_sep
+        UNWIND [i IN range(0, size(row.downstream) - 1) WHERE substring(row.downstream, i, 1) = '.' | i] AS down_sep
+        MATCH (a:SDATable {generation:$generation, database:substring(row.upstream, 0, up_sep), name:substring(row.upstream, up_sep + 1)})
+        MATCH (b:SDATable {generation:$generation, database:substring(row.downstream, 0, down_sep), name:substring(row.downstream, down_sep + 1)})
         CREATE (a)-[r:DEPENDS_ON]->(b) SET r = row""",
         {"rows": edges, "generation": generation},
     )
