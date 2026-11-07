@@ -9,6 +9,9 @@ import httpx
 
 from .eval import compare_results, load_questions
 
+DETAIL_LIMIT = 200
+CLARIFY_MESSAGE = "请按以下口径回答并给出 SQL：{caliber}"
+
 
 def _failure(status):
     if status in (401, 403):
@@ -20,28 +23,103 @@ def _failure(status):
     return "DTB 或服务错误"
 
 
+def _detail(response):
+    try:
+        payload = response.json()
+    except (ValueError, TypeError):
+        return None
+    value = payload.get("detail") if isinstance(payload, dict) else None
+    if value is None:
+        return None
+    text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+    return text[:DETAIL_LIMIT]
+
+
+def _sql(value):
+    if isinstance(value, str):
+        return value if value.strip() else None
+    if isinstance(value, dict):
+        return _sql(value.get("sql"))
+    if isinstance(value, list):
+        for item in value:
+            found = _sql(item)
+            if found:
+                return found
+    return None
+
+
+def _cell(value):
+    return str(value or "").replace("|", "\\|").replace("\n", " ")
+
+
+def _ask(client, payload):
+    result = {
+        "sql": None,
+        "conversation_id": None,
+        "clarification": False,
+        "via_plan": False,
+    }
+    try:
+        with client.stream(
+            "POST", "/api/v1/conversations/ask", json=payload
+        ) as response:
+            if not response.is_success:
+                return result
+            event = None
+            for line in response.iter_lines():
+                if line.startswith("event:"):
+                    event = line[6:].strip()
+                elif line.startswith("data:"):
+                    try:
+                        data = json.loads(line[5:].strip())
+                    except (ValueError, TypeError):
+                        continue
+                    if not isinstance(data, dict):
+                        continue
+                    if event == "conversation":
+                        conversation_id = data.get("conversation_id")
+                        if isinstance(conversation_id, str):
+                            result["conversation_id"] = conversation_id
+                    elif event == "clarification":
+                        result["clarification"] = True
+                    elif event == "query_plan":
+                        planned = _sql(data.get("sql"))
+                        if planned:
+                            result["sql"] = planned
+                            result["via_plan"] = True
+                    elif event == "done":
+                        answered = _sql(data.get("sql"))
+                        if answered:
+                            result["sql"] = answered
+    except (httpx.HTTPError, ValueError, TypeError):
+        return result
+    return result
+
+
 def _execute(client, sql):
     started = time.monotonic()
 
-    def failure(reason):
+    def failure(reason, detail=None):
         return {
             "status": "failed",
             "reason": reason,
+            "detail": detail,
             "elapsed_ms": round((time.monotonic() - started) * 1000),
         }
 
     try:
         plan = client.post("/api/v1/queries/plan", json={"sql": sql})
         if not plan.is_success:
-            return failure(_failure(plan.status_code))
+            return failure(_failure(plan.status_code), _detail(plan))
         data = plan.json()
         response = client.post(f"/api/v1/queries/{data['id']}/execute", json={})
         if not response.is_success:
-            return failure(_failure(response.status_code))
+            return failure(_failure(response.status_code), _detail(response))
         result = response.json()
         rows = result["rows"]
         return {
             "status": "succeeded",
+            "detail": None,
             "row_count": result["row_count"],
             "column_count": len(result["columns"]),
             "elapsed_ms": round((time.monotonic() - started) * 1000),
@@ -59,31 +137,28 @@ def _execute(client, sql):
 
 
 def _answer(client, question, args):
-    try:
-        with client.stream(
-            "POST",
-            "/api/v1/conversations/ask",
-            json={
-                "question": question.question,
-                "agent": args.agent,
-                "provider_id": args.provider_id,
-                "model": args.model,
-            },
-        ) as response:
-            if not response.is_success:
-                return None
-            event = None
-            for line in response.iter_lines():
-                if line.startswith("event:"):
-                    event = line[6:].strip()
-                elif line.startswith("data:") and event == "done":
-                    sql = json.loads(line[5:]).get("sql")
-                    if isinstance(sql, list):
-                        return sql[0] if sql and isinstance(sql[0], str) else None
-                    return sql if isinstance(sql, str) and sql.strip() else None
-    except (httpx.HTTPError, ValueError, TypeError):
-        return None
-    return None
+    first = _ask(
+        client,
+        {
+            "question": question.question,
+            "agent": args.agent,
+            "provider_id": args.provider_id,
+            "model": args.model,
+        },
+    )
+    if first["sql"]:
+        return first["sql"], False, first["via_plan"]
+    conversation_id = first["conversation_id"]
+    if not first["clarification"] or not conversation_id:
+        return None, False, False
+    second = _ask(
+        client,
+        {
+            "question": CLARIFY_MESSAGE.format(caliber=question.caliber),
+            "conversation_id": conversation_id,
+        },
+    )
+    return second["sql"], True, second["via_plan"]
 
 
 def run_cli(args):
@@ -108,8 +183,10 @@ def run_cli(args):
         timeout=600,
     ) as client:
         for question in questions:
-            sql = _answer(client, question, args)
-            agent = _execute(client, sql) if sql else {"status": "no_sql"}
+            sql, clarified, via_plan = _answer(client, question, args)
+            agent = (
+                _execute(client, sql) if sql else {"status": "no_sql", "detail": None}
+            )
             reference = (
                 _execute(client, question.reference_sql)
                 if not args.skip_reference
@@ -133,6 +210,10 @@ def run_cli(args):
                 {
                     "id": question.id,
                     "agent_sql": bool(sql),
+                    "clarified": clarified,
+                    "via_plan": via_plan,
+                    "detail": agent.get("detail"),
+                    "reference_detail": reference.get("detail"),
                     "agent": agent,
                     "reference": reference,
                     "comparison": comparison,
@@ -147,6 +228,8 @@ def run_cli(args):
     metrics = {
         "questions": len(entries),
         "no_sql": len(entries) - with_sql,
+        "clarified": sum(e["clarified"] for e in entries),
+        "via_plan": sum(e["via_plan"] for e in entries),
         "execution_success": successful,
         "execution_total": with_sql,
         "execution_success_rate": successful / with_sql if with_sql else None,
@@ -176,12 +259,18 @@ def run_cli(args):
         "",
         *[f"- {k}: {v}" for k, v in failures.items()],
         "",
-        "| 题号 | 有 SQL | agent 执行 | 参考执行 | 一致性 |",
-        "| --- | --- | --- | --- | --- |",
+        (
+            "| 题号 | 有 SQL | 澄清 | 查询计划 | agent 执行 | 参考执行 | 一致性 | "
+            "agent detail | 参考 detail |"
+        ),
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for e in entries:
         lines.append(
-            f"| {e['id']} | {e['agent_sql']} | {e['agent']} | {e['reference']} | {e['comparison']} |"
+            f"| {e['id']} | {e['agent_sql']} | {e['clarified']} | "
+            f"{e['via_plan']} | {e['agent']} | {e['reference']} | "
+            f"{e['comparison']} | {_cell(e['detail'])} | "
+            f"{_cell(e['reference_detail'])} |"
         )
     args.report.with_suffix(".md").write_text("\n".join(lines) + "\n", encoding="utf-8")
     return 0
