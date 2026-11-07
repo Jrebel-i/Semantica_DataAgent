@@ -295,22 +295,23 @@ export function App() {
     <ConfigProvider
       theme={{
         token: {
-          colorPrimary: "#0B6E63",
-          colorInfo: "#0B6E63",
-          colorLink: "#0B6E63",
-          colorText: "#172021",
-          colorTextSecondary: "#5C6B69",
-          colorBorder: "#D6DEDC",
-          colorBgLayout: "#EEF1F0",
-          borderRadius: 6,
-          controlHeight: 36,
-          fontFamily: "IBM Plex Sans, Noto Sans SC, sans-serif",
+          colorPrimary: "#D97757",
+          colorInfo: "#D97757",
+          colorLink: "#D97757",
+          colorText: "#30302E",
+          colorTextSecondary: "#6F6B64",
+          colorBorder: "#DEDBD2",
+          colorBgLayout: "#FAF9F5",
+          borderRadius: 10,
+          controlHeight: 38,
+          fontFamily:
+            "-apple-system, BlinkMacSystemFont, Segoe UI, Noto Sans SC, sans-serif",
           fontSize: 14,
         },
         components: {
-          Table: { cellPaddingBlock: 8, headerBg: "#F1F4F3" },
+          Table: { cellPaddingBlock: 8, headerBg: "#F5F3ED" },
           Button: { primaryShadow: "none" },
-          Tabs: { itemSelectedColor: "#0B6E63", inkBarColor: "#0B6E63" },
+          Tabs: { itemSelectedColor: "#D97757", inkBarColor: "#D97757" },
         },
       }}
     >
