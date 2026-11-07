@@ -609,3 +609,29 @@ def test_build_counts_and_stage_log_record_embedding_dedupe(
         for message in completed
     ), completed
     assert len(vectors.rows) == 2
+
+
+def test_add_vectors_does_not_share_dedupe_cache_between_calls(monkeypatch):
+    from semantica_dataagent import knowledge
+    from semantica_dataagent.stage_contract import StorageHandles
+
+    calls = []
+
+    def fake_embed(values, texts, stats=None):
+        calls.append(list(texts))
+        return [[1.0] for _ in texts]
+
+    class Vectors:
+        def add_vectors(self, vectors, ids, metadata):
+            pass
+
+    monkeypatch.setattr(knowledge, "embed", fake_embed)
+    handles = StorageHandles("generation", object(), Vectors(), {})
+    handles.add_vectors(["table:first"], ["same"], [{"scope": "tables"}])
+    handles.add_vectors(["table:second"], ["same"], [{"scope": "tables"}])
+
+    assert calls == [["same"], ["same"]]
+    assert handles.embedding_counts() == {
+        "embedding_inputs": 2,
+        "embedding_unique": 2,
+    }
