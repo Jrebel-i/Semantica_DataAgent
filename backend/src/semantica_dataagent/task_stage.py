@@ -358,10 +358,16 @@ def write_column_lineage(records, tasks, parsed_tasks, schema, generation, stora
     )
     storage.execute(
         """UNWIND $rows AS row
-        MATCH (a:SDAField {generation:$generation, name:row.upstream_field}),
-              (b:SDAField {generation:$generation, name:row.downstream_field})
-        WHERE a.database + '.' + a.table = row.upstream_table
-          AND b.database + '.' + b.table = row.downstream_table
+        UNWIND [i IN range(0, size(row.upstream_table) - 1)
+                WHERE substring(row.upstream_table, i, 1) = '.' | i] AS up_sep
+        UNWIND [i IN range(0, size(row.downstream_table) - 1)
+                WHERE substring(row.downstream_table, i, 1) = '.' | i] AS down_sep
+        MATCH (a:SDAField {generation:$generation,
+               database:substring(row.upstream_table, 0, up_sep),
+               table:substring(row.upstream_table, up_sep + 1), name:row.upstream_field})
+        MATCH (b:SDAField {generation:$generation,
+               database:substring(row.downstream_table, 0, down_sep),
+               table:substring(row.downstream_table, down_sep + 1), name:row.downstream_field})
         CREATE (a)-[r:FIELD_DEPENDS_ON]->(b) SET r = row""",
         {"rows": rows, "generation": generation},
     )
