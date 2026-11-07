@@ -674,6 +674,7 @@ def run_build(build_id):
                     )
         changes = hash_difference(previous_hashes, hashes)
         counts = dict.fromkeys(KINDS.values(), 0)
+        counts.update({"embedding_inputs": 0, "embedding_unique": 0})
         counts.update(adapter_stats)
         physical_changes = source_file_difference(
             previous_hashes, hashes, previous_generated, generated
@@ -779,9 +780,15 @@ def run_build(build_id):
                 ):
                     continue
                 stage_started = time.monotonic()
+                embedding_before = storage.embedding_counts()
                 result = stage(selected, generation, storage)
                 elapsed = time.monotonic() - stage_started
+                embedding_after = storage.embedding_counts()
                 stage_counts = dict(result.counts)
+                for key in ("embedding_inputs", "embedding_unique"):
+                    delta = embedding_after[key] - embedding_before[key]
+                    stage_counts[key] = delta
+                    counts[key] += delta
                 counts.update(result.counts)
                 failures.extend(result.failures)
                 summary = ", ".join(
