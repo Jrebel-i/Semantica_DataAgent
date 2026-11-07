@@ -748,6 +748,9 @@ def test_local_mcp_confirmation_and_download(client, monkeypatch):
         assert len(calls) == 1
         assert (await call(first, {"confirmation_id": query_id})).isError
         for fmt in ("csv", "xlsx", "json"):
+            assert (
+                c.get(result.structuredContent["download_urls"][fmt]).status_code == 200
+            )
             path = f"/api/v1/queries/{query_id}/download?format={fmt}"
             assert c.get(path, headers=headers).status_code == 200
             assert (
@@ -756,11 +759,75 @@ def test_local_mcp_confirmation_and_download(client, monkeypatch):
                 ).status_code
                 == 404
             )
+        import hashlib
+        import hmac
+        import os
+        from urllib.parse import urlsplit
+
+        response = c.post(f"/api/v1/queries/{query_id}/download-links", headers=headers)
+        assert response.status_code == 200
+        relative = response.json()["csv"]
+        assert relative.startswith(f"/api/v1/queries/{query_id}/download-link/csv/")
+        assert c.get(relative).status_code == 200
+        parts = relative.split("/")
+        direct = hmac.new(
+            os.environ["DATAAGENT_ENCRYPTION_KEY"].encode(),
+            f"{query_id}:csv:{parts[-2]}".encode(),
+            hashlib.sha256,
+        ).hexdigest()
+        assert parts[-1] != direct
+        parts[-1] = direct
+        assert c.get("/".join(parts)).status_code == 404
+        link = result.structuredContent["download_urls"]["csv"]
+        assert link.startswith("http")
+        path = urlsplit(link).path
+        with sessions().begin() as db:
+            db.add(
+                QueryExecution(
+                    id="other-query",
+                    owner_id=second.id,
+                    sql="SELECT 2",
+                    status="succeeded",
+                    rows='{"columns": ["value"], "data": [[2]]}',
+                )
+            )
+        parts = path.split("/")
+        for index, value in (
+            (4, "other-query"),
+            (-3, "json"),
+            (-2, "1"),
+            (-2, "invalid"),
+            (-1, "0" * 64),
+        ):
+            changed = parts.copy()
+            changed[index] = value
+            assert c.get("/".join(changed)).status_code == 404
+        assert (
+            c.post(
+                f"/api/v1/queries/{query_id}/download-links",
+                headers={"Authorization": f"Bearer {other_token}"},
+            ).status_code
+            == 404
+        )
+        future = query_api.time.time() + 3600
+        with monkeypatch.context() as clock:
+            clock.setattr(query_api.time, "time", lambda: future)
+            assert c.get(link).status_code == 404
+        with sessions()() as db:
+            assert (
+                db.query(QueryAudit).filter_by(kind="download_link_created").count()
+                == 6
+            )
+            assert (
+                db.query(QueryAudit).filter_by(kind="download_link_used").count() == 4
+            )
+
         with sessions().begin() as db:
             db.get(QueryExecution, query_id).created_at = datetime.now(UTC) - timedelta(
                 days=31
             )
         assert c.get(f"/api/v1/queries/{query_id}", headers=headers).status_code == 404
+        assert c.get(link).status_code == 404
         assert (
             c.get(f"/api/v1/queries/{query_id}/download", headers=headers).status_code
             == 404
@@ -796,6 +863,8 @@ def test_mcp_and_online_use_same_execution_service(client, monkeypatch):
 
     async def service(query_id, body, user, kind="query"):
         calls.append((query_id, user.id, kind))
+        with sessions().begin() as db:
+            db.get(QueryExecution, query_id).status = "succeeded"
         return {"row_count": 0}
 
     monkeypatch.setattr(query_api, "_execute_with_audit", service)

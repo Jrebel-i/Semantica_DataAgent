@@ -2,19 +2,19 @@ import { createPortal } from "react-dom";
 import { ColumnLineage } from "./ColumnLineage";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
-import { Alert, Button, Input, Space, Tag, Tabs } from "antd";
+import { Alert, Button, Input, Space, Tag } from "antd";
 import type { components, paths } from "./api";
 import type { Language, Messages } from "./i18n";
 import { TaskLineage } from "./TaskLineage";
 import {
   ArrowUpOutlined,
   CloseOutlined,
-  MenuFoldOutlined,
-  MenuUnfoldOutlined,
+  DeleteOutlined,
   PlusOutlined,
 } from "@ant-design/icons";
 import { parseAgentProfiles, type AgentProfiles } from "./agentProfiles";
 import { HighlightedSql, Markdown } from "./Markdown";
+import { safeDecodePath } from "./paths";
 import {
   loadTableDetail,
   tablePartsFromRef,
@@ -32,6 +32,19 @@ type DocumentView =
 
 type SqlBlock = { sql: string; dialect?: string };
 type Citation = { ref: string; type: string };
+export type CitationLabel = {
+  kind: "table" | "document" | "lineage" | "other";
+  label: string;
+  category?: string;
+  title: string;
+};
+export type CitationGroup = {
+  key: string;
+  openRef: string;
+  refs: string[];
+  label: CitationLabel;
+  fields: string[];
+};
 type ToolCall = {
   id: string;
   name: string;
@@ -121,6 +134,247 @@ function citationsOf(values: unknown[] | undefined): Citation[] {
   return result;
 }
 
+function normalizeSql(sql: string): string {
+  return sql.replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+function hasInvalidEncoding(value: string): boolean {
+  return value.split("/").some((segment) => {
+    try {
+      decodeURIComponent(segment);
+      return false;
+    } catch {
+      return true;
+    }
+  });
+}
+
+function middleEllipsis(value: string, max = 48): string {
+  if (value.length <= max) return value;
+  const head = Math.ceil((max - 1) / 2);
+  const tail = Math.floor((max - 1) / 2);
+  return `${value.slice(0, head)}…${value.slice(value.length - tail)}`;
+}
+
+export function citationLabel(ref: string): CitationLabel {
+  const separator = ref.indexOf(":");
+  const type = (separator >= 0 ? ref.slice(0, separator) : "").toLowerCase();
+  const value = separator >= 0 ? ref.slice(separator + 1) : ref;
+  if (type === "document") {
+    const rawPath = value.split("#", 1)[0];
+    const fullPath = safeDecodePath(rawPath);
+    const segments = fullPath.split("/").filter(Boolean);
+    if (hasInvalidEncoding(rawPath)) {
+      const rawSegments = rawPath.split("/").filter(Boolean);
+      return {
+        kind: "document",
+        label: rawSegments.at(-1) ?? rawPath,
+        category: rawSegments[0] ?? "",
+        title: fullPath,
+      };
+    }
+    const fileName = segments.at(-1) ?? fullPath;
+    const parent = segments.at(-2) ?? "";
+    const category = segments[0] ?? "";
+    const stem = fileName.replace(/\.md$/i, "") || fileName;
+    let label = stem;
+    if (/^_overview$/i.test(stem)) {
+      label = parent ? `${parent} · 概览` : "概览";
+    } else {
+      const variant = /^variant_(\d+)$/i.exec(stem);
+      if (variant) {
+        label = parent
+          ? `${parent} · 口径 ${variant[1]}`
+          : `口径 ${variant[1]}`;
+      }
+    }
+    return { kind: "document", label, category, title: fullPath };
+  }
+  if (type === "table" || type === "field") {
+    const parts = tablePartsFromRef(ref);
+    if (parts) {
+      const full = `${parts.database}.${parts.name}`;
+      let title = full;
+      if (type === "field") {
+        const column = safeDecodePath(value.split(".").slice(2).join("."));
+        if (column) title = `${full} · ${column}`;
+      }
+      return { kind: "table", label: middleEllipsis(full), title };
+    }
+  }
+  const decoded = safeDecodePath(value);
+  return {
+    kind: type === "lineage" ? "lineage" : "other",
+    label: middleEllipsis(decoded || ref),
+    title: decoded || ref,
+  };
+}
+
+function citationKey(ref: string): string {
+  const separator = ref.indexOf(":");
+  const type = separator >= 0 ? ref.slice(0, separator) : "";
+  const value = separator >= 0 ? ref.slice(separator + 1) : ref;
+  if (type === "document") return `document:${value.split("#", 1)[0]}`;
+  if (type === "table" || type === "field") {
+    const parts = tablePartsFromRef(ref);
+    if (parts) return `table:${parts.database}.${parts.name}`;
+  }
+  return ref;
+}
+
+function fieldName(ref: string): string | undefined {
+  if (!ref.startsWith("field:")) return undefined;
+  const parts = ref.slice(6).split(".");
+  if (parts.length < 3) return undefined;
+  return safeDecodePath(parts.slice(2).join("."));
+}
+
+export function mergeCitations(citations: Citation[]): CitationGroup[] {
+  const groups = new Map<string, CitationGroup>();
+  for (const citation of citations) {
+    const ref = citation.ref.trim();
+    if (!ref) continue;
+    const key = citationKey(ref);
+    const field = fieldName(ref);
+    const existing = groups.get(key);
+    if (existing) {
+      if (!existing.refs.includes(ref)) existing.refs.push(ref);
+      if (ref.startsWith("table:")) existing.openRef = ref;
+      if (field && !existing.fields.includes(field))
+        existing.fields.push(field);
+      continue;
+    }
+    const group: CitationGroup = {
+      key,
+      openRef: ref,
+      refs: [ref],
+      label: citationLabel(ref),
+      fields: field ? [field] : [],
+    };
+    groups.set(key, group);
+  }
+  for (const group of groups.values()) {
+    if (group.label.kind !== "table" || group.fields.length === 0) continue;
+    const parts = tablePartsFromRef(group.openRef);
+    const table = parts ? `${parts.database}.${parts.name}` : group.label.title;
+    group.label = {
+      ...group.label,
+      title: `${table} · 字段：${group.fields.join("、")}`,
+    };
+  }
+  return [...groups.values()];
+}
+
+function citationsFromRefs(refs: string[]): Citation[] {
+  return refs.map((ref) => ({ ref, type: ref.split(":", 1)[0] }));
+}
+
+function stripMatchingSql(text: string, sql: string | undefined): string {
+  if (!sql) return text;
+  const target = normalizeSql(sql);
+  const lines = text.split(/\r?\n/);
+  const kept: string[] = [];
+  let index = 0;
+  while (index < lines.length) {
+    const fence = /^\s*```([\w+-]*)\s*$/.exec(lines[index]);
+    if (!fence) {
+      kept.push(lines[index]);
+      index += 1;
+      continue;
+    }
+    let end = index + 1;
+    while (end < lines.length && !/^\s*```\s*$/.test(lines[end])) end += 1;
+    const code = lines.slice(index + 1, end).join("\n");
+    if (normalizeSql(code) === target) {
+      index = end + 1;
+      continue;
+    }
+    for (
+      let cursor = index;
+      cursor <= Math.min(end, lines.length - 1);
+      cursor++
+    )
+      kept.push(lines[cursor]);
+    index = end + 1;
+  }
+  return kept
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trimEnd();
+}
+
+const CITATION_HEADER =
+  /^(?:引用\s*[:：]|citations?\s*[:：]|references?\s*[:：])\s*/i;
+const CITATION_REF = /^(?:document|table|field|lineage|task):\S+$/i;
+
+function normalizeCitationLine(line: string): string {
+  return line
+    .trim()
+    .replace(/^>\s*/, "")
+    .replace(/^(?:[-*+•]\s+)+/, "")
+    .replace(/^`+|`+$/g, "")
+    .replace(/^\*\*(.*?)\*\*$/, "$1")
+    .trim();
+}
+
+function citationTokens(value: string): string[] | null {
+  const tokens = value
+    .replace(/`/g, "")
+    .split(/[、,，;；\s]+/)
+    .map((token) => token.trim())
+    .filter(Boolean);
+  if (tokens.length === 0) return null;
+  return tokens.every((token) => CITATION_REF.test(token)) ? tokens : null;
+}
+
+export function stripCitationRefs(text: string): {
+  text: string;
+  refs: string[];
+} {
+  const lines = text.split(/\r?\n/);
+  let cursor = lines.length;
+  while (cursor > 0 && !lines[cursor - 1].trim()) cursor -= 1;
+  const removed = new Set<number>();
+  const entries: { index: number; tokens: string[] }[] = [];
+  while (cursor > 0) {
+    const continuation: number[] = [];
+    const continuationEntries: { index: number; tokens: string[] }[] = [];
+    let scan = cursor;
+    while (scan > 0) {
+      if (!lines[scan - 1].trim()) {
+        continuation.unshift(scan - 1);
+        scan -= 1;
+        continue;
+      }
+      const tokens = citationTokens(normalizeCitationLine(lines[scan - 1]));
+      if (!tokens) break;
+      continuation.unshift(scan - 1);
+      continuationEntries.unshift({ index: scan - 1, tokens });
+      scan -= 1;
+    }
+    if (scan === 0) break;
+    const normalized = normalizeCitationLine(lines[scan - 1]);
+    const header = CITATION_HEADER.exec(normalized);
+    if (!header) break;
+    const rest = normalized.slice(header[0].length);
+    const headerTokens = rest.trim() ? citationTokens(rest) : [];
+    if (rest.trim() && !headerTokens) break;
+    removed.add(scan - 1);
+    for (const index of continuation) removed.add(index);
+    entries.push({ index: scan - 1, tokens: headerTokens ?? [] });
+    entries.push(...continuationEntries);
+    cursor = scan - 1;
+  }
+  if (removed.size === 0) return { text, refs: [] };
+  entries.sort((left, right) => left.index - right.index);
+  const kept = lines.filter((_, index) => !removed.has(index));
+  while (kept.length > 0 && !kept[kept.length - 1].trim()) kept.pop();
+  return {
+    text: kept.join("\n"),
+    refs: entries.flatMap((entry) => entry.tokens),
+  };
+}
+
 function clarificationsOf(value: unknown): Clarification[] {
   if (!Array.isArray(value)) return [];
   return value.filter(
@@ -197,7 +451,7 @@ function ResultTable({
   limit?: number;
 }) {
   return (
-    <div style={{ overflowX: "auto" }}>
+    <div className="result-table-scroll">
       <table>
         <thead>
           <tr>
@@ -293,31 +547,53 @@ function ToolList({
   tools: ToolCall[];
   messages: Messages;
 }) {
+  const [expanded, setExpanded] = useState(false);
+  const failures = tools.filter((tool) => tool.status === "error").length;
+  useEffect(() => {
+    if (failures) setExpanded(true);
+  }, [failures]);
   if (tools.length === 0) return null;
+  const running = tools.find((tool) => tool.status === "running");
   return (
     <section aria-label={messages.toolCalls} className="tool-log">
-      {tools.map((tool) => (
-        <details className="tool-step" key={tool.id}>
-          <summary title={`${tool.name} ${tool.summary}`}>
-            <span className="tool-name">{toolLabel(tool.name)}</span>
-            <code className="tool-raw">{tool.name}</code>
-            <span className="tool-summary">{tool.summary || "—"}</span>
-            <span className={`tool-status ${tool.status}`}>
-              {tool.status === "running"
-                ? messages.toolRunning
-                : tool.status === "error"
-                  ? messages.toolFailed
-                  : messages.toolDone}
-            </span>
-          </summary>
-          <dl className="tool-detail">
-            <dt>{messages.parameters}</dt>
-            <dd>{tool.input || tool.summary || "—"}</dd>
-            <dt>{messages.result}</dt>
-            <dd>{tool.result || tool.summary || "—"}</dd>
-          </dl>
-        </details>
-      ))}
+      <button
+        type="button"
+        onClick={() => setExpanded(!expanded)}
+        aria-expanded={expanded}
+      >
+        已使用 {tools.length} 个工具 {expanded ? "▾" : "▸"}
+      </button>
+      {running && <span>正在{toolLabel(running.name)}…</span>}
+      {expanded && (
+        <>
+          {tools.map((tool) => (
+            <details
+              className="tool-step"
+              key={tool.id}
+              open={tool.status === "error" ? true : undefined}
+            >
+              <summary title={`${tool.name} ${tool.summary}`}>
+                <span className="tool-name">{toolLabel(tool.name)}</span>
+                <code className="tool-raw">{tool.name}</code>
+                <span className="tool-summary">{tool.summary || "—"}</span>
+                <span className={`tool-status ${tool.status}`}>
+                  {tool.status === "running"
+                    ? messages.toolRunning
+                    : tool.status === "error"
+                      ? messages.toolFailed
+                      : messages.toolDone}
+                </span>
+              </summary>
+              <dl className="tool-detail">
+                <dt>{messages.parameters}</dt>
+                <dd>{tool.input || tool.summary || "—"}</dd>
+                <dt>{messages.result}</dt>
+                <dd>{tool.result || tool.summary || "—"}</dd>
+              </dl>
+            </details>
+          ))}
+        </>
+      )}
     </section>
   );
 }
@@ -380,35 +656,39 @@ function CitationList({
   onOpen: (ref: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
-  if (citations.length === 0) return null;
-  const visible = expanded ? citations : citations.slice(0, 6);
-  const countOf = (citation: Citation) =>
-    citation.type === "table" || citation.ref.startsWith("table:")
+  const groups = mergeCitations(citations);
+  if (groups.length === 0) return null;
+  const visible = expanded ? groups : groups.slice(0, 6);
+  const countOf = (citation: CitationGroup) =>
+    citation.label.kind === "table"
       ? messages.dataTables
-      : citation.type === "field" || citation.ref.startsWith("field:")
-        ? messages.fields
-        : messages.knowledgeDocuments;
-  const shortOf = (citation: Citation) => {
-    const value = citation.ref.slice(citation.ref.indexOf(":") + 1);
-    return value.length > 34 ? `${value.slice(0, 32)}…` : value;
-  };
+      : citation.label.kind === "document"
+        ? messages.knowledgeDocuments
+        : citation.label.kind === "lineage"
+          ? messages.contextLineage
+          : messages.citations;
   return (
     <section aria-label={messages.citations}>
       <div className="citation-list">
         {visible.map((citation) => (
           <button
             type="button"
-            className={`citation-chip ${citation.type}`}
-            key={citation.ref}
-            aria-label={citation.ref}
-            title={citation.ref}
-            onClick={() => onOpen(citation.ref)}
+            className={`citation-chip ${citation.label.kind}`}
+            key={citation.key}
+            aria-label={citation.openRef}
+            title={citation.label.title}
+            onClick={() => onOpen(citation.openRef)}
           >
             <span className="citation-kind">{countOf(citation)}</span>
-            <span className="citation-label">{shortOf(citation)}</span>
+            {citation.label.category && (
+              <span className="citation-category">
+                {citation.label.category}
+              </span>
+            )}
+            <span className="citation-label">{citation.label.label}</span>
           </button>
         ))}
-        {citations.length > 6 && (
+        {groups.length > 6 && (
           <button
             type="button"
             className="citation-chip citation-more"
@@ -416,7 +696,7 @@ function CitationList({
           >
             {expanded
               ? messages.close
-              : `${messages.showMore} ${citations.length - 6} ${messages.moreCount}`}
+              : `${messages.showMore} ${groups.length - 6} ${messages.moreCount}`}
           </button>
         )}
       </div>
@@ -462,7 +742,7 @@ function ClarificationList({
                     {option.ref && (
                       <>
                         {" "}
-                        <code>{option.ref}</code>
+                        <code>{safeDecodePath(option.ref)}</code>
                       </>
                     )}
                   </Button>
@@ -484,7 +764,8 @@ function TurnBlock({
   onOpen,
   onClarify,
   onExecute,
-  onShowResult,
+  onDownload,
+  onCopyLink,
   executing,
 }: {
   turn: Turn;
@@ -497,15 +778,28 @@ function TurnBlock({
     option: NonNullable<Clarification["options"]>[number],
   ) => void;
   onExecute: (turn: Turn, plan: QueryPlan) => void;
-  onShowResult: (id: string) => void;
+  onDownload: (id: string, format: string) => void;
+  onCopyLink: (id: string) => void;
   executing: boolean;
 }) {
-  const sql = sqlBlocks(turn.sql);
-  const citations = citationsOf(turn.citations);
-  const tools = toolsOfTurn(turn.events ?? []);
-  const clarifications = clarificationsOfTurn(turn.events ?? []);
   const plan = queryEvent<QueryPlan>(turn.events ?? [], "query_plan");
   const result = queryEvent<QueryResult>(turn.events ?? [], "query_result");
+  const awaitingPlan =
+    plan !== undefined && turn.status === "awaiting_confirmation";
+  const strippedAnswer = stripCitationRefs(turn.answer ?? "");
+  const answer = awaitingPlan
+    ? stripMatchingSql(strippedAnswer.text, plan?.sql)
+    : strippedAnswer.text;
+  const citations = [
+    ...citationsOf(turn.citations),
+    ...citationsFromRefs(strippedAnswer.refs),
+  ];
+  const tools = toolsOfTurn(turn.events ?? []);
+  const clarifications = clarificationsOfTurn(turn.events ?? []);
+  const planSql = plan ? normalizeSql(plan.sql) : "";
+  const sql = sqlBlocks(turn.sql).filter(
+    (block) => !awaitingPlan || normalizeSql(block.sql) !== planSql,
+  );
   return (
     <article className="turn">
       <div className="message">
@@ -522,35 +816,55 @@ function TurnBlock({
         </span>
         <div className="message-body">
           <ToolList tools={tools} messages={messages} />
-          {plan && (
-            <div className="card query-plan-card">
-              <h3>{messages.queryPlan}</h3>
-              <pre>{plan.sql}</pre>
-              <p>
-                {messages.planPartitions}: {plan.estimated_partitions ?? "—"} ·{" "}
-                {messages.planRows}: {plan.estimated_rows ?? "—"}
+          {awaitingPlan && plan && (
+            <section className="card query-confirmation">
+              <SqlList
+                blocks={[{ sql: plan.sql }]}
+                messages={messages}
+                copied={copied}
+                onCopy={onCopy}
+              />
+              <p className="query-confirmation-hint">
+                {messages.confirmExecuteHint}
               </p>
-              {turn.status === "awaiting_confirmation" && (
-                <Button
-                  size="small"
-                  disabled={executing}
-                  onClick={() => onExecute(turn, plan)}
-                >
-                  {messages.executePlan}
-                </Button>
-              )}
-            </div>
+              <Button
+                type="primary"
+                disabled={executing}
+                onClick={() => onExecute(turn, plan)}
+              >
+                {executing
+                  ? messages.confirmExecuting
+                  : messages.confirmExecute}
+              </Button>
+            </section>
           )}
           {result && (
             <div className="card query-result-preview">
-              <ResultTable result={result} limit={5} />
-              <Button type="link" onClick={() => onShowResult(result.id)}>
-                查看完整结果
-              </Button>
+              <ResultTable result={result} limit={20} />
+              <p>共 {result.row_count} 行，已显示前 20 行</p>
+              {plan &&
+                result.row_count >=
+                  Math.min(
+                    plan.row_limit,
+                    plan.execution_limit ?? plan.row_limit,
+                  ) && <p>结果可能被截断</p>}
+              <Space wrap>
+                {[
+                  ["csv", "CSV"],
+                  ["xlsx", "Excel"],
+                  ["json", "JSON"],
+                ].map(([fmt, label]) => (
+                  <Button key={fmt} onClick={() => onDownload(result.id, fmt)}>
+                    下载 {label}
+                  </Button>
+                ))}
+                <Button onClick={() => onCopyLink(result.id)}>复制链接</Button>
+              </Space>
+              <p className="muted">{messages.downloadLinkHint}</p>
             </div>
           )}
           <div className="answer">
-            <Markdown text={turn.answer} />
+            <Markdown text={answer} />
           </div>
           {turn.error && <Alert type="error" title={turn.error} />}
           <SqlList
@@ -629,7 +943,6 @@ export function ChatPage({
   sessionTarget,
   newTarget,
   onNavigateChat,
-  initialContextOpen = true,
   refreshKey = 0,
 }: {
   token: string;
@@ -639,7 +952,6 @@ export function ChatPage({
   sessionTarget?: HTMLElement | null;
   newTarget?: HTMLElement | null;
   onNavigateChat?: () => void;
-  initialContextOpen?: boolean;
   language?: Language;
   onChangeLanguage?: () => void;
   refreshKey?: number;
@@ -654,12 +966,13 @@ export function ChatPage({
     provider: "",
     model: "",
   });
-  const [contextOpen, setContextOpen] = useState(initialContextOpen);
-  const [contextTab, setContextTab] = useState("plan");
-  const contextTouched = useRef(false);
-  const [selectedQueryId, setSelectedQueryId] = useState("");
   const [providers, setProviders] = useState<Provider[]>([]);
   const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [hoveredConversationId, setHoveredConversationId] = useState("");
+  const [focusedConversationId, setFocusedConversationId] = useState("");
+  const [confirmingDeleteId, setConfirmingDeleteId] = useState("");
+  const [deletingConversationId, setDeletingConversationId] = useState("");
+  const [sessionError, setSessionError] = useState("");
   const [agentId, setAgentId] = useState("pi");
   const [providerId, setProviderId] = useState("");
   const [model, setModel] = useState("");
@@ -690,34 +1003,15 @@ export function ChatPage({
   const [providerError, setProviderError] = useState("");
   const [providerNotice, setProviderNotice] = useState("");
 
-  const queryTurns = [...turns]
-    .reverse()
-    .filter((turn) =>
-      (turn.events ?? []).some((event) => event.type === "query_plan"),
-    );
-  const latestTurn =
-    queryTurns.find(
-      (turn) =>
-        queryEvent<QueryPlan>(turn.events ?? [], "query_plan")?.id ===
-        selectedQueryId,
-    ) ?? queryTurns[0];
-  const latestPlan = queryEvent<QueryPlan>(
-    latestTurn?.events ?? [],
-    "query_plan",
-  );
-  const latestResult = queryEvent<QueryResult>(
-    latestTurn?.events ?? [],
-    "query_result",
-  );
-  useEffect(() => {
-    if (!contextTouched.current && latestPlan)
-      setContextTab(latestResult ? "results" : "plan");
-  }, [latestPlan?.id, latestResult?.id]);
-
   async function executePlan(turn: Turn, plan: QueryPlan) {
     if (sending || !currentConversationId) return;
     setSending(true);
     setError("");
+    setTurns((current) =>
+      current.map((item) =>
+        item.id === turn.id ? { ...item, error: null } : item,
+      ),
+    );
     try {
       const response = await fetch(
         `/api/v1/conversations/${encodeURIComponent(currentConversationId)}/turns/${turn.id}/queries/${encodeURIComponent(plan.id)}/execute`,
@@ -759,41 +1053,62 @@ export function ChatPage({
             ),
           );
         } else if (name === "error") {
-          setError(String(data.message ?? t.answerFailed));
+          const message = String(data.message ?? t.answerFailed);
+          setError(message);
+          setTurns((current) =>
+            current.map((item) =>
+              item.id === turn.id ? { ...item, error: message } : item,
+            ),
+          );
         }
       });
       await openConversation(currentConversationId);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : t.askError);
+      const message = caught instanceof Error ? caught.message : t.askError;
+      setError(message);
+      setTurns((current) =>
+        current.map((item) =>
+          item.id === turn.id ? { ...item, error: message } : item,
+        ),
+      );
     } finally {
       setSending(false);
     }
   }
 
+  async function downloadLinks(id: string): Promise<Record<string, string>> {
+    const response = await fetch(
+      `/api/v1/queries/${encodeURIComponent(id)}/download-links`,
+      { method: "POST", headers: { Authorization: `Bearer ${token}` } },
+    );
+    if (!response.ok) throw new Error(t.askError);
+    const paths = (await response.json()) as Record<string, string>;
+    return Object.fromEntries(
+      Object.entries(paths).map(([format, path]) => [
+        format,
+        new URL(path, window.location.origin).href,
+      ]),
+    );
+  }
   async function downloadQuery(id: string, format: string) {
     try {
-      const response = await fetch(
-        `/api/v1/queries/${encodeURIComponent(id)}/download?format=${format}`,
-        {
-          headers: { Authorization: `Bearer ${token}` },
-        },
-      );
-      if (!response.ok) throw new Error(t.askError);
-      const url = URL.createObjectURL(await response.blob());
+      const links = await downloadLinks(id);
       const anchor = document.createElement("a");
-      anchor.href = url;
-      anchor.download = `query.${format}`;
+      anchor.href = links[format];
+      anchor.rel = "noreferrer";
       anchor.click();
-      URL.revokeObjectURL(url);
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : t.askError);
+    } catch {
+      setError(t.askError);
     }
   }
-
-  useEffect(() => {
-    if (citationDetail && !latestPlan && !contextTouched.current)
-      setContextTab("schema");
-  }, [citationDetail, latestPlan]);
+  async function copyDownloadLink(id: string) {
+    try {
+      const links = await downloadLinks(id);
+      await copyText(links.csv);
+    } catch {
+      setError(t.copyError);
+    }
+  }
 
   const refreshConversations = useCallback(async () => {
     try {
@@ -1106,8 +1421,6 @@ export function ChatPage({
   function applyConversation(detail: ConversationDetail) {
     selectionTouched.current = true;
     if (detail.id !== currentConversationId) {
-      setSelectedQueryId("");
-      contextTouched.current = false;
     }
     setCurrentConversationId(detail.id);
     setResumable(detail.resumable !== false);
@@ -1145,8 +1458,6 @@ export function ChatPage({
   }
 
   function newConversation() {
-    contextTouched.current = false;
-    setSelectedQueryId("");
     selectionTouched.current = true;
     setCurrentConversationId("");
     setAgentId(defaults.agent);
@@ -1172,19 +1483,6 @@ export function ChatPage({
     setLive(null);
     setError("");
   }
-
-  useEffect(() => {
-    const citations = live
-      ? live.citations
-      : citationsOf(turns.at(-1)?.citations);
-    const ref = citations.find(
-      (citation) =>
-        citation.type === "table" || citation.ref.startsWith("table:"),
-    )?.ref;
-    if (ref && ref !== citationRef) void openCitation(ref);
-    // Follow the latest answer; manual citation choices remain until the answer changes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [live?.citations, turns]);
 
   async function openCitation(ref: string) {
     const sequence = ++citationSequence.current;
@@ -1317,6 +1615,38 @@ export function ChatPage({
     }
   }
 
+  async function deleteConversation(id: string) {
+    if (deletingConversationId) return;
+    setDeletingConversationId(id);
+    setSessionError("");
+    try {
+      const response = await fetch(
+        `/api/v1/conversations/${encodeURIComponent(id)}`,
+        {
+          method: "DELETE",
+          headers: { Authorization: `Bearer ${token}` },
+        },
+      );
+      if (response.status === 409) {
+        setSessionError(t.deleteConversationRunning);
+        return;
+      }
+      if (!response.ok) {
+        setSessionError(t.deleteConversationFailed);
+        return;
+      }
+      setConversations((current) =>
+        current.filter((conversation) => conversation.id !== id),
+      );
+      if (id === currentConversationId) newConversation();
+    } catch {
+      setSessionError(t.deleteConversationFailed);
+    } finally {
+      setDeletingConversationId("");
+      setConfirmingDeleteId("");
+    }
+  }
+
   const canAsk = Boolean(
     question.trim() && providerId && model && !sending && resumable,
   );
@@ -1326,6 +1656,9 @@ export function ChatPage({
   );
   const selectedTable =
     citationDetail?.kind === "table" ? citationDetail.table : null;
+  const citationHeading = citationRef
+    ? citationLabel(citationDetail?.ref ?? citationRef)
+    : null;
   const shortTime = (value: string) => {
     const date = new Date(value);
     if (Number.isNaN(date.getTime())) return "—";
@@ -1342,158 +1675,19 @@ export function ChatPage({
     setCitationDetail(null);
     setCitationError("");
   };
-  const contextItems = [
-    {
-      key: "plan",
-      label: t.queryPlan,
-      children: latestPlan ? (
-        <div className="context-section">
-          <pre>{latestPlan.sql}</pre>
-          <p>{latestPlan.data_source}</p>
-          <p>{latestPlan.tables?.join(", ")}</p>
-          <p>
-            {t.planPartitions}: {latestPlan.estimated_partitions ?? "—"} ·{" "}
-            {t.planRows}: {latestPlan.estimated_rows ?? "—"}
-          </p>
-          <p>行数上限: {latestPlan.execution_limit ?? latestPlan.row_limit}</p>
-        </div>
-      ) : (
-        <div className="empty-state">
-          <strong>{t.noPlan}</strong>
-          <span>
-            SQL — · {t.planPartitions} — · {t.planRows} —
-          </span>
-          <Button size="small" disabled>
-            {t.executePlan}
-          </Button>
-        </div>
-      ),
-    },
-    {
-      key: "results",
-      label: t.queryResults,
-      children: latestResult ? (
-        <div className="context-section">
-          <ResultTable result={latestResult} />
-          {latestPlan &&
-            latestResult.row_count >=
-              Math.min(
-                latestPlan.row_limit,
-                latestPlan.execution_limit ?? latestPlan.row_limit,
-              ) && <p>结果可能被截断</p>}
-          <Space>
-            {[
-              ["csv", "CSV"],
-              ["xlsx", "Excel"],
-              ["json", "JSON"],
-            ].map(([format, label]) => (
-              <Button
-                key={format}
-                onClick={() => void downloadQuery(latestResult.id, format)}
-              >
-                {label}
-              </Button>
-            ))}
-          </Space>
-        </div>
-      ) : (
-        <div className="empty-state">{t.emptyContext}</div>
-      ),
-    },
-    {
-      key: "lineage",
-      label: t.contextLineage,
-      children: selectedTable ? (
-        citationRef.startsWith("field:") ? (
-          <ColumnLineage
-            token={token}
-            table={`${selectedTable.database}.${selectedTable.name}`}
-            column={citationRef.slice(6).split(".").slice(2).join(".")}
-          />
-        ) : (
-          <TaskLineage
-            token={token}
-            messages={t}
-            table={`${selectedTable.database}.${selectedTable.name}`}
-            showTasks={false}
-          />
-        )
-      ) : (
-        <div className="empty-state">{t.emptyContext}</div>
-      ),
-    },
-    {
-      key: "schema",
-      label: t.contextSchema,
-      children: selectedTable ? (
-        <div className="context-schema">
-          <div className="context-schema-head">
-            <div className="context-schema-title">
-              <strong>
-                {selectedTable.database}.{selectedTable.name}
-              </strong>
-              {selectedTable.comment && (
-                <span className="muted">{selectedTable.comment}</span>
-              )}
-            </div>
-            <Button
-              type="text"
-              size="small"
-              aria-label={t.close}
-              title={t.close}
-              onClick={closeCitation}
-            >
-              <CloseOutlined />
-            </Button>
-          </div>
-          <table className="schema-table">
-            <thead>
-              <tr>
-                <th>{t.field}</th>
-                <th>{t.dataType}</th>
-                <th>{t.comment}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {selectedTable.fields.map((field) => (
-                <tr key={field.name}>
-                  <td>{field.name}</td>
-                  <td>{field.type}</td>
-                  <td>
-                    {field.comment}
-                    {field.partition ? ` · ${t.partition}` : ""}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      ) : citationDetail?.kind === "document" ? (
-        <article>
-          <div className="context-ref">{citationDetail.document.path}</div>
-          <div className="doc-content">
-            <pre>{citationDetail.document.content}</pre>
-          </div>
-        </article>
-      ) : (
-        <div className="empty-state">{t.emptyContext}</div>
-      ),
-    },
-  ];
-  const hasContext = Boolean(
-    latestPlan || latestResult || citationRef || citationDetail,
-  );
   const emptyConversation = !loadingConversation && turns.length === 0 && !live;
-  const contextTabs = contextItems.map(({ key, label }) => ({ key, label }));
-  const contextContent = contextItems.find(
-    (item) => item.key === contextTab,
-  )?.children;
+  const liveAnswer = live
+    ? stripCitationRefs(live.text)
+    : { text: "", refs: [] };
+  const liveCitations = live
+    ? [...live.citations, ...citationsFromRefs(liveAnswer.refs)]
+    : [];
 
   return (
     <section style={{ height: "100%", minHeight: 0 }}>
       {!settingsOnly && (
         <div
-          className={`chat-layout${!hasContext ? " context-hidden" : contextOpen ? "" : " context-collapsed"}${emptyConversation ? " chat-layout--empty" : ""}`}
+          className={`chat-layout${!citationRef ? " context-hidden" : ""}${emptyConversation ? " chat-layout--empty" : ""}`}
         >
           {newTarget &&
             createPortal(
@@ -1531,30 +1725,90 @@ export function ChatPage({
                     </Button>
                   )}
                 </div>
+                {sessionError && (
+                  <div className="session-delete-error" role="alert">
+                    {sessionError}
+                  </div>
+                )}
                 <div className="session-list">
                   {conversations.length === 0 ? (
                     <div className="session-empty">{t.noConversations}</div>
                   ) : (
                     conversations.map((conversation) => {
                       const active = conversation.id === currentConversationId;
+                      const revealed =
+                        hoveredConversationId === conversation.id ||
+                        focusedConversationId === conversation.id;
+                      const confirming = confirmingDeleteId === conversation.id;
+                      const deleting =
+                        deletingConversationId === conversation.id;
                       return (
                         <div
                           className={`session-item${active ? " active" : ""}`}
                           key={conversation.id}
+                          onMouseEnter={() =>
+                            setHoveredConversationId(conversation.id)
+                          }
+                          onMouseLeave={() => setHoveredConversationId("")}
+                          onFocus={() =>
+                            setFocusedConversationId(conversation.id)
+                          }
+                          onBlur={() => setFocusedConversationId("")}
                         >
-                          <button
-                            type="button"
-                            title={conversation.title}
-                            onClick={() => {
-                              onNavigateChat?.();
-                              void openConversation(conversation.id);
-                            }}
-                            disabled={sending}
-                          >
-                            {conversation.title}
-                            {conversation.resumable === false &&
-                              ` (${t.sessionExpired})`}
-                          </button>
+                          <div className="session-row">
+                            {confirming ? (
+                              <span className="session-delete-actions">
+                                <button
+                                  type="button"
+                                  className="session-delete-confirm"
+                                  onClick={() =>
+                                    void deleteConversation(conversation.id)
+                                  }
+                                  disabled={deleting}
+                                >
+                                  {t.confirmDeleteConversation}
+                                </button>
+                                <button
+                                  type="button"
+                                  className="session-delete-cancel"
+                                  onClick={() => setConfirmingDeleteId("")}
+                                  disabled={deleting}
+                                >
+                                  {t.cancelDeleteConversation}
+                                </button>
+                              </span>
+                            ) : (
+                              <>
+                                <button
+                                  type="button"
+                                  className="session-open"
+                                  title={conversation.title}
+                                  onClick={() => {
+                                    onNavigateChat?.();
+                                    void openConversation(conversation.id);
+                                  }}
+                                  disabled={sending}
+                                >
+                                  {conversation.title}
+                                  {conversation.resumable === false &&
+                                    ` (${t.sessionExpired})`}
+                                </button>
+                                <button
+                                  type="button"
+                                  className={`session-delete${revealed ? " visible" : ""}`}
+                                  aria-label={t.deleteConversation}
+                                  title={t.deleteConversation}
+                                  onClick={() => {
+                                    setSessionError("");
+                                    setConfirmingDeleteId(conversation.id);
+                                  }}
+                                  disabled={sending && active}
+                                >
+                                  <DeleteOutlined />
+                                </button>
+                              </>
+                            )}
+                          </div>
                           <span className="session-meta">
                             <span>{shortTime(conversation.updated_at)}</span>
                           </span>
@@ -1596,18 +1850,12 @@ export function ChatPage({
                   copied={copied}
                   onCopy={(sql) => void copySql(sql)}
                   onOpen={(ref) => {
-                    contextTouched.current = true;
-                    setContextTab("schema");
                     void openCitation(ref);
                   }}
                   onClarify={chooseClarification}
                   onExecute={(turn, plan) => void executePlan(turn, plan)}
-                  onShowResult={(id) => {
-                    contextTouched.current = true;
-                    setSelectedQueryId(id);
-                    setContextTab("results");
-                    setContextOpen(true);
-                  }}
+                  onDownload={(id, format) => void downloadQuery(id, format)}
+                  onCopyLink={(id) => void copyDownloadLink(id)}
                   executing={sending}
                 />
               ))}
@@ -1628,8 +1876,8 @@ export function ChatPage({
                     <div className="message-body">
                       <ToolList tools={live.tools} messages={t} />
                       <div className="answer">
-                        {live.text ? (
-                          <Markdown text={live.text} />
+                        {liveAnswer.text ? (
+                          <Markdown text={liveAnswer.text} />
                         ) : (
                           <p className="muted">
                             {live.status === "running" ? t.asking : ""}
@@ -1643,11 +1891,9 @@ export function ChatPage({
                         onCopy={(sql) => void copySql(sql)}
                       />
                       <CitationList
-                        citations={live.citations}
+                        citations={liveCitations}
                         messages={t}
                         onOpen={(ref) => {
-                          contextTouched.current = true;
-                          setContextTab("schema");
                           void openCitation(ref);
                         }}
                       />
@@ -1775,73 +2021,100 @@ export function ChatPage({
               )}
             </div>
           </div>
-          {hasContext && (
+          {citationRef && (
             <aside className="chat-context">
-              {contextOpen ? (
-                <>
-                  <div className="context-tabs">
-                    <Tabs
-                      activeKey={contextTab}
-                      onChange={(tab) => {
-                        contextTouched.current = true;
-                        setContextTab(tab);
-                      }}
-                      items={contextTabs}
-                      tabBarExtraContent={
-                        <Button
-                          type="text"
-                          aria-label={t.collapseContext}
-                          title={t.collapseContext}
-                          onClick={() => setContextOpen(false)}
-                        >
-                          <MenuFoldOutlined />
-                        </Button>
-                      }
-                    />
-                  </div>
-                  <div
-                    className={`context-body${
-                      contextTab === "schema" && selectedTable
-                        ? " context-body--schema"
-                        : ""
-                    }`}
+              <div className="context-body">
+                <div className="context-header">
+                  <strong title={citationHeading?.title}>
+                    {citationHeading?.label ?? t.citations}
+                  </strong>
+                  <Button
+                    type="text"
+                    aria-label={t.close}
+                    onClick={closeCitation}
                   >
-                    {contextContent}
-                    {citationRef && !selectedTable && (
-                      <section className="context-section">
-                        <div className="context-ref">
-                          <code>{citationRef}</code>
-                          <Button
-                            size="small"
-                            type="text"
-                            onClick={closeCitation}
-                          >
-                            {t.close}
-                          </Button>
-                        </div>
-                        {citationLoading && (
-                          <p className="muted">{t.loadingCitation}</p>
+                    <CloseOutlined />
+                  </Button>
+                </div>
+                {citationLoading && <p>{t.loadingCitation}</p>}
+                {citationError && <Alert type="error" title={citationError} />}
+                {selectedTable ? (
+                  <div className="context-schema">
+                    <div className="context-schema-head">
+                      <div className="context-schema-title">
+                        <strong>
+                          {safeDecodePath(
+                            `${selectedTable.database}.${selectedTable.name}`,
+                          )}
+                        </strong>
+                        {selectedTable.comment && (
+                          <span className="muted">{selectedTable.comment}</span>
                         )}
-                        {citationError && (
-                          <Alert type="error" title={citationError} />
-                        )}
-                      </section>
-                    )}
-                    {citationDetail?.kind === "message" && (
-                      <Alert type="info" title={citationDetail.message} />
-                    )}
+                      </div>
+                    </div>
+                    <table className="schema-table">
+                      <thead>
+                        <tr>
+                          <th>{t.field}</th>
+                          <th>{t.dataType}</th>
+                          <th>{t.comment}</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {selectedTable.fields.map((field) => (
+                          <tr key={field.name}>
+                            <td>{field.name}</td>
+                            <td>{field.type}</td>
+                            <td>
+                              {field.comment}
+                              {field.partition ? ` · ${t.partition}` : ""}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
                   </div>
-                </>
-              ) : (
-                <Button
-                  type="text"
-                  aria-label={t.expandContext}
-                  title={t.expandContext}
-                  onClick={() => setContextOpen(true)}
-                >
-                  <MenuUnfoldOutlined />
-                </Button>
-              )}
+                ) : citationDetail?.kind === "document" ? (
+                  <article>
+                    <div className="context-ref">
+                      {safeDecodePath(citationDetail.document.path)}
+                    </div>
+                    <div className="doc-content">
+                      {safeDecodePath(citationDetail.document.path)
+                        .toLowerCase()
+                        .endsWith(".md") ? (
+                        <Markdown text={citationDetail.document.content} />
+                      ) : (
+                        <pre>{citationDetail.document.content}</pre>
+                      )}
+                    </div>
+                  </article>
+                ) : (
+                  <div className="empty-state">{t.emptyContext}</div>
+                )}
+                {selectedTable &&
+                  (citationRef.startsWith("field:") ? (
+                    <ColumnLineage
+                      token={token}
+                      table={`${selectedTable.database}.${selectedTable.name}`}
+                      column={citationRef
+                        .slice(6)
+                        .split(".")
+                        .slice(2)
+                        .join(".")}
+                    />
+                  ) : (
+                    <TaskLineage
+                      token={token}
+                      messages={t}
+                      table={`${selectedTable.database}.${selectedTable.name}`}
+                      showTasks={false}
+                    />
+                  ))}
+                {citationDetail?.kind === "message" && (
+                  <Alert type="info" title={citationDetail.message} />
+                )}
+              </div>
             </aside>
           )}
         </div>

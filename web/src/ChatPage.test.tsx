@@ -8,7 +8,12 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
-import { ChatPage } from "./ChatPage";
+import {
+  ChatPage,
+  citationLabel,
+  mergeCitations,
+  stripCitationRefs,
+} from "./ChatPage";
 import { getMessages } from "./i18n";
 import { clearTableDetailCache } from "./tableDetail";
 
@@ -107,10 +112,10 @@ test("新对话的消息区不显示占位查询计划", async () => {
   expect(container.querySelector(".chat-scroll .plan-placeholder")).toBeNull();
 });
 
-test("查询计划可确认执行，结果和下载显示在右侧面板", async () => {
+test("查询计划可确认执行，结果和下载显示在对话中", async () => {
   const plan = {
     id: "query-81",
-    sql: "SELECT sales FROM shop.orders",
+    sql: "SELECT sales\nFROM shop.orders",
     data_source: "doris_ai",
     tables: ["shop.orders"],
     estimated_partitions: 2,
@@ -120,8 +125,8 @@ test("查询计划可确认执行，结果和下载显示在右侧面板", async
   const result = {
     id: plan.id,
     columns: ["sales"],
-    rows: [[1], [2], [3], [4], [5], [6]],
-    row_count: 6,
+    rows: Array.from({ length: 25 }, (_, i) => [i + 1]),
+    row_count: 25,
   };
   let executed = false;
   let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
@@ -195,8 +200,12 @@ test("查询计划可确认执行，结果和下载显示在右侧面板", async
         );
       }
       if (url.startsWith("/api/v1/tables/")) return json(table);
-      if (url.startsWith("/api/v1/queries/query-81/download?")) {
-        return new Response("download", { status: 200 });
+      if (url === "/api/v1/queries/query-81/download-links") {
+        return json({
+          csv: "/signed/csv",
+          xlsx: "/signed/xlsx",
+          json: "/signed/json",
+        });
       }
       return new Response("", { status: 404 });
     },
@@ -209,61 +218,60 @@ test("查询计划可确认执行，结果和下载显示在右侧面板", async
       messages={getMessages("zh")}
     />,
   );
-  expect(
-    (await screen.findAllByText("SELECT sales FROM shop.orders")).length,
-  ).toBeGreaterThan(0);
+  expect((await screen.findByText("确认执行这条 SQL？")) !== null).toBe(true);
+  expect(container.querySelector(".sql-block")?.textContent).toContain(
+    "SELECT sales",
+  );
+  expect(container.querySelector(".sql-block")?.textContent).toContain(
+    "FROM shop.orders",
+  );
+  expect(screen.queryByText("查询计划")).toBeNull();
+  expect(screen.queryByText(/命中分区/)).toBeNull();
+  expect(screen.queryByText(/预计行数/)).toBeNull();
   expect(executed).toBe(false);
-  fireEvent.click(screen.getByRole("button", { name: /执\s*行/ }));
+  fireEvent.click(screen.getByRole("button", { name: /确\s*认\s*执\s*行/ }));
+  expect(
+    (
+      (await screen.findByRole("button", {
+        name: /执\s*行\s*中/,
+      })) as HTMLButtonElement
+    ).disabled,
+  ).toBe(true);
   expect(await screen.findByText("结果可能被截断")).toBeTruthy();
   expect(
     container.querySelectorAll(".query-result-preview tbody tr"),
-  ).toHaveLength(5);
+  ).toHaveLength(20);
   expect(screen.queryByText("销售结论")).toBeNull();
   streamController?.enqueue(
     new TextEncoder().encode('event: done\ndata: {"text":"销售结论"}\n\n'),
   );
   streamController?.close();
   expect(await screen.findByText("销售结论")).toBeTruthy();
-  await waitFor(() =>
-    expect(
-      fetcher.mock.calls.some(([input]) =>
-        String(input).startsWith("/api/v1/tables/"),
-      ),
-    ).toBe(true),
-  );
-  expect(await screen.findByText("结果可能被截断")).toBeTruthy();
+  expect(screen.queryByRole("tab", { name: "结果" })).toBeNull();
+  expect(screen.getByText("共 25 行，已显示前 20 行")).toBeTruthy();
   expect(
-    screen.getByRole("tab", { name: "结果" }).getAttribute("aria-selected"),
-  ).toBe("true");
-  expect(screen.getByText("6")).toBeTruthy();
-  expect(screen.getByRole("button", { name: "CSV" })).toBeTruthy();
-  expect(screen.getByRole("button", { name: "Excel" })).toBeTruthy();
-  expect(screen.getByRole("button", { name: "JSON" })).toBeTruthy();
-  vi.stubGlobal(
-    "URL",
-    Object.assign(URL, {
-      createObjectURL: vi.fn(() => "blob:test"),
-      revokeObjectURL: vi.fn(),
-    }),
+    screen.getByText("完整数据请通过下载链接获取（链接 30 分钟内有效）"),
+  ).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "复制链接" }));
+  await waitFor(() =>
+    expect(navigator.clipboard.writeText).toHaveBeenCalledWith(
+      `${window.location.origin}/signed/csv`,
+    ),
   );
-  vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
-  for (const label of ["CSV", "Excel", "JSON"])
+  const click = vi
+    .spyOn(HTMLAnchorElement.prototype, "click")
+    .mockImplementation(() => {});
+  for (const label of ["下载 CSV", "下载 Excel", "下载 JSON"])
     fireEvent.click(screen.getByRole("button", { name: label }));
-  await waitFor(() => {
-    const downloads = fetcher.mock.calls.filter(([input]) =>
-      String(input).includes("/download?format="),
-    );
-    expect(
-      downloads.map(([input]) => String(input).split("=").at(-1)).sort(),
-    ).toEqual(["csv", "json", "xlsx"]);
-    expect(
-      downloads.every(
-        ([, init]) =>
-          (init?.headers as Record<string, string>).Authorization ===
-          "Bearer personal-token",
-      ),
-    ).toBe(true);
-  });
+  await waitFor(() => expect(click).toHaveBeenCalledTimes(3));
+  expect(
+    fetcher.mock.calls.filter(([input]) =>
+      String(input).includes("/download-links"),
+    ),
+  ).toHaveLength(4);
+  expect(
+    fetcher.mock.calls.some(([input]) => String(input).startsWith("/signed/")),
+  ).toBe(false);
 });
 
 test("结果达到执行上限时提示可能被截断", async () => {
@@ -329,8 +337,7 @@ test("结果达到执行上限时提示可能被截断", async () => {
   );
   render(<ChatPage token="token" role="user" messages={getMessages("zh")} />);
   expect(await screen.findByText("结果可能被截断")).toBeTruthy();
-  fireEvent.click(screen.getByRole("tab", { name: "查询计划" }));
-  expect(await screen.findByText("行数上限: 6")).toBeTruthy();
+  expect(screen.queryByRole("tab", { name: "查询计划" })).toBeNull();
 });
 
 test("查看历史预览会打开对应查询结果", async () => {
@@ -394,10 +401,8 @@ test("查看历史预览会打开对应查询结果", async () => {
     <ChatPage token="token" role="user" messages={getMessages("zh")} />,
   );
   await screen.findByText("old-value");
-  fireEvent.click(screen.getAllByRole("button", { name: "查看完整结果" })[0]);
-  expect(container.querySelector(".context-body")?.textContent).toContain(
-    "old-value",
-  );
+  expect(container.querySelectorAll(".query-result-preview")).toHaveLength(2);
+  expect(screen.getByText("new-value")).toBeTruthy();
 });
 
 test("streams tools and text, copies SQL, and opens table and document citations", async () => {
@@ -436,6 +441,8 @@ test("streams tools and text, copies SQL, and opens table and document citations
   fireEvent.click(screen.getByRole("button", { name: /提\s*问/ }));
 
   expect(await screen.findByText("推荐 shop.payments。")).toBeTruthy();
+  expect(screen.queryByText("mcp__dataagent__search_knowledge")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: /已使用 1 个工具/ }));
   expect(screen.getByText("mcp__dataagent__search_knowledge")).toBeTruthy();
   expect(screen.getByText("完成")).toBeTruthy();
   expect(
@@ -471,6 +478,9 @@ test("streams tools and text, copies SQL, and opens table and document citations
   expect(
     await screen.findByText("支付销售额按支付成功时间归属日期。"),
   ).toBeTruthy();
+  expect(
+    window.document.querySelector(".context-header strong")?.textContent,
+  ).toBe("sales");
   expect(fetcher).toHaveBeenCalledWith(
     "/api/v1/document?doc_id=document%3Ametrics%2Fdefinitions%2Fsales.md",
     { headers: { Authorization: "Bearer personal-token" } },
@@ -570,6 +580,7 @@ test("restores conversation history and renders its SQL and citations", async ()
   expect(
     screen.getByRole("button", { name: "table:shop.payments" }),
   ).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: /已使用 1 个工具/ }));
   expect(screen.getByText("mcp__dataagent__search_knowledge")).toBeTruthy();
   expect(screen.getByText("按支付日还是下单日？")).toBeTruthy();
 });
@@ -969,6 +980,9 @@ test("后打开的引用不会被较晚返回的旧请求覆盖", async () => {
   });
   fireEvent.click(screen.getByRole("button", { name: /提\s*问/ }));
   fireEvent.click(
+    await screen.findByRole("button", { name: "table:shop.payments" }),
+  );
+  fireEvent.click(
     await screen.findByRole("button", {
       name: "document:metrics/definitions/sales.md#chunk-1",
     }),
@@ -976,13 +990,9 @@ test("后打开的引用不会被较晚返回的旧请求覆盖", async () => {
   expect(
     await screen.findByText("支付销售额按支付成功时间归属日期。"),
   ).toBeTruthy();
-  await waitFor(() =>
-    expect(
-      fetcher.mock.calls.some(([url]) =>
-        String(url).startsWith("/api/v1/tables/"),
-      ),
-    ).toBe(true),
-  );
+  expect(
+    window.document.querySelector(".context-header strong")?.textContent,
+  ).toBe("sales");
   await act(async () => {
     resolveTable(json([table]));
     await delayedTable;
@@ -1171,7 +1181,6 @@ test("字段引用的血缘标签显示字段血缘", async () => {
     await screen.findByRole("button", { name: "field:shop.payments.dt" }),
   );
   await screen.findByText("支付流水");
-  fireEvent.click(screen.getByRole("tab", { name: "血缘" }));
   expect(await screen.findByText(/暂无字段级血缘/)).toBeTruthy();
   expect(
     fetcher.mock.calls.some(([url]) =>
@@ -1196,4 +1205,758 @@ test("示例问题只填入输入框而不发送请求", async () => {
       ([url]) => String(url) === "/api/v1/conversations/ask",
     ),
   ).toBe(false);
+});
+
+test("文档引用解码文件名并在抽屉渲染 Markdown，失败工具自动展开", async () => {
+  const name = "销售 50% #报告.md";
+  const ref = `document:指标/${encodeURIComponent(name)}#chunk-1`;
+  const response = sse
+    .replace('"is_error":false', '"is_error":true')
+    .replace("document:metrics/definitions/sales.md#chunk-1", ref);
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/v1/agents")
+        return json([{ id: "pi", available: true }]);
+      if (url === "/api/v1/providers") return json([provider]);
+      if (url === "/api/v1/conversations") return json([]);
+      if (url === "/api/v1/conversations/ask")
+        return new Response(response, {
+          headers: { "Content-Type": "text/event-stream" },
+        });
+      if (url.startsWith("/api/v1/document?"))
+        return json({
+          ...document,
+          path: `definitions/${encodeURIComponent(name)}`,
+          content: "# 销售标题\n\n**重要内容**",
+        });
+      return new Response("", { status: 404 });
+    }),
+  );
+  const { container } = render(
+    <ChatPage token="token" role="user" messages={getMessages("zh")} />,
+  );
+  await waitFor(() =>
+    expect((screen.getByLabelText("模型") as HTMLSelectElement).value).toBe(
+      provider.models[0],
+    ),
+  );
+  fireEvent.change(screen.getByLabelText("问题"), {
+    target: { value: "查看" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: /提\s*问/ }));
+  const chip = await screen.findByRole("button", { name: ref });
+  expect(chip.textContent).toContain(name.replace(/\.md$/, ""));
+  expect(chip.getAttribute("title")).toBe(`指标/${name}`);
+  expect(container.querySelector(".chat-context")).toBeNull();
+  expect(container.querySelector(".tool-step")?.hasAttribute("open")).toBe(
+    true,
+  );
+  fireEvent.click(chip);
+  expect(
+    (await screen.findByRole("heading", { name: "销售标题" })).tagName,
+  ).toBe("H1");
+  expect(screen.getByText("重要内容").tagName).toBe("STRONG");
+  expect(container.querySelector(".context-header strong")?.textContent).toBe(
+    name.replace(/\.md$/, ""),
+  );
+  expect(container.querySelector(".context-ref")?.textContent).toBe(
+    `definitions/${name}`,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "关闭" }));
+  expect(container.querySelector(".chat-context")).toBeNull();
+  expect(container.querySelector(".chat-layout.context-hidden")).toBeTruthy();
+});
+
+test("文档路径编码非法时抽屉和悬停提示原样显示", async () => {
+  const path = "definitions/%E9%94.md";
+  const ref = `document:${path}#chunk-1`;
+  const response = sse
+    .replace('"is_error":false', '"is_error":true')
+    .replace("document:metrics/definitions/sales.md#chunk-1", ref);
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/v1/agents")
+        return json([{ id: "pi", available: true }]);
+      if (url === "/api/v1/providers") return json([provider]);
+      if (url === "/api/v1/conversations") return json([]);
+      if (url === "/api/v1/conversations/ask")
+        return new Response(response, {
+          headers: { "Content-Type": "text/event-stream" },
+        });
+      if (url.startsWith("/api/v1/document?"))
+        return json({
+          ...document,
+          path,
+          content: "# 非法编码\n\n文件仍可查看。",
+        });
+      return new Response("", { status: 404 });
+    }),
+  );
+  const { container } = render(
+    <ChatPage token="token" role="user" messages={getMessages("zh")} />,
+  );
+  await waitFor(() =>
+    expect((screen.getByLabelText("模型") as HTMLSelectElement).value).toBe(
+      provider.models[0],
+    ),
+  );
+  fireEvent.change(screen.getByLabelText("问题"), {
+    target: { value: "查看" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: /提\s*问/ }));
+  const chip = await screen.findByRole("button", { name: ref });
+  expect(chip.textContent).toContain("%E9%94.md");
+  expect(chip.getAttribute("title")).toBe(path);
+  fireEvent.click(chip);
+  expect(
+    (await screen.findByRole("heading", { name: "非法编码" })).tagName,
+  ).toBe("H1");
+  expect(container.querySelector(".context-header strong")?.textContent).toBe(
+    "%E9%94.md",
+  );
+  expect(container.querySelector(".context-ref")?.textContent).toBe(path);
+});
+
+function conversationRow(id: string, title: string) {
+  return {
+    id,
+    title,
+    agent: "pi",
+    provider_id: provider.id,
+    model: provider.models[0],
+    created_at: "2026-11-05T00:00:00Z",
+    updated_at: "2026-11-05T00:00:00Z",
+    turn_count: 0,
+    resumable: true,
+  };
+}
+
+function conversationFetcher(
+  rows: ReturnType<typeof conversationRow>[],
+  onDelete: (id: string) => Response,
+) {
+  return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url === "/api/v1/agents")
+      return json([{ id: "pi", name: "pi", available: true }]);
+    if (url === "/api/v1/providers") return json([provider]);
+    if (url === "/api/v1/conversations") return json(rows);
+    const match = url.match(/^\/api\/v1\/conversations\/([^/]+)$/);
+    if (match) {
+      const id = decodeURIComponent(match[1]);
+      if (init?.method === "DELETE") return onDelete(id);
+      const row = rows.find((item) => item.id === id);
+      if (row) return json({ ...row, turns: [] });
+    }
+    return new Response("", { status: 404 });
+  });
+}
+
+test("会话项悬停或聚焦时显示删除按钮", async () => {
+  const messages = getMessages("zh");
+  const rows = [conversationRow("conv-1", "订单分析")];
+  vi.stubGlobal(
+    "fetch",
+    conversationFetcher(rows, () => new Response(null, { status: 204 })),
+  );
+  const { container } = render(
+    <ChatPage token="token" role="user" messages={messages} />,
+  );
+  const deleteButton = await screen.findByRole("button", {
+    name: messages.deleteConversation,
+  });
+  const item = container.querySelector(".session-item") as HTMLElement;
+  expect(deleteButton.className).not.toContain("visible");
+  fireEvent.mouseEnter(item);
+  expect(deleteButton.className).toContain("visible");
+  fireEvent.mouseLeave(item);
+  expect(deleteButton.className).not.toContain("visible");
+  fireEvent.focusIn(item);
+  expect(deleteButton.className).toContain("visible");
+  fireEvent.focusOut(item);
+  expect(deleteButton.className).not.toContain("visible");
+});
+
+test("删除会话需要就地二次确认，取消不发送请求", async () => {
+  const messages = getMessages("zh");
+  const rows = [conversationRow("conv-1", "订单分析")];
+  const onDelete = vi.fn(() => new Response(null, { status: 204 }));
+  vi.stubGlobal("fetch", conversationFetcher(rows, onDelete));
+  render(<ChatPage token="token" role="user" messages={messages} />);
+
+  fireEvent.click(
+    await screen.findByRole("button", { name: messages.deleteConversation }),
+  );
+  expect(
+    screen.getByRole("button", { name: messages.confirmDeleteConversation }),
+  ).toBeTruthy();
+  expect(
+    screen.getByRole("button", { name: messages.cancelDeleteConversation }),
+  ).toBeTruthy();
+  expect(onDelete).not.toHaveBeenCalled();
+
+  fireEvent.click(
+    screen.getByRole("button", { name: messages.cancelDeleteConversation }),
+  );
+  expect(
+    screen.queryByRole("button", {
+      name: messages.confirmDeleteConversation,
+    }),
+  ).toBeNull();
+  expect(onDelete).not.toHaveBeenCalled();
+
+  fireEvent.click(
+    screen.getByRole("button", { name: messages.deleteConversation }),
+  );
+  fireEvent.click(
+    screen.getByRole("button", { name: messages.confirmDeleteConversation }),
+  );
+  await waitFor(() => expect(onDelete).toHaveBeenCalledWith("conv-1"));
+});
+
+test("删除当前会话后从列表移除并回到新对话空状态", async () => {
+  const messages = getMessages("zh");
+  const rows = [
+    conversationRow("conv-1", "订单分析"),
+    conversationRow("conv-2", "客户分析"),
+  ];
+  vi.stubGlobal(
+    "fetch",
+    conversationFetcher(rows, () => new Response(null, { status: 204 })),
+  );
+  const { container } = render(
+    <ChatPage token="token" role="user" messages={messages} />,
+  );
+  await waitFor(() =>
+    expect(container.querySelector(".chat-header strong")?.textContent).toBe(
+      "订单分析",
+    ),
+  );
+
+  fireEvent.click(
+    screen.getAllByRole("button", { name: messages.deleteConversation })[0],
+  );
+  fireEvent.click(
+    screen.getByRole("button", { name: messages.confirmDeleteConversation }),
+  );
+
+  await waitFor(() =>
+    expect(screen.queryByRole("button", { name: "订单分析" })).toBeNull(),
+  );
+  expect(screen.getByRole("button", { name: "客户分析" })).toBeTruthy();
+  expect(container.querySelector(".chat-header strong")?.textContent).toBe(
+    messages.newConversation,
+  );
+  expect(container.querySelector(".session-item.active")).toBeNull();
+  expect(screen.getByText(messages.chatGreeting)).toBeTruthy();
+});
+
+test("删除运行中的会话提示稍后再试且列表不变", async () => {
+  const messages = getMessages("zh");
+  const rows = [conversationRow("conv-1", "订单分析")];
+  vi.stubGlobal(
+    "fetch",
+    conversationFetcher(
+      rows,
+      () =>
+        new Response(JSON.stringify({ detail: "running" }), { status: 409 }),
+    ),
+  );
+  const { container } = render(
+    <ChatPage token="token" role="user" messages={messages} />,
+  );
+  await waitFor(() =>
+    expect(container.querySelector(".chat-header strong")?.textContent).toBe(
+      "订单分析",
+    ),
+  );
+
+  fireEvent.click(
+    screen.getByRole("button", { name: messages.deleteConversation }),
+  );
+  fireEvent.click(
+    screen.getByRole("button", { name: messages.confirmDeleteConversation }),
+  );
+
+  expect(
+    await screen.findByText(messages.deleteConversationRunning),
+  ).toBeTruthy();
+  expect(screen.getByRole("button", { name: "订单分析" })).toBeTruthy();
+  expect(container.querySelector(".chat-header strong")?.textContent).toBe(
+    "订单分析",
+  );
+  expect(container.querySelectorAll(".session-item")).toHaveLength(1);
+});
+
+test("删除他人会话返回 404 时提示失败且列表不变", async () => {
+  const messages = getMessages("zh");
+  const rows = [conversationRow("conv-1", "订单分析")];
+  vi.stubGlobal(
+    "fetch",
+    conversationFetcher(
+      rows,
+      () =>
+        new Response(JSON.stringify({ detail: "not found" }), { status: 404 }),
+    ),
+  );
+  const { container } = render(
+    <ChatPage token="token" role="user" messages={messages} />,
+  );
+  await waitFor(() =>
+    expect(container.querySelector(".chat-header strong")?.textContent).toBe(
+      "订单分析",
+    ),
+  );
+
+  fireEvent.click(
+    screen.getByRole("button", { name: messages.deleteConversation }),
+  );
+  fireEvent.click(
+    screen.getByRole("button", { name: messages.confirmDeleteConversation }),
+  );
+
+  expect(
+    await screen.findByText(messages.deleteConversationFailed),
+  ).toBeTruthy();
+  expect(screen.getByRole("button", { name: "订单分析" })).toBeTruthy();
+  expect(container.querySelectorAll(".session-item")).toHaveLength(1);
+});
+
+test("末尾纯引用行被移除，引用回收后按对象合并", () => {
+  const answer = [
+    "结论如下。",
+    "",
+    "引用：`document:metrics/definitions/sales.md#chunk-1`、`document:metrics/definitions/sales.md#chunk-2`",
+    "`table:shop.payments`，`field:shop.payments.dt`",
+  ].join("\n");
+  expect(stripCitationRefs(answer)).toEqual({
+    text: "结论如下。",
+    refs: [
+      "document:metrics/definitions/sales.md#chunk-1",
+      "document:metrics/definitions/sales.md#chunk-2",
+      "table:shop.payments",
+      "field:shop.payments.dt",
+    ],
+  });
+  expect(
+    stripCitationRefs(
+      "结论\n\n引用：\n\n- `document:a/b.md#chunk-1`\n- `field:x.y.z`",
+    ),
+  ).toEqual({
+    text: "结论",
+    refs: ["document:a/b.md#chunk-1", "field:x.y.z"],
+  });
+  expect(
+    stripCitationRefs("结论\nCitations: document:a.md, document:b.md#chunk-2"),
+  ).toEqual({
+    text: "结论",
+    refs: ["document:a.md", "document:b.md#chunk-2"],
+  });
+});
+
+test("引用行识别只移除末尾的纯引用块", () => {
+  expect(stripCitationRefs("引用：这份文档说明了口径")).toEqual({
+    text: "引用：这份文档说明了口径",
+    refs: [],
+  });
+  expect(stripCitationRefs("正文\n引用：document:a.md\n后面还有正文")).toEqual({
+    text: "正文\n引用：document:a.md\n后面还有正文",
+    refs: [],
+  });
+  expect(stripCitationRefs("正文\ndocument:a.md")).toEqual({
+    text: "正文\ndocument:a.md",
+    refs: [],
+  });
+  expect(
+    stripCitationRefs("正文\nReferences: document:a.md\n引用：table:x.y"),
+  ).toEqual({
+    text: "正文",
+    refs: ["document:a.md", "table:x.y"],
+  });
+});
+
+test("citationLabel 生成文档与数据表的友好名称", () => {
+  expect(citationLabel("document:%E6%8C%87%E6%A0%87/sales.md#chunk-1")).toEqual(
+    {
+      kind: "document",
+      label: "sales",
+      category: "指标",
+      title: "指标/sales.md",
+    },
+  );
+  expect(
+    citationLabel("document:%E6%8C%87%E6%A0%87/%E5%BA%93/_overview.md#chunk-1"),
+  ).toEqual({
+    kind: "document",
+    label: "库 · 概览",
+    category: "指标",
+    title: "指标/库/_overview.md",
+  });
+  expect(citationLabel("document:指标/订单/variant_001.md#chunk-2")).toEqual({
+    kind: "document",
+    label: "订单 · 口径 001",
+    category: "指标",
+    title: "指标/订单/variant_001.md",
+  });
+  const tricky = citationLabel(
+    `document:指标/${encodeURIComponent("销售 50% #报告.md")}#chunk-1`,
+  );
+  expect(tricky).toEqual({
+    kind: "document",
+    label: "销售 50% #报告",
+    category: "指标",
+    title: "指标/销售 50% #报告.md",
+  });
+  expect(citationLabel("document:definitions/%E9%94.md#chunk-1")).toEqual({
+    kind: "document",
+    label: "%E9%94.md",
+    category: "definitions",
+    title: "definitions/%E9%94.md",
+  });
+  expect(citationLabel("table:shop.orders")).toEqual({
+    kind: "table",
+    label: "shop.orders",
+    title: "shop.orders",
+  });
+  expect(citationLabel("field:shop.orders.amount")).toEqual({
+    kind: "table",
+    label: "shop.orders",
+    title: "shop.orders · amount",
+  });
+  const long = citationLabel(
+    "table:warehouse.a_very_long_table_name_that_should_be_middle_ellipsized",
+  );
+  expect(long.label).toContain("…");
+  expect(long.title).toBe(
+    "warehouse.a_very_long_table_name_that_should_be_middle_ellipsized",
+  );
+});
+
+test("同一文档的多个 chunk 与同表字段合并为同一个引用", () => {
+  const groups = mergeCitations([
+    { ref: "document:metrics/a.md#chunk-1", type: "document" },
+    { ref: "document:metrics/a.md#chunk-9", type: "document" },
+    { ref: "table:shop.orders", type: "table" },
+    { ref: "field:shop.orders.amount", type: "field" },
+    { ref: "field:shop.orders.status", type: "field" },
+  ]);
+  expect(groups).toHaveLength(2);
+  const document = groups.find((group) => group.label.kind === "document");
+  const table = groups.find((group) => group.label.kind === "table");
+  expect(document?.refs).toHaveLength(2);
+  expect(document?.label.label).toBe("a");
+  expect(table?.refs).toHaveLength(3);
+  expect(table?.openRef).toBe("table:shop.orders");
+  expect(table?.label.label).toBe("shop.orders");
+  expect(table?.fields).toEqual(["amount", "status"]);
+  expect(table?.label.title).toBe("shop.orders · 字段：amount、status");
+});
+
+test("引用标签合并后点击打开文档与数据表抽屉", async () => {
+  const citations = [
+    "document:metrics/definitions/sales.md#chunk-1",
+    "document:metrics/definitions/sales.md#chunk-2",
+    "table:shop.payments",
+    "field:shop.payments.dt",
+  ];
+  const done = JSON.stringify({
+    text: `结论如下。\n\n引用：${citations.map((ref) => `\`${ref}\``).join("、")}`,
+    sql: [],
+    citations: [],
+  });
+  const response = [
+    'event: conversation\ndata: {"conversation_id":"conv-cite","turn_id":1}',
+    `event: done\ndata: ${done}`,
+  ].join("\n\n");
+  const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url === "/api/v1/agents")
+      return json([{ id: "pi", name: "pi", available: true }]);
+    if (url === "/api/v1/providers") return json([provider]);
+    if (url === "/api/v1/conversations") return json([]);
+    if (url === "/api/v1/conversations/ask")
+      return new Response(response, {
+        headers: { "Content-Type": "text/event-stream" },
+      });
+    if (url.startsWith("/api/v1/tables/")) return json(table);
+    if (url.startsWith("/api/v1/document?")) return json(document);
+    return new Response("", { status: 404 });
+  });
+  vi.stubGlobal("fetch", fetcher);
+  const { container } = render(
+    <ChatPage token="token" role="user" messages={getMessages("zh")} />,
+  );
+  await waitFor(() =>
+    expect((screen.getByLabelText("模型") as HTMLSelectElement).value).toBe(
+      provider.models[0],
+    ),
+  );
+  fireEvent.change(screen.getByLabelText("问题"), {
+    target: { value: "引用测试" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: /提\s*问/ }));
+  await screen.findByText("结论如下。");
+  expect(container.querySelector(".answer")?.textContent).not.toContain(
+    "引用：",
+  );
+  expect(
+    container.querySelectorAll(".citation-chip:not(.citation-more)"),
+  ).toHaveLength(2);
+  const documentChip = screen.getByRole("button", {
+    name: "document:metrics/definitions/sales.md#chunk-1",
+  });
+  expect(documentChip.textContent).toContain("sales");
+  expect(documentChip.getAttribute("title")).toBe(
+    "metrics/definitions/sales.md",
+  );
+  const tableChip = screen.getByRole("button", {
+    name: "table:shop.payments",
+  });
+  expect(tableChip.textContent).toContain("shop.payments");
+  expect(tableChip.getAttribute("title")).toBe("shop.payments · 字段：dt");
+
+  fireEvent.click(documentChip);
+  expect(
+    await screen.findByText("支付销售额按支付成功时间归属日期。"),
+  ).toBeTruthy();
+  expect(container.querySelector(".context-header strong")?.textContent).toBe(
+    "sales",
+  );
+  expect(container.querySelector(".context-ref")?.textContent).toBe(
+    "definitions/sales.md",
+  );
+  expect(fetcher).toHaveBeenCalledWith(
+    "/api/v1/document?doc_id=document%3Ametrics%2Fdefinitions%2Fsales.md",
+    { headers: { Authorization: "Bearer token" } },
+  );
+  fireEvent.click(screen.getByRole("button", { name: "关闭" }));
+
+  fireEvent.click(tableChip);
+  expect(await screen.findByText("支付流水")).toBeTruthy();
+  expect(container.querySelector(".context-header strong")?.textContent).toBe(
+    "shop.payments",
+  );
+});
+
+test("超过六个引用时折叠为更多 N 个并可展开", async () => {
+  const refs = Array.from(
+    { length: 8 },
+    (_, index) => `document:metrics/doc${index + 1}.md#chunk-1`,
+  );
+  const done = JSON.stringify({
+    text: "结论",
+    sql: [],
+    citations: refs.map((ref) => ({ ref, type: "document" })),
+  });
+  const response = [
+    'event: conversation\ndata: {"conversation_id":"conv-many","turn_id":1}',
+    `event: done\ndata: ${done}`,
+  ].join("\n\n");
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/v1/agents")
+        return json([{ id: "pi", name: "pi", available: true }]);
+      if (url === "/api/v1/providers") return json([provider]);
+      if (url === "/api/v1/conversations") return json([]);
+      if (url === "/api/v1/conversations/ask")
+        return new Response(response, {
+          headers: { "Content-Type": "text/event-stream" },
+        });
+      return new Response("", { status: 404 });
+    }),
+  );
+  const { container } = render(
+    <ChatPage token="token" role="user" messages={getMessages("zh")} />,
+  );
+  await waitFor(() =>
+    expect((screen.getByLabelText("模型") as HTMLSelectElement).value).toBe(
+      provider.models[0],
+    ),
+  );
+  fireEvent.change(screen.getByLabelText("问题"), {
+    target: { value: "很多引用" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: /提\s*问/ }));
+  const more = await screen.findByRole("button", { name: "更多 2 个" });
+  expect(
+    container.querySelectorAll(".citation-chip:not(.citation-more)"),
+  ).toHaveLength(6);
+  fireEvent.click(more);
+  expect(
+    container.querySelectorAll(".citation-chip:not(.citation-more)"),
+  ).toHaveLength(8);
+  expect(screen.getByRole("button", { name: "关闭" })).toBeTruthy();
+});
+
+test("确认卡片与正文 SQL 相同时只显示一次", async () => {
+  const plan = {
+    id: "query-dup",
+    sql: "SELECT sales FROM shop.orders",
+    data_source: "doris_ai",
+    tables: ["shop.orders"],
+    estimated_partitions: null,
+    estimated_rows: null,
+    row_limit: 100,
+  };
+  const conversation = {
+    id: "conv-dup",
+    title: "重复 SQL",
+    agent: "pi",
+    provider_id: provider.id,
+    model: provider.models[0],
+    created_at: "2026-11-05T00:00:00Z",
+    updated_at: "2026-11-05T00:00:00Z",
+    turn_count: 1,
+    resumable: true,
+  };
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/v1/agents")
+        return json([{ id: "pi", available: true }]);
+      if (url === "/api/v1/providers") return json([provider]);
+      if (url === "/api/v1/conversations") return json([conversation]);
+      if (url === "/api/v1/conversations/conv-dup")
+        return json({
+          ...conversation,
+          turns: [
+            {
+              id: 1,
+              sequence: 1,
+              question: "重复 SQL",
+              status: "awaiting_confirmation",
+              answer:
+                "请确认。\n\n```sql\nselect   sales\nfrom   SHOP.orders\n```",
+              sql: [
+                {
+                  sql: "select   sales\nfrom   SHOP.orders",
+                  dialect: "hive",
+                },
+              ],
+              citations: [],
+              error: null,
+              started_at: conversation.created_at,
+              finished_at: null,
+              events: [{ seq: 0, type: "query_plan", data: plan }],
+            },
+          ],
+        });
+      return new Response("", { status: 404 });
+    }),
+  );
+  const { container } = render(
+    <ChatPage token="token" role="user" messages={getMessages("zh")} />,
+  );
+  expect(await screen.findByText("确认执行这条 SQL？")).toBeTruthy();
+  expect(container.querySelectorAll(".sql-block")).toHaveLength(1);
+  expect(container.querySelectorAll(".code-block")).toHaveLength(0);
+  expect(container.querySelector(".sql-block")?.textContent).toContain(
+    "SELECT sales FROM shop.orders",
+  );
+});
+
+test("执行失败后显示错误并可重试", async () => {
+  const plan = {
+    id: "query-retry",
+    sql: "SELECT 1",
+    data_source: "doris_ai",
+    tables: [],
+    estimated_partitions: null,
+    estimated_rows: null,
+    row_limit: 100,
+  };
+  const result = {
+    id: plan.id,
+    columns: ["value"],
+    rows: [[1]],
+    row_count: 1,
+  };
+  let attempts = 0;
+  let executed = false;
+  const conversation = {
+    id: "conv-retry",
+    title: "重试",
+    agent: "pi",
+    provider_id: provider.id,
+    model: provider.models[0],
+    created_at: "2026-11-05T00:00:00Z",
+    updated_at: "2026-11-05T00:00:00Z",
+    turn_count: 1,
+    resumable: true,
+  };
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/v1/agents")
+        return json([{ id: "pi", available: true }]);
+      if (url === "/api/v1/providers") return json([provider]);
+      if (url === "/api/v1/conversations") return json([conversation]);
+      if (url === "/api/v1/conversations/conv-retry")
+        return json({
+          ...conversation,
+          turns: [
+            {
+              id: 1,
+              sequence: 1,
+              question: "重试",
+              status: executed ? "completed" : "awaiting_confirmation",
+              answer: executed ? "执行完成" : "",
+              sql: [],
+              citations: [],
+              error: null,
+              started_at: conversation.created_at,
+              finished_at: executed ? conversation.updated_at : null,
+              events: [
+                { seq: 0, type: "query_plan", data: plan },
+                ...(executed
+                  ? [{ seq: 1, type: "query_result", data: result }]
+                  : []),
+              ],
+            },
+          ],
+        });
+      if (
+        url ===
+        "/api/v1/conversations/conv-retry/turns/1/queries/query-retry/execute"
+      ) {
+        attempts += 1;
+        if (attempts === 1) {
+          return new Response(JSON.stringify({ detail: "执行失败" }), {
+            status: 500,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        executed = true;
+        return new Response(
+          `event: query_result\ndata: ${JSON.stringify(result)}\n\nevent: done\ndata: {"text":"执行完成"}\n\n`,
+          { headers: { "Content-Type": "text/event-stream" } },
+        );
+      }
+      return new Response("", { status: 404 });
+    }),
+  );
+  const { container } = render(
+    <ChatPage token="token" role="user" messages={getMessages("zh")} />,
+  );
+  expect(await screen.findByText("确认执行这条 SQL？")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: /确\s*认\s*执\s*行/ }));
+  expect((await screen.findAllByText("执行失败")).length).toBeGreaterThan(0);
+  expect(
+    screen.getByRole("button", { name: /确\s*认\s*执\s*行/ }),
+  ).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: /确\s*认\s*执\s*行/ }));
+  expect(await screen.findByText("执行完成")).toBeTruthy();
+  expect(container.querySelector(".query-result-preview")).toBeTruthy();
+  expect(
+    screen.queryByRole("button", { name: /确\s*认\s*执\s*行/ }),
+  ).toBeNull();
+  expect(attempts).toBe(2);
 });

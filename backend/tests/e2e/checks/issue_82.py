@@ -4,6 +4,8 @@ import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Thread
 
+import httpx
+
 
 def check_local_mcp_query(ctx):
     from __main__ import McpSession
@@ -87,18 +89,42 @@ def check_local_mcp_query(ctx):
             result["columns"] == ["sales"] and result["rows"] == [[12345]], str(result)
         )
         ctx.require(len(executions()) == 1, str(calls))
+        links = ctx.rest.post(f"/api/v1/queries/{query_id}/download-links")
+        ctx.require(links.status_code == 200, links.text)
+        for fmt, path in links.json().items():
+            ctx.require(
+                path.startswith(f"/api/v1/queries/{query_id}/download-link/"),
+                "REST link is not relative",
+            )
+            ctx.require(
+                httpx.get(ctx.runtime.base_url + path).status_code == 200,
+                f"REST link failed: {fmt}",
+            )
         for fmt, url in result["download_urls"].items():
-            path = f"/api/v1/queries/{query_id}/download?format={fmt}"
-            download = ctx.rest.get(path)
+            ctx.require(url.startswith("http"), "MCP link is not absolute")
+            download = httpx.get(url)
             ctx.require(
                 download.status_code == 200 and download.content,
                 f"download failed: {fmt}",
             )
-            denied = ctx.rest.get(
-                path, headers={"Authorization": "Bearer " + other.json()["token"]}
+            signature = url.rsplit("/", 1)[-1]
+            ctx.require(
+                signature not in ctx.runtime.service_log.read_text(),
+                "signature leaked into server log",
             )
-            ctx.require(denied.status_code == 404, "other token downloaded result")
-            ctx.require(url.endswith(path), f"bad URL: {url}")
+            pieces = url.split("/")
+            for index, value in (
+                (-3, "invalid"),
+                (-2, "1"),
+                (-1, "0" * 64),
+                (-5, "other-query"),
+            ):
+                changed = pieces.copy()
+                changed[index] = value
+                ctx.require(
+                    httpx.get("/".join(changed)).status_code == 404,
+                    "tampered download accepted",
+                )
         ctx.require(
             ctx.rest.get(f"/api/v1/queries/{query_id}/download?format=csv").content
             == b"sales\n12345\n",

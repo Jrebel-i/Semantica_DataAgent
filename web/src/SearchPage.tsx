@@ -3,6 +3,7 @@ import type { FormEvent } from "react";
 import { Alert, Button } from "antd";
 import type { paths } from "./api";
 import type { Messages } from "./i18n";
+import { safeDecodePath } from "./paths";
 
 type Category =
   paths["/api/v1/categories"]["get"]["responses"][200]["content"]["application/json"][number];
@@ -155,7 +156,9 @@ export function SearchPage({
             {results.map((hit) => (
               <li key={hit.ref}>
                 <article className="search-result">
-                  <h3>{hit.name || hit.path || hit.ref}</h3>
+                  <h3>
+                    {hit.name || safeDecodePath(hit.path || hit.ref || "")}
+                  </h3>
                   <p className="ref">
                     {hit.ref} ({hit.type})
                   </p>

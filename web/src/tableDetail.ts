@@ -1,4 +1,5 @@
 import type { components } from "./api";
+import { safeDecodePath } from "./paths";
 
 export type TableSummary = components["schemas"]["TableSummary"];
 export type TableDetail = components["schemas"]["TableView"];
@@ -46,14 +47,6 @@ export function summaryFromDetail(row: TableDetail): TableSummary {
   };
 }
 
-function decode(part: string): string {
-  try {
-    return decodeURIComponent(part);
-  } catch {
-    return part;
-  }
-}
-
 export function tablePartsFromRef(
   ref: string,
 ): { database: string; name: string } | null {
@@ -61,8 +54,8 @@ export function tablePartsFromRef(
   const parts = ref.slice(ref.indexOf(":") + 1).split(".");
   if (parts.length < 2) return null;
   return {
-    database: decode(parts[0]),
-    name: decode(
+    database: safeDecodePath(parts[0]),
+    name: safeDecodePath(
       ref.startsWith("field:") ? parts[1] : parts.slice(1).join("."),
     ),
   };

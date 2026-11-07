@@ -2,8 +2,11 @@
 
 import asyncio
 import csv
+import hashlib
+import hmac
 import io
 import json
+import os
 import time
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -377,8 +380,8 @@ async def execute_query(
     """Plan SQL, then execute only after the user explicitly confirms the plan.
 
     First supply only sql. Show the returned plan to the user and wait for their
-    confirmation. Then supply only confirmation_id. Downloads require the same
-    bearer token. Never confirm on behalf of the user.
+    confirmation. Then supply only confirmation_id. Signed download links are
+    short-lived bearer credentials. Never confirm on behalf of the user.
     """
     from .conversation_api import public_base_url
     from .mcp_context import current_conversation_id, current_requester
@@ -404,10 +407,9 @@ async def execute_query(
         result = await _execute_with_audit(
             confirmation_id, ExecuteInput(), user, kind="mcp"
         )
-        base = f"{public_base_url()}/api/v1/queries/{confirmation_id}/download"
-        result["download_urls"] = {
-            fmt: f"{base}?format={fmt}" for fmt in ("csv", "xlsx", "json")
-        }
+        result["download_urls"] = _download_links(
+            confirmation_id, user, public_base_url()
+        )
         return result
     except HTTPException as exc:
         raise ToolInvalidInput(str(exc.detail)) from exc
@@ -608,6 +610,83 @@ def get_result(query_id: str, user: Annotated[Requester, Depends(current_request
             "columns": result.get("columns") if result else None,
             "rows": result["data"][: config.get("row_limit", 1000)] if result else None,
         }
+
+
+DOWNLOAD_LINK_TTL_SECONDS = 30 * 60
+DOWNLOAD_FORMATS = ("csv", "xlsx", "json")
+
+
+def _download_signature(query_id: str, format: str, expires: int) -> str:
+    message = f"{query_id}:{format}:{expires}".encode()
+    key = hmac.new(
+        os.environ["DATAAGENT_ENCRYPTION_KEY"].encode(),
+        b"semantica-dataagent/download-link/v1",
+        hashlib.sha256,
+    ).digest()
+    return hmac.new(key, message, hashlib.sha256).hexdigest()
+
+
+def _audit_download(owner_id: str, query_id: str, format: str, kind: str) -> None:
+    with sessions().begin() as db:
+        db.add(
+            QueryAudit(
+                id=uuid.uuid4().hex,
+                owner_id=owner_id,
+                sql=json.dumps({"query_id": query_id, "format": format}),
+                kind=kind,
+                status="succeeded",
+                row_count=None,
+                elapsed_ms=0,
+            )
+        )
+
+
+def _download_links(query_id: str, user: Requester, base: str) -> dict[str, str]:
+    _cleanup_expired_conversation_results(query_id, user)
+    with sessions()() as db:
+        row = db.get(QueryExecution, query_id)
+        if row is None or row.owner_id != user.id or row.status != "succeeded":
+            raise HTTPException(404, "查询结果不存在")
+    expires = int(time.time()) + DOWNLOAD_LINK_TTL_SECONDS
+    links = {}
+    for fmt in DOWNLOAD_FORMATS:
+        signature = _download_signature(query_id, fmt, expires)
+        links[fmt] = (
+            f"{base}/api/v1/queries/{query_id}/download-link/{fmt}/{expires}/{signature}"
+        )
+        _audit_download(user.id, query_id, fmt, "download_link_created")
+    return links
+
+
+@router.post("/api/v1/queries/{query_id}/download-links")
+def create_download_links(
+    query_id: str, user: Annotated[Requester, Depends(current_requester)]
+):
+    return _download_links(query_id, user, "")
+
+
+@router.get("/api/v1/queries/{query_id}/download-link/{format}/{expires}/{signature}")
+async def download_link(query_id: str, format: str, expires: str, signature: str):
+    if not expires.isascii() or not expires.isdigit() or len(expires) > 12:
+        raise HTTPException(404, "查询结果不存在")
+    deadline = int(expires)
+    if (
+        format not in DOWNLOAD_FORMATS
+        or deadline <= int(time.time())
+        or not signature.isascii()
+        or not hmac.compare_digest(
+            _download_signature(query_id, format, deadline), signature
+        )
+    ):
+        raise HTTPException(404, "查询结果不存在")
+    with sessions()() as db:
+        row = db.get(QueryExecution, query_id)
+        if row is None:
+            raise HTTPException(404, "查询结果不存在")
+        user = Requester(id=row.owner_id, role="user", token="")
+    response = await download(query_id, user, format)
+    _audit_download(user.id, query_id, format, "download_link_used")
+    return response
 
 
 @router.get("/api/v1/queries/{query_id}/download")
