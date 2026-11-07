@@ -256,3 +256,44 @@ test("user cannot access correction review", async () => {
   expect(screen.queryByRole("button", { name: "批准" })).toBeNull();
   expect(screen.queryByText("纠错审批")).toBeNull();
 });
+
+test("status bar distinguishes knowledge generations by suffix and tooltip", async () => {
+  const name = "default_4177a9e7c8a844aa9a889b5166999f";
+  localStorage.setItem("token", "user");
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) => {
+      if (url === "/api/v1/me") return Response.json({ role: "user" });
+      if (url === "/api/v1/generations")
+        return Response.json({
+          generations: [
+            {
+              name,
+              current: true,
+              created_at: "2026-11-07T03:51:00Z",
+              source_commit: null,
+              counts: {},
+            },
+            {
+              name: "default_4177a9e7c8a844aa9a889b5166999e",
+              current: false,
+              created_at: null,
+              source_commit: null,
+              counts: {},
+            },
+          ],
+          source_head: null,
+          behind: false,
+        });
+      return Response.json({});
+    }),
+  );
+  render(<App />);
+
+  const suffix = await screen.findByText(/5166999f/);
+  expect(suffix.textContent).toContain("5166999f");
+  expect(suffix.textContent).toMatch(/· \d{2}-\d{2} \d{2}:\d{2}/);
+  const item = suffix.closest(".status-item");
+  expect(item?.getAttribute("title")).toBe(name);
+  expect(screen.queryByText(/default_4177a9e7c8a844aa9a…/)).toBeNull();
+});
