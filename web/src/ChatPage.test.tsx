@@ -230,6 +230,12 @@ test("查询计划可确认执行，结果和下载显示在对话中", async ()
   expect(await screen.findByText("销售结论")).toBeTruthy();
   expect(screen.queryByRole("tab", { name: "结果" })).toBeNull();
   expect(screen.getByText("共 25 行，已显示前 20 行")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "复制链接" }));
+  await waitFor(() =>
+    expect(navigator.clipboard.writeText).toHaveBeenCalledWith(
+      `${window.location.origin}/signed/csv`,
+    ),
+  );
   const click = vi
     .spyOn(HTMLAnchorElement.prototype, "click")
     .mockImplementation(() => {});
@@ -240,7 +246,7 @@ test("查询计划可确认执行，结果和下载显示在对话中", async ()
     fetcher.mock.calls.filter(([input]) =>
       String(input).includes("/download-links"),
     ),
-  ).toHaveLength(3);
+  ).toHaveLength(4);
   expect(
     fetcher.mock.calls.some(([input]) => String(input).startsWith("/signed/")),
   ).toBe(false);
@@ -450,6 +456,9 @@ test("streams tools and text, copies SQL, and opens table and document citations
   expect(
     await screen.findByText("支付销售额按支付成功时间归属日期。"),
   ).toBeTruthy();
+  expect(
+    window.document.querySelector(".context-header strong")?.textContent,
+  ).toBe("sales.md");
   expect(fetcher).toHaveBeenCalledWith(
     "/api/v1/document?doc_id=document%3Ametrics%2Fdefinitions%2Fsales.md",
     { headers: { Authorization: "Bearer personal-token" } },
@@ -959,6 +968,9 @@ test("后打开的引用不会被较晚返回的旧请求覆盖", async () => {
   expect(
     await screen.findByText("支付销售额按支付成功时间归属日期。"),
   ).toBeTruthy();
+  expect(
+    window.document.querySelector(".context-header strong")?.textContent,
+  ).toBe("sales.md");
   await act(async () => {
     resolveTable(json([table]));
     await delayedTable;

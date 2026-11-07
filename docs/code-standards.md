@@ -202,4 +202,4 @@ Docker Desktop / WSL 下，agent 只连接 internal 网络；同一网络中的�
 
 ## 查询结果下载链接
 
-查询所有者可通过 `POST /api/v1/queries/{id}/download-links` 获取 CSV、XLSX、JSON 的短期链接；MCP 的 `execute_query` 也返回这些链接。链接是敏感凭据，持有人在 30 分钟内无需登录即可下载绑定结果，切勿公开或记录完整链接；过期、密钥轮换或结果清理后失效。部署时代理和网关的访问日志必须对 `/download-link/` 后的路径脱敏或禁用记录。
+查询所有者可通过 `POST /api/v1/queries/{id}/download-links` 获取 CSV、XLSX、JSON 的短期相对路径，浏览器以当前 origin 补全；MCP 的 `execute_query` 返回面向集群内调用方的绝对地址。链接是敏感凭据，持有人在 30 分钟内无需登录即可下载绑定结果，切勿公开或记录完整链接；过期、密钥轮换或结果清理后失效。部署时代理和网关的访问日志必须对 `/download-link/` 后的路径脱敏或禁用记录。

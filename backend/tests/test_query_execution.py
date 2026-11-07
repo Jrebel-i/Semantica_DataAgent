@@ -759,9 +759,27 @@ def test_local_mcp_confirmation_and_download(client, monkeypatch):
                 ).status_code
                 == 404
             )
+        import hashlib
+        import hmac
+        import os
         from urllib.parse import urlsplit
 
+        response = c.post(f"/api/v1/queries/{query_id}/download-links", headers=headers)
+        assert response.status_code == 200
+        relative = response.json()["csv"]
+        assert relative.startswith(f"/api/v1/queries/{query_id}/download-link/csv/")
+        assert c.get(relative).status_code == 200
+        parts = relative.split("/")
+        direct = hmac.new(
+            os.environ["DATAAGENT_ENCRYPTION_KEY"].encode(),
+            f"{query_id}:csv:{parts[-2]}".encode(),
+            hashlib.sha256,
+        ).hexdigest()
+        assert parts[-1] != direct
+        parts[-1] = direct
+        assert c.get("/".join(parts)).status_code == 404
         link = result.structuredContent["download_urls"]["csv"]
+        assert link.startswith("http")
         path = urlsplit(link).path
         with sessions().begin() as db:
             db.add(
@@ -798,10 +816,10 @@ def test_local_mcp_confirmation_and_download(client, monkeypatch):
         with sessions()() as db:
             assert (
                 db.query(QueryAudit).filter_by(kind="download_link_created").count()
-                == 3
+                == 6
             )
             assert (
-                db.query(QueryAudit).filter_by(kind="download_link_used").count() == 3
+                db.query(QueryAudit).filter_by(kind="download_link_used").count() == 4
             )
 
         with sessions().begin() as db:

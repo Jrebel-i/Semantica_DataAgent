@@ -618,9 +618,12 @@ DOWNLOAD_FORMATS = ("csv", "xlsx", "json")
 
 def _download_signature(query_id: str, format: str, expires: int) -> str:
     message = f"{query_id}:{format}:{expires}".encode()
-    return hmac.new(
-        os.environ["DATAAGENT_ENCRYPTION_KEY"].encode(), message, hashlib.sha256
-    ).hexdigest()
+    key = hmac.new(
+        os.environ["DATAAGENT_ENCRYPTION_KEY"].encode(),
+        b"semantica-dataagent/download-link/v1",
+        hashlib.sha256,
+    ).digest()
+    return hmac.new(key, message, hashlib.sha256).hexdigest()
 
 
 def _audit_download(owner_id: str, query_id: str, format: str, kind: str) -> None:
@@ -659,9 +662,7 @@ def _download_links(query_id: str, user: Requester, base: str) -> dict[str, str]
 def create_download_links(
     query_id: str, user: Annotated[Requester, Depends(current_requester)]
 ):
-    from .conversation_api import public_base_url
-
-    return _download_links(query_id, user, public_base_url())
+    return _download_links(query_id, user, "")
 
 
 @router.get("/api/v1/queries/{query_id}/download-link/{format}/{expires}/{signature}")

@@ -195,7 +195,7 @@ function ResultTable({
   limit?: number;
 }) {
   return (
-    <div style={{ overflowX: "auto" }}>
+    <div className="result-table-scroll">
       <table>
         <thead>
           <tr>
@@ -802,7 +802,13 @@ export function ChatPage({
       { method: "POST", headers: { Authorization: `Bearer ${token}` } },
     );
     if (!response.ok) throw new Error(t.askError);
-    return (await response.json()) as Record<string, string>;
+    const paths = (await response.json()) as Record<string, string>;
+    return Object.fromEntries(
+      Object.entries(paths).map(([format, path]) => [
+        format,
+        new URL(path, window.location.origin).href,
+      ]),
+    );
   }
   async function downloadQuery(id: string, format: string) {
     try {
@@ -1637,13 +1643,31 @@ export function ChatPage({
           {citationRef && (
             <aside className="chat-context">
               <div className="context-body">
-                <Button
-                  type="text"
-                  aria-label={t.close}
-                  onClick={closeCitation}
-                >
-                  <CloseOutlined />
-                </Button>
+                <div className="context-header">
+                  <strong title={citationRef}>
+                    {citationDetail?.kind === "document"
+                      ? (() => {
+                          const name =
+                            citationDetail.document.path.split("/").at(-1) ||
+                            citationDetail.document.path;
+                          try {
+                            return decodeURIComponent(name);
+                          } catch {
+                            return name;
+                          }
+                        })()
+                      : selectedTable
+                        ? `${selectedTable.database}.${selectedTable.name}`
+                        : "引用详情"}
+                  </strong>
+                  <Button
+                    type="text"
+                    aria-label={t.close}
+                    onClick={closeCitation}
+                  >
+                    <CloseOutlined />
+                  </Button>
+                </div>
                 {citationLoading && <p>{t.loadingCitation}</p>}
                 {citationError && <Alert type="error" title={citationError} />}
                 {selectedTable ? (
