@@ -7,7 +7,7 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
-import { KnowledgePage } from "./KnowledgePage";
+import { KnowledgePage, warehouseLayer } from "./KnowledgePage";
 import { getMessages } from "./i18n";
 
 type TableRow = {
@@ -138,6 +138,20 @@ test("按数仓层次分组，层和库都显示表数", async () => {
   expect(order).toEqual([...order].sort((left, right) => left - right));
 });
 
+test("库名到数仓层的映射固定，未知库名归入其他层", () => {
+  expect(warehouseLayer("ods")).toBe("raw");
+  expect(warehouseLayer("ods_archive")).toBe("raw");
+  expect(warehouseLayer("dwd")).toBe("detail");
+  expect(warehouseLayer("dws")).toBe("summary");
+  expect(warehouseLayer("dwt")).toBe("summary");
+  expect(warehouseLayer("dm")).toBe("mart");
+  expect(warehouseLayer("app")).toBe("application");
+  expect(warehouseLayer("dimensions")).toBe("dimension");
+  expect(warehouseLayer("tmp")).toBe("temporary");
+  expect(warehouseLayer("quick")).toBe("other");
+  expect(warehouseLayer("test")).toBe("other");
+});
+
 test("默认只展开选中表所在的库，折叠的库不渲染子节点", async () => {
   installFetch([table("ods", "ods_selected"), table("app", "app_hidden")]);
   const { container } = render(
@@ -186,6 +200,12 @@ test("大量表时首次只渲染选中库，DOM 节点低于 3000", async () =>
   );
   expect(screen.getByRole("button", { name: "quick_table_0" })).toBeTruthy();
   expect(screen.queryByRole("button", { name: "app_table_0" })).toBeNull();
+  expect(screen.getByRole("button", { name: "quick_table_99" })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "quick_table_100" })).toBeNull();
+  fireEvent.click(screen.getByText("更多 (418)"));
+  expect(
+    await screen.findByRole("button", { name: "quick_table_199" }),
+  ).toBeTruthy();
 });
 
 test("搜索在树数据层过滤，并展开命中的库", async () => {

@@ -303,8 +303,6 @@ export function KnowledgePage({
   }, [selectedDatabase, selectedRef, visibleTables]);
   const defaultExpandedKeys = useMemo(
     () => [
-      "group:docs",
-      ...categories.map((category) => category.ref),
       ...(selectedRef
         ? [
             "group:tables",
@@ -313,7 +311,7 @@ export function KnowledgePage({
           ]
         : []),
     ],
-    [categories, selectedDatabase, selectedLayer, selectedRef],
+    [selectedDatabase, selectedLayer, selectedRef],
   );
 
   useEffect(() => {
@@ -355,15 +353,6 @@ export function KnowledgePage({
       ),
     );
   }, [needle, tableLayers]);
-
-  useEffect(() => {
-    if (needle || categories.length === 0) return;
-    setExpandedKeys((keys) =>
-      Array.from(
-        new Set([...keys, "group:docs", ...categories.map((row) => row.ref)]),
-      ),
-    );
-  }, [categories, needle]);
 
   useEffect(() => {
     if (needle) {
