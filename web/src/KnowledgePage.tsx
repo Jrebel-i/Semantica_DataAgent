@@ -13,15 +13,42 @@ type Category =
 type Document =
   paths["/api/v1/document"]["get"]["responses"][200]["content"]["application/json"];
 
-function groupTables(
-  rows: WarehouseTable[],
-  key: (row: WarehouseTable) => string,
-): Record<string, WarehouseTable[]> {
-  const groups: Record<string, WarehouseTable[]> = Object.create(
-    null,
-  ) as Record<string, WarehouseTable[]>;
-  for (const row of rows) (groups[key(row)] ??= []).push(row);
-  return groups;
+type LayerId =
+  | "raw"
+  | "detail"
+  | "summary"
+  | "mart"
+  | "application"
+  | "dimension"
+  | "temporary"
+  | "other";
+
+const TABLE_PAGE_SIZE = 100;
+
+export const WAREHOUSE_LAYERS: {
+  id: LayerId;
+  pattern: RegExp | null;
+  label: keyof Messages;
+}[] = [
+  { id: "raw", pattern: /^ods(?:_|$)/i, label: "layerRaw" },
+  { id: "detail", pattern: /^dwd(?:_|$)/i, label: "layerDetail" },
+  { id: "summary", pattern: /^(?:dws|dwt)(?:_|$)/i, label: "layerSummary" },
+  { id: "mart", pattern: /^dm(?:_|$)/i, label: "layerMart" },
+  { id: "application", pattern: /^app(?:_|$)/i, label: "layerApplication" },
+  {
+    id: "dimension",
+    pattern: /^dimensions(?:_|$)/i,
+    label: "layerDimension",
+  },
+  { id: "temporary", pattern: /^tmp(?:_|$)/i, label: "layerTemporary" },
+  { id: "other", pattern: null, label: "otherLayer" },
+];
+
+export function warehouseLayer(database: string): LayerId {
+  return (
+    WAREHOUSE_LAYERS.find((layer) => layer.pattern?.test(database))?.id ??
+    "other"
+  );
 }
 
 export function KnowledgePage({
@@ -40,6 +67,9 @@ export function KnowledgePage({
   const [lineage, setLineage] = useState<TableLineage | null>(null);
   const [database, setDatabase] = useState("");
   const [search, setSearch] = useState("");
+  const [expandedKeys, setExpandedKeys] = useState<string[]>([]);
+  const [tableLimits, setTableLimits] = useState<Record<string, number>>({});
+  const [treeHeight, setTreeHeight] = useState(0);
   const [error, setError] = useState(false);
   const [correctionOpen, setCorrectionOpen] = useState(false);
   const [patch, setPatch] = useState("");
@@ -47,6 +77,7 @@ export function KnowledgePage({
   const [proposalStatus, setProposalStatus] = useState("");
   const treeScrollRef = useRef<HTMLDivElement>(null);
   const treeLoaded = useRef(false);
+  const previousSearch = useRef("");
 
   useEffect(() => {
     setLinkedDocument(null);
@@ -201,93 +232,243 @@ export function KnowledgePage({
     }
   }
 
-  const treeData = useMemo(() => {
-    const needle = search.trim().toLowerCase();
-    const tableChildren = Object.entries(
-      groupTables(
-        tables.filter(
-          (row) =>
-            !needle ||
-            row.name.toLowerCase().includes(needle) ||
-            (row.comment || "").toLowerCase().includes(needle) ||
-            row.database.toLowerCase().includes(needle),
-        ),
+  const needle = search.trim().toLowerCase();
+  const visibleTables = useMemo(
+    () =>
+      tables.filter(
         (row) =>
-          /^(ods|dwd|dws|ads|dim)(?:_|$)/i
-            .exec(row.database)?.[1]
-            ?.toUpperCase() ?? messages.otherLayer,
-      ),
-    ).map(([layer, layerTables]) => ({
-      key: `layer:${layer}`,
-      title: layer,
-      children: Object.entries(
-        groupTables(layerTables ?? [], (row) => row.database),
-      ).map(([databaseName, rows]) => ({
-        key: `database:${databaseName}`,
-        title: databaseName,
-        children: (rows ?? []).map((row) => ({
-          key: row.ref,
-          title: (
-            <button
-              type="button"
-              className="tree-table-link"
-              aria-label={row.name}
-              onClick={() => {
-                setSelected(row);
-                setReadingDoc(null);
-              }}
-            >
-              <span className="tree-table-name" title={row.name}>
-                {row.name}
-              </span>
-              {row.comment && (
-                <span className="category-tree-description" title={row.comment}>
-                  {row.comment}
-                </span>
-              )}
-            </button>
-          ),
-          isLeaf: true,
-        })),
-      })),
-    }));
-    const docChildren = categories
-      .filter(
-        (category) =>
           !needle ||
-          category.name.toLowerCase().includes(needle) ||
-          (category.description || "").toLowerCase().includes(needle) ||
-          category.documents.some((document) =>
-            document.path.toLowerCase().includes(needle),
-          ),
-      )
-      .map((category) => ({
-        key: category.ref,
-        title: category.name,
-        children: category.documents
-          .filter(
+          row.name.toLowerCase().includes(needle) ||
+          (row.comment || "").toLowerCase().includes(needle) ||
+          row.database.toLowerCase().includes(needle),
+      ),
+    [needle, tables],
+  );
+  const visibleCategories = useMemo(
+    () =>
+      categories
+        .filter(
+          (category) =>
+            !needle ||
+            category.name.toLowerCase().includes(needle) ||
+            (category.description || "").toLowerCase().includes(needle) ||
+            category.documents.some((document) =>
+              document.path.toLowerCase().includes(needle),
+            ),
+        )
+        .map((category) => ({
+          ...category,
+          documents: category.documents.filter(
             (document) =>
               !needle || document.path.toLowerCase().includes(needle),
-          )
-          .map((document) => ({
-            key: document.ref,
-            isLeaf: true,
-            title: (
-              <button
-                type="button"
-                className="tree-doc-link"
-                aria-label={document.path}
-                onClick={() => void openDocument(document.ref)}
-              >
-                {document.path}
-              </button>
-            ),
-          })),
-      }));
+          ),
+        })),
+    [categories, needle],
+  );
+  const tableLayers = useMemo(() => {
+    const grouped = new Map<LayerId, Map<string, WarehouseTable[]>>();
+    for (const row of visibleTables) {
+      const layer = warehouseLayer(row.database);
+      const databases =
+        grouped.get(layer) ?? new Map<string, WarehouseTable[]>();
+      grouped.set(layer, databases);
+      const rows = databases.get(row.database) ?? [];
+      rows.push(row);
+      databases.set(row.database, rows);
+    }
+    return WAREHOUSE_LAYERS.map((layer) => {
+      const databases = [...(grouped.get(layer.id)?.entries() ?? [])];
+      return {
+        id: layer.id,
+        label: messages[layer.label] as string,
+        count: databases.reduce((sum, [, rows]) => sum + rows.length, 0),
+        databases,
+      };
+    }).filter((layer) => layer.count > 0);
+  }, [messages, visibleTables]);
+  const selectedRef = selected?.ref ?? "";
+  const selectedDatabase = selected?.database ?? "";
+  const selectedLayer = selectedDatabase
+    ? warehouseLayer(selectedDatabase)
+    : "";
+  const selectedIndex = useMemo(() => {
+    if (!selectedRef) return -1;
+    let index = 0;
+    for (const row of visibleTables) {
+      if (row.database !== selectedDatabase) continue;
+      if (row.ref === selectedRef) return index;
+      index += 1;
+    }
+    return -1;
+  }, [selectedDatabase, selectedRef, visibleTables]);
+  const defaultExpandedKeys = useMemo(
+    () => [
+      ...(selectedRef
+        ? [
+            "group:tables",
+            `layer:${selectedLayer}`,
+            `database:${selectedDatabase}`,
+          ]
+        : []),
+    ],
+    [selectedDatabase, selectedLayer, selectedRef],
+  );
+
+  useEffect(() => {
+    if (!selectedRef) return;
+    setExpandedKeys((keys) =>
+      Array.from(
+        new Set([
+          ...keys,
+          "group:tables",
+          `layer:${selectedLayer}`,
+          `database:${selectedDatabase}`,
+        ]),
+      ),
+    );
+  }, [selectedDatabase, selectedLayer, selectedRef]);
+
+  useEffect(() => {
+    if (!selectedDatabase || selectedIndex < 0) return;
+    setTableLimits((current) => {
+      const limit = current[selectedDatabase] ?? TABLE_PAGE_SIZE;
+      if (selectedIndex < limit) return current;
+      return {
+        ...current,
+        [selectedDatabase]:
+          Math.ceil((selectedIndex + 1) / TABLE_PAGE_SIZE) * TABLE_PAGE_SIZE,
+      };
+    });
+  }, [selectedDatabase, selectedIndex]);
+
+  useEffect(() => {
+    if (needle) return;
+    setExpandedKeys((keys) =>
+      Array.from(
+        new Set([
+          ...keys,
+          "group:tables",
+          ...tableLayers.map((layer) => `layer:${layer.id}`),
+        ]),
+      ),
+    );
+  }, [needle, tableLayers]);
+
+  useEffect(() => {
+    if (needle) {
+      const keys = ["group:tables", "group:docs"];
+      for (const layer of tableLayers) {
+        keys.push(`layer:${layer.id}`);
+        for (const [databaseName] of layer.databases)
+          keys.push(`database:${databaseName}`);
+      }
+      for (const category of visibleCategories) keys.push(category.ref);
+      setExpandedKeys(keys);
+    } else if (previousSearch.current) {
+      setExpandedKeys(defaultExpandedKeys);
+    }
+    previousSearch.current = needle;
+  }, [defaultExpandedKeys, needle, tableLayers, visibleCategories]);
+
+  useEffect(() => {
+    const node = treeScrollRef.current;
+    if (!node || typeof ResizeObserver === "undefined") return;
+    const update = () => setTreeHeight(node.clientHeight);
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, []);
+
+  const treeData = useMemo(() => {
+    const tableChildren = tableLayers.map((layer) => ({
+      key: `layer:${layer.id}`,
+      title: `${layer.label} (${layer.count})`,
+      children: layer.databases.map(([databaseName, rows]) => {
+        const limit = tableLimits[databaseName] ?? TABLE_PAGE_SIZE;
+        const shown = rows.slice(0, limit);
+        const remaining = rows.length - shown.length;
+        return {
+          key: `database:${databaseName}`,
+          title: `${databaseName} (${rows.length})`,
+          children: [
+            ...shown.map((row) => ({
+              key: row.ref,
+              title: (
+                <button
+                  type="button"
+                  className="tree-table-link"
+                  aria-label={row.name}
+                  onClick={() => {
+                    setSelected(row);
+                    setReadingDoc(null);
+                  }}
+                >
+                  <span className="tree-table-name" title={row.name}>
+                    {row.name}
+                  </span>
+                  {row.comment && (
+                    <span
+                      className="category-tree-description"
+                      title={row.comment}
+                    >
+                      {row.comment}
+                    </span>
+                  )}
+                </button>
+              ),
+              isLeaf: true,
+            })),
+            ...(remaining > 0
+              ? [
+                  {
+                    key: `more:${databaseName}`,
+                    isLeaf: true,
+                    title: (
+                      <button
+                        type="button"
+                        className="tree-doc-link"
+                        onClick={() =>
+                          setTableLimits((current) => ({
+                            ...current,
+                            [databaseName]:
+                              (current[databaseName] ?? TABLE_PAGE_SIZE) +
+                              TABLE_PAGE_SIZE,
+                          }))
+                        }
+                      >
+                        {messages.showMore} ({remaining})
+                      </button>
+                    ),
+                  },
+                ]
+              : []),
+          ],
+        };
+      }),
+    }));
+    const docChildren = visibleCategories.map((category) => ({
+      key: category.ref,
+      title: category.name,
+      children: category.documents.map((document) => ({
+        key: document.ref,
+        isLeaf: true,
+        title: (
+          <button
+            type="button"
+            className="tree-doc-link"
+            aria-label={document.path}
+            onClick={() => void openDocument(document.ref)}
+          >
+            {document.path}
+          </button>
+        ),
+      })),
+    }));
     return [
       {
         key: "group:docs",
-        title: `${messages.knowledgeDocuments} (${categories.reduce(
+        title: `${messages.knowledgeDocuments} (${visibleCategories.reduce(
           (sum, category) => sum + category.documents.length,
           0,
         )})`,
@@ -295,11 +476,17 @@ export function KnowledgePage({
       },
       {
         key: "group:tables",
-        title: `${messages.dataTables} (${tables.length})`,
+        title: `${messages.dataTables} (${visibleTables.length})`,
         children: tableChildren,
       },
     ];
-  }, [categories, messages, readingDoc, search, tables]);
+  }, [
+    messages,
+    tableLayers,
+    tableLimits,
+    visibleCategories,
+    visibleTables.length,
+  ]);
 
   return (
     <>
@@ -317,11 +504,11 @@ export function KnowledgePage({
           </div>
           <div className="knowledge-tree-scroll" ref={treeScrollRef}>
             <Tree
-              key={`${tables.map((row) => row.ref).join("|")}-${categories
-                .map((category) => category.ref)
-                .join("|")}`}
-              defaultExpandAll
               blockNode
+              expandAction="click"
+              expandedKeys={expandedKeys}
+              onExpand={(keys) => setExpandedKeys(keys.map(String))}
+              height={treeHeight || undefined}
               selectedKeys={
                 selected?.ref
                   ? [selected.ref]
