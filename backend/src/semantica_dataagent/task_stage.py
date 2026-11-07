@@ -3,6 +3,7 @@
 from urllib.parse import quote
 
 from .plugins import parse_task
+from .refs import bounded_ref
 from .stage_contract import StageResult, delete_batches
 
 
@@ -121,9 +122,10 @@ def write(records, generation, storage):
             pair = (record.data["upstream"], record.data["downstream"])
             declarations.setdefault(task_id, {}).setdefault(pair, []).append(record)
     rows, edges, failures = [], [], []
+    truncations = {}
     for task in tasks:
         name = task.data["name"]
-        ref = "task:" + quote(name, safe="")
+        ref = bounded_ref("task:" + quote(name, safe=""), truncations)
         declared = list(declarations.get(name, {}))
         result, resolved = resolve_task(task, declared, parsed_tasks[name])
         reads = sorted(set(result.reads) | {u for u, _ in declared})
@@ -173,7 +175,10 @@ def write(records, generation, storage):
                 "parse_status": record.data["parse_status"],
                 "task_id": record.data.get("task_id", ""),
                 "ref": (
-                    "task:" + quote(record.data["task_id"], safe="")
+                    bounded_ref(
+                        "task:" + quote(record.data["task_id"], safe=""),
+                        truncations,
+                    )
                     if record.data.get("task_id")
                     else ""
                 ),
@@ -226,19 +231,26 @@ def write(records, generation, storage):
     )
     storage.execute(
         """UNWIND $rows AS row MATCH (task:SDATask {generation:$generation, ref:row.ref})
-        UNWIND row.reads AS name MATCH (table:SDATable {generation:$generation})
-        WHERE table.database + '.' + table.name = name MERGE (task)-[:READS]->(table)""",
+        UNWIND row.reads AS name
+        UNWIND [i IN range(0, size(name) - 1) WHERE substring(name, i, 1) = '.' | i] AS sep
+        MATCH (table:SDATable {generation:$generation, database:substring(name, 0, sep), name:substring(name, sep + 1)})
+        MERGE (task)-[:READS]->(table)""",
         {"rows": rows, "generation": generation},
     )
     storage.execute(
         """UNWIND $rows AS row MATCH (task:SDATask {generation:$generation, ref:row.ref})
-        UNWIND row.writes AS name MATCH (table:SDATable {generation:$generation})
-        WHERE table.database + '.' + table.name = name MERGE (task)-[:PRODUCES]->(table)""",
+        UNWIND row.writes AS name
+        UNWIND [i IN range(0, size(name) - 1) WHERE substring(name, i, 1) = '.' | i] AS sep
+        MATCH (table:SDATable {generation:$generation, database:substring(name, 0, sep), name:substring(name, sep + 1)})
+        MERGE (task)-[:PRODUCES]->(table)""",
         {"rows": rows, "generation": generation},
     )
     storage.execute(
-        """UNWIND $rows AS row MATCH (a:SDATable {generation:$generation}), (b:SDATable {generation:$generation})
-        WHERE a.database + '.' + a.name = row.upstream AND b.database + '.' + b.name = row.downstream
+        """UNWIND $rows AS row
+        UNWIND [i IN range(0, size(row.upstream) - 1) WHERE substring(row.upstream, i, 1) = '.' | i] AS up_sep
+        UNWIND [i IN range(0, size(row.downstream) - 1) WHERE substring(row.downstream, i, 1) = '.' | i] AS down_sep
+        MATCH (a:SDATable {generation:$generation, database:substring(row.upstream, 0, up_sep), name:substring(row.upstream, up_sep + 1)})
+        MATCH (b:SDATable {generation:$generation, database:substring(row.downstream, 0, down_sep), name:substring(row.downstream, down_sep + 1)})
         CREATE (a)-[r:DEPENDS_ON]->(b) SET r = row""",
         {"rows": edges, "generation": generation},
     )
@@ -274,6 +286,7 @@ def write(records, generation, storage):
             "lineage": len(edges),
             "column_lineage": column_count,
             "column_failures": column_failure_tasks,
+            **truncations,
         },
         failures=failures,
     )
@@ -358,10 +371,16 @@ def write_column_lineage(records, tasks, parsed_tasks, schema, generation, stora
     )
     storage.execute(
         """UNWIND $rows AS row
-        MATCH (a:SDAField {generation:$generation, name:row.upstream_field}),
-              (b:SDAField {generation:$generation, name:row.downstream_field})
-        WHERE a.database + '.' + a.table = row.upstream_table
-          AND b.database + '.' + b.table = row.downstream_table
+        UNWIND [i IN range(0, size(row.upstream_table) - 1)
+                WHERE substring(row.upstream_table, i, 1) = '.' | i] AS up_sep
+        UNWIND [i IN range(0, size(row.downstream_table) - 1)
+                WHERE substring(row.downstream_table, i, 1) = '.' | i] AS down_sep
+        MATCH (a:SDAField {generation:$generation,
+               database:substring(row.upstream_table, 0, up_sep),
+               table:substring(row.upstream_table, up_sep + 1), name:row.upstream_field})
+        MATCH (b:SDAField {generation:$generation,
+               database:substring(row.downstream_table, 0, down_sep),
+               table:substring(row.downstream_table, down_sep + 1), name:row.downstream_field})
         CREATE (a)-[r:FIELD_DEPENDS_ON]->(b) SET r = row""",
         {"rows": rows, "generation": generation},
     )

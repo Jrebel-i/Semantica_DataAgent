@@ -36,6 +36,7 @@ from .embedding_client import EmbeddingStats
 from .embedding_client import embed as embedding_embed
 from .filters import filter_records, get_filters
 from .plugins import configured
+from .refs import bounded_ref
 from .stage_contract import WRITE_BATCH_SIZE, delete_batches
 from .storage_errors import StorageUnavailable
 
@@ -332,14 +333,47 @@ def milvus(values):
     return store
 
 
-def reference(kind, data):
+def reference(kind, data, counts=None):
     key = ".".join(
         quote(str(data[k]), safe="").replace(".", "%2E")
         for k in (
             ("database", "name") if kind == "table" else ("database", "table", "name")
         )
     )
-    return f"{kind}:{key}"
+    return bounded_ref(f"{kind}:{key}", counts)
+
+
+def ensure_build_indexes(store):
+    """Prepare lookup indexes before either kind of build touches graph data."""
+    indexes = (
+        ("sda_field_generation_name", "SDAField", ("generation", "name")),
+        (
+            "sda_field_generation_location",
+            "SDAField",
+            ("generation", "database", "table", "name"),
+        ),
+        ("sda_field_generation_table", "SDAField", ("generation", "database", "table")),
+        (
+            "sda_table_generation_location",
+            "SDATable",
+            ("generation", "database", "name"),
+        ),
+        ("sda_table_generation_name", "SDATable", ("generation", "name")),
+        ("sda_task_generation_ref", "SDATask", ("generation", "ref")),
+        ("sda_document_generation_ref", "SDADocument", ("generation", "ref")),
+        ("sda_entity_generation_ref", "SDAEntity", ("generation", "ref")),
+        ("sda_entity_generation", "SDAEntity", ("generation",)),
+        ("sda_category_generation_name", "SDACategory", ("generation", "name")),
+        ("sda_lineage_generation_name", "SDALineageTable", ("generation", "name")),
+    )
+    for name, label, properties in indexes:
+        columns = ", ".join(f"n.{prop}" for prop in properties)
+        execute(
+            store,
+            f"CREATE INDEX {name} IF NOT EXISTS FOR (n:{label}) ON ({columns})",
+            {},
+        )
+    execute(store, "CALL db.awaitIndexes(3600)", {})
 
 
 @contextmanager
@@ -352,6 +386,7 @@ def build_storage(values, embedding_stats=None):
     dimension = len(embed(values, ["knowledge"], stats)[0])
     graph_store = graph(values)
     try:
+        ensure_build_indexes(graph_store)
         vector_store = milvus(values)
         try:
             if values.get("_build_id"):
@@ -387,6 +422,7 @@ def incremental_storage(values, embedding_stats=None):
     stats = embedding_stats if embedding_stats is not None else EmbeddingStats()
     graph_store = graph(values)
     try:
+        ensure_build_indexes(graph_store)
         vector_store = milvus(values)
         try:
             vector_store.get_collection(collection_name(values))

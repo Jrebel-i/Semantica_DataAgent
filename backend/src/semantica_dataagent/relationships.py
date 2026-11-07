@@ -125,8 +125,11 @@ def reconcile(storage, records, generation):
         if record.kind == "lineage"
     ]
     storage.execute(
-        """UNWIND $rows AS row MATCH (up:SDATable {generation:$generation}), (down:SDATable {generation:$generation})
-        WHERE up.database + '.' + up.name = row.upstream AND down.database + '.' + down.name = row.downstream
+        """UNWIND $rows AS row
+        UNWIND [i IN range(0, size(row.upstream) - 1) WHERE substring(row.upstream, i, 1) = '.' | i] AS up_sep
+        UNWIND [i IN range(0, size(row.downstream) - 1) WHERE substring(row.downstream, i, 1) = '.' | i] AS down_sep
+        MATCH (up:SDATable {generation:$generation, database:substring(row.upstream, 0, up_sep), name:substring(row.upstream, up_sep + 1)})
+        MATCH (down:SDATable {generation:$generation, database:substring(row.downstream, 0, down_sep), name:substring(row.downstream, down_sep + 1)})
         MERGE (up)-[r:DEPENDS_ON {task_id: coalesce(row.task_id, ''), upstream: row.upstream, downstream: row.downstream}]->(down)
         ON CREATE SET r.evidence = row.evidence, r.parse_status = row.parse_status, r.source_file = row.source_file, r.source_key = row.source_key, r.source_files = row.source_files, r.build_id = $build_id""",
         {

@@ -3,12 +3,20 @@
 from collections import defaultdict
 from urllib.parse import quote
 
+from .refs import MAX_REF_BYTES
 from .stage_contract import StageResult
 
 WRITE_BATCH_SIZE = 2000
+MAX_VALUE_CHARS = 512
+MAX_SAMPLE_CHARS = 200
 
 
 def prepare(records, limit):
+    values, statuses, _ = _prepare(records, limit)
+    return values, statuses
+
+
+def _prepare(records, limit):
     groups = defaultdict(list)
     rows = defaultdict(dict)
     for record in records:
@@ -30,7 +38,7 @@ def prepare(records, limit):
                     name = cells.get(field[: -len(suffix)] + "_name")
                     if name:
                         aliases[(database, table, field, value)].add(name.strip())
-    values, statuses = [], []
+    values, statuses, skipped = [], [], 0
     for (database, table, field), raw in groups.items():
         distinct = sorted(set(raw))
         normalized = {value.strip() for value in distinct}
@@ -42,7 +50,9 @@ def prepare(records, limit):
                 "field": field,
                 "count": len(normalized),
                 "too_many": too_many,
-                "samples": distinct[:5],
+                "samples": [
+                    value for value in distinct if len(value) <= MAX_SAMPLE_CHARS
+                ][:5],
             }
         )
         if not too_many:
@@ -51,6 +61,12 @@ def prepare(records, limit):
                     quote(x, safe="").replace(".", "%2E")
                     for x in (database, table, field, value)
                 )
+                if (
+                    len(ref.encode("utf-8")) > MAX_REF_BYTES
+                    or len(value) > MAX_VALUE_CHARS
+                ):
+                    skipped += 1
+                    continue
                 values.append(
                     {
                         "database": database,
@@ -62,11 +78,11 @@ def prepare(records, limit):
                         "ref": ref,
                     }
                 )
-    return values, statuses
+    return values, statuses, skipped
 
 
 def write(records, generation, storage):
-    values, statuses = prepare(
+    values, statuses, skipped = _prepare(
         records, int(storage._settings.get("dimension_value_limit", "1000"))
     )
     changed_fields = {
@@ -75,7 +91,7 @@ def write(records, generation, storage):
         if r.kind == "field"
     }
     if storage.is_incremental and changed_fields:
-        _, all_statuses = prepare(
+        _, all_statuses, _ = _prepare(
             storage.all_records,
             int(storage._settings.get("dimension_value_limit", "1000")),
         )
@@ -126,4 +142,6 @@ def write(records, generation, storage):
                     "generation": generation,
                 },
             )
-    return StageResult(counts={"dimension_value": len(values)})
+    return StageResult(
+        counts={"dimension_value": len(values), "dimension_value_skipped": skipped}
+    )
