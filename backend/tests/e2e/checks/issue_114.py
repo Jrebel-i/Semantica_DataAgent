@@ -144,6 +144,7 @@ def check_table_lineage_uses_location_indexes(ctx):
 
 
 def check_qualified_names_with_dots(ctx):
+    from semantica_dataagent import relationships
     from semantica_dataagent.canonical import Record
 
     generation = ctx.generation + "_dots"
@@ -194,8 +195,38 @@ def check_qualified_names_with_dots(ctx):
                 actual = {(r["ad"], r["at"], r["bd"], r["bt"]) for r in rows}
                 locations = [("a", "b.c"), ("a.b", "c")]
                 expected = {(a, b, c, d) for a, b in locations for c, d in locations}
-                ctx.require(actual == expected, f"带点的限定名关系不完整：{actual}")
-                return {"relationships": len(actual)}
+                ctx.require(actual == expected, f"带点的字段限定名关系不完整：{actual}")
+                session.run(
+                    "UNWIND $rows AS row CREATE (t:SDAEntity:SDATable) SET t = row, t.generation = $g",
+                    g=generation,
+                    rows=[{"database": db, "name": table} for db, table in locations],
+                ).consume()
+                lineage = Record(
+                    "lineage",
+                    {
+                        "upstream": "a.b.c",
+                        "downstream": "a.b.c",
+                        "task_id": "dot",
+                        "evidence": "declared",
+                        "parse_status": "success",
+                    },
+                    "synthetic",
+                )
+                relationships.reconcile(Storage(), [lineage], generation)
+                rows = session.run(
+                    """MATCH (a:SDATable {generation:$g})-[:DEPENDS_ON]->(b:SDATable {generation:$g})
+                    RETURN a.database AS ad, a.name AS at, b.database AS bd, b.name AS bt""",
+                    g=generation,
+                )
+                table_actual = {(r["ad"], r["at"], r["bd"], r["bt"]) for r in rows}
+                ctx.require(
+                    table_actual == expected,
+                    f"带点的表限定名关系不完整：{table_actual}",
+                )
+                return {
+                    "field_relationships": len(actual),
+                    "table_relationships": len(table_actual),
+                }
             finally:
                 session.run(
                     "MATCH (n:SDAEntity {generation:$g}) DETACH DELETE n", g=generation
