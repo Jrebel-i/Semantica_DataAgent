@@ -1151,18 +1151,27 @@ def test_table_list_view_summary_and_full(client, monkeypatch):
         "document_count": 2,
         "has_partition": True,
     }
+    full_field = {
+        "name": "dt",
+        "type": "string",
+        "comment": "日期分区",
+        "partition": True,
+        "dimension_count": None,
+        "dimension_too_many": None,
+        "dimension_samples": None,
+    }
     full = {
-        **summary,
-        "fields": [
-            {
-                "name": "dt",
-                "type": "string",
-                "comment": "日期分区",
-                "partition": True,
-            }
-        ],
+        "name": "orders",
+        "database": "shop",
+        "comment": "交易订单",
+        "ref": "table:shop.orders",
+        "fields": [full_field],
         "documents": [
-            {"ref": "document:metrics/sales.md", "path": "sales.md", "category": "metrics"}
+            {
+                "ref": "document:metrics/sales.md",
+                "path": "sales.md",
+                "category": "metrics",
+            }
         ],
     }
     calls = []
@@ -1177,9 +1186,7 @@ def test_table_list_view_summary_and_full(client, monkeypatch):
     assert c.get("/api/v1/tables", params={"view": "summary"}).status_code == 401
     assert c.get("/api/v1/tables/shop/orders").status_code == 401
 
-    response = c.get(
-        "/api/v1/tables", params={"view": "summary"}, headers=headers
-    )
+    response = c.get("/api/v1/tables", params={"view": "summary"}, headers=headers)
     assert response.status_code == 200
     assert response.json() == [summary]
     assert calls[-1] == {
@@ -1232,6 +1239,9 @@ def test_table_detail_route_looks_up_dotted_names_and_returns_404(client, monkey
                 "type": "string",
                 "comment": "日期分区",
                 "partition": True,
+                "dimension_count": None,
+                "dimension_too_many": None,
+                "dimension_samples": None,
             }
         ],
         "documents": [],
@@ -1242,7 +1252,11 @@ def test_table_detail_route_looks_up_dotted_names_and_returns_404(client, monkey
         calls.append(kwargs)
         database = kwargs.get("database")
         names = kwargs.get("names") or []
-        return [row] if database == row["database"] and names == ["db.with.dot.orders.v2"] else []
+        return (
+            [row]
+            if database == row["database"] and names == ["db.with.dot.orders.v2"]
+            else []
+        )
 
     monkeypatch.setattr(knowledge, "describe", describe)
     response = c.get("/api/v1/tables/db.with.dot/orders.v2", headers=headers)
@@ -1251,7 +1265,6 @@ def test_table_detail_route_looks_up_dotted_names_and_returns_404(client, monkey
     assert calls[-1] == {
         "database": "db.with.dot",
         "names": ["db.with.dot.orders.v2"],
-        "summary": False,
     }
 
     assert c.get("/api/v1/tables/shop/missing", headers=headers).status_code == 404
