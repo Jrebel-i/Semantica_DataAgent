@@ -77,7 +77,99 @@ def _config():
     raise HTTPException(503, "尚未启用执行器")
 
 
-def _tables_and_partitions(tree):
+def _partition_terms(where):
+    terms = []
+
+    def collect(node):
+        if isinstance(node, exp.Paren):
+            collect(node.this)
+        elif isinstance(node, exp.And):
+            collect(node.this)
+            collect(node.expression)
+        elif not isinstance(node, (exp.Or, exp.Not)):
+            terms.append(node)
+
+    if where:
+        collect(where.this)
+    return terms
+
+
+def _latest_partition_subquery(term, field, alias, scope, table):
+    if not isinstance(term, exp.EQ):
+        return None
+    column = term.this
+    if not isinstance(column, exp.Column) or column.name.lower() != field:
+        return None
+    if column.table and column.table.lower() != alias.lower():
+        return None
+    if not column.table and len(scope.selected_sources) != 1:
+        return None
+    subquery = term.expression
+    if not isinstance(subquery, exp.Subquery):
+        return None
+    select = subquery.this
+    if not isinstance(select, exp.Select):
+        return None
+    if any(
+        select.args.get(key)
+        for key in (
+            "with_",
+            "distinct",
+            "where",
+            "group",
+            "having",
+            "qualify",
+            "windows",
+            "order",
+            "limit",
+            "offset",
+            "fetch",
+            "joins",
+            "connect",
+            "match",
+            "sample",
+            "pivot",
+            "unpivot",
+            "lateral",
+            "prewhere",
+            "cluster",
+            "distribute",
+            "sort",
+        )
+    ):
+        return None
+    if len(select.expressions) != 1:
+        return None
+    projection = select.expressions[0]
+    if (
+        not isinstance(projection, exp.Max)
+        or projection.args.get("expressions")
+        or projection.args.get("over")
+        or not isinstance(projection.this, exp.Column)
+        or projection.this.name.lower() != field
+    ):
+        return None
+    from_ = select.args.get("from_")
+    if not isinstance(from_, exp.From) or not isinstance(from_.this, exp.Table):
+        return None
+    inner_table = from_.this
+    if (
+        not isinstance(inner_table.this, exp.Identifier)
+        or inner_table.catalog
+        or inner_table.name.lower() != table.name.lower()
+        or (inner_table.db or "").lower() != (table.db or "").lower()
+    ):
+        return None
+    max_column = projection.this
+    if max_column.table and max_column.table.lower() not in {
+        inner_table.alias_or_name.lower(),
+        inner_table.name.lower(),
+    }:
+        return None
+    return select
+
+
+def _partition_analysis(tree):
     try:
         tables = knowledge.describe()
     except Exception as exc:
@@ -89,22 +181,10 @@ def _tables_and_partitions(tree):
             table
         )
     names = []
+    records = []
     for scope in traverse_scope(tree):
-        where = scope.expression.args.get("where")
         # A predicate beneath OR or NOT cannot prove the partition is constrained.
-        terms = []
-
-        def collect(node, terms=terms):
-            if isinstance(node, exp.Paren):
-                collect(node.this)
-            elif isinstance(node, exp.And):
-                collect(node.this)
-                collect(node.expression)
-            elif not isinstance(node, (exp.Or, exp.Not)):
-                terms.append(node)
-
-        if where:
-            collect(where.this)
+        terms = _partition_terms(scope.expression.args.get("where"))
         for alias, source in scope.selected_sources.items():
             table = source[1]
             if not isinstance(table, exp.Table):
@@ -130,40 +210,59 @@ def _tables_and_partitions(tree):
                 raise HTTPException(503, f"无法确定表的分区元数据: {name}")
             names.append(name)
             partitions = [f["name"].lower() for f in fields if f.get("partition")]
-            for field in partitions:
+            records.append((scope, terms, alias, table, name, partitions))
 
-                def valid(term, field=field, alias=alias, scope=scope):
-                    if not isinstance(
-                        term,
-                        (exp.EQ, exp.GT, exp.GTE, exp.LT, exp.LTE, exp.Between, exp.In),
-                    ):
-                        return False
-                    column = term.this
-                    if (
-                        not isinstance(column, exp.Column)
-                        or column.name.lower() != field
-                    ):
-                        return False
-                    if column.table and column.table.lower() != alias.lower():
-                        return False
-                    if not column.table and len(scope.selected_sources) != 1:
-                        return False
-                    values = [
-                        value
-                        for key, value in term.args.items()
-                        if key != "this" and value is not None
-                    ]
-                    flat = [
-                        item
-                        for value in values
-                        for item in (value if isinstance(value, list) else [value])
-                    ]
-                    return bool(flat) and all(
-                        isinstance(value, exp.Literal) for value in flat
-                    )
+    latest_runtime = False
+    allowed = set()
+    for scope, terms, alias, table, _, partitions in records:
+        for field in partitions:
+            for term in terms:
+                inner = _latest_partition_subquery(term, field, alias, scope, table)
+                if inner is not None:
+                    allowed.add(id(inner))
+                    latest_runtime = True
 
-                if not any(valid(term) for term in terms):
-                    raise HTTPException(422, f"分区表 {name} 缺少分区条件: {field}")
+    for scope, terms, alias, table, name, partitions in records:
+        if id(scope.expression) in allowed:
+            continue
+        for field in partitions:
+
+            def valid(term, field=field, alias=alias, scope=scope, table=table):
+                if _latest_partition_subquery(term, field, alias, scope, table):
+                    return True
+                if not isinstance(
+                    term,
+                    (exp.EQ, exp.GT, exp.GTE, exp.LT, exp.LTE, exp.Between, exp.In),
+                ):
+                    return False
+                column = term.this
+                if not isinstance(column, exp.Column) or column.name.lower() != field:
+                    return False
+                if column.table and column.table.lower() != alias.lower():
+                    return False
+                if not column.table and len(scope.selected_sources) != 1:
+                    return False
+                values = [
+                    value
+                    for key, value in term.args.items()
+                    if key != "this" and value is not None
+                ]
+                flat = [
+                    item
+                    for value in values
+                    for item in (value if isinstance(value, list) else [value])
+                ]
+                return bool(flat) and all(
+                    isinstance(value, exp.Literal) for value in flat
+                )
+
+            if not any(valid(term) for term in terms):
+                raise HTTPException(422, f"分区表 {name} 缺少分区条件: {field}")
+    return names, latest_runtime
+
+
+def _tables_and_partitions(tree):
+    names, _ = _partition_analysis(tree)
     return names
 
 
@@ -201,7 +300,7 @@ async def plan(body: PlanInput, user: Annotated[Requester, Depends(current_reque
 
 async def _create_plan(body, user, conversation_id=None, turn_id=None, source=None):
     tree = _validate_sql(body.sql)
-    tables = _tables_and_partitions(tree)
+    tables, latest_partition = _partition_analysis(tree)
     plugin, config = _config()
     estimate = await plugin.bind(config, "").estimate(body.sql)
     query_id = uuid.uuid4().hex
@@ -215,6 +314,8 @@ async def _create_plan(body, user, conversation_id=None, turn_id=None, source=No
         "row_limit": config.get("row_limit", 1000),
         "execution_limit": config.get("download_limit", 100000),
     }
+    if latest_partition:
+        plan_data["partition_selection"] = "latest_at_runtime"
     if source:
         plan_data["source"] = source
     with sessions().begin() as db:

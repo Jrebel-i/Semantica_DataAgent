@@ -84,14 +84,22 @@ def _configure_partition_plan(monkeypatch):
     "sql",
     [
         "SELECT * FROM shop.orders WHERE dt = (SELECT MAX(dt) FROM shop.orders)",
-        "SELECT o.* FROM shop.orders AS o "
-        "WHERE o.dt = (SELECT MAX(dt) FROM shop.orders)",
-        "SELECT * FROM shop.orders WHERE dt = "
-        "(SELECT MAX(dt) FROM shop.orders) AND dt >= '2025-01-01'",
-        "SELECT * FROM shop.orders WHERE dt = (SELECT MAX(dt) FROM shop.orders) "
-        "AND amount > 0",
-        "SELECT o.* FROM shop.orders AS o "
-        "WHERE o.dt = (SELECT MAX(o.dt) FROM shop.orders AS o)",
+        (
+            "SELECT o.* FROM shop.orders AS o "
+            "WHERE o.dt = (SELECT MAX(dt) FROM shop.orders)"
+        ),
+        (
+            "SELECT * FROM shop.orders WHERE dt = "
+            "(SELECT MAX(dt) FROM shop.orders) AND dt >= '2025-01-01'"
+        ),
+        (
+            "SELECT * FROM shop.orders WHERE dt = (SELECT MAX(dt) FROM shop.orders) "
+            "AND amount > 0"
+        ),
+        (
+            "SELECT o.* FROM shop.orders AS o "
+            "WHERE o.dt = (SELECT MAX(o.dt) FROM shop.orders AS o)"
+        ),
     ],
 )
 def test_latest_partition_subquery_is_accepted(client, monkeypatch, sql):
@@ -102,7 +110,7 @@ def test_latest_partition_subquery_is_accepted(client, monkeypatch, sql):
 
     assert response.status_code == 200, response.text
     plan = response.json()
-    assert plan["tables"] == ["shop.orders"]
+    assert set(plan["tables"]) == {"shop.orders"}
     assert plan["estimated_partitions"] is None
     assert plan["estimated_rows"] is None
     assert plan["partition_selection"] == "latest_at_runtime"
@@ -111,45 +119,65 @@ def test_latest_partition_subquery_is_accepted(client, monkeypatch, sql):
 @pytest.mark.parametrize(
     "sql",
     [
-        "SELECT * FROM shop.orders WHERE dt = "
-        "(SELECT MAX(dt) FROM shop.orders WHERE amount > 0)",
-        "SELECT * FROM shop.orders WHERE dt = "
-        "(SELECT MAX(dt) FROM shop.orders GROUP BY dt)",
-        "SELECT * FROM shop.orders WHERE dt = "
-        "(SELECT MAX(dt) FROM shop.orders HAVING MAX(dt) > '2025-01-01')",
-        "SELECT * FROM shop.orders WHERE dt = "
-        "(SELECT MAX(dt) FROM shop.orders LIMIT 1)",
-        "SELECT * FROM shop.orders WHERE dt = "
-        "(SELECT MAX(dt) FROM shop.orders JOIN shop.customers ON 1 = 1)",
-        "WITH latest AS (SELECT MAX(dt) AS dt FROM shop.orders) "
-        "SELECT * FROM shop.orders WHERE dt = (SELECT dt FROM latest)",
-        "SELECT * FROM shop.orders WHERE dt = "
-        "(SELECT MAX(amount) FROM shop.orders)",
-        "SELECT * FROM shop.orders WHERE dt = "
-        "(SELECT MAX(dt) FROM shop.customers)",
-        "SELECT * FROM shop.orders WHERE dt = "
-        "(SELECT MAX(dt) FROM shop.orders) OR 1 = 1",
-        "SELECT * FROM shop.orders WHERE NOT "
-        "(dt = (SELECT MAX(dt) FROM shop.orders))",
-        "SELECT (SELECT MAX(dt) FROM shop.orders), * FROM shop.orders "
-        "WHERE dt = '2025-01-01'",
-        "SELECT * FROM shop.orders WHERE dt >= "
-        "(SELECT MAX(dt) FROM shop.orders)",
-        "SELECT * FROM shop.orders WHERE dt IN "
-        "(SELECT MAX(dt) FROM shop.orders)",
+        (
+            "SELECT * FROM shop.orders WHERE dt = "
+            "(SELECT MAX(dt) FROM shop.orders WHERE amount > 0)"
+        ),
+        (
+            "SELECT * FROM shop.orders WHERE dt = "
+            "(SELECT MAX(dt) FROM shop.orders GROUP BY dt)"
+        ),
+        (
+            "SELECT * FROM shop.orders WHERE dt = "
+            "(SELECT MAX(dt) FROM shop.orders HAVING MAX(dt) > '2025-01-01')"
+        ),
+        (
+            "SELECT * FROM shop.orders WHERE dt = "
+            "(SELECT MAX(dt) FROM shop.orders LIMIT 1)"
+        ),
+        (
+            "SELECT * FROM shop.orders WHERE dt = "
+            "(SELECT MAX(dt) FROM shop.orders JOIN shop.customers ON 1 = 1)"
+        ),
+        (
+            "WITH latest AS (SELECT MAX(dt) AS dt FROM shop.orders) "
+            "SELECT * FROM shop.orders WHERE dt = (SELECT dt FROM latest)"
+        ),
+        "SELECT * FROM shop.orders WHERE dt = (SELECT MAX(amount) FROM shop.orders)",
+        "SELECT * FROM shop.orders WHERE dt = (SELECT MAX(dt) FROM shop.customers)",
+        (
+            "SELECT * FROM shop.orders WHERE dt = "
+            "(SELECT MAX(dt) FROM shop.orders) OR 1 = 1"
+        ),
+        "SELECT * FROM shop.orders WHERE NOT (dt = (SELECT MAX(dt) FROM shop.orders))",
+        (
+            "SELECT (SELECT MAX(dt) FROM shop.orders), * FROM shop.orders "
+            "WHERE dt = '2025-01-01'"
+        ),
+        "SELECT * FROM shop.orders WHERE dt >= (SELECT MAX(dt) FROM shop.orders)",
+        "SELECT * FROM shop.orders WHERE dt IN (SELECT MAX(dt) FROM shop.orders)",
         "SELECT MAX(dt) FROM shop.orders",
-        "SELECT * FROM shop.orders WHERE dt = "
-        "(SELECT MAX(dt) FROM (SELECT dt FROM shop.orders) AS latest)",
-        "SELECT * FROM shop.orders WHERE dt = "
-        "(SELECT MAX(dt) + 1 FROM shop.orders)",
-        "SELECT * FROM shop.orders WHERE dt = "
-        "(SELECT DISTINCT MAX(dt) FROM shop.orders)",
-        "SELECT * FROM shop.orders WHERE dt = "
-        "(SELECT MAX(DISTINCT dt) FROM shop.orders)",
-        "SELECT * FROM shop.orders WHERE dt = "
-        "(SELECT MAX(dt) OVER () FROM shop.orders)",
-        "SELECT * FROM shop.orders WHERE dt = "
-        "(SELECT MAX(dt) FROM shop.orders ORDER BY MAX(dt))",
+        (
+            "SELECT * FROM shop.orders WHERE dt = "
+            "(SELECT MAX(dt) FROM (SELECT dt FROM shop.orders) AS latest)"
+        ),
+        "SELECT * FROM shop.orders WHERE dt = (SELECT MAX(dt) + 1 FROM shop.orders)",
+        (
+            "SELECT * FROM shop.orders WHERE dt = "
+            "(SELECT DISTINCT MAX(dt) FROM shop.orders)"
+        ),
+        (
+            "SELECT * FROM shop.orders WHERE dt = "
+            "(SELECT MAX(DISTINCT dt) FROM shop.orders)"
+        ),
+        (
+            "SELECT * FROM shop.orders WHERE dt = "
+            "(SELECT MAX(dt) OVER () FROM shop.orders)"
+        ),
+        (
+            "SELECT * FROM shop.orders WHERE dt = "
+            "(SELECT MAX(dt) FROM shop.orders ORDER BY MAX(dt))"
+        ),
     ],
 )
 def test_invalid_latest_partition_subquery_is_rejected(client, monkeypatch, sql):
@@ -160,6 +188,73 @@ def test_invalid_latest_partition_subquery_is_rejected(client, monkeypatch, sql)
 
     assert response.status_code == 422, response.text
     assert "缺少分区条件" in response.text
+
+
+def test_latest_partition_execution_is_still_limited(client, monkeypatch):
+    from semantica_dataagent import knowledge, query_api
+
+    submissions = []
+
+    monkeypatch.setattr(
+        knowledge,
+        "describe",
+        lambda **_: [
+            {
+                "database": "shop",
+                "name": "orders",
+                "fields": [{"name": "dt", "partition": True}],
+            }
+        ],
+    )
+
+    class Plugin:
+        def bind(self, config, token):
+            return self
+
+        async def estimate(self, sql):
+            return {"partitions": None, "rows": None}
+
+        async def submit(self, sql, limit):
+            submissions.append((sql, limit))
+            return "query-key"
+
+        async def wait(self, key):
+            return {"columns": ["dt"], "data": [["2025-01-01"]]}
+
+    monkeypatch.setattr(
+        query_api,
+        "_config",
+        lambda: (Plugin(), {"row_limit": 10, "download_limit": 5}),
+    )
+    c, headers = client
+    assert (
+        c.put(
+            "/api/v1/me/dtb-token", headers=headers, json={"token": "fake-token"}
+        ).status_code
+        == 200
+    )
+    response = c.post(
+        "/api/v1/queries/plan",
+        headers=headers,
+        json={
+            "sql": "SELECT * FROM shop.orders "
+            "WHERE dt = (SELECT MAX(dt) FROM shop.orders)"
+        },
+    )
+    assert response.status_code == 200, response.text
+    query_id = response.json()["id"]
+
+    response = c.post(
+        f"/api/v1/queries/{query_id}/execute", headers=headers, json={"limit": 1}
+    )
+
+    assert response.status_code == 200, response.text
+    assert len(submissions) == 1
+    bounded, limit = submissions[0]
+    assert bounded.startswith("SELECT * FROM (SELECT * FROM shop.orders")
+    assert bounded.endswith(") AS _dataagent_query LIMIT 5")
+    assert "MAX(dt)" in bounded
+    assert limit == 5
 
 
 def test_expired_query_confirmation_cannot_execute(client, monkeypatch):
