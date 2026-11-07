@@ -373,7 +373,8 @@ def test_build_storage_uses_the_embedding_dimension(server, monkeypatch, dimensi
 
     class Graph:
         def execute_query(self, query, parameters):
-            return {"success": True, "records": []}
+            records = [{"deleted": 0}] if "RETURN count(*) AS deleted" in query else []
+            return {"success": True, "records": records}
 
         def close(self):
             pass
