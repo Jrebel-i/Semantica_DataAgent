@@ -73,6 +73,10 @@ function json(value: unknown) {
   });
 }
 
+async function openHistory(title: string) {
+  fireEvent.click(await screen.findByRole("button", { name: title }));
+}
+
 beforeEach(() => {
   vi.stubGlobal(
     "ResizeObserver",
@@ -110,6 +114,131 @@ test("新对话的消息区不显示占位查询计划", async () => {
   );
   await screen.findByText(getMessages("zh").exampleQuestions);
   expect(container.querySelector(".chat-scroll .plan-placeholder")).toBeNull();
+});
+
+test("首次加载有历史会话时显示空状态且不请求会话详情", async () => {
+  const messages = getMessages("zh");
+  const rows = [conversationRow("conv-1", "订单分析")];
+  const fetcher = conversationFetcher(
+    rows,
+    () => new Response(null, { status: 204 }),
+  );
+  vi.stubGlobal("fetch", fetcher);
+  const { container } = render(
+    <ChatPage token="token" role="user" messages={messages} />,
+  );
+
+  expect(await screen.findByRole("button", { name: "订单分析" })).toBeTruthy();
+  expect(container.querySelector(".chat-header strong")?.textContent).toBe(
+    messages.newConversation,
+  );
+  expect(container.querySelector(".session-item.active")).toBeNull();
+  expect(screen.getByText(messages.chatGreeting)).toBeTruthy();
+  expect(
+    fetcher.mock.calls.some(
+      ([input]) => String(input) === "/api/v1/conversations/conv-1",
+    ),
+  ).toBe(false);
+});
+
+test("点击侧栏历史会话才请求详情并打开", async () => {
+  const messages = getMessages("zh");
+  const rows = [conversationRow("conv-1", "订单分析")];
+  const fetcher = conversationFetcher(
+    rows,
+    () => new Response(null, { status: 204 }),
+  );
+  vi.stubGlobal("fetch", fetcher);
+  const { container } = render(
+    <ChatPage token="token" role="user" messages={messages} />,
+  );
+
+  fireEvent.click(await screen.findByRole("button", { name: "订单分析" }));
+  await waitFor(() =>
+    expect(container.querySelector(".chat-header strong")?.textContent).toBe(
+      "订单分析",
+    ),
+  );
+  expect(container.querySelector(".session-item.active")).toBeTruthy();
+  expect(fetcher).toHaveBeenCalledWith("/api/v1/conversations/conv-1", {
+    headers: { Authorization: "Bearer token" },
+  });
+});
+
+test("提问后新会话出现在列表顶部并选中", async () => {
+  const messages = getMessages("zh");
+  const previous = conversationRow("conv-old", "旧会话");
+  const created = {
+    ...conversationRow("conv-new", "新问题"),
+    turn_count: 1,
+  };
+  const stream = [
+    'event: conversation\ndata: {"conversation_id":"conv-new","turn_id":1}',
+    'event: done\ndata: {"text":"新回答","sql":[],"citations":[]}',
+  ].join("\n\n");
+  let asked = false;
+  const fetcher = vi.fn(
+    async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/v1/agents")
+        return json([{ id: "pi", available: true }]);
+      if (url === "/api/v1/providers") return json([provider]);
+      if (url === "/api/v1/conversations")
+        return json(asked ? [created, previous] : [previous]);
+      if (url === "/api/v1/conversations/ask" && init?.method === "POST") {
+        asked = true;
+        return new Response(stream, {
+          headers: { "Content-Type": "text/event-stream" },
+        });
+      }
+      if (url === "/api/v1/conversations/conv-new")
+        return json({
+          ...created,
+          turns: [
+            {
+              id: 1,
+              sequence: 1,
+              question: "新问题",
+              status: "completed",
+              answer: "新回答",
+              sql: [],
+              citations: [],
+              error: null,
+              started_at: created.created_at,
+              finished_at: created.updated_at,
+              events: [],
+            },
+          ],
+        });
+      return new Response("", { status: 404 });
+    },
+  );
+  vi.stubGlobal("fetch", fetcher);
+  const { container } = render(
+    <ChatPage token="token" role="user" messages={messages} />,
+  );
+
+  await waitFor(() =>
+    expect((screen.getByLabelText("模型") as HTMLSelectElement).value).toBe(
+      provider.models[0],
+    ),
+  );
+  fireEvent.change(screen.getByLabelText("问题"), {
+    target: { value: "新问题" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: /提\s*问/ }));
+
+  expect(await screen.findByText("新回答")).toBeTruthy();
+  await waitFor(() => {
+    const items = container.querySelectorAll(".session-item");
+    expect(items).toHaveLength(2);
+    expect(items[0].textContent).toContain("新问题");
+    expect(items[0].classList.contains("active")).toBe(true);
+  });
+  expect(container.querySelector(".chat-header strong")?.textContent).toBe(
+    "新问题",
+  );
+  expect(screen.getByRole("button", { name: "旧会话" })).toBeTruthy();
 });
 
 test("查询计划可确认执行，结果和下载显示在对话中", async () => {
@@ -218,6 +347,7 @@ test("查询计划可确认执行，结果和下载显示在对话中", async ()
       messages={getMessages("zh")}
     />,
   );
+  await openHistory("销售额");
   expect((await screen.findByText("确认执行这条 SQL？")) !== null).toBe(true);
   expect(container.querySelector(".sql-block")?.textContent).toContain(
     "SELECT sales",
@@ -336,6 +466,7 @@ test("结果达到执行上限时提示可能被截断", async () => {
     }),
   );
   render(<ChatPage token="token" role="user" messages={getMessages("zh")} />);
+  await openHistory("上限");
   expect(await screen.findByText("结果可能被截断")).toBeTruthy();
   expect(screen.queryByRole("tab", { name: "查询计划" })).toBeNull();
 });
@@ -400,6 +531,7 @@ test("查看历史预览会打开对应查询结果", async () => {
   const { container } = render(
     <ChatPage token="token" role="user" messages={getMessages("zh")} />,
   );
+  await openHistory("历史");
   await screen.findByText("old-value");
   expect(container.querySelectorAll(".query-result-preview")).toHaveLength(2);
   expect(screen.getByText("new-value")).toBeTruthy();
@@ -468,6 +600,7 @@ test.each([1, 20, 21])("结果预览在 %i 行时显示正确的说明", async (
   const { container } = render(
     <ChatPage token="token" role="user" messages={getMessages("zh")} />,
   );
+  await openHistory("预览");
   if (rowCount <= 20) {
     expect(await screen.findByText(`共 ${rowCount} 行`)).toBeTruthy();
     expect(screen.queryByText(`共 ${rowCount} 行，已显示前 20 行`)).toBeNull();
@@ -735,6 +868,7 @@ test("确认执行返回 410 后按钮禁用并显示已过期", async () => {
     }),
   );
   render(<ChatPage token="token" role="user" messages={getMessages("zh")} />);
+  await openHistory("过期");
   expect(await screen.findByText("确认执行这条 SQL？")).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: /确\s*认\s*执\s*行/ }));
   expect((await screen.findAllByText("查询确认已过期")).length).toBeGreaterThan(
@@ -814,6 +948,7 @@ test.each([
     }),
   );
   render(<ChatPage token="token" role="user" messages={getMessages("en")} />);
+  await openHistory("Preview");
   expect(await screen.findByText(summary)).toBeTruthy();
   expect(screen.getByText(hint)).toBeTruthy();
 });
@@ -948,6 +1083,7 @@ test("英文界面 410 后显示过期文案", async () => {
     }),
   );
   render(<ChatPage token="token" role="user" messages={getMessages("en")} />);
+  await openHistory("Expired");
   expect(await screen.findByText("Confirm running this SQL?")).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Confirm and run" }));
   const expired = (await screen.findByRole("button", {
@@ -2078,6 +2214,7 @@ test("删除当前会话后从列表移除并回到新对话空状态", async ()
   const { container } = render(
     <ChatPage token="token" role="user" messages={messages} />,
   );
+  await openHistory("订单分析");
   await waitFor(() =>
     expect(container.querySelector(".chat-header strong")?.textContent).toBe(
       "订单分析",
@@ -2116,6 +2253,7 @@ test("删除运行中的会话提示稍后再试且列表不变", async () => {
   const { container } = render(
     <ChatPage token="token" role="user" messages={messages} />,
   );
+  await openHistory("订单分析");
   await waitFor(() =>
     expect(container.querySelector(".chat-header strong")?.textContent).toBe(
       "订单分析",
@@ -2153,6 +2291,7 @@ test("删除他人会话返回 404 时提示失败且列表不变", async () => 
   const { container } = render(
     <ChatPage token="token" role="user" messages={messages} />,
   );
+  await openHistory("订单分析");
   await waitFor(() =>
     expect(container.querySelector(".chat-header strong")?.textContent).toBe(
       "订单分析",
@@ -2507,6 +2646,7 @@ test("确认卡片与正文 SQL 相同时只显示一次", async () => {
   const { container } = render(
     <ChatPage token="token" role="user" messages={getMessages("zh")} />,
   );
+  await openHistory("重复 SQL");
   expect(await screen.findByText("确认执行这条 SQL？")).toBeTruthy();
   expect(container.querySelectorAll(".sql-block")).toHaveLength(1);
   expect(container.querySelectorAll(".code-block")).toHaveLength(0);
@@ -2599,6 +2739,7 @@ test("执行失败后显示错误并可重试", async () => {
   const { container } = render(
     <ChatPage token="token" role="user" messages={getMessages("zh")} />,
   );
+  await openHistory("重试");
   expect(await screen.findByText("确认执行这条 SQL？")).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: /确\s*认\s*执\s*行/ }));
   expect((await screen.findAllByText("执行失败")).length).toBeGreaterThan(0);

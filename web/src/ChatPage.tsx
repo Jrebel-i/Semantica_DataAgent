@@ -1012,7 +1012,6 @@ export function ChatPage({
 }) {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [profiles, setProfiles] = useState<AgentProfiles>({});
-  const openedRecent = useRef(false);
   const selectionTouched = useRef(false);
   const askSequence = useRef(0);
   const [defaults, setDefaults] = useState({
@@ -1179,16 +1178,10 @@ export function ChatPage({
       const rows = (await response.json()) as Conversation[];
       if (!Array.isArray(rows)) throw new Error("Invalid conversation list");
       setConversations(rows);
-      if (!openedRecent.current && !settingsOnly) {
-        if (rows.length) {
-          openedRecent.current = true;
-          void openConversation(rows[0].id);
-        }
-      }
     } catch {
       setError(t.askError);
     }
-  }, [token, t.askError, settingsOnly]);
+  }, [token, t.askError]);
 
   const loadProviders = useCallback(async () => {
     try {
@@ -1270,7 +1263,7 @@ export function ChatPage({
           model: profile?.default_model || data.assistant_model || "",
         };
         setDefaults(next);
-        if (!openedRecent.current && !selectionTouched.current) {
+        if (!selectionTouched.current) {
           setAgentId(next.agent);
           if (next.provider) setProviderId(next.provider);
           if (next.model) setModel(next.model);
@@ -1280,8 +1273,7 @@ export function ChatPage({
   }, [token]);
 
   useEffect(() => {
-    if (selectionTouched.current || openedRecent.current || !providers.length)
-      return;
+    if (selectionTouched.current || !providers.length) return;
     const profile = profiles[defaults.agent];
     const options = providers.filter(
       (provider) =>
@@ -1378,9 +1370,6 @@ export function ChatPage({
           name === "conversation" &&
           typeof data.conversation_id === "string"
         ) {
-          // Keep the live answer mounted; reloading the list must not replace
-          // it with a partially persisted turn.
-          openedRecent.current = true;
           conversationId = data.conversation_id;
           setCurrentConversationId(data.conversation_id);
         } else if (name === "text_delta" && typeof data.text === "string") {
