@@ -1701,7 +1701,7 @@ legend {
 }
 .doc-content pre {
   margin: 0;
-  white-space: pre-wrap;
+  white-space: pre;
   font: 12px/1.65 var(--font-mono);
 }
 .category-tree-description {

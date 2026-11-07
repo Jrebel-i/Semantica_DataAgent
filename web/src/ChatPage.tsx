@@ -1658,7 +1658,7 @@ export function ChatPage({
                         })()
                       : selectedTable
                         ? `${selectedTable.database}.${selectedTable.name}`
-                        : "引用详情"}
+                        : t.citations}
                   </strong>
                   <Button
                     type="text"
