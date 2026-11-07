@@ -422,7 +422,7 @@ test("streams tools and text, copies SQL, and opens table and document citations
     return new Response("", { status: 404 });
   });
   vi.stubGlobal("fetch", fetcher);
-  render(
+  const { container } = render(
     <ChatPage
       token="personal-token"
       role="user"
@@ -464,6 +464,9 @@ test("streams tools and text, copies SQL, and opens table and document citations
   const schemaHead = window.document.querySelector(".context-schema-head");
   expect(schemaHead?.textContent).toContain("shop.payments");
   expect(schemaHead?.textContent).toContain("支付流水");
+  expect(
+    window.document.querySelector(".context-schema-body .schema-table"),
+  ).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "关闭" }));
   expect(window.document.querySelector(".context-schema-head")).toBeNull();
   expect(fetcher).toHaveBeenCalledWith("/api/v1/tables/shop/payments", {
@@ -1264,6 +1267,13 @@ test("文档引用解码文件名并在抽屉渲染 Markdown，失败工具自�
   expect(container.querySelector(".context-ref")?.textContent).toBe(
     `definitions/${name}`,
   );
+  const drawer = container.querySelector(".chat-context");
+  const header = drawer?.querySelector(":scope > .context-header");
+  const body = drawer?.querySelector(":scope > .context-body");
+  expect(header).toBeTruthy();
+  expect(body).toBeTruthy();
+  expect(header?.contains(container.querySelector(".context-ref"))).toBe(true);
+  expect(container.querySelector(".context-body .doc-content")).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "关闭" }));
   expect(container.querySelector(".chat-context")).toBeNull();
   expect(container.querySelector(".chat-layout.context-hidden")).toBeTruthy();
@@ -1598,9 +1608,15 @@ test("citationLabel 生成文档与数据表的友好名称", () => {
   });
   expect(citationLabel("document:指标/订单/variant_001.md#chunk-2")).toEqual({
     kind: "document",
-    label: "订单 · 口径 001",
+    label: "订单 · 口径 1",
     category: "指标",
     title: "指标/订单/variant_001.md",
+  });
+  expect(citationLabel("document:指标/订单/variant_012.md#chunk-2")).toEqual({
+    kind: "document",
+    label: "订单 · 口径 12",
+    category: "指标",
+    title: "指标/订单/variant_012.md",
   });
   const tricky = citationLabel(
     `document:指标/${encodeURIComponent("销售 50% #报告.md")}#chunk-1`,
