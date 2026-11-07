@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import json
+import logging
 import math
 import os
 import re
@@ -132,6 +133,21 @@ async def lifespan(application):
             scheduler.stop()
             build_queue.stop()
             knowledge.close_readers()
+
+
+class _RedactDownloadAccess(logging.Filter):
+    """Keep bearer link paths out of uvicorn access logs."""
+
+    def filter(self, record):
+        if isinstance(record.args, tuple) and len(record.args) == 5:
+            client, method, path, version, status = record.args
+            if "/download-link/" in path:
+                path = path.split("/download-link/", 1)[0] + "/download-link/[redacted]"
+                record.args = (client, method, path, version, status)
+        return True
+
+
+logging.getLogger("uvicorn.access").addFilter(_RedactDownloadAccess())
 
 
 app = FastAPI(

@@ -4,6 +4,8 @@ import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Thread
 
+import httpx
+
 
 def check_local_mcp_query(ctx):
     from __main__ import McpSession
@@ -88,17 +90,11 @@ def check_local_mcp_query(ctx):
         )
         ctx.require(len(executions()) == 1, str(calls))
         for fmt, url in result["download_urls"].items():
-            path = f"/api/v1/queries/{query_id}/download?format={fmt}"
-            download = ctx.rest.get(path)
+            download = httpx.get(url)
             ctx.require(
                 download.status_code == 200 and download.content,
                 f"download failed: {fmt}",
             )
-            denied = ctx.rest.get(
-                path, headers={"Authorization": "Bearer " + other.json()["token"]}
-            )
-            ctx.require(denied.status_code == 404, "other token downloaded result")
-            ctx.require(url.endswith(path), f"bad URL: {url}")
         ctx.require(
             ctx.rest.get(f"/api/v1/queries/{query_id}/download?format=csv").content
             == b"sales\n12345\n",

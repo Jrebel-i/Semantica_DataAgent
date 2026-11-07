@@ -555,6 +555,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/queries/{query_id}/download-link/{format}/{expires}/{signature}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Download Link */
+        get: operations["download_link_api_v1_queries__query_id__download_link__format___expires___signature__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/queries/{query_id}/download-links": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create Download Links */
+        post: operations["create_download_links_api_v1_queries__query_id__download_links_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/queries/{query_id}/execute": {
         parameters: {
             query?: never;
@@ -2622,6 +2656,71 @@ export interface operations {
             query?: {
                 format?: "csv" | "xlsx" | "json";
             };
+            header?: never;
+            path: {
+                query_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    download_link_api_v1_queries__query_id__download_link__format___expires___signature__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                query_id: string;
+                format: string;
+                expires: number;
+                signature: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_download_links_api_v1_queries__query_id__download_links_post: {
+        parameters: {
+            query?: never;
             header?: never;
             path: {
                 query_id: string;
