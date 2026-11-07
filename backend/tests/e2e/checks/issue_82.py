@@ -95,6 +95,11 @@ def check_local_mcp_query(ctx):
                 download.status_code == 200 and download.content,
                 f"download failed: {fmt}",
             )
+            signature = url.rsplit("/", 1)[-1]
+            ctx.require(
+                signature not in ctx.runtime.service_log.read_text(),
+                "signature leaked into server log",
+            )
             pieces = url.split("/")
             for index, value in (
                 (-3, "invalid"),
