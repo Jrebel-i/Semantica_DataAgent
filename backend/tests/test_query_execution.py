@@ -748,6 +748,7 @@ def test_local_mcp_confirmation_and_download(client, monkeypatch):
         assert len(calls) == 1
         assert (await call(first, {"confirmation_id": query_id})).isError
         for fmt in ("csv", "xlsx", "json"):
+            assert c.get(result.structuredContent["download_urls"][fmt]).status_code == 200
             path = f"/api/v1/queries/{query_id}/download?format={fmt}"
             assert c.get(path, headers=headers).status_code == 200
             assert (
