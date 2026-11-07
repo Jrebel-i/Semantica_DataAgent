@@ -117,6 +117,7 @@ test("admin issues and revokes a token", async () => {
   );
   localStorage.setItem("token", "admin");
   render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: "用户菜单" }));
   fireEvent.click(await screen.findByRole("button", { name: "管理" }));
   fireEvent.click(await screen.findByRole("link", { name: "配置" }));
   fireEvent.click(await screen.findByRole("link", { name: "令牌管理" }));
@@ -249,6 +250,7 @@ test("MCP access page is reachable from navigation", async () => {
     ),
   );
   render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: "用户菜单" }));
   fireEvent.click(await screen.findByRole("link", { name: "个人设置" }));
   fireEvent.click(await screen.findByRole("link", { name: "MCP 接入" }));
   expect(screen.getByRole("heading", { name: "MCP 接入" })).toBeTruthy();

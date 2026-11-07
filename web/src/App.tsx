@@ -64,6 +64,7 @@ export function App() {
   );
   const [newTarget, setNewTarget] = useState<HTMLDivElement | null>(null);
   const [managementOpen, setManagementOpen] = useState(false);
+  const [personalOpen, setPersonalOpen] = useState(false);
   const [path, setPath] = useState(window.location.pathname);
   const [error, setError] = useState("");
   const [health, setHealth] = useState<Health | null>(null);
@@ -198,7 +199,7 @@ export function App() {
           : []),
         { path: "/knowledge-gaps", label: t.gapTitle },
       ];
-    if (["/config", "/plugins", "/tokens"].includes(path))
+    if (["/config", "/plugins", "/tokens"].includes(path) && role === "admin")
       return [
         { path: "/config", label: t.workbenchConfig },
         ...(role === "admin"
@@ -386,62 +387,76 @@ export function App() {
               ))}
               <div ref={setSessionTarget} className="sidebar-sessions" />
               <div className="personal-menu">
-                <a
-                  className="nav-item"
-                  href="/personal-settings"
-                  aria-current={
-                    path === "/personal-settings" ? "page" : undefined
-                  }
-                  title={t.personalSettings}
-                  onClick={(event) => {
-                    event.preventDefault();
-                    navigate("/personal-settings");
-                  }}
-                >
-                  <span aria-hidden="true">
-                    <UserOutlined />
-                  </span>
-                  <span>{t.personalSettings}</span>
-                </a>
-                {role === "admin" && (
+                {personalOpen && (
                   <>
+                    <a
+                      className="nav-item"
+                      href="/personal-settings"
+                      aria-current={
+                        path === "/personal-settings" ? "page" : undefined
+                      }
+                      title={t.personalSettings}
+                      onClick={(event) => {
+                        event.preventDefault();
+                        navigate("/personal-settings");
+                      }}
+                    >
+                      <span aria-hidden="true">
+                        <UserOutlined />
+                      </span>
+                      <span>{t.personalSettings}</span>
+                    </a>
+                    {role === "admin" && (
+                      <>
+                        <Button
+                          type="text"
+                          className="nav-item"
+                          aria-expanded={managementOpen}
+                          onClick={() => setManagementOpen(!managementOpen)}
+                        >
+                          {t.management}
+                        </Button>
+                        {managementOpen && (
+                          <div className="management-links">
+                            {management.map((item) => (
+                              <a
+                                key={item.path}
+                                href={item.path}
+                                className="nav-item"
+                                onClick={(event) => {
+                                  event.preventDefault();
+                                  navigate(item.path);
+                                  setManagementOpen(false);
+                                }}
+                              >
+                                {item.label}
+                              </a>
+                            ))}
+                          </div>
+                        )}
+                      </>
+                    )}
                     <Button
                       type="text"
                       className="nav-item"
-                      aria-expanded={managementOpen}
-                      onClick={() => setManagementOpen(!managementOpen)}
+                      aria-label={t.logout}
+                      title={t.logout}
+                      icon={<LogoutOutlined />}
+                      onClick={logout}
                     >
-                      {t.management}
+                      {expanded && t.logout}
                     </Button>
-                    {managementOpen && (
-                      <div className="management-links">
-                        {management.map((item) => (
-                          <a
-                            key={item.path}
-                            href={item.path}
-                            className="nav-item"
-                            onClick={(event) => {
-                              event.preventDefault();
-                              navigate(item.path);
-                              setManagementOpen(false);
-                            }}
-                          >
-                            {item.label}
-                          </a>
-                        ))}
-                      </div>
-                    )}
                   </>
                 )}
                 <Button
                   type="text"
-                  className="nav-item"
-                  aria-label={t.logout}
-                  title={t.logout}
-                  icon={<LogoutOutlined />}
-                  onClick={logout}
+                  className="nav-item account-toggle"
+                  icon={<UserOutlined />}
+                  aria-label={t.accountMenu}
+                  aria-expanded={personalOpen}
+                  onClick={() => setPersonalOpen(!personalOpen)}
                 >
-                  {expanded && t.logout}
+                  {expanded && t.accountMenu}
                 </Button>
               </div>
             </nav>
@@ -474,6 +489,8 @@ export function App() {
                     role={role}
                     messages={t}
                     initialContextOpen={false}
+                    language={lang}
+                    onChangeLanguage={changeLanguage}
                     sessionTarget={sessionTarget}
                     newTarget={newTarget}
                     onNavigateChat={() => navigate("/chat")}

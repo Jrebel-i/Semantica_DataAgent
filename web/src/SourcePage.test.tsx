@@ -73,6 +73,7 @@ test("admin can upload and browse source history and compare versions", async ()
   });
   vi.stubGlobal("fetch", fetcher);
   render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: "用户菜单" }));
   fireEvent.click(await screen.findByRole("button", { name: "管理" }));
   fireEvent.click(await screen.findByRole("link", { name: "构建记录" }));
   fireEvent.click(await screen.findByRole("link", { name: "源文件" }));

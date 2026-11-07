@@ -4,7 +4,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { Alert, Button, Input, Space, Tag, Tabs } from "antd";
 import type { components, paths } from "./api";
-import type { Messages } from "./i18n";
+import type { Language, Messages } from "./i18n";
+import { LanguageSwitcher } from "./LanguageSwitcher";
 import { TaskLineage } from "./TaskLineage";
 import {
   CloseOutlined,
@@ -629,6 +630,8 @@ export function ChatPage({
   newTarget,
   onNavigateChat,
   initialContextOpen = true,
+  language,
+  onChangeLanguage,
 }: {
   token: string;
   role: string;
@@ -638,6 +641,8 @@ export function ChatPage({
   newTarget?: HTMLElement | null;
   onNavigateChat?: () => void;
   initialContextOpen?: boolean;
+  language?: Language;
+  onChangeLanguage?: () => void;
 }) {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [profiles, setProfiles] = useState<AgentProfiles>({});
@@ -1751,6 +1756,12 @@ export function ChatPage({
                       </select>
                     </label>
                   </div>
+                  {language && onChangeLanguage && (
+                    <LanguageSwitcher
+                      language={language}
+                      onChange={onChangeLanguage}
+                    />
+                  )}
                   <Button htmlType="submit" type="primary" disabled={!canAsk}>
                     {sending ? t.asking : t.askSubmit}
                   </Button>
