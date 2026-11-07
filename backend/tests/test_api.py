@@ -1224,6 +1224,8 @@ def test_table_list_view_summary_and_full(client, monkeypatch):
 
 
 def test_table_detail_route_looks_up_dotted_names_and_returns_404(client, monkeypatch):
+    from urllib.parse import quote
+
     from semantica_dataagent import knowledge
 
     c, token = client
@@ -1259,7 +1261,11 @@ def test_table_detail_route_looks_up_dotted_names_and_returns_404(client, monkey
         )
 
     monkeypatch.setattr(knowledge, "describe", describe)
-    response = c.get("/api/v1/tables/db.with.dot/orders.v2", headers=headers)
+    encoded_database = quote("db.with.dot", safe="").replace(".", "%2E")
+    encoded_table = quote("orders.v2", safe="").replace(".", "%2E")
+    response = c.get(
+        f"/api/v1/tables/{encoded_database}/{encoded_table}", headers=headers
+    )
     assert response.status_code == 200
     assert response.json() == row
     assert calls[-1] == {
