@@ -575,7 +575,7 @@ export function KnowledgePage({
               {detailError && (
                 <Alert
                   type="error"
-                  title={messages.error}
+                  title={messages.tableDetailError}
                   action={
                     <Button
                       size="small"

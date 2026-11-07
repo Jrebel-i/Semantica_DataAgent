@@ -336,7 +336,7 @@ test("详情请求失败显示错误，重试后恢复", async () => {
   installFetch([table("shop", "orders")], [], () => fail);
   render(<KnowledgePage token="token" messages={getMessages("zh")} />);
 
-  expect(await screen.findByText("无法获取状态")).toBeTruthy();
+  expect(await screen.findByText("表详情加载失败")).toBeTruthy();
   expect(screen.getByRole("button", { name: /重\s*试/ })).toBeTruthy();
   fail = false;
   fireEvent.click(screen.getByRole("button", { name: /重\s*试/ }));
