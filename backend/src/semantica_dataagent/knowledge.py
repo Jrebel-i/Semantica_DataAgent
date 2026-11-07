@@ -379,11 +379,18 @@ def ensure_build_indexes(store):
 @contextmanager
 def build_storage(values, embedding_stats=None):
     """Initialize the generation once, then share append-only stage handles."""
+    from .embedding_cache import open_embedding_cache
     from .stage_contract import StorageHandles
 
     stats = embedding_stats if embedding_stats is not None else EmbeddingStats()
     generation = values["knowledge_generation"]
-    dimension = len(embed(values, ["knowledge"], stats)[0])
+    model = values.get("embedding_model") or "model/bge-m3"
+    cache = open_embedding_cache(values, model=model)
+    dimension = cache.dimension if cache is not None and cache.enabled else None
+    if dimension is None:
+        dimension = len(embed(values, ["knowledge"], stats)[0])
+        if cache is not None and cache.enabled:
+            cache.remember_dimension(dimension)
     graph_store = graph(values)
     try:
         ensure_build_indexes(graph_store)
@@ -406,7 +413,14 @@ def build_storage(values, embedding_stats=None):
                 utility.drop_collection(name)
             vector_store.create_collection(name, dimension, metric_type="COSINE")
             yield StorageHandles(
-                generation, graph_store, vector_store, values, _embedding_stats=stats
+                generation,
+                graph_store,
+                vector_store,
+                values,
+                _embedding_stats=stats,
+                _embedding_cache=cache,
+                _embedding_model=model,
+                _embedding_dimension=dimension,
             )
             vector_store.collection.load()
         finally:
@@ -417,9 +431,13 @@ def build_storage(values, embedding_stats=None):
 
 @contextmanager
 def incremental_storage(values, embedding_stats=None):
+    from .embedding_cache import open_embedding_cache
     from .stage_contract import StorageHandles
 
     stats = embedding_stats if embedding_stats is not None else EmbeddingStats()
+    model = values.get("embedding_model") or "model/bge-m3"
+    cache = open_embedding_cache(values, model=model)
+    dimension = cache.dimension if cache is not None and cache.enabled else None
     graph_store = graph(values)
     try:
         ensure_build_indexes(graph_store)
@@ -432,6 +450,9 @@ def incremental_storage(values, embedding_stats=None):
                 vector_store,
                 values,
                 _embedding_stats=stats,
+                _embedding_cache=cache,
+                _embedding_model=model,
+                _embedding_dimension=dimension,
             )
             vector_store.collection.load()
         finally:
@@ -674,7 +695,14 @@ def run_build(build_id):
                     )
         changes = hash_difference(previous_hashes, hashes)
         counts = dict.fromkeys(KINDS.values(), 0)
-        counts.update({"embedding_inputs": 0, "embedding_unique": 0})
+        counts.update(
+            {
+                "embedding_inputs": 0,
+                "embedding_unique": 0,
+                "embedding_cache_hits": 0,
+                "embedding_cache_misses": 0,
+            }
+        )
         counts.update(adapter_stats)
         physical_changes = source_file_difference(
             previous_hashes, hashes, previous_generated, generated
@@ -785,7 +813,12 @@ def run_build(build_id):
                 elapsed = time.monotonic() - stage_started
                 embedding_after = storage.embedding_counts()
                 stage_counts = dict(result.counts)
-                for key in ("embedding_inputs", "embedding_unique"):
+                for key in (
+                    "embedding_inputs",
+                    "embedding_unique",
+                    "embedding_cache_hits",
+                    "embedding_cache_misses",
+                ):
                     delta = embedding_after[key] - embedding_before[key]
                     stage_counts[key] = delta
                     counts[key] += delta

@@ -284,6 +284,9 @@ def test_embedding_settings_are_validated_and_saved(client):
         ("embedding_timeout_per_input_seconds", "-1"),
         ("embedding_retries", "11"),
         ("embedding_backoff_seconds", "nan"),
+        ("embedding_cache_max_mb", "-1"),
+        ("embedding_cache_max_mb", "many"),
+        ("embedding_cache_max_mb", "nan"),
     ]:
         response = c.put(
             "/api/v1/settings", headers=headers, json={"values": {key: value}}
@@ -296,6 +299,7 @@ def test_embedding_settings_are_validated_and_saved(client):
         "embedding_timeout_per_input_seconds": "15",
         "embedding_retries": "0",
         "embedding_backoff_seconds": "0.5",
+        "embedding_cache_max_mb": "256",
     }
     assert (
         c.put("/api/v1/settings", headers=headers, json={"values": saved}).status_code

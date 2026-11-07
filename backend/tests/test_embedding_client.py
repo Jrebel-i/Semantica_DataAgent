@@ -520,6 +520,8 @@ def test_add_vectors_embeds_each_distinct_text_once(monkeypatch):
     assert handles.embedding_counts() == {
         "embedding_inputs": 40,
         "embedding_unique": len(set(texts)),
+        "embedding_cache_hits": 0,
+        "embedding_cache_misses": 0,
     }
 
 
@@ -634,4 +636,6 @@ def test_add_vectors_does_not_share_dedupe_cache_between_calls(monkeypatch):
     assert handles.embedding_counts() == {
         "embedding_inputs": 2,
         "embedding_unique": 2,
+        "embedding_cache_hits": 0,
+        "embedding_cache_misses": 0,
     }

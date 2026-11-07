@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import re
 
-COUNT = re.compile(r"(embedding_inputs|embedding_unique)=(\d+)")
+COUNT = re.compile(
+    r"(embedding_inputs|embedding_unique|embedding_cache_hits|embedding_cache_misses)=(\d+)"
+)
 
 
 def _stage_counts(build):
@@ -18,7 +20,7 @@ def _stage_counts(build):
         ):
             continue
         counts = {name: int(value) for name, value in COUNT.findall(message)}
-        if set(counts) != {"embedding_inputs", "embedding_unique"}:
+        if not {"embedding_inputs", "embedding_unique"} <= set(counts):
             raise AssertionError(
                 f"阶段 {entry.get('stage')} 的 Completed 日志缺少去重计数：{message}"
             )

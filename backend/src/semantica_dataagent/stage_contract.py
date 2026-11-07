@@ -1,6 +1,7 @@
 """Shared append-only interface for entity-writing stages."""
 
 from dataclasses import dataclass, field
+from threading import Lock
 
 WRITE_BATCH_SIZE = 2000
 DELETE_BATCH_SIZE = 2000
@@ -39,6 +40,13 @@ class StorageHandles:
     is_incremental: bool = False
     _embedding_inputs: int = 0
     _embedding_unique: int = 0
+    _embedding_cache_hits: int = 0
+    _embedding_cache_misses: int = 0
+    _embedding_cache: object | None = None
+    _embedding_model: str | None = None
+    _embedding_dimension: int | None = None
+    _cache_initialized: bool = False
+    _lock: object = field(default_factory=Lock)
 
     def execute(self, query, parameters):
         from .knowledge import execute
@@ -65,9 +73,39 @@ class StorageHandles:
         return {
             "embedding_inputs": self._embedding_inputs,
             "embedding_unique": self._embedding_unique,
+            "embedding_cache_hits": self._embedding_cache_hits,
+            "embedding_cache_misses": self._embedding_cache_misses,
         }
 
+    def _cache_for_call(self):
+        with self._lock:
+            if self._embedding_cache is None and not self._cache_initialized:
+                from .embedding_cache import open_embedding_cache
+
+                self._embedding_cache = open_embedding_cache(
+                    self._settings,
+                    model=self._embedding_model,
+                    dimension=self._embedding_dimension,
+                )
+            self._cache_initialized = True
+            if self._embedding_dimension is None:
+                raw = self._settings.get("_embedding_dimension")
+                if raw not in (None, ""):
+                    try:
+                        self._embedding_dimension = int(raw)
+                    except (TypeError, ValueError):
+                        self._embedding_dimension = None
+            cache = self._embedding_cache
+            if cache is None or not cache.enabled:
+                return None
+            if self._embedding_dimension is not None:
+                cache.dimension = self._embedding_dimension
+            else:
+                self._embedding_dimension = cache.dimension
+            return cache
+
     def add_vectors(self, ids, texts, metadata):
+        from .embedding_cache import float32_values
         from .knowledge import embed
 
         if not (len(ids) == len(texts) == len(metadata)):
@@ -77,12 +115,51 @@ class StorageHandles:
         texts = list(texts)
         if not texts:
             return
-        self._embedding_inputs += len(texts)
         positions = {}
         for index, text in enumerate(texts):
             positions.setdefault(text, []).append(index)
         unique_texts = list(positions)
-        self._embedding_unique += len(unique_texts)
+        with self._lock:
+            self._embedding_inputs += len(texts)
+            self._embedding_unique += len(unique_texts)
+        cache = self._cache_for_call()
+        vectors = {}
+        hits = misses = 0
+        if cache is not None:
+            misses = len(unique_texts)
+            if cache.dimension is not None:
+                vectors = cache.lookup(unique_texts)
+                if cache.enabled:
+                    hits = len(vectors)
+                    misses -= hits
+                else:
+                    cache = None
+                    vectors = {}
+                    misses = 0
+
+        missing = [text for text in unique_texts if text not in vectors]
+        new_vectors = {}
+        for offset in range(0, len(missing), 32):
+            batch = missing[offset : offset + 32]
+            embedded = embed(self._settings, batch, self._embedding_stats)
+            if len(embedded) != len(batch):
+                raise ValueError("Embedding response has a different length")
+            for text, vector in zip(batch, embedded, strict=True):
+                if cache is not None:
+                    vector = float32_values(vector)
+                new_vectors[text] = vector
+                vectors[text] = vector
+
+        if cache is not None:
+            if self._embedding_dimension is None and new_vectors:
+                self._embedding_dimension = len(next(iter(new_vectors.values())))
+                cache.dimension = self._embedding_dimension
+            hit_texts = [text for text in unique_texts if text not in new_vectors]
+            with self._lock:
+                self._embedding_cache_hits += hits
+                self._embedding_cache_misses += misses
+            cache.store(hit_texts, new_vectors)
+
         pending_vectors, pending_ids, pending_metadata = [], [], []
 
         def flush():
@@ -97,28 +174,24 @@ class StorageHandles:
             pending_ids.clear()
             pending_metadata.clear()
 
-        for offset in range(0, len(unique_texts), 32):
-            batch = unique_texts[offset : offset + 32]
-            embedded = embed(self._settings, batch, self._embedding_stats)
-            if len(embedded) != len(batch):
-                raise ValueError("Embedding response has a different length")
-            for text, vector in zip(batch, embedded, strict=True):
-                for index in positions[text]:
-                    pending_vectors.append(vector)
-                    pending_ids.append(ids[index])
-                    pending_metadata.append(
-                        {
-                            **metadata[index],
-                            "generation": self.generation,
-                            **(
-                                {"build_id": self.build_id}
-                                if self.build_id is not None
-                                else {}
-                            ),
-                        }
-                    )
-                    if len(pending_ids) == 32:
-                        flush()
+        for text in unique_texts:
+            vector = vectors[text]
+            for index in positions[text]:
+                pending_vectors.append(vector)
+                pending_ids.append(ids[index])
+                pending_metadata.append(
+                    {
+                        **metadata[index],
+                        "generation": self.generation,
+                        **(
+                            {"build_id": self.build_id}
+                            if self.build_id is not None
+                            else {}
+                        ),
+                    }
+                )
+                if len(pending_ids) == 32:
+                    flush()
         flush()
 
 

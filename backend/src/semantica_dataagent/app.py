@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import json
+import math
 import os
 import re
 import secrets
@@ -158,6 +159,7 @@ KEYS = {
     "embedding_timeout_per_input_seconds",
     "embedding_retries",
     "embedding_backoff_seconds",
+    "embedding_cache_max_mb",
     "assistant_agent",
     "assistant_provider_id",
     "assistant_model",
@@ -320,6 +322,18 @@ def put_settings(
         or not 0 <= int(interval) <= 604800
     ):
         raise HTTPException(status_code=422, detail="Invalid schedule interval")
+    cache_mb = body.values.get("embedding_cache_max_mb")
+    if cache_mb not in (None, ""):
+        try:
+            cache_size = float(cache_mb)
+        except (TypeError, ValueError):
+            raise HTTPException(
+                status_code=422, detail="Invalid embedding_cache_max_mb"
+            ) from None
+        if not math.isfinite(cache_size) or not 0 <= cache_size <= 1000000:
+            raise HTTPException(
+                status_code=422, detail="Invalid embedding_cache_max_mb"
+            )
     retention = body.values.get("generation_retention")
     if retention and (
         not retention.isascii()
