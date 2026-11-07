@@ -40,6 +40,14 @@ function installFetch(tables: TableRow[], categories: unknown[] = []) {
         return Response.json({ upstream: [], downstream: [], tasks: [] });
       if (url.startsWith("/api/v1/column-lineage"))
         return Response.json({ upstream: [], downstream: [] });
+      if (url.startsWith("/api/v1/document"))
+        return Response.json({
+          path: "metrics/sales.md",
+          category: "metrics",
+          content: "订单定义",
+          start_line: 1,
+          generated: false,
+        });
       return Response.json({});
     }),
   );
@@ -229,4 +237,28 @@ test("搜索在树数据层过滤，并展开命中的库", async () => {
   expect(treeTitles(container)).toContain("集市层 (1)");
   expect(treeTitles(container)).toContain("dm (1)");
   expect(treeTitles(container)).not.toContain("quick (1)");
+});
+
+test("文档分组仍可展开并打开文档", async () => {
+  installFetch(
+    [],
+    [
+      {
+        ref: "category:metrics",
+        name: "指标",
+        description: "",
+        documents: [
+          { ref: "document:metrics/sales.md", path: "metrics/sales.md" },
+        ],
+      },
+    ],
+  );
+  render(<KnowledgePage token="token" messages={getMessages("zh")} />);
+
+  fireEvent.click(await screen.findByText("知识文档 (1)"));
+  fireEvent.click(await screen.findByText("指标"));
+  fireEvent.click(
+    await screen.findByRole("button", { name: "metrics/sales.md" }),
+  );
+  expect(await screen.findByText(/订单定义/)).toBeTruthy();
 });
