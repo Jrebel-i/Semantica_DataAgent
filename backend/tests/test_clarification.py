@@ -207,6 +207,35 @@ def test_mcp_middleware_binds_the_caller_and_conversation_header(client):
     assert seen["conversation_id"] == "conversation-middleware"
 
 
+def test_existing_refs_accepts_field_refs_in_the_current_generation(
+    client, monkeypatch
+):
+    from semantica_dataagent import knowledge
+    from semantica_dataagent.db import (
+        GenerationPointer,
+        KnowledgeGeneration,
+        Setting,
+    )
+
+    with sessions().begin() as db:
+        db.add(KnowledgeGeneration(name="field_generation"))
+        db.add(Setting(key="knowledge_generation", value="field_generation"))
+        db.add(GenerationPointer(id=1, generation="field_generation"))
+    field_ref = "field:shop.channels.os_type"
+    monkeypatch.setattr(knowledge, "read_graph", lambda values: object())
+    monkeypatch.setattr(
+        knowledge,
+        "execute",
+        lambda store, query, parameters: [
+            {"ref": ref} for ref in parameters["refs"] if ref == field_ref
+        ],
+    )
+
+    assert knowledge.existing_refs([field_ref, "field:shop.channels.os_missing"]) == {
+        field_ref
+    }
+
+
 def test_request_clarification_records_caller_and_returns_structured_questions(
     client, monkeypatch
 ):
