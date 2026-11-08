@@ -406,6 +406,8 @@ test("requires the exact project name before permanent deletion", async () => {
     body: JSON.stringify({ name: "旧项目" }),
   });
   await waitFor(() => expect(screen.queryByText("旧项目")).toBeNull());
+});
+
 function adapterRows() {
   return [
     {

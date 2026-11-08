@@ -70,12 +70,12 @@ MCP 请求必须解析出**一个**项目，所有读知识库的工具都只经
 
 ### 按项目配置来源适配器
 
-`plugin_config` 的主键是 `(project_id, category, plugin_id)`，迁移 `0035` 把旧行原样归到默认项目。默认项目继续接受旧的 `GET/PUT /api/v1/plugins` 接口，行为与迁移前一致；新接口按项目读写：
+`plugin_config` 的主键是 `(project_id, category, plugin_id)`，迁移 `0036` 把旧行原样归到默认项目。默认项目继续接受旧的 `GET/PUT /api/v1/plugins` 接口，行为与迁移前一致；新接口按项目读写：
 
 - `GET /api/v1/projects/{id}/adapters` 使用 `project_path_scope`，成员可读。返回每个已注册源适配器的 `id`、名称、支持的项目类型、是否启用、参数 schema、参数、兼容性；不兼容时 `compatible=false` 并给出 `reason`。DTB 额外返回 `pull`（拉取器启用状态、非凭据参数、`token_configured`），凭据只报告是否已保存，不回显明文。
-- `PUT /api/v1/projects/{id}/adapters` 使用 `admin_project_path_scope`，项目管理员或系统管理员可改。请求体为 `{"adapters":[{"id","enabled","parameters","pull"}]}`；按给出的适配器逐项更新，未给出者保持不变。服务端用适配器自己的 JSON Schema 校验参数，并在启用时校验项目类型兼容性：文档型启用 DTB 源或 DTB 拉取配置返回 422，数仓型允许。
+- `PUT /api/v1/projects/{id}/adapters` 使用 `admin_project_path_scope`，项目管理员或系统管理员可改；已归档项目返回 409 `项目已归档`，`GET` 仍可读。请求体为 `{"adapters":[{"id","enabled","parameters","pull"}]}`；按给出的适配器逐项更新，未给出者保持不变。服务端用适配器自己的 JSON Schema 校验参数，并在启用时校验项目类型兼容性：文档型启用 DTB 源或 DTB 拉取配置返回 422，数仓型允许。
 - DTB 拉取凭据按项目保存在项目级加密设置中；默认项目读取时先看项目级值，再回退到旧的全局 `puller.dtb.token`，所以迁移不会丢已有配置。拉取入队使用该项目的源目录与构建队列。
-- `pull_records` 增加 `project_id`（迁移 `0036`，旧行回填 `default`）。手动拉取、定时拉取与启动时的中断恢复都按记录所属项目入队构建；同项目的拉取仍串行，不同项目可以使用各自的锁。各项目启用 DTB 且 `interval_seconds > 0` 时，服务启动会把每个项目的间隔注册到 `pull_scheduler`，保存拉取配置时也会立即更新该项目的时间表。
+- `pull_records` 增加 `project_id`（迁移 `0037`，旧行回填 `default`）。手动拉取、定时拉取与启动时的中断恢复都按记录所属项目入队构建；同项目的拉取仍串行，不同项目可以使用各自的锁。各项目启用 DTB 且 `interval_seconds > 0` 时，服务启动会把每个项目的间隔注册到 `pull_scheduler`，保存拉取配置时也会立即更新该项目的时间表。
 - 默认启用集合仍是 `canonical` + `markdown`（按类型过滤后）；启用 canonical/DTB 的数仓型项目才能读到对应来源。前端项目管理页的“来源适配器”区沿用现有管理页样式：不兼容项灰显并显示原因，管理员可改，成员只读。
 
 ## 项目隔离与存储命名
