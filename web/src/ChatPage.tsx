@@ -1732,7 +1732,7 @@ export function ChatPage({
         return;
       }
       if (!response.ok) {
-        setSessionError(t.deleteConversationFailed);
+        setSessionError(t.operationFailed);
         return;
       }
       setConversations((current) =>
@@ -1741,7 +1741,7 @@ export function ChatPage({
       if (id === currentConversationId) newConversation();
       await refreshConversations();
     } catch {
-      setSessionError(t.deleteConversationFailed);
+      setSessionError(t.operationFailed);
     } finally {
       setDeletingConversationId("");
       setConfirmingDeleteId("");
@@ -1933,7 +1933,9 @@ export function ChatPage({
                                   }}
                                   disabled={sending}
                                 >
-                                  {conversation.pinned && <PushpinFilled />}{" "}
+                                  {conversation.pinned && (
+                                    <PushpinFilled aria-hidden="true" />
+                                  )}{" "}
                                   {conversation.title}
                                   {conversation.resumable === false &&
                                     ` (${t.sessionExpired})`}
