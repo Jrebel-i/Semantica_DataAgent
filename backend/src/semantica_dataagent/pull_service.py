@@ -1,5 +1,6 @@
 """Execute configured metadata pulls and record their outcome."""
 
+import json
 import threading
 import uuid
 from datetime import UTC, datetime
@@ -9,12 +10,13 @@ import httpx
 
 from . import project_context
 from .crypto import decrypt
-from .db import PullRecord, sessions
+from .db import PluginConfig, PullRecord, sessions
 from .plugins import discover
 from .project_context import DEFAULT_PROJECT_ID, add_queued_build
 from .source_directory import git, publish_pull, repository
 
-_lock = threading.Lock()
+_locks: dict[str, threading.Lock] = {}
+_locks_guard = threading.Lock()
 
 
 def interval():
@@ -22,12 +24,43 @@ def interval():
     return int(config[1].get("interval_seconds", 0)) if config and config[0] else 0
 
 
+def intervals() -> dict[str, int]:
+    """Enabled DTB pull intervals, keyed by project."""
+    with sessions()() as db:
+        rows = (
+            db.query(PluginConfig)
+            .filter(
+                PluginConfig.category == "puller",
+                PluginConfig.plugin_id == "dtb",
+                PluginConfig.enabled.is_(True),
+            )
+            .all()
+        )
+    result = {}
+    for row in rows:
+        try:
+            parameters = json.loads(row.parameters)
+        except (TypeError, ValueError):
+            continue
+        value = parameters.get("interval_seconds", 0)
+        if isinstance(value, int) and value > 0:
+            result[row.project_id] = value
+    return result
+
+
+def _lock_for(project_id: str) -> threading.Lock:
+    with _locks_guard:
+        return _locks.setdefault(project_id, threading.Lock())
+
+
 def run_pull(project_id: str = DEFAULT_PROJECT_ID):
-    if not _lock.acquire(blocking=False):
+    lock = _lock_for(project_id)
+    if not lock.acquire(blocking=False):
         raise ValueError("A pull is already running")
     try:
         with sessions().begin() as db:
             record = PullRecord(
+                project_id=project_id,
                 status="running",
                 started_at=datetime.now(UTC),
                 tables=0,
@@ -87,15 +120,16 @@ def run_pull(project_id: str = DEFAULT_PROJECT_ID):
             db.expunge(row)
             return row
     finally:
-        _lock.release()
+        lock.release()
 
 
-def finalize_pull(record_id, commit, counts=None, project_id: str = DEFAULT_PROJECT_ID):
+def finalize_pull(record_id, commit, counts=None, project_id: str | None = None):
     with sessions().begin() as db:
         row = db.get(PullRecord, record_id)
+        target = project_id or row.project_id or DEFAULT_PROJECT_ID
         if row.build_id is None:
             row.build_id = add_queued_build(
-                db, "incremental", "定时拉取", project_id=project_id
+                db, "incremental", "定时拉取", project_id=target
             )
         failures = (counts or {}).get("failures") or []
         row.status, row.commit = "succeeded", commit
@@ -118,8 +152,11 @@ def recover_pulls(record_id=None):
         query = db.query(PullRecord).filter(PullRecord.status == "running")
         if record_id is not None:
             query = query.filter(PullRecord.id == record_id)
-        pending = [(r.id, r.source_directory, r.operation_id) for r in query.all()]
-    for ident, directory, operation in pending:
+        pending = [
+            (r.id, r.source_directory, r.operation_id, r.project_id)
+            for r in query.all()
+        ]
+    for ident, directory, operation, project_id in pending:
         commit = None
         if directory and operation:
             with repository(directory) as root:
@@ -141,7 +178,7 @@ def recover_pulls(record_id=None):
                 except ValueError:
                     pass
         if commit:
-            finalize_pull(ident, commit)
+            finalize_pull(ident, commit, project_id=project_id)
         else:
             with sessions().begin() as db:
                 row = db.get(PullRecord, ident)

@@ -318,6 +318,7 @@ class QueryAudit(Base):
 class PullRecord(Base):
     __tablename__ = "pull_records"
     id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[str] = mapped_column(default="default", server_default="default")
     status: Mapped[str]
     started_at: Mapped[datetime]
     finished_at: Mapped[datetime | None]

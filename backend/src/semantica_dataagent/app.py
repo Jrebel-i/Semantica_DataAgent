@@ -114,8 +114,12 @@ async def lifespan(application):
     auto_build.pending_build_scheduler.start()
     project_context.start_schedule()
     from .pull_service import interval as pull_interval
+    from .pull_service import intervals as pull_intervals
 
     pull_scheduler.start(pull_interval())
+    for project_id, seconds in pull_intervals().items():
+        if project_id != project_context.DEFAULT_PROJECT_ID:
+            pull_scheduler.start(seconds, project_id)
     server = create_mcp()
     application.state.mcp_app = server.streamable_http_app()
     async with server.session_manager.run():

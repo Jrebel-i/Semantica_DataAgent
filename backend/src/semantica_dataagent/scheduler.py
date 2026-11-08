@@ -123,7 +123,7 @@ scheduler = Scheduler()
 def _scheduled_pull(project_id=None):
     from .pull_service import run_pull
 
-    run_pull()
+    run_pull(project_id or DEFAULT_PROJECT_ID)
 
 
 pull_scheduler = Scheduler(_scheduled_pull)

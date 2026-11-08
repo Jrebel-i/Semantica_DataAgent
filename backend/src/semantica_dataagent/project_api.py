@@ -573,6 +573,7 @@ def put_project_adapters(
                     ),
                 )
     with sessions().begin() as db:
+        schedules = []
         for update in body.adapters:
             project_context.upsert_plugin_config(
                 db,
@@ -600,6 +601,16 @@ def put_project_adapters(
                         DTB_PULL_TOKEN_KEY,
                         encrypt(token) if token else None,
                     )
+                interval = (
+                    update.pull.parameters.get("interval_seconds", 0)
+                    if update.pull.enabled
+                    else 0
+                )
+                schedules.append((scope.project_id, interval))
+    from .scheduler import pull_scheduler
+
+    for target, interval in schedules:
+        pull_scheduler.configure(interval, target)
     return _project_adapters(scope)
 
 
