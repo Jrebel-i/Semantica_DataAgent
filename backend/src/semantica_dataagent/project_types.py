@@ -12,19 +12,6 @@ WAREHOUSE = "warehouse"
 DOCUMENT = "document"
 PROJECT_TYPES = (WAREHOUSE, DOCUMENT)
 
-DOCUMENT_TOOL_NAMES = frozenset(
-    {
-        "search_knowledge",
-        "read_document",
-        "list_categories",
-        "read_category_index",
-        "request_clarification",
-        "propose_correction",
-        "report_knowledge_gap",
-        "get_capabilities",
-    }
-)
-
 TOOL_PROJECT_TYPES: dict[str, tuple[str, ...]] = {
     "describe_tables": (WAREHOUSE,),
     "search_knowledge": (WAREHOUSE, DOCUMENT),
@@ -65,17 +52,19 @@ def unclassified_tools(names) -> set[str]:
 def tools_for_project_type(project_type: str) -> set[str]:
     """Tool names visible to an agent working in this project type."""
     project_type = _check_project_type(project_type)
-    if project_type == DOCUMENT:
-        return set(DOCUMENT_TOOL_NAMES)
-    return set(TOOL_PROJECT_TYPES)
+    return {
+        name
+        for name, supported in TOOL_PROJECT_TYPES.items()
+        if project_type in supported
+    }
+
+
+DOCUMENT_TOOL_NAMES = frozenset(tools_for_project_type(DOCUMENT))
+WAREHOUSE_TOOL_NAMES = frozenset(tools_for_project_type(WAREHOUSE))
 
 
 def supports_tool(project_type: str, tool_name: str) -> bool:
-    project_type = _check_project_type(project_type)
-    project_types = TOOL_PROJECT_TYPES.get(tool_name)
-    if project_types is None:
-        return True
-    return project_type in project_types
+    return tool_name in tools_for_project_type(project_type)
 
 
 def ensure_tool_supported(project_type: str, tool_name: str) -> None:

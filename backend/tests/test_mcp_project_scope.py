@@ -214,7 +214,7 @@ def test_tools_list_fails_closed_when_the_project_cannot_be_resolved(client):
     from semantica_dataagent.app import create_mcp
     from semantica_dataagent.mcp_context import bind_mcp_context
 
-    c, admin = client
+    _c, admin = client
     server = create_mcp()
     requester = _requester(admin)
 

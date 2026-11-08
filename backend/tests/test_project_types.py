@@ -245,7 +245,6 @@ def test_project_type_cannot_be_changed_after_creation(client):
     assert listing[project["id"]]["type"] == "document"
 
 
-
 def test_document_project_build_never_runs_dtb_even_when_globally_enabled(
     client, tmp_path, monkeypatch
 ):
