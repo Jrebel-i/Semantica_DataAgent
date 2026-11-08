@@ -98,51 +98,91 @@ def tool_args_summary(name: str, args) -> str:
     return truncate(args, 200)
 
 
+def _text_content(value) -> str | None:
+    if isinstance(value, str):
+        return value
+    if not isinstance(value, list):
+        return None
+    parts = []
+    for item in value:
+        if isinstance(item, str):
+            parts.append(item)
+        elif (
+            isinstance(item, dict)
+            and item.get("type") == "text"
+            and isinstance(item.get("text"), str)
+        ):
+            parts.append(item["text"])
+    return "\n".join(parts) if parts else None
+
+
+def _json_object(value) -> dict | None:
+    if isinstance(value, dict):
+        return value
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = json.loads(value)
+    except (TypeError, ValueError):
+        # Some MCP wrappers prefix errors ("Error executing tool ...: {json}").
+        start, end = value.find("{"), value.rfind("}")
+        if start < 0 or end <= start:
+            return None
+        try:
+            parsed = json.loads(value[start : end + 1])
+        except (TypeError, ValueError):
+            return None
+    return parsed if isinstance(parsed, dict) else None
+
+
 def result_text(result) -> str:
     if isinstance(result, dict):
-        content = result.get("content")
-        if isinstance(content, list):
-            parts = [
-                item.get("text", "")
-                for item in content
-                if isinstance(item, dict) and item.get("type") == "text"
-            ]
-            if parts:
-                return "\n".join(parts)
-        if "structuredContent" in result:
-            return truncate(result["structuredContent"], 600)
-    return truncate(result, 600)
+        text = _text_content(result.get("content"))
+        if text is not None:
+            return text
+        for key in ("structuredContent", "structured_content", "result", "result_fragment"):
+            value = result.get(key)
+            if value is not None:
+                return truncate(value, EVENT_DETAIL_LIMIT)
+        return truncate(result, EVENT_DETAIL_LIMIT)
+    if isinstance(result, list):
+        text = _text_content(result)
+        return text if text is not None else truncate(result, EVENT_DETAIL_LIMIT)
+    return result if isinstance(result, str) else truncate(result, EVENT_DETAIL_LIMIT)
 
 
-def _result_payload(result):
-    if isinstance(result, dict):
-        structured = result.get("structuredContent")
-        if isinstance(structured, dict):
-            payload = structured
-        elif isinstance(structured, str):
-            try:
-                payload = json.loads(structured)
-            except (TypeError, ValueError):
-                payload = None
-        else:
-            content = result.get("content")
-            text = (
-                "\n".join(
-                    item.get("text", "")
-                    for item in content
-                    if isinstance(item, dict) and item.get("type") == "text"
-                )
-                if isinstance(content, list)
-                else ""
-            )
-            try:
-                payload = json.loads(text) if text else result
-            except (TypeError, ValueError):
-                payload = result
-        if isinstance(payload, dict) and isinstance(payload.get("result"), dict):
-            payload = payload["result"]
-        return payload if isinstance(payload, dict) else None
-    return None
+_WRAPPER_KEYS = ("structuredContent", "structured_content", "result")
+
+
+def _result_payload(result, _depth: int = 0):
+    if _depth > 8:
+        return None
+    if isinstance(result, str):
+        payload = _json_object(result)
+        return _result_payload(payload, _depth + 1) if payload is not None else None
+    if isinstance(result, list):
+        text = _text_content(result)
+        payload = _json_object(text) if text is not None else None
+        return _result_payload(payload, _depth + 1) if payload is not None else None
+    if not isinstance(result, dict):
+        return None
+    for key in _WRAPPER_KEYS:
+        if key not in result:
+            continue
+        value = result[key]
+        if value is None:
+            continue
+        payload = _result_payload(value, _depth + 1)
+        if payload is not None:
+            return payload
+    text = _text_content(result.get("content"))
+    if text is not None:
+        payload = _json_object(text)
+        if payload is not None:
+            found = _result_payload(payload, _depth + 1)
+            if found is not None:
+                return found
+    return result
 
 
 def result_summary(result, name: str | None = None) -> str:
@@ -150,13 +190,16 @@ def result_summary(result, name: str | None = None) -> str:
     payload = _result_payload(result)
     if isinstance(payload, dict):
         if short == "validate_sql":
-            status = payload.get("status", "unknown")
-            issues = payload.get("issues")
-            if issues:
-                detail = json.dumps(issues, ensure_ascii=False, sort_keys=True)
-                return truncate(f"status={status} issues={detail}", EVENT_DETAIL_LIMIT)
-            return truncate(f"status={status}", EVENT_DETAIL_LIMIT)
-        if short == "propose_query":
+            if "status" in payload:
+                status = payload["status"]
+                issues = payload.get("issues")
+                if issues:
+                    detail = json.dumps(issues, ensure_ascii=False, sort_keys=True)
+                    return truncate(
+                        f"status={status} issues={detail}", EVENT_DETAIL_LIMIT
+                    )
+                return truncate(f"status={status}", EVENT_DETAIL_LIMIT)
+        elif short == "propose_query":
             if payload.get("code"):
                 return truncate(
                     f"{payload['code']}: {payload.get('message', '')}",
@@ -230,13 +273,7 @@ def request_secrets(request: AgentTurnRequest) -> tuple[str, ...]:
 
 
 def clarification_questions(result) -> list[dict]:
-    text = result_text(result)
-    try:
-        body = json.loads(text)
-    except (TypeError, ValueError):
-        return []
-    if isinstance(body, dict) and "structuredContent" in body:
-        body = body["structuredContent"]
+    body = _result_payload(result)
     questions = body.get("questions") if isinstance(body, dict) else None
     return questions if isinstance(questions, list) else []
 
@@ -289,13 +326,7 @@ def clarification_event(name: str, result) -> AgentEvent | None:
 def query_plan_event(name: str, result) -> AgentEvent | None:
     if name.split("__")[-1] != "propose_query":
         return None
-    if isinstance(result, dict) and isinstance(result.get("structuredContent"), dict):
-        body = result["structuredContent"]
-    else:
-        try:
-            body = json.loads(result_text(result))
-        except (TypeError, ValueError):
-            return None
+    body = _result_payload(result)
     if not isinstance(body, dict) or not isinstance(body.get("id"), str):
         return None
     return AgentEvent(QUERY_PLAN, body)
