@@ -41,6 +41,22 @@
 - `POST /api/v1/tokens` 接受可选的 `projects: [{project_id, role}]`，仅系统管理员可用。不传时普通用户自动加入默认项目的 `member`；传了（包括空数组）就只加入列出的项目。管理员令牌忽略该字段。令牌列表返回每个令牌的项目与角色。
 - `project_context` 显式传入项目 id 时解析该项目；请求、令牌与会话上下文仍以请求解析结果为准，名称、类型、状态来自 `projects` 表。
 
+## MCP 项目作用域
+
+MCP 请求必须解析出**一个**项目，所有读知识库的工具都只经该项目取值；选择顺序固定为：
+
+1. 在线 agent 沙箱凭据绑定的项目（`agent_credentials.project_id`）优先，请求里的 `project` 查询参数或 `X-Dataagent-Project` 头若指向别的项目一律返回“项目不存在”，不能靠参数越权。
+2. 普通令牌可用 `project` 查询参数或 `X-Dataagent-Project` 头二选一；两种同时出现且不一致时返回 `请只提供一种项目选择`。
+3. 未指定时沿用 REST 的缺省规则：能访问默认项目就用默认项目（系统管理员也走这条）；否则只访问一个项目就用它；否则返回 `invalid_input`，消息以 `请指定项目` 开头并列出可访问项目的 `id（名称）`。
+
+项目不存在与无权限统一当作“项目不存在”，不泄露是否存在。解析复用 `project_api.py` 的 `resolve_project_scope` / `_resolve_project_context`，MCP 层不再写第二份成员判断。解析结果绑定在 `mcp_context` 的 ContextVar 中，`bind_mcp_context` 在 `finally` 中复位，异常路径也不能泄漏到下一个请求。
+
+- `describe_tables`、`search_knowledge`、`lookup_dim_values`、类别与文档、血缘、任务 SQL、`validate_sql`、`find_join_path`、取样、查询计划与取数等读取工具都必须把解析到的项目传给底层知识访问；`propose_correction` 与 `report_knowledge_gap` 写入该项目。
+- `ask_dataagent` 本票仍只支持默认项目；非默认项目返回 `invalid_input` “项目问答将在对话绑定项目后支持”（#184 再接对话项目）。
+- `get_capabilities` 返回当前解析出的 `project: {id, name, type}` 和请求者可访问的 `projects: [{id, name, type}]`。
+- `agent_credentials` 增加 `project_id`（迁移 `0032`，旧行回填 `default`）；`issue_agent_credential(..., project_id="default")` 写入对话所属项目。本票对话一律是默认项目。
+- 兼容：工具 JSON Schema 不新增必填参数；只有单项目（或系统管理员）的令牌与现有 MCP 客户端不传项目时行为不变。新增 MCP 工具必须经过项目上下文，`test_mcp_project_scope.py` 的守护测试会拦住绕过项目作用域的新工具。
+
 ## 项目隔离与存储命名
 
 项目之间靠“知识代命名前缀”隔离，不新增 Neo4j 标签或 Milvus 索引。
@@ -234,7 +250,7 @@ zip 可以直接包含文档，也可以包含同名知识类顶层文件夹；�
 
 ## 纠错审批与知识缺口
 
-`correction_proposals`、`knowledge_gaps` 和 `metadata_overrides` 都带 `project_id`；迁移把旧行回填为 `default`。纠错提交、列表和详情接受可选 `project`（缺省默认项目），读路径走 `project_scope`；批准和驳回走 `admin_project_scope`，只有系统管理员或该项目管理员能操作。批准文档纠错只写入提案所属项目的源目录并创建该项目的 Git 提交，状态经过 `applying`；失败回滚，启动时逐项目补完成或回滚中断的审批，一个提案失败不影响其它项目。批准后只在提案所属项目入队增量构建，并与该项目已有的纠错构建去重。表格/字段纠错写入该项目作用域的 `metadata_overrides`，构建时只应用本项目的覆盖。知识缺口列表按 `project` 过滤；MCP 提交的纠错与缺口在 #178 前仍归默认项目。
+`correction_proposals`、`knowledge_gaps` 和 `metadata_overrides` 都带 `project_id`；迁移把旧行回填为 `default`。纠错提交、列表和详情接受可选 `project`（缺省默认项目），读路径走 `project_scope`；批准和驳回走 `admin_project_scope`，只有系统管理员或该项目管理员能操作。批准文档纠错只写入提案所属项目的源目录并创建该项目的 Git 提交，状态经过 `applying`；失败回滚，启动时逐项目补完成或回滚中断的审批，一个提案失败不影响其它项目。批准后只在提案所属项目入队增量构建，并与该项目已有的纠错构建去重。表格/字段纠错写入该项目作用域的 `metadata_overrides`，构建时只应用本项目的覆盖。知识缺口列表按 `project` 过滤；MCP 提交的纠错与缺口写入请求解析出的项目（见“MCP 项目作用域”）。
 
 每个节点和向量记录来源路径及写入它的 build id。自动生成索引记录其派生来源列表；空目录不产生知识类节点。修改或删除源文件时删除其节点、相关关系和向量，再写新记录；字段、维度值、文档与表的关系以及依赖边根据当前记录重新合并。维度值去重和别名可能跨文件依赖同一张表的行：该表涉及的维度值作为一个受影响单元重算；其他表和文件不重写。失败的增量构建记录待修复来源和向量 id，下一次增量即使源文件已恢复也会重试清理。Neo4j 与 Milvus 之间不做事务；运行中仍可能看到部分更新：单文件删除至重写期间检索可能暂时缺失，也可能因存储可见性延迟返回旧内容；完成后读取更新后的内容。失败后需重试。
 

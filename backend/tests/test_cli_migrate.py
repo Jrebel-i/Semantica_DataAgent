@@ -67,8 +67,8 @@ def test_migrate_upgrades_from_0016_and_keeps_data(database, capsys):
     assert cli.main(["migrate"]) == 0
 
     output = capsys.readouterr().out
-    assert "0016" in output and "0031" in output
-    assert _schema_version(database) == "0031"
+    assert "0016" in output and "0032" in output
+    assert _schema_version(database) == "0032"
     assert _kept_rows(database) == (("kept token", "admin"), ("kept value",))
 
 
@@ -83,7 +83,7 @@ def test_migrate_backs_up_before_upgrade_and_is_repeatable(database, capsys):
 
     capsys.readouterr()
     assert cli.main(["migrate"]) == 0
-    assert "0031" in capsys.readouterr().out
+    assert "0032" in capsys.readouterr().out
     assert len(_backups(database)) == 1
 
 
@@ -108,14 +108,14 @@ def test_serve_migrates_before_starting(database, capsys, monkeypatch):
 
     assert cli.main(["serve"]) == 0
     assert started == [True]
-    assert _schema_version(database) == "0031"
+    assert _schema_version(database) == "0032"
     assert _kept_rows(database) == (("kept token", "admin"), ("kept value",))
     assert len(_backups(database)) == 1
 
     assert cli.main(["serve"]) == 0
     assert started == [True, True]
     assert len(_backups(database)) == 1
-    assert "0031" in capsys.readouterr().out
+    assert "0032" in capsys.readouterr().out
 
 
 def test_serve_does_not_start_when_migration_fails(database, capsys, monkeypatch):
@@ -136,7 +136,7 @@ def test_init_still_initializes_an_empty_database(database):
     token = cli.initialize()
 
     assert token
-    assert _schema_version(database) == "0031"
+    assert _schema_version(database) == "0032"
     with sqlite3.connect(database) as db:
         row = db.execute("SELECT name, role FROM tokens").fetchone()
     assert row == ("initial admin", "admin")
@@ -161,7 +161,7 @@ def test_serve_upgrades_0023_conversations_and_backs_up(database, monkeypatch):
         )
     monkeypatch.setattr(cli, "_serve", lambda: None)
     assert cli.main(["serve"]) == 0
-    assert _schema_version(database) == "0031"
+    assert _schema_version(database) == "0032"
     with sqlite3.connect(database) as db:
         assert db.execute(
             "SELECT title, pinned_at, archived_at FROM conversations WHERE id='old'"
@@ -231,7 +231,7 @@ def test_migrate_adds_empty_model_capabilities_for_existing_providers(database):
 
     assert cli.main(["migrate"]) == 0
 
-    assert _schema_version(database) == "0031"
+    assert _schema_version(database) == "0032"
     with sqlite3.connect(database) as db:
         columns = {
             row[1] for row in db.execute("PRAGMA table_info(providers)").fetchall()
@@ -352,7 +352,7 @@ def test_master_project_database_upgrades_to_audit_table(database):
 
     assert cli.main(["migrate"]) == 0
 
-    assert _schema_version(database) == "0031"
+    assert _schema_version(database) == "0032"
     with sqlite3.connect(database) as db:
         assert db.execute("SELECT count(*) FROM project_audit").fetchone() == (0,)
         assert (
@@ -378,7 +378,7 @@ def test_project_migration_preserves_existing_data(database):
 
     assert cli.main(["migrate"]) == 0
 
-    assert _schema_version(database) == "0031"
+    assert _schema_version(database) == "0032"
     assert {
         table: _table_rows(database, table, old_columns[table]) for table in OLD_TABLES
     } == before
@@ -426,9 +426,9 @@ def test_empty_database_has_a_single_migration_head(database):
     from alembic.script import ScriptDirectory
 
     config = _config(database)
-    assert ScriptDirectory.from_config(config).get_heads() == ["0031"]
+    assert ScriptDirectory.from_config(config).get_heads() == ["0032"]
     command.upgrade(config, "head")
-    assert _schema_version(database) == "0031"
+    assert _schema_version(database) == "0032"
     with sqlite3.connect(database) as db:
         assert db.execute("SELECT count(*) FROM projects").fetchone() == (1,)
         assert db.execute("SELECT count(*) FROM project_members").fetchone() == (0,)
@@ -469,10 +469,50 @@ def test_migrate_adds_null_effort_for_existing_turns(database):
 
     assert cli.main(["migrate"]) == 0
 
-    assert _schema_version(database) == "0031"
+    assert _schema_version(database) == "0032"
     with sqlite3.connect(database) as db:
         columns = {row[1] for row in db.execute("PRAGMA table_info(turns)").fetchall()}
         assert "effort" in columns
         assert db.execute(
             "SELECT effort FROM turns WHERE conversation_id='legacy'"
         ).fetchone() == (None,)
+
+
+def test_migrate_backfills_agent_credential_project(database):
+    command.upgrade(_config(database), "0031")
+    with sqlite3.connect(database) as db:
+        db.execute(
+            "INSERT INTO agent_credentials "
+            "(digest, owner_id, conversation_id, turn_id) VALUES (?, ?, ?, ?)",
+            ("credential-digest", "owner", "conversation", 1),
+        )
+
+    assert cli.main(["migrate"]) == 0
+
+    with sqlite3.connect(database) as db:
+        project = db.execute(
+            "SELECT project_id FROM agent_credentials WHERE digest = ?",
+            ("credential-digest",),
+        ).fetchone()
+    assert project == ("default",)
+    assert _schema_version(database) == "0032"
+
+
+def test_migrated_builds_index_is_unique_per_project_and_status(database):
+    assert cli.main(["migrate"]) == 0
+
+    with sqlite3.connect(database) as db:
+        index = db.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'index' "
+            "AND name = 'one_running_build_per_project'"
+        ).fetchone()
+        assert index is not None, "one_running_build_per_project is missing"
+        assert "WHERE status = 'running'" in index[0]
+        insert = (
+            "INSERT INTO builds "
+            "(project_id, status, started_at, counts) VALUES (?, 'running', ?, '{}')"
+        )
+        db.execute(insert, ("default", "2026-01-01T00:00:00+00:00"))
+        db.execute(insert, ("other", "2026-01-01T00:00:00+00:00"))
+        with pytest.raises(sqlite3.IntegrityError):
+            db.execute(insert, ("default", "2026-01-01T00:00:01+00:00"))

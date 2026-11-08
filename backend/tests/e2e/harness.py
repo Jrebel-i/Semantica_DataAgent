@@ -43,7 +43,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import urlencode, urlsplit
 
 import httpx
 
@@ -315,9 +315,20 @@ class Logger:
 class McpSession:
     """A synchronous facade over one MCP streamable-HTTP session."""
 
-    def __init__(self, base_url: str, token: str, timeout: float = 180.0):
+    def __init__(
+        self,
+        base_url: str,
+        token: str,
+        timeout: float = 180.0,
+        *,
+        query: dict[str, str] | None = None,
+        headers: dict[str, str] | None = None,
+    ):
         self._url = base_url.rstrip("/") + "/mcp/"
+        if query:
+            self._url += "?" + urlencode(query)
         self._headers = {"Authorization": f"Bearer {token}"}
+        self._headers.update(headers or {})
         self._timeout = timeout
         self._loop = asyncio.new_event_loop()
         self._thread = threading.Thread(
@@ -439,6 +450,30 @@ class CheckContext:
         self.work_dir = runtime.run_dir
         self.health = runtime.health
         self.logger = runtime.logger
+        self._sessions: list[McpSession] = []
+
+    def open_mcp(
+        self,
+        token: str,
+        *,
+        project: str | None = None,
+        headers: dict[str, str] | None = None,
+        timeout: float = 30.0,
+    ) -> McpSession:
+        """Open one extra MCP session for a ticket-specific check."""
+        session = McpSession(
+            self.runtime.base_url,
+            token,
+            query={"project": project} if project is not None else None,
+            headers=headers,
+        )
+        try:
+            session.open(timeout)
+        except Exception:
+            session.close()
+            raise
+        self._sessions.append(session)
+        return session
 
     @property
     def expect_table(self) -> str:
@@ -471,6 +506,9 @@ class CheckContext:
         return result if raw else _tool_value(result)
 
     def close(self) -> None:
+        for session in self._sessions:
+            session.close()
+        self._sessions.clear()
         self.rest.close()
 
 

@@ -50,8 +50,11 @@ def _qualified(metadata):
     return f"{metadata['database']}.{metadata['name']}"
 
 
-def _table_metadata(table):
-    matches = knowledge.describe(names=[table])
+def _table_metadata(table, project_id=None):
+    if project_id in (None, "default"):
+        matches = knowledge.describe(names=[table])
+    else:
+        matches = knowledge.describe(names=[table], project_id=project_id)
     if not matches:
         raise ToolInvalidInput(f"表 {table} 不在当前知识代")
     if len(matches) > 1:
@@ -226,14 +229,16 @@ def _partitions_from_metadata(fields, columns, rows):
     return max(candidates, key=lambda item: item[0])[1], None
 
 
-def _knowledge_partitions(metadata, fields):
+def _knowledge_partitions(metadata, fields, project_id=None):
     latest = []
     for field in fields:
         if field.get("partition") is not True:
             continue
-        values = knowledge.dimension_values(
-            metadata["database"], metadata["name"], field["name"]
-        )
+        arguments = (metadata["database"], metadata["name"], field["name"])
+        if project_id in (None, "default"):
+            values = knowledge.dimension_values(*arguments)
+        else:
+            values = knowledge.dimension_values(*arguments, project_id=project_id)
         candidates = [
             value for value in values if isinstance(value, str) and value.strip()
         ]
@@ -245,7 +250,7 @@ def _knowledge_partitions(metadata, fields):
     return latest, None
 
 
-async def _latest_partitions(metadata, fields, runtime):
+async def _latest_partitions(metadata, fields, runtime, project_id=None):
     if not any(field.get("partition") is True for field in fields):
         return [], None
     reason = None
@@ -272,7 +277,9 @@ async def _latest_partitions(metadata, fields, runtime):
             if partitions is not None:
                 return partitions, None
             reason = malformed
-    fallback, knowledge_reason = _knowledge_partitions(metadata, fields)
+    fallback, knowledge_reason = _knowledge_partitions(
+        metadata, fields, project_id=project_id
+    )
     if fallback is not None:
         return fallback, None
     details = reason or knowledge_reason
@@ -380,6 +387,7 @@ async def sample_table_data(
     limit: Annotated[int, Field(default=DEFAULT_LIMIT, ge=1, le=MAX_LIMIT)] = (
         DEFAULT_LIMIT
     ),
+    project_id: str | None = None,
 ) -> dict:
     """Return a few real rows from one table without accepting caller SQL.
 
@@ -400,7 +408,7 @@ async def sample_table_data(
     ):
         raise ToolInvalidInput(f"limit 必须在 1 到 {MAX_LIMIT} 之间")
     table = table.strip()
-    metadata = _table_metadata(table)
+    metadata = _table_metadata(table, project_id=project_id)
     fields = _field_metadata(metadata)
     selected, truncated = _select_columns(metadata, fields, columns)
     runtime = None
@@ -409,7 +417,9 @@ async def sample_table_data(
         runtime = _runtime(user)
     except (ToolInvalidInput, ToolUnavailable) as exc:
         runtime_error = exc
-    partitions, partition_error = await _latest_partitions(metadata, fields, runtime)
+    partitions, partition_error = await _latest_partitions(
+        metadata, fields, runtime, project_id=project_id
+    )
     if partitions is None:
         if isinstance(runtime_error, ToolInvalidInput):
             raise runtime_error
@@ -417,7 +427,7 @@ async def sample_table_data(
     sql = _build_sql(metadata, selected, partitions, limit)
     try:
         tree = _validate_sql(sql)
-        _tables_and_partitions(tree)
+        _tables_and_partitions(tree, project_id=project_id)
     except HTTPException as exc:
         raise ToolUnavailable(f"取样 SQL 未通过平台安全检查: {exc.detail}") from exc
 

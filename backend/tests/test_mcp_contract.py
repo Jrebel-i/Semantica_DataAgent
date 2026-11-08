@@ -315,6 +315,17 @@ def test_get_capabilities_lists_sql_tools(monkeypatch):
 
     assert not result.isError
     assert {"validate_sql", "find_join_path"} <= set(result.structuredContent["tools"])
+    assert result.structuredContent["project"]["id"] == "default"
+    assert result.structuredContent["projects"] == []
+
+
+def test_project_selection_does_not_add_tool_arguments():
+    from semantica_dataagent.app import create_mcp
+
+    for tool in create_mcp()._tool_manager.list_tools():
+        properties = (tool.parameters or {}).get("properties", {})
+        assert "project" not in properties, tool.name
+        assert "project_id" not in properties, tool.name
 
 
 def test_embedding_retry_exhaustion_is_unavailable_through_registered_tool(
