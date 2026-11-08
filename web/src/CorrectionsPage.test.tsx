@@ -18,31 +18,30 @@ afterEach(() => {
 test.each(["approve", "edited", "reject"])(
   "review %s uses the correct endpoint and patch",
   async (action) => {
-    const fetcher = vi.fn(
-      async (url: string, options?: RequestInit) =>
-        options?.method === "POST"
-          ? Response.json({})
-          : url === "/api/v1/projects"
-            ? Response.json([
-                {
-                  id: "default",
-                  name: "业务数据",
-                  type: "warehouse",
-                  status: "active",
-                  created_at: "2026-01-01T00:00:00Z",
-                  my_role: "admin",
-                },
-              ])
-            : Response.json([
-                {
-                  id: "p1",
-                  target: "document:a",
-                  reason: "wrong",
-                  diff: "-old\n+new",
-                  patch: "new",
-                  status: "pending",
-                },
-              ]),
+    const fetcher = vi.fn(async (url: string, options?: RequestInit) =>
+      options?.method === "POST"
+        ? Response.json({})
+        : url === "/api/v1/projects"
+          ? Response.json([
+              {
+                id: "default",
+                name: "业务数据",
+                type: "warehouse",
+                status: "active",
+                created_at: "2026-01-01T00:00:00Z",
+                my_role: "admin",
+              },
+            ])
+          : Response.json([
+              {
+                id: "p1",
+                target: "document:a",
+                reason: "wrong",
+                diff: "-old\n+new",
+                patch: "new",
+                status: "pending",
+              },
+            ]),
     );
     vi.stubGlobal("fetch", fetcher);
     render(<CorrectionsPage token="token" messages={getMessages("en")} />);

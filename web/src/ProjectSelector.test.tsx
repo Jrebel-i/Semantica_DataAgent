@@ -1,6 +1,12 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { ProjectSelector } from "./ProjectSelector";
 import { getMessages } from "./i18n";
 
@@ -25,6 +31,14 @@ const projects = [
 
 beforeEach(() => {
   localStorage.clear();
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  );
   Object.defineProperty(window, "matchMedia", {
     configurable: true,
     value: () => ({

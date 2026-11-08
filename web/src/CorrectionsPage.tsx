@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Alert } from "antd";
 import type { Messages } from "./i18n";
 import { safeDecodePath } from "./paths";
+import { ProjectSelector, storedProject } from "./ProjectSelector";
 
 type Proposal = {
   id: string;
@@ -22,15 +23,19 @@ export function CorrectionsPage({
   gaps?: boolean;
   messages: Messages;
 }) {
+  const [project, setProject] = useState(storedProject);
   const [rows, setRows] = useState<Proposal[]>([]);
   const [missing, setMissing] = useState<Gap[]>([]);
   const [selected, setSelected] = useState<Proposal | null>(null);
   const [patch, setPatch] = useState("");
   const [error, setError] = useState("");
+  const projectQuery = `project=${encodeURIComponent(project)}`;
   const refresh = useCallback(async () => {
     try {
       const response = await fetch(
-        gaps ? "/api/v1/knowledge-gaps" : "/api/v1/corrections",
+        `${
+          gaps ? "/api/v1/knowledge-gaps" : "/api/v1/corrections"
+        }?${projectQuery}`,
         { headers: { Authorization: `Bearer ${token}` } },
       );
       if (!response.ok) throw new Error();
@@ -40,15 +45,18 @@ export function CorrectionsPage({
     } catch {
       setError(t.correctionLoadError);
     }
-  }, [gaps, token, t.correctionLoadError]);
+  }, [gaps, projectQuery, token, t.correctionLoadError]);
   useEffect(() => {
     void refresh();
   }, [refresh]);
+  useEffect(() => {
+    setSelected(null);
+  }, [project]);
   async function review(action: "approve" | "reject", edited = false) {
     if (!selected) return;
     try {
       const response = await fetch(
-        `/api/v1/corrections/${selected.id}/${action}`,
+        `/api/v1/corrections/${selected.id}/${action}?${projectQuery}`,
         {
           method: "POST",
           headers: {
@@ -80,6 +88,12 @@ export function CorrectionsPage({
         <button type="button" onClick={() => void refresh()}>
           {t.refresh}
         </button>
+        <ProjectSelector
+          token={token}
+          value={project}
+          onChange={setProject}
+          messages={t}
+        />
       </div>
       {error && <Alert type="error" title={error} />}
       {gaps ? (

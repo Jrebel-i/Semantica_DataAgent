@@ -72,7 +72,10 @@ test("shows queue state, logs, stats and triggers both build types", async () =>
         ]);
       if (url === "/api/v1/projects/default/schedule")
         return Response.json({ interval_seconds: 60 });
-      if (url === "/api/v1/builds?project=default" && options?.method === "POST") {
+      if (
+        url === "/api/v1/builds?project=default" &&
+        options?.method === "POST"
+      ) {
         const body = JSON.parse(String(options.body)) as {
           build_type: "full" | "incremental";
         };
@@ -93,7 +96,8 @@ test("shows queue state, logs, stats and triggers both build types", async () =>
         builds.unshift(created as (typeof builds)[number]);
         return Response.json(created, { status: 202 });
       }
-      if (url === "/api/v1/builds?project=default") return Response.json(builds);
+      if (url === "/api/v1/builds?project=default")
+        return Response.json(builds);
       if (url === "/api/v1/generations?project=default")
         return Response.json({
           generations: [],
@@ -143,16 +147,24 @@ test("shows and saves the selected project's schedule", async () => {
         ]);
       if (url === "/api/v1/projects/default/schedule")
         return Response.json(
-          options?.method === "PUT" ? { interval_seconds: 5 } : { interval_seconds: 60 },
+          options?.method === "PUT"
+            ? { interval_seconds: 5 }
+            : { interval_seconds: 60 },
         );
       if (url === "/api/v1/builds?project=default") return Response.json([]);
       if (url === "/api/v1/generations?project=default")
-        return Response.json({ generations: [], behind: false, source_head: null });
+        return Response.json({
+          generations: [],
+          behind: false,
+          source_head: null,
+        });
       return Response.json([]);
     }),
   );
   render(<BuildPage token="token" messages={getMessages("zh")} />);
-  const input = (await screen.findByLabelText("间隔秒数（0 为关闭）")) as HTMLInputElement;
+  const input = (await screen.findByLabelText(
+    "间隔秒数（0 为关闭）",
+  )) as HTMLInputElement;
   await waitFor(() => expect(input.value).toBe("60"));
   fireEvent.change(input, { target: { value: "5" } });
   fireEvent.click(screen.getByRole("button", { name: "保存定时" }));

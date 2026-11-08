@@ -1,6 +1,7 @@
 import { PullsPanel } from "./PullsPanel";
+import { ProjectSelector, storedProject } from "./ProjectSelector";
 import { useCallback, useEffect, useState } from "react";
-import { Alert, Button, Descriptions, Table, Tag } from "antd";
+import { Alert, Button, Descriptions, Input, Table, Tag } from "antd";
 import type { components } from "./api";
 import type { Messages } from "./i18n";
 
@@ -43,22 +44,33 @@ export function BuildPage({
   token: string;
   messages: Messages;
 }) {
+  const [project, setProject] = useState(storedProject);
   const [builds, setBuilds] = useState<Build[]>([]);
   const [generations, setGenerations] = useState<Generations | null>(null);
   const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [interval, setInterval] = useState("0");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const projectQuery = `project=${encodeURIComponent(project)}`;
   const load = useCallback(async () => {
-    const response = await fetch("/api/v1/builds", {
+    const response = await fetch(`/api/v1/builds?${projectQuery}`, {
       headers: { Authorization: `Bearer ${token}` },
     });
     if (!response.ok) throw new Error();
     setBuilds((await response.json()) as Build[]);
-    const versions = await fetch("/api/v1/generations", {
+    const versions = await fetch(`/api/v1/generations?${projectQuery}`, {
       headers: { Authorization: `Bearer ${token}` },
     });
     if (versions.ok) setGenerations((await versions.json()) as Generations);
-  }, [token]);
+    const schedule = await fetch(
+      `/api/v1/projects/${encodeURIComponent(project)}/schedule`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    if (schedule.ok) {
+      const saved = (await schedule.json()) as { interval_seconds: number };
+      setInterval(String(saved.interval_seconds));
+    }
+  }, [project, projectQuery, token]);
   useEffect(() => {
     void load().catch(() => setError(t.buildError));
     const timer = window.setInterval(() => {
@@ -69,9 +81,12 @@ export function BuildPage({
   useEffect(() => {
     if (selectedId === null && builds.length) setSelectedId(builds[0].id);
   }, [builds, selectedId]);
+  useEffect(() => {
+    setSelectedId(null);
+  }, [project]);
   async function trigger(buildType: BuildType) {
     try {
-      const response = await fetch("/api/v1/builds", {
+      const response = await fetch(`/api/v1/builds?${projectQuery}`, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${token}`,
@@ -93,12 +108,35 @@ export function BuildPage({
   async function switchGeneration(name: string) {
     try {
       const response = await fetch(
-        `/api/v1/generations/${encodeURIComponent(name)}/switch`,
+        `/api/v1/generations/${encodeURIComponent(name)}/switch?${projectQuery}`,
         { method: "POST", headers: { Authorization: `Bearer ${token}` } },
       );
       if (!response.ok) throw new Error();
       await load();
     } catch {
+      setError(t.buildError);
+    }
+  }
+  async function saveSchedule() {
+    try {
+      const response = await fetch(
+        `/api/v1/projects/${encodeURIComponent(project)}/schedule`,
+        {
+          method: "PUT",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ interval_seconds: Number(interval) }),
+        },
+      );
+      if (!response.ok) throw new Error();
+      const saved = (await response.json()) as { interval_seconds: number };
+      setInterval(String(saved.interval_seconds));
+      setNotice(t.scheduleSaved);
+      setError("");
+    } catch {
+      setNotice("");
       setError(t.buildError);
     }
   }
@@ -110,6 +148,12 @@ export function BuildPage({
           <h1 className="page-title">{t.builds}</h1>
           <p className="page-subtitle">{t.buildsHint}</p>
         </div>
+        <ProjectSelector
+          token={token}
+          value={project}
+          onChange={setProject}
+          messages={t}
+        />
       </div>
       <PullsPanel token={token} messages={t} />
       {generations?.behind && (
@@ -125,6 +169,31 @@ export function BuildPage({
       {error && <Alert type="error" title={error} />}
       <div className="build-grid">
         <div className="build-stack">
+          <section className="card section-card">
+            <div className="card-title-row">
+              <h2 className="card-title">{t.scheduleTitle}</h2>
+            </div>
+            <div className="field">
+              <label className="field-label" htmlFor="build-schedule-interval">
+                {t.scheduleInterval}
+              </label>
+              <Input
+                id="build-schedule-interval"
+                aria-label={t.scheduleInterval}
+                type="number"
+                min={0}
+                max={604800}
+                value={interval}
+                onChange={(event) => setInterval(event.target.value)}
+              />
+              <p className="field-hint">{t.scheduleIntervalHint}</p>
+            </div>
+            <div className="save-bar">
+              <Button onClick={() => void saveSchedule()}>
+                {t.scheduleSave}
+              </Button>
+            </div>
+          </section>
           <section className="card section-card">
             <div className="card-title-row">
               <h2 className="card-title">{t.builds}</h2>
