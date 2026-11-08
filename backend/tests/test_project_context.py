@@ -113,3 +113,35 @@ def test_new_generation_keeps_the_project_prefix():
     generation = project.new_generation()
     assert generation.startswith("abc_")
     assert project.collection_name(generation) == "sda_" + generation
+
+
+def test_instance_schedule_methods_target_the_contexts_own_project(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        project_context,
+        "configure_schedule",
+        lambda interval, project_id="default": calls.append(
+            ("configure", interval, project_id)
+        ),
+    )
+    project = project_context.from_values(
+        {
+            "knowledge_generation": "abc_initial",
+            "_project_id": "abc",
+            "schedule_interval_seconds": "11",
+        }
+    )
+    project.configure_schedule(11)
+
+    from semantica_dataagent import scheduler
+
+    monkeypatch.setattr(
+        scheduler.scheduler,
+        "start",
+        lambda interval, project_id="default": calls.append(
+            ("start", interval, project_id)
+        ),
+    )
+    project.start_schedule()
+
+    assert calls == [("configure", 11, "abc"), ("start", 11, "abc")]

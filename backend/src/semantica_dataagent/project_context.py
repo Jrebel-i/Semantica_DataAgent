@@ -263,12 +263,12 @@ class ProjectContext:
         wake_build_queue()
 
     def configure_schedule(self, interval: int) -> None:
-        configure_schedule(interval)
+        configure_schedule(interval, self.project_id)
 
     def start_schedule(self) -> None:
         from .scheduler import scheduler
 
-        scheduler.start(self.schedule_interval_seconds)
+        scheduler.start(self.schedule_interval_seconds, project_id=self.project_id)
 
     @contextmanager
     def source_repository(self):
