@@ -3149,3 +3149,34 @@ code {
 .admin-page .form-card > .ant-checkbox-wrapper {
   align-self: flex-start;
 }
+
+/* Provider 模型能力卡片：模型纵向排列，复选框与文字同行 */
+.provider-capability-list {
+  gap: var(--admin-space-8);
+  margin-top: var(--admin-space-8);
+}
+.provider-capability-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--admin-space-8);
+  padding: var(--admin-space-12) var(--admin-space-16);
+}
+.provider-capability-fields {
+  gap: var(--admin-space-8);
+}
+.provider-capability-card .ant-checkbox-wrapper {
+  display: inline-flex;
+  flex-direction: row;
+  align-items: center;
+  align-self: flex-start;
+  gap: var(--admin-space-8);
+}
+.provider-capability-card .ant-checkbox + span {
+  padding-inline-start: 0;
+}
+.provider-effort-group {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--admin-space-8) var(--admin-space-12);
+}

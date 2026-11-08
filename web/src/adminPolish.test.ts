@@ -66,4 +66,13 @@ describe("admin page polish", () => {
       /\.admin-page \.empty-state,\s*\.admin-page \.ant-empty\s*\{[^}]*border: 1px dashed var\(--line\);/,
     );
   });
+
+  test("provider capability checkboxes stay inline with their labels", () => {
+    expect(css).toMatch(
+      /\.provider-capability-card \.ant-checkbox-wrapper\s*\{[^}]*display: inline-flex;[^}]*flex-direction: row;[^}]*align-items: center;/,
+    );
+    expect(css).toMatch(
+      /\.provider-capability-card \.ant-checkbox \+ span\s*\{[^}]*padding-inline-start: 0;/,
+    );
+  });
 });
