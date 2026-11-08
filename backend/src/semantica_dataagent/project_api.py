@@ -11,7 +11,7 @@ from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from sqlalchemy import func
+from sqlalchemy import func, text
 
 from .api_time import UtcDatetime
 from .auth import Requester, admin, current_requester
@@ -471,6 +471,7 @@ def put_project_member(
     requester: Annotated[Requester, Depends(current_requester)],
 ):
     with sessions().begin() as db:
+        db.execute(text("BEGIN IMMEDIATE"))
         token = (
             db.query(Token)
             .filter(Token.id == token_id, Token.revoked.is_(False))
@@ -531,6 +532,7 @@ def delete_project_member(
     requester: Annotated[Requester, Depends(current_requester)],
 ):
     with sessions().begin() as db:
+        db.execute(text("BEGIN IMMEDIATE"))
         token = (
             db.query(Token)
             .filter(Token.id == token_id, Token.revoked.is_(False))
