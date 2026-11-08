@@ -26,12 +26,13 @@ function project(
   id: string,
   name: string,
   role: "admin" | "member" = "member",
+  status: "active" | "archived" = "active",
 ) {
   return {
     id,
     name,
     type: "document" as const,
-    status: "active" as const,
+    status,
     created_at: "2026-11-05T00:00:00Z",
     my_role: role,
   };
@@ -241,6 +242,51 @@ test("回复中的新对话沿用当前项目选择", async () => {
     ),
   );
   expect(selectText("项目")).toBe("电商渠道");
+});
+
+test("归档项目不出现在提问项目选择器里", async () => {
+  vi.stubGlobal(
+    "fetch",
+    fetcher({
+      projects: [
+        project("default", "业务数据", "member"),
+        project("beta", "电商渠道", "member"),
+        project("old", "旧项目", "member", "archived"),
+      ],
+    }),
+  );
+  render(<ChatPage token="token" role="user" messages={getMessages("zh")} />);
+
+  await waitFor(() => expect(selectText("项目")).toBe("业务数据"));
+  const options = Array.from(
+    (screen.getByLabelText("项目") as HTMLSelectElement).options,
+  ).map((option) => option.textContent);
+  expect(options).toEqual(["业务数据", "电商渠道"]);
+});
+
+test("打开归档项目的会话后输入框禁用并提示项目已归档", async () => {
+  const rows = [conversation("conv-old", "归档会话", "old", "旧项目")];
+  vi.stubGlobal(
+    "fetch",
+    fetcher({
+      projects: [
+        project("default", "业务数据", "member"),
+        project("old", "旧项目", "member", "archived"),
+      ],
+      conversations: rows,
+    }),
+  );
+  render(<ChatPage token="token" role="user" messages={getMessages("zh")} />);
+
+  fireEvent.click(await screen.findByRole("button", { name: "归档会话" }));
+  await waitFor(() => expect(screen.getByText("项目已归档")).toBeTruthy());
+  const input = screen.getByLabelText("问题") as HTMLTextAreaElement;
+  expect(input.disabled).toBe(true);
+  expect(input.getAttribute("placeholder")).toBe("项目已归档");
+  expect(
+    (screen.getByRole("button", { name: "提问" }) as HTMLButtonElement)
+      .disabled,
+  ).toBe(true);
 });
 
 test("侧栏显示会话项目并可按项目筛选，筛选不改当前对话", async () => {

@@ -9,7 +9,7 @@ import shutil
 import uuid
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import func, text
 
@@ -29,7 +29,9 @@ from .db import (
 )
 from .project_audit import actor_name, record_project_audit
 from .project_context import (
+    ARCHIVED_DETAIL,
     DEFAULT_PROJECT_ID,
+    FROZEN_STATUSES,
     GENERATION_PREFIX_KEY,
     SCHEDULE_INTERVAL_KEY,
     SOURCE_DIRECTORY_KEY,
@@ -43,7 +45,7 @@ from .project_context import (
 router = APIRouter()
 
 ProjectType = Literal["warehouse", "document"]
-ProjectStatus = Literal["active", "archived"]
+ProjectStatus = Literal["active", "archived", "deleting"]
 ProjectRole = Literal["admin", "member"]
 TokenRole = Literal["user", "admin"]
 
@@ -76,6 +78,12 @@ class ProjectMemberView(BaseModel):
     id: str
     name: str
     role: ProjectRole
+
+
+class ProjectDeleteRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=200)
 
 
 class ProjectMemberUpdate(BaseModel):
@@ -154,11 +162,12 @@ def _accessible_project_ids(db, requester: Requester) -> list[str]:
 
 
 def _resolve_project_context(
-    project_id: str | None, requester: Requester
+    project_id: str | None, requester: Requester, *, allow_frozen: bool = False
 ) -> ProjectContext:
     with sessions()() as db:
         if project_id is not None:
-            if db.get(Project, project_id) is None:
+            project = db.get(Project, project_id)
+            if project is None:
                 raise HTTPException(status_code=404, detail="Project not found")
             if (
                 requester.role != "admin"
@@ -176,15 +185,24 @@ def _resolve_project_context(
                 raise HTTPException(status_code=422, detail="请指定项目")
             else:
                 raise HTTPException(status_code=422, detail="请指定项目")
+            project = db.get(Project, resolved)
+        if (
+            not allow_frozen
+            and project is not None
+            and project.status in FROZEN_STATUSES
+        ):
+            raise HTTPException(status_code=409, detail=ARCHIVED_DETAIL)
     try:
         return current_project(resolved)
     except ProjectNotFound as exc:
         raise HTTPException(status_code=404, detail="Project not found") from exc
 
 
-def resolve_project_scope(project_id: str, requester: Requester) -> ProjectContext:
+def resolve_project_scope(
+    project_id: str, requester: Requester, *, allow_frozen: bool = False
+) -> ProjectContext:
     """Public entry to the single access rule used by REST and MCP."""
-    return _resolve_project_context(project_id, requester)
+    return _resolve_project_context(project_id, requester, allow_frozen=allow_frozen)
 
 
 def _require_project_admin(
@@ -225,7 +243,7 @@ def project_path_scope(
     project_id: str,
     requester: Annotated[Requester, Depends(current_requester)],
 ) -> ProjectContext:
-    return _resolve_project_context(project_id, requester)
+    return _resolve_project_context(project_id, requester, allow_frozen=True)
 
 
 def admin_project_path_scope(
@@ -486,6 +504,65 @@ def create_project_record(
         raise
     with sessions()() as db:
         return db.get(Project, project_id)
+
+
+@router.post("/api/v1/projects/{project_id}/archive", response_model=ProjectView)
+def archive_project_route(
+    project_id: str,
+    requester: Annotated[Requester, Depends(current_requester)],
+    _: Annotated[str, Depends(admin)],
+):
+    from .project_deletion import archive_project
+
+    with sessions()() as db:
+        name = actor_name(db, requester)
+    archive_project(project_id, requester.id, name)
+    with sessions()() as db:
+        project = db.get(Project, project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        return _view(project, "admin")
+
+
+@router.post("/api/v1/projects/{project_id}/restore", response_model=ProjectView)
+def restore_project_route(
+    project_id: str,
+    requester: Annotated[Requester, Depends(current_requester)],
+    _: Annotated[str, Depends(admin)],
+):
+    from .project_deletion import restore_project
+
+    with sessions()() as db:
+        name = actor_name(db, requester)
+    restore_project(project_id, requester.id, name)
+    with sessions()() as db:
+        project = db.get(Project, project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        return _view(project, "admin")
+
+
+@router.post("/api/v1/projects/{project_id}/delete", status_code=204)
+def delete_project_route(
+    project_id: str,
+    body: ProjectDeleteRequest,
+    requester: Annotated[Requester, Depends(current_requester)],
+    _: Annotated[str, Depends(admin)],
+):
+    from .project_deletion import prepare_deletion, run_deletion
+
+    with sessions()() as db:
+        name = actor_name(db, requester)
+    state = prepare_deletion(project_id, body.name, requester.id, name)
+    if state == "completed":
+        return Response(status_code=204)
+    try:
+        run_deletion(project_id)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail="项目删除失败，可重试") from exc
+    return Response(status_code=204)
 
 
 @router.get("/api/v1/projects", response_model=list[ProjectView])

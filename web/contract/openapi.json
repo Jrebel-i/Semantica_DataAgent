@@ -1350,6 +1350,22 @@
         "title": "ProjectCreate",
         "type": "object"
       },
+      "ProjectDeleteRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "ProjectDeleteRequest",
+        "type": "object"
+      },
       "ProjectMemberUpdate": {
         "additionalProperties": false,
         "properties": {
@@ -1566,7 +1582,8 @@
           "status": {
             "enum": [
               "active",
-              "archived"
+              "archived",
+              "deleting"
             ],
             "title": "Status",
             "type": "string"
@@ -4720,6 +4737,50 @@
         "summary": "Rename Project"
       }
     },
+    "/api/v1/projects/{project_id}/archive": {
+      "post": {
+        "operationId": "archive_project_route_api_v1_projects__project_id__archive_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Archive Project Route"
+      }
+    },
     "/api/v1/projects/{project_id}/audit": {
       "get": {
         "operationId": "list_project_audit_api_v1_projects__project_id__audit_get",
@@ -4887,6 +4948,53 @@
         "summary": "Set Project Auto Build"
       }
     },
+    "/api/v1/projects/{project_id}/delete": {
+      "post": {
+        "operationId": "delete_project_route_api_v1_projects__project_id__delete_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProjectDeleteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Delete Project Route"
+      }
+    },
     "/api/v1/projects/{project_id}/members": {
       "get": {
         "operationId": "list_project_members_api_v1_projects__project_id__members_get",
@@ -5040,6 +5148,50 @@
           }
         ],
         "summary": "Put Project Member"
+      }
+    },
+    "/api/v1/projects/{project_id}/restore": {
+      "post": {
+        "operationId": "restore_project_route_api_v1_projects__project_id__restore_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Restore Project Route"
       }
     },
     "/api/v1/projects/{project_id}/schedule": {

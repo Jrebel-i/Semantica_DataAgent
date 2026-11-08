@@ -163,6 +163,8 @@ class BuildQueue:
                 self._condition.notify_all()
 
     def _claim(self):
+        from .project_context import project_is_frozen
+
         with sessions().begin() as db:
             rows = (
                 db.query(Build)
@@ -171,7 +173,14 @@ class BuildQueue:
                 .all()
             )
             for row in rows:
-                if _project(row) in self._excluded:
+                project_id = _project(row)
+                if project_id in self._excluded:
+                    continue
+                if project_is_frozen(project_id):
+                    row.status = "cancelled"
+                    row.finished_at = datetime.now(UTC).isoformat()
+                    row.error = "Build cancelled because the project is archived"
+                    db.flush()
                     continue
                 row.status = "running"
                 row.started_at = datetime.now(UTC).isoformat()

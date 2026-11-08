@@ -34,6 +34,7 @@ from .db import (
 )
 from .dtb_executor import column_names
 from .plugins import ExecutorAuthenticationError, ExecutorError, configured
+from .project_context import ARCHIVED_DETAIL, FROZEN_STATUSES
 
 router = APIRouter()
 
@@ -717,6 +718,20 @@ def get_result(query_id: str, user: Annotated[Requester, Depends(current_request
         }
 
 
+def _require_query_project_open(db, row) -> None:
+    """Download access follows the conversation's project archive state."""
+    from .db import Conversation, Project
+
+    project_id = "default"
+    if row.conversation_id:
+        conversation = db.get(Conversation, row.conversation_id)
+        if conversation is not None:
+            project_id = conversation.project_id
+    project = db.get(Project, project_id)
+    if project is not None and project.status in FROZEN_STATUSES:
+        raise HTTPException(status_code=409, detail=ARCHIVED_DETAIL)
+
+
 DOWNLOAD_LINK_TTL_SECONDS = 30 * 60
 DOWNLOAD_FORMATS = ("csv", "xlsx", "json")
 
@@ -752,6 +767,7 @@ def _download_links(query_id: str, user: Requester, base: str) -> dict[str, str]
         row = db.get(QueryExecution, query_id)
         if row is None or row.owner_id != user.id or row.status != "succeeded":
             raise HTTPException(404, "查询结果不存在")
+        _require_query_project_open(db, row)
     expires = int(time.time()) + DOWNLOAD_LINK_TTL_SECONDS
     links = {}
     for fmt in DOWNLOAD_FORMATS:
@@ -788,6 +804,7 @@ async def download_link(query_id: str, format: str, expires: str, signature: str
         row = db.get(QueryExecution, query_id)
         if row is None:
             raise HTTPException(404, "查询结果不存在")
+        _require_query_project_open(db, row)
         user = Requester(id=row.owner_id, role="user", token="")
     response = await download(query_id, user, format)
     _audit_download(user.id, query_id, format, "download_link_used")
@@ -805,6 +822,7 @@ async def download(
         row = db.get(QueryExecution, query_id)
         if row is None or row.owner_id != user.id or row.status != "succeeded":
             raise HTTPException(404, "查询结果不存在")
+        _require_query_project_open(db, row)
         if row.rows and (
             row.conversation_id is not None
             or (row.plan_data and json.loads(row.plan_data).get("source") == "mcp")

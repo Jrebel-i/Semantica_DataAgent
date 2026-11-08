@@ -65,6 +65,21 @@ class ProjectAudit(Base):
     created_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC))
 
 
+class ProjectDeletion(Base):
+    """Durable progress for a multi-step permanent project deletion."""
+
+    __tablename__ = "project_deletions"
+    project_id: Mapped[str] = mapped_column(primary_key=True)
+    project_name: Mapped[str]
+    status: Mapped[str] = mapped_column(default="deleting")
+    step: Mapped[str] = mapped_column(default="begin")
+    steps: Mapped[str] = mapped_column(default="[]", server_default="[]")
+    error: Mapped[str | None]
+    requested_by: Mapped[str]
+    created_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC))
+    updated_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC))
+
+
 class AgentCredential(Base):
     __tablename__ = "agent_credentials"
     digest: Mapped[str] = mapped_column(primary_key=True)

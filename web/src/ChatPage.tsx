@@ -88,12 +88,17 @@ export function ChatPage({
 
   useEffect(() => {
     if (!projects.length) return;
-    if (projects.some((project) => project.id === projectId)) return;
+    const current = projects.find((project) => project.id === projectId);
+    if (current?.status === "active") return;
+    if (currentConversationId && current?.status === "archived") return;
     const fallback =
-      projects.find((project) => project.id === "default") ?? projects[0];
+      projects.find(
+        (project) => project.id === "default" && project.status === "active",
+      ) ?? projects.find((project) => project.status === "active");
+    if (!fallback) return;
     setProjectId(fallback.id);
     rememberProject(fallback.id);
-  }, [projects, projectId]);
+  }, [projects, projectId, currentConversationId]);
 
   function selectProject(value: string) {
     setProjectId(value);
@@ -185,6 +190,9 @@ export function ChatPage({
     closeCitation,
   } = useCitations({ token, messages: t, setError });
 
+  const selectedProject = projects.find((project) => project.id === projectId);
+  const projectArchived = selectedProject?.status === "archived";
+
   const {
     question,
     setQuestion,
@@ -206,6 +214,7 @@ export function ChatPage({
     effort,
     projectId,
     visionEnabled,
+    projectArchived,
     currentConversationId,
     setCurrentConversationId,
     sending,
@@ -338,6 +347,16 @@ export function ChatPage({
     setLive(null);
     setError("");
     clearAttachments();
+    if (projectArchived) {
+      const fallback =
+        projects.find(
+          (project) => project.id === "default" && project.status === "active",
+        ) ?? projects.find((project) => project.status === "active");
+      if (fallback) {
+        setProjectId(fallback.id);
+        rememberProject(fallback.id);
+      }
+    }
   }
 
   const currentConversation = [...conversations, ...archivedConversations].find(
@@ -586,6 +605,7 @@ export function ChatPage({
               emptyConversation={emptyConversation}
               projects={projects}
               projectId={projectId}
+              projectArchived={projectArchived}
               selectProject={selectProject}
               projectLocked={projectLocked}
               agents={agents}

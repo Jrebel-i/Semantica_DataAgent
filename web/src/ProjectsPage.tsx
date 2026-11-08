@@ -43,6 +43,10 @@ export function ProjectsPage({
   const [addRole, setAddRole] = useState<ProjectRole>("member");
   const [memberError, setMemberError] = useState("");
   const [confirmMember, setConfirmMember] = useState<MemberRow | null>(null);
+  const [archiveTarget, setArchiveTarget] = useState<ProjectRow | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<ProjectRow | null>(null);
+  const [deleteName, setDeleteName] = useState("");
+  const [lifecycleBusy, setLifecycleBusy] = useState(false);
 
   const authHeaders = { Authorization: `Bearer ${token}` };
   const refresh = useCallback(async () => {
@@ -158,6 +162,81 @@ export function ProjectsPage({
       await loadMembers(selected.id);
     } catch {
       setMemberError(t.memberError);
+    }
+  }
+
+  async function errorDetail(response: Response, fallback: string) {
+    try {
+      const body = (await response.json()) as { detail?: string };
+      return body.detail || fallback;
+    } catch {
+      return fallback;
+    }
+  }
+
+  async function archiveProject() {
+    if (!archiveTarget) return;
+    setLifecycleBusy(true);
+    try {
+      const response = await fetch(
+        `/api/v1/projects/${encodeURIComponent(archiveTarget.id)}/archive`,
+        { method: "POST", headers: authHeaders },
+      );
+      if (!response.ok)
+        throw new Error(await errorDetail(response, t.projectError));
+      setArchiveTarget(null);
+      setError("");
+      await refresh();
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : t.projectError);
+    } finally {
+      setLifecycleBusy(false);
+    }
+  }
+
+  async function restoreProject(project: ProjectRow) {
+    setLifecycleBusy(true);
+    try {
+      const response = await fetch(
+        `/api/v1/projects/${encodeURIComponent(project.id)}/restore`,
+        { method: "POST", headers: authHeaders },
+      );
+      if (!response.ok)
+        throw new Error(await errorDetail(response, t.projectError));
+      setError("");
+      await refresh();
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : t.projectError);
+    } finally {
+      setLifecycleBusy(false);
+    }
+  }
+
+  async function deleteProject() {
+    if (!deleteTarget || deleteName !== deleteTarget.name) return;
+    setLifecycleBusy(true);
+    try {
+      const response = await fetch(
+        `/api/v1/projects/${encodeURIComponent(deleteTarget.id)}/delete`,
+        {
+          method: "POST",
+          headers: { ...authHeaders, "Content-Type": "application/json" },
+          body: JSON.stringify({ name: deleteName }),
+        },
+      );
+      if (!response.ok) {
+        throw new Error(await errorDetail(response, t.deleteProjectError));
+      }
+      setDeleteTarget(null);
+      setDeleteName("");
+      setError("");
+      await refresh();
+    } catch (failure) {
+      setError(
+        failure instanceof Error ? failure.message : t.deleteProjectError,
+      );
+    } finally {
+      setLifecycleBusy(false);
     }
   }
 
@@ -305,6 +384,8 @@ export function ProjectsPage({
           pagination={false}
           onRow={(row) => ({
             onClick: () => void openProject(row),
+            className:
+              row.status === "archived" ? "project-archived-row" : undefined,
             style: { cursor: "pointer" },
           })}
           columns={[
@@ -340,6 +421,8 @@ export function ProjectsPage({
               render: (_, row) =>
                 row.status === "active" ? (
                   <Tag color="green">{t.active}</Tag>
+                ) : row.status === "deleting" ? (
+                  <Tag color="red">{t.projectDeleting}</Tag>
                 ) : (
                   <Tag>{t.archived}</Tag>
                 ),
@@ -351,15 +434,60 @@ export function ProjectsPage({
             {
               title: t.actions,
               render: (_, row) => (
-                <Button
-                  autoInsertSpace={false}
+                <Space
+                  wrap
                   onClick={(event) => {
                     event.stopPropagation();
-                    void openProject(row);
                   }}
                 >
-                  {t.projectMembers}
-                </Button>
+                  <Button
+                    autoInsertSpace={false}
+                    onClick={() => {
+                      void openProject(row);
+                    }}
+                  >
+                    {t.projectMembers}
+                  </Button>
+                  {canCreate && row.status === "active" && (
+                    <Button
+                      autoInsertSpace={false}
+                      onClick={() => {
+                        setArchiveTarget(row);
+                        setError("");
+                      }}
+                    >
+                      {t.archiveProject}
+                    </Button>
+                  )}
+                  {canCreate && row.status === "archived" && (
+                    <>
+                      <Button
+                        autoInsertSpace={false}
+                        disabled={lifecycleBusy}
+                        onClick={() => void restoreProject(row)}
+                      >
+                        {t.restoreProject}
+                      </Button>
+                      <Button
+                        autoInsertSpace={false}
+                        danger
+                        disabled={lifecycleBusy || row.id === "default"}
+                        title={
+                          row.id === "default"
+                            ? t.defaultProjectUndeletable
+                            : undefined
+                        }
+                        onClick={() => {
+                          setDeleteName("");
+                          setDeleteTarget(row);
+                          setError("");
+                        }}
+                      >
+                        {t.deleteProject}
+                      </Button>
+                    </>
+                  )}
+                </Space>
               ),
             },
           ]}
@@ -397,6 +525,55 @@ export function ProjectsPage({
               />
               <p className="field-hint">{t.projectTypeHint}</p>
             </label>
+          </div>
+        </Modal>
+      )}
+      {archiveTarget !== null && (
+        <Modal
+          open
+          title={t.archiveProject}
+          okText={t.archiveProject}
+          cancelText={t.cancel}
+          confirmLoading={lifecycleBusy}
+          onOk={() => void archiveProject()}
+          onCancel={() => setArchiveTarget(null)}
+        >
+          <div className="stack">
+            <p>{t.archiveConfirm.replace("{name}", archiveTarget.name)}</p>
+            <p className="muted">{t.archiveProjectHint}</p>
+          </div>
+        </Modal>
+      )}
+      {deleteTarget !== null && (
+        <Modal
+          open
+          title={t.confirmDeleteProject}
+          okText={t.deleteProject}
+          cancelText={t.cancel}
+          okButtonProps={{
+            danger: true,
+            disabled: deleteName !== deleteTarget.name,
+          }}
+          confirmLoading={lifecycleBusy}
+          onOk={() => void deleteProject()}
+          onCancel={() => {
+            setDeleteTarget(null);
+            setDeleteName("");
+          }}
+        >
+          <div className="stack">
+            <p>{t.deleteProjectHint.replace("{name}", deleteTarget.name)}</p>
+            <Input
+              aria-label={t.name}
+              value={deleteName}
+              maxLength={200}
+              onChange={(event) => setDeleteName(event.target.value)}
+            />
+            {deleteName !== "" && deleteName !== deleteTarget.name && (
+              <p className="field-hint" role="alert">
+                {t.deleteProjectMismatch}
+              </p>
+            )}
           </div>
         </Modal>
       )}

@@ -27,6 +27,14 @@ const projects = [
     created_at: "2026-01-01T00:00:00Z",
     my_role: "admin",
   },
+  {
+    id: "old",
+    name: "Old Docs",
+    type: "document",
+    status: "archived",
+    created_at: "2026-01-01T00:00:00Z",
+    my_role: "admin",
+  },
 ];
 
 beforeEach(() => {
@@ -78,4 +86,5 @@ test("lists manageable projects and reports the selected project", async () => {
   fireEvent.mouseDown(screen.getByRole("combobox"));
   fireEvent.click(await screen.findByTitle("Platform Docs"));
   await waitFor(() => expect(changes).toEqual(["docs"]));
+  expect(screen.queryByTitle("Old Docs")).toBeNull();
 });

@@ -43,7 +43,13 @@ export function ProjectSelector({
     })
       .then((response) => (response.ok ? response.json() : []))
       .then((rows: Project[]) => {
-        if (active) setProjects(rows.filter((row) => row.my_role === "admin"));
+        if (active) {
+          setProjects(
+            rows.filter(
+              (row) => row.my_role === "admin" && row.status === "active",
+            ),
+          );
+        }
       })
       .catch(() => undefined);
     return () => {

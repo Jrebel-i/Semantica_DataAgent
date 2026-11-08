@@ -41,6 +41,11 @@ DEFAULT_PROJECT_ID = "default"
 DEFAULT_PROJECT_NAME = "业务数据"
 DEFAULT_PROJECT_TYPE = "warehouse"
 DEFAULT_PROJECT_STATUS = "active"
+ACTIVE_STATUS = "active"
+ARCHIVED_STATUS = "archived"
+DELETING_STATUS = "deleting"
+FROZEN_STATUSES = frozenset({ARCHIVED_STATUS, DELETING_STATUS})
+ARCHIVED_DETAIL = "项目已归档"
 
 GENERATION_KEY = "knowledge_generation"
 SOURCE_DIRECTORY_KEY = "source_directory"
@@ -300,6 +305,23 @@ def current_project(
     return ProjectContext(resolved, values, project.name, project.type, project.status)
 
 
+def project_status(project_id: str = DEFAULT_PROJECT_ID) -> str:
+    """Return a project's lifecycle status; the implicit default is active."""
+    with sessions()() as db:
+        project = db.get(Project, project_id)
+        if project is None:
+            raise ProjectNotFound(project_id)
+        return project.status
+
+
+def project_is_frozen(project_id: str = DEFAULT_PROJECT_ID) -> bool:
+    """Archived and deleting projects reject project-scoped work."""
+    try:
+        return project_status(project_id) in FROZEN_STATUSES
+    except ProjectNotFound:
+        return True
+
+
 def project_type(project_id: str | None = None) -> str:
     """Return a project's immutable type, defaulting the default project."""
     resolved = resolve_project_id(project_id)
@@ -384,23 +406,29 @@ def recover_projects() -> None:
     if not root.exists():
         return
     with sessions()() as db:
-        known = {row.id for row in db.query(Project).all()}
+        known = {row.id: row.status for row in db.query(Project).all()}
     for entry in root.iterdir():
         if not entry.is_dir() or entry.is_symlink():
             continue
         if entry.name.startswith(".creating-"):
             shutil.rmtree(entry, ignore_errors=True)
             continue
-        if entry.name not in known:
+        status = known.get(entry.name)
+        if status is None:
             try:
                 entry.rmdir()
             except OSError:
                 pass
             continue
+        if status == DELETING_STATUS:
+            shutil.rmtree(entry, ignore_errors=True)
+            continue
         source = entry / "source"
         if not source.exists():
             source.mkdir(parents=True, exist_ok=True)
-    for project_id in known - {DEFAULT_PROJECT_ID}:
+    for project_id, status in known.items():
+        if project_id == DEFAULT_PROJECT_ID or status == DELETING_STATUS:
+            continue
         project_source_directory(project_id).mkdir(parents=True, exist_ok=True)
     try:
         root.rmdir()

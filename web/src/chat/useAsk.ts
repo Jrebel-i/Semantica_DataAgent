@@ -28,6 +28,7 @@ export function useAsk({
   effort,
   projectId,
   visionEnabled,
+  projectArchived,
   currentConversationId,
   setCurrentConversationId,
   sending,
@@ -53,6 +54,7 @@ export function useAsk({
   effort: EffortLevel | "";
   projectId: string;
   visionEnabled: boolean;
+  projectArchived: boolean;
   currentConversationId: string;
   setCurrentConversationId: Dispatch<SetStateAction<string>>;
   sending: boolean;
@@ -190,6 +192,7 @@ export function useAsk({
       !model ||
       sending ||
       !resumable ||
+      projectArchived ||
       archivedConversations.some((row) => row.id === currentConversationId)
     )
       return;
@@ -350,6 +353,7 @@ export function useAsk({
     !sending &&
     resumable &&
     !(attachments.some((item) => item.isImage) && !visionEnabled) &&
+    !projectArchived &&
     !archivedConversations.some((row) => row.id === currentConversationId),
   );
 

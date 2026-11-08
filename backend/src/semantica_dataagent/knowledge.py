@@ -631,6 +631,8 @@ def run_build(build_id):
             project_row = db.get(Project, project_id)
             if project_row is None:
                 raise ValueError(f"Project {project_id} not found")
+            if project_row.status in project_context.FROZEN_STATUSES:
+                raise ValueError(project_context.ARCHIVED_DETAIL)
             project_type = project_row.type
         values = (
             settings()

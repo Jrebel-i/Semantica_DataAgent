@@ -5,6 +5,7 @@ import {
   fireEvent,
   render,
   screen,
+  within,
   waitFor,
 } from "@testing-library/react";
 import { ProjectsPage } from "./ProjectsPage";
@@ -286,4 +287,121 @@ test("disables demoting or removing the last project admin", async () => {
   expect(
     screen.getAllByTitle("不能移除或降级最后一个项目管理员").length,
   ).toBeGreaterThan(0);
+});
+
+test("archives and restores a project from the management table", async () => {
+  const calls: Array<{ url: string; method?: string }> = [];
+  let rows = [projectRow()];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string, options?: RequestInit) => {
+      if (options?.method === "POST" && url.endsWith("/archive")) {
+        calls.push({ url, method: options.method });
+        rows = rows.map((row) => ({ ...row, status: "archived" }));
+        return Response.json(rows[0]);
+      }
+      if (options?.method === "POST" && url.endsWith("/restore")) {
+        calls.push({ url, method: options.method });
+        rows = rows.map((row) => ({ ...row, status: "active" }));
+        return Response.json(rows[0]);
+      }
+      return Response.json(rows);
+    }),
+  );
+  render(<ProjectsPage token="admin" messages={getMessages("zh")} />);
+
+  fireEvent.click(await screen.findByRole("button", { name: "归档项目" }));
+  const dialog = await screen.findByRole("dialog");
+  expect(within(dialog).getByText(/确认归档/)).toBeTruthy();
+  fireEvent.click(
+    within(dialog).getByRole("button", { name: /归\s*档\s*项\s*目/ }),
+  );
+
+  await waitFor(() =>
+    expect(calls).toContainEqual({
+      url: "/api/v1/projects/default/archive",
+      method: "POST",
+    }),
+  );
+  const row = (await screen.findByText("业务数据")).closest("tr");
+  expect(row?.className).toContain("project-archived-row");
+
+  fireEvent.click(screen.getByRole("button", { name: "恢复项目" }));
+  await waitFor(() =>
+    expect(calls).toContainEqual({
+      url: "/api/v1/projects/default/restore",
+      method: "POST",
+    }),
+  );
+  await waitFor(() =>
+    expect(
+      (screen.getByText("业务数据").closest("tr") as HTMLElement).className,
+    ).not.toContain("project-archived-row"),
+  );
+});
+
+test("requires the exact project name before permanent deletion", async () => {
+  const calls: Array<{ url: string; method?: string; body?: string }> = [];
+  let rows = [
+    projectRow({ status: "archived" }),
+    projectRow({ id: "old", name: "旧项目", status: "archived" }),
+  ];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string, options?: RequestInit) => {
+      if (options?.method === "POST" && url.endsWith("/delete")) {
+        calls.push({
+          url,
+          method: options.method,
+          body: options.body as string | undefined,
+        });
+        rows = rows.filter((row) => row.id !== "old");
+        return new Response(null, { status: 204 });
+      }
+      return Response.json(rows);
+    }),
+  );
+  render(<ProjectsPage token="admin" messages={getMessages("zh")} />);
+
+  const defaultRow = (await screen.findByText("业务数据")).closest(
+    "tr",
+  ) as HTMLElement;
+  const defaultDelete = within(defaultRow)
+    .getAllByRole("button")
+    .find((button) => /永\s*久\s*删\s*除/.test(button.textContent ?? ""));
+  expect((defaultDelete as HTMLButtonElement).disabled).toBe(true);
+  expect(defaultDelete?.getAttribute("title")).toBe("默认项目不可删除");
+
+  const oldRow = screen.getByText("旧项目").closest("tr") as HTMLElement;
+  expect(oldRow.className).toContain("project-archived-row");
+  fireEvent.click(
+    within(oldRow)
+      .getAllByRole("button")
+      .find((button) => /永\s*久\s*删\s*除/.test(button.textContent ?? ""))!,
+  );
+
+  const dialog = await screen.findByRole("dialog");
+  const confirm = within(dialog)
+    .getAllByRole("button")
+    .find((button) => /永\s*久\s*删\s*除/.test(button.textContent ?? ""))!;
+  expect((confirm as HTMLButtonElement).disabled).toBe(true);
+  fireEvent.change(within(dialog).getByLabelText("名称"), {
+    target: { value: "旧" },
+  });
+  expect(within(dialog).getByRole("alert").textContent).toBe("项目名不匹配");
+  expect((confirm as HTMLButtonElement).disabled).toBe(true);
+
+  fireEvent.change(within(dialog).getByLabelText("名称"), {
+    target: { value: "旧项目" },
+  });
+  expect((confirm as HTMLButtonElement).disabled).toBe(false);
+  fireEvent.click(confirm);
+
+  await waitFor(() => expect(calls).toHaveLength(1));
+  expect(calls[0]).toEqual({
+    url: "/api/v1/projects/old/delete",
+    method: "POST",
+    body: JSON.stringify({ name: "旧项目" }),
+  });
+  await waitFor(() => expect(screen.queryByText("旧项目")).toBeNull());
 });

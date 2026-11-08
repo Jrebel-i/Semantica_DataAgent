@@ -19,7 +19,7 @@ from fastapi import HTTPException
 from .auth import Requester
 from .mcp_contract import ToolInvalidInput
 from .project_api import accessible_projects, resolve_project_scope
-from .project_context import DEFAULT_PROJECT_ID
+from .project_context import ARCHIVED_DETAIL, DEFAULT_PROJECT_ID
 
 NOT_FOUND = "项目不存在"
 
@@ -28,6 +28,8 @@ def _resolve(requester: Requester, project_id: str) -> str:
     try:
         return resolve_project_scope(project_id, requester).project_id
     except HTTPException as exc:
+        if exc.status_code == 409 and exc.detail == ARCHIVED_DETAIL:
+            raise ToolInvalidInput(ARCHIVED_DETAIL) from exc
         raise ToolInvalidInput(NOT_FOUND) from exc
 
 
@@ -56,5 +58,5 @@ def resolve_mcp_project(
     if requester.role == "admin":
         return _resolve(requester, DEFAULT_PROJECT_ID)
     if len(projects) == 1:
-        return projects[0].id
+        return _resolve(requester, projects[0].id)
     raise _selection_error(requester, projects)
