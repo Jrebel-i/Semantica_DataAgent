@@ -206,6 +206,74 @@ def test_warehouse_project_accepts_dtb_with_pull_config_and_hides_token(client):
     assert DTB_SECRET.encode() not in Path(os.environ["DATAAGENT_DB_PATH"]).read_bytes()
 
 
+def test_default_project_pull_token_stays_in_sync_with_legacy_endpoint(client):
+    from semantica_dataagent.crypto import decrypt
+
+    c, admin = client
+    headers = _headers(admin)
+    url = "/api/v1/projects/default/adapters"
+
+    def secret():
+        from semantica_dataagent import project_context
+
+        value = project_context.plugin_secret("default", "puller.dtb.token")
+        return decrypt(value) if value else None
+
+    response = c.put(
+        url,
+        headers=headers,
+        json={
+            "adapters": [
+                {
+                    "id": "dtb",
+                    "enabled": True,
+                    "parameters": {},
+                    "pull": {
+                        "enabled": True,
+                        "parameters": {
+                            "url": "https://dtb.example",
+                            "token": "first-secret",
+                        },
+                    },
+                }
+            ]
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert secret() == "first-secret"
+
+    response = c.put(
+        "/api/v1/plugins/puller/dtb",
+        headers=headers,
+        json={
+            "enabled": True,
+            "parameters": {"url": "https://dtb.example", "token": "second-secret"},
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert secret() == "second-secret"
+
+    response = c.put(
+        url,
+        headers=headers,
+        json={
+            "adapters": [
+                {
+                    "id": "dtb",
+                    "enabled": True,
+                    "parameters": {},
+                    "pull": {
+                        "enabled": True,
+                        "parameters": {"url": "https://dtb.example", "token": ""},
+                    },
+                }
+            ]
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert secret() is None
+
+
 def test_project_adapter_configs_are_isolated(client):
     c, admin = client
     first = _create_project(c, admin, "First", "warehouse")

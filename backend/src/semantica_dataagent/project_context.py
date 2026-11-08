@@ -486,9 +486,6 @@ def upsert_plugin_config(
     return row
 
 
-PLUGIN_SECRET_KEYS = frozenset({"puller.dtb.token"})
-
-
 def plugin_secret(project_id: str, key: str) -> str | None:
     """Read a project-scoped plugin secret, falling back to the legacy global row."""
     with sessions()() as db:
@@ -500,14 +497,22 @@ def plugin_secret(project_id: str, key: str) -> str | None:
 
 def set_plugin_secret(db, project_id: str, key: str, value: str | None) -> None:
     row = db.get(ProjectSetting, (project_id, key))
+    legacy = db.get(Setting, key) if project_id == DEFAULT_PROJECT_ID else None
     if not value:
         if row is not None:
             db.delete(row)
+        if legacy is not None:
+            db.delete(legacy)
         return
     if row is None:
         db.add(ProjectSetting(project_id=project_id, key=key, value=value))
     else:
         row.value = value
+    if project_id == DEFAULT_PROJECT_ID:
+        if legacy is None:
+            db.add(Setting(key=key, value=value))
+        else:
+            legacy.value = value
 
 
 def add_queued_build(

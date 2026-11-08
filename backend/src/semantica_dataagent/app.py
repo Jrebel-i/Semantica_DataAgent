@@ -1201,11 +1201,12 @@ def update_plugin(
         if token:
             from .crypto import encrypt
 
-            secret = db.get(Setting, "puller.dtb.token")
-            if secret is None:
-                db.add(Setting(key="puller.dtb.token", value=encrypt(token)))
-            else:
-                secret.value = encrypt(token)
+            project_context.set_plugin_secret(
+                db,
+                project_context.DEFAULT_PROJECT_ID,
+                "puller.dtb.token",
+                encrypt(token),
+            )
         project_context.upsert_plugin_config(
             db, category, plugin_id, body.enabled, parameters
         )
