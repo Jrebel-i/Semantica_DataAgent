@@ -135,15 +135,25 @@ def public_base_url() -> str:
     return f"http://{host}:{port}"
 
 
-def _summarize(value, depth: int = 0):
-    if depth > 4:
+DEFAULT_SUMMARY_DEPTH = 4
+# Clarification options put their id/label/ref at depth 5, just past the
+# default limit, so persisted cards lost every option field.  Keep the same
+# string and list caps for these events while allowing their full structure.
+SUMMARY_DEPTH_BY_EVENT = {"clarification": 8}
+
+
+def _summarize(value, depth: int = 0, max_depth: int = DEFAULT_SUMMARY_DEPTH):
+    if depth > max_depth:
         return "…"
     if isinstance(value, str):
         return value if len(value) <= 4000 else value[:3999] + "…"
     if isinstance(value, list):
-        return [_summarize(item, depth + 1) for item in value[:100]]
+        return [_summarize(item, depth + 1, max_depth) for item in value[:100]]
     if isinstance(value, dict):
-        return {str(key): _summarize(item, depth + 1) for key, item in value.items()}
+        return {
+            str(key): _summarize(item, depth + 1, max_depth)
+            for key, item in value.items()
+        }
     return value
 
 
@@ -195,7 +205,12 @@ def _record_event(turn_id: int, seq: int, event: AgentEvent) -> None:
                 data=json.dumps(
                     event.data
                     if event.type in {"query_plan", "query_result"}
-                    else _summarize(event.data),
+                    else _summarize(
+                        event.data,
+                        max_depth=SUMMARY_DEPTH_BY_EVENT.get(
+                            event.type, DEFAULT_SUMMARY_DEPTH
+                        ),
+                    ),
                     ensure_ascii=False,
                 ),
             )
