@@ -1314,7 +1314,7 @@ print(json.dumps({{"type": "item.completed", "item": {{
     secret.write_bytes(PNG)
     attacked = AttachmentInput(
         name="secret.png",
-        path=f"../{other.name}/work/attachments/secret.png",
+        path=f"../../{other.name}/work/attachments/secret.png",
         size=len(PNG),
         mime_type="image/png",
         is_image=True,
