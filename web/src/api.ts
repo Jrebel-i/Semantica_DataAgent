@@ -1202,6 +1202,21 @@ export interface components {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
         };
+        /** ModelCapability */
+        ModelCapability: {
+            /**
+             * Description
+             * @default
+             */
+            description: string;
+            /** Effort Levels */
+            effort_levels?: ("low" | "medium" | "high" | "extra" | "max")[];
+            /**
+             * Vision
+             * @default false
+             */
+            vision: boolean;
+        };
         /** PlanInput */
         PlanInput: {
             /** Sql */
@@ -1286,6 +1301,10 @@ export interface components {
             api_key?: string | null;
             /** Base Url */
             base_url: string;
+            /** Model Capabilities */
+            model_capabilities?: {
+                [key: string]: components["schemas"]["ModelCapability"];
+            } | null;
             /** Models */
             models: string[];
             /** Name */
@@ -1302,6 +1321,10 @@ export interface components {
             api_key?: string | null;
             /** Base Url */
             base_url?: string | null;
+            /** Model Capabilities */
+            model_capabilities?: {
+                [key: string]: components["schemas"]["ModelCapability"];
+            } | null;
             /** Models */
             models?: string[] | null;
             /** Name */
@@ -1322,6 +1345,10 @@ export interface components {
             has_api_key: boolean;
             /** Id */
             id: string;
+            /** Model Capabilities */
+            model_capabilities: {
+                [key: string]: components["schemas"]["ModelCapability"];
+            };
             /** Models */
             models: string[];
             /** Name */

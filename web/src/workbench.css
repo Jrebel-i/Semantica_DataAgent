@@ -2056,6 +2056,35 @@ button.clarification-option-toggle:hover {
   gap: 8px;
   flex-wrap: wrap;
 }
+.provider-capability-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 6px;
+}
+.provider-capability-card {
+  display: grid;
+  grid-template-columns: minmax(150px, 0.6fr) minmax(0, 2.4fr);
+  gap: 10px 16px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--white);
+}
+.provider-capability-model {
+  overflow-wrap: anywhere;
+}
+.provider-capability-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.provider-effort-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+}
 
 /* Builds */
 .build-grid {
@@ -2327,7 +2356,6 @@ button.clarification-option-toggle:hover {
 code {
   font-family: var(--font-mono);
 }
-
 
 /* Shared conversation navigation */
 .chat-page-host {
@@ -3120,4 +3148,35 @@ code {
 }
 .admin-page .form-card > .ant-checkbox-wrapper {
   align-self: flex-start;
+}
+
+/* Provider 模型能力卡片：模型纵向排列，复选框与文字同行 */
+.provider-capability-list {
+  gap: var(--admin-space-8);
+  margin-top: var(--admin-space-8);
+}
+.provider-capability-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--admin-space-8);
+  padding: var(--admin-space-12) var(--admin-space-16);
+}
+.provider-capability-fields {
+  gap: var(--admin-space-8);
+}
+.provider-capability-card .ant-checkbox-wrapper {
+  display: inline-flex;
+  flex-direction: row;
+  align-items: center;
+  align-self: flex-start;
+  gap: var(--admin-space-8);
+}
+.provider-capability-card .ant-checkbox + span {
+  padding-inline-start: 0;
+}
+.provider-effort-group {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--admin-space-8) var(--admin-space-12);
 }

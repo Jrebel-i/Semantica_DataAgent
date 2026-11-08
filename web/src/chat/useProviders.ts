@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { parseAgentProfiles, type AgentProfiles } from "../agentProfiles";
 import type { Messages } from "../i18n";
+import type { ProviderForm } from "./ProviderSettings";
 import type { Agent, Provider } from "./types";
 
 export function useProviders({
@@ -26,12 +27,13 @@ export function useProviders({
   const [agentId, setAgentId] = useState("pi");
   const [providerId, setProviderId] = useState("");
   const [model, setModel] = useState("");
-  const [providerForm, setProviderForm] = useState({
+  const [providerForm, setProviderForm] = useState<ProviderForm>({
     name: "",
     type: "anthropic-messages",
     base_url: "",
     api_key: "",
     models: "",
+    model_capabilities: {},
   });
   const [editingProviderId, setEditingProviderId] = useState("");
   const [providerError, setProviderError] = useState("");
@@ -181,6 +183,19 @@ export function useProviders({
       base_url: provider.base_url,
       api_key: "",
       models: provider.models.join(", "),
+      model_capabilities: Object.fromEntries(
+        provider.models.map((model) => {
+          const capability = provider.model_capabilities?.[model];
+          return [
+            model,
+            {
+              description: capability?.description ?? "",
+              vision: capability?.vision ?? false,
+              effort_levels: [...(capability?.effort_levels ?? [])],
+            },
+          ];
+        }),
+      ),
     });
     setProviderError("");
     setProviderNotice("");
@@ -194,6 +209,7 @@ export function useProviders({
       base_url: "",
       api_key: "",
       models: "",
+      model_capabilities: {},
     });
   }
 
@@ -210,6 +226,19 @@ export function useProviders({
       type: providerForm.type,
       base_url: providerForm.base_url.trim(),
       models,
+      model_capabilities: Object.fromEntries(
+        models.map((model) => {
+          const capability = providerForm.model_capabilities[model];
+          return [
+            model,
+            {
+              description: capability?.description ?? "",
+              vision: capability?.vision ?? false,
+              effort_levels: capability?.effort_levels ?? [],
+            },
+          ];
+        }),
+      ),
     };
     if (providerForm.api_key.trim()) payload.api_key = providerForm.api_key;
     try {

@@ -94,6 +94,7 @@ class Provider(Base):
     base_url: Mapped[str]
     api_key: Mapped[str | None]
     models: Mapped[str]
+    model_capabilities: Mapped[str | None]
     created_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC))
     updated_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC))
 
