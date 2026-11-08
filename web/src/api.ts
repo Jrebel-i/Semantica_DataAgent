@@ -487,6 +487,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{project_id}/auto-build": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Project Auto Build */
+        get: operations["get_project_auto_build_api_v1_projects__project_id__auto_build_get"];
+        /** Set Project Auto Build */
+        put: operations["set_project_auto_build_api_v1_projects__project_id__auto_build_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{project_id}/members": {
         parameters: {
             query?: never;
@@ -533,6 +551,23 @@ export interface paths {
         get: operations["get_project_schedule_api_v1_projects__project_id__schedule_get"];
         /** Set Project Schedule */
         put: operations["set_project_schedule_api_v1_projects__project_id__schedule_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/source-status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Project Source Status */
+        get: operations["get_project_source_status_api_v1_projects__project_id__source_status_get"];
+        put?: never;
         post?: never;
         delete?: never;
         options?: never;
@@ -1055,6 +1090,16 @@ export interface components {
             /** Question */
             question: string;
         };
+        /** AutoBuildUpdate */
+        AutoBuildUpdate: {
+            /** Enabled */
+            enabled: boolean;
+        };
+        /** AutoBuildView */
+        AutoBuildView: {
+            /** Enabled */
+            enabled: boolean;
+        };
         /** BuildLog */
         BuildLog: {
             /**
@@ -1505,6 +1550,24 @@ export interface components {
         ProjectScheduleView: {
             /** Interval Seconds */
             interval_seconds: number;
+        };
+        /** ProjectSourceStatus */
+        ProjectSourceStatus: {
+            /** Auto Build */
+            auto_build: boolean;
+            /** Due In Seconds */
+            due_in_seconds: number | null;
+            /** Error */
+            error: string | null;
+            /** Last Build Id */
+            last_build_id: number | null;
+            /** Source Commit */
+            source_commit: string | null;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "pending" | "building" | "effective" | "failed" | "unknown";
         };
         /** ProjectUpdate */
         ProjectUpdate: {
@@ -3090,6 +3153,72 @@ export interface operations {
             };
         };
     };
+    get_project_auto_build_api_v1_projects__project_id__auto_build_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutoBuildView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_project_auto_build_api_v1_projects__project_id__auto_build_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AutoBuildUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AutoBuildView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_project_members_api_v1_projects__project_id__members_get: {
         parameters: {
             query?: never;
@@ -3240,6 +3369,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ProjectScheduleView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_project_source_status_api_v1_projects__project_id__source_status_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectSourceStatus"];
                 };
             };
             /** @description Validation Error */

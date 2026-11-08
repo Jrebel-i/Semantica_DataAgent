@@ -6,7 +6,7 @@ import threading
 import time
 from datetime import UTC, datetime
 
-from sqlalchemy import func, update
+from sqlalchemy import func, or_, update
 
 from .db import Build, sessions
 
@@ -278,6 +278,10 @@ def recover_interrupted_builds():
                         func.coalesce(Build.project_id, "default") == project_id,
                         Build.status == "queued",
                         Build.correction_proposal_id.is_(None),
+                        or_(
+                            Build.triggered_by.is_(None),
+                            Build.triggered_by != "upload",
+                        ),
                     )
                     .values(
                         status="cancelled",

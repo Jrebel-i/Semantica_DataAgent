@@ -23,7 +23,7 @@ from pydantic import BaseModel, Field
 from pymilvus import MilvusClient
 from sqlalchemy import text, update
 
-from . import knowledge, project_context
+from . import auto_build, knowledge, project_context
 from .api_time import UtcDatetime
 from .auth import admin, authenticate_mcp, bearer, current_user
 from .build_queue import build_queue, recover_interrupted_builds
@@ -107,6 +107,7 @@ async def lifespan(application):
 
         logging.getLogger(__name__).exception("Pull recovery failed")
     build_queue.start()
+    auto_build.pending_build_scheduler.start()
     project_context.start_schedule()
     from .pull_service import interval as pull_interval
 
@@ -121,6 +122,7 @@ async def lifespan(application):
             await asyncio.gather(cleanup_task, return_exceptions=True)
             pull_scheduler.stop()
             scheduler.stop()
+            auto_build.pending_build_scheduler.stop()
             build_queue.stop()
             knowledge.close_readers()
 
@@ -147,31 +149,35 @@ app = FastAPI(
     openapi_url=None,
     lifespan=lifespan,
 )
-KEYS = {
-    "neo4j_uri",
-    "neo4j_user",
-    "neo4j_password",
-    "milvus_uri",
-    "embedding_url",
-    "embedding_model",
-    "session_retention_days",
-    "embedding_concurrency",
-    "embedding_timeout_seconds",
-    "embedding_timeout_per_input_seconds",
-    "embedding_retries",
-    "embedding_backoff_seconds",
-    "embedding_cache_max_mb",
-    "build_concurrency",
-    "assistant_agent",
-    "assistant_provider_id",
-    "assistant_model",
-    "assistant_timeout_seconds",
-    "assistant_agent_profiles",
-    "langfuse_enabled",
-    "langfuse_url",
-    "langfuse_public_key",
-    "langfuse_secret_key",
-} | set(project_context.PROJECT_SETTING_KEYS)
+KEYS = (
+    {
+        "neo4j_uri",
+        "neo4j_user",
+        "neo4j_password",
+        "milvus_uri",
+        "embedding_url",
+        "embedding_model",
+        "session_retention_days",
+        "embedding_concurrency",
+        "embedding_timeout_seconds",
+        "embedding_timeout_per_input_seconds",
+        "embedding_retries",
+        "embedding_backoff_seconds",
+        "embedding_cache_max_mb",
+        "build_concurrency",
+        "assistant_agent",
+        "assistant_provider_id",
+        "assistant_model",
+        "assistant_timeout_seconds",
+        "assistant_agent_profiles",
+        "langfuse_enabled",
+        "langfuse_url",
+        "langfuse_public_key",
+        "langfuse_secret_key",
+    }
+    | {auto_build.DEBOUNCE_KEY}
+    | set(project_context.PROJECT_SETTING_KEYS)
+)
 SECRET = {"langfuse_secret_key", "neo4j_password"}
 
 
@@ -379,6 +385,16 @@ def put_settings(
         or not 0 <= int(interval) <= 604800
     ):
         raise HTTPException(status_code=422, detail="Invalid schedule interval")
+    debounce = body.values.get(auto_build.DEBOUNCE_KEY)
+    if debounce not in (None, ""):
+        try:
+            seconds = float(debounce)
+        except (TypeError, ValueError):
+            raise HTTPException(
+                status_code=422, detail="Invalid auto build debounce"
+            ) from None
+        if not math.isfinite(seconds) or not 0 <= seconds <= 3600:
+            raise HTTPException(status_code=422, detail="Invalid auto build debounce")
     concurrency = body.values.get("build_concurrency")
     if concurrency not in (None, "") and (
         not concurrency.isascii()
@@ -1334,17 +1350,22 @@ def upload_sources(
         user = db.get(Token, digest(credentials.credentials))
         author = user.name
     with source_repository(scope.project_id) as root:
-        return SourceCommit(
-            commit=source.upload(
-                root,
-                target.as_posix(),
-                files,
-                body.replace,
-                author,
-                category_root,
-                delete_root.as_posix() if delete_root else None,
-            )
+        commit = source.upload(
+            root,
+            target.as_posix(),
+            files,
+            body.replace,
+            author,
+            category_root,
+            delete_root.as_posix() if delete_root else None,
         )
+    try:
+        auto_build.request_upload_build(scope.project_id, author)
+    except Exception:
+        logging.getLogger(__name__).exception(
+            "Could not register automatic build for project %s", scope.project_id
+        )
+    return SourceCommit(commit=commit)
 
 
 @app.post("/api/v1/source/upload/preview", response_model=SourcePreview)
