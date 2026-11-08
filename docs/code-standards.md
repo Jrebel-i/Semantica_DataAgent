@@ -33,7 +33,13 @@
 - `GET /api/v1/projects` 需要认证。系统管理员返回全部项目，其它用户只返回自己是成员的项目；每项包含 `id`、`name`、`type`、`status`、`created_at`、`my_role`。系统管理员的 `my_role` 恒为 `admin`。
 - `PATCH /api/v1/projects/{id}` 仅系统管理员可用，只接受 `name`；请求里出现 `type`、`status` 等其它字段返回 422。名称两端空白会被去掉，长度为 1–200。
 - 默认项目 id 固定为 `default`，类型 `warehouse`，显示名默认“业务数据”，可改名但不可删除；删除与归档留给 #190。
-- 新建普通用户令牌时自动写入默认项目的 `member` 成员行；管理员令牌不写成员行。`project_context` 显式传入项目 id 时解析该项目，未传时解析默认项目；请求、令牌与会话上下文仍恒为默认项目（#177、#184 再接），名称、类型、状态来自 `projects` 表。
+- 访问规则集中在 `project_api.py` 的依赖里，接口本身不要再写成员判断：读接口用 `project_scope`（系统管理员或项目成员），管理接口用 `admin_project_scope`（系统管理员或项目管理员）。无权限与项目不存在一律返回同样的 404，不泄露项目是否存在；成员调用管理接口返回 403 或 404。
+- 显式 `project` 参数优先。缺省时，能访问默认项目就用默认项目；否则若只访问一个项目就用它；否则返回 422 `请指定项目`。只属于非默认项目的用户因此不需要显式参数。
+- 成员管理接口使用项目路径上的 `admin_project_path_scope`：`GET/PUT/DELETE /api/v1/projects/{id}/members[/{token_id}]`（`PUT` 请求体 `{role}`）。目标必须存在且未吊销；不能移除或降级最后一个项目管理员（409）；系统管理员令牌不能加成员行（422）。吊销令牌保留成员行，但访问立即被拒。
+- `GET /api/v1/users` 只对系统管理员和项目管理员开放，返回未吊销令牌的 `id`、`name`、`role`，不返回其它字段。
+- 项目审计写入 `project_audit` 表（迁移 `0030`），覆盖项目创建、改名和成员增删改。`GET /api/v1/projects/{id}/audit` 对项目管理员与系统管理员开放，用 `limit` / `offset` 分页，按时间倒序。
+- `POST /api/v1/tokens` 接受可选的 `projects: [{project_id, role}]`，仅系统管理员可用。不传时普通用户自动加入默认项目的 `member`；传了（包括空数组）就只加入列出的项目。管理员令牌忽略该字段。令牌列表返回每个令牌的项目与角色。
+- `project_context` 显式传入项目 id 时解析该项目；请求、令牌与会话上下文仍以请求解析结果为准，名称、类型、状态来自 `projects` 表。
 
 ## 项目隔离与存储命名
 
@@ -45,7 +51,7 @@
 - `project_settings(project_id, key, value)` 只存项目级覆盖；默认项目没有覆盖行，仍读全局 `settings`。`current_project(project_id)` 返回“全局设置 + 本项目覆盖”。
 - 新项目源目录为 `$DATAAGENT_PROJECTS_ROOT/<项目 id>/source`；未设置该环境变量时取数据库文件同目录下的 `projects/<项目 id>/source`。默认项目继续使用全局 `source_directory`。
 - `builds.project_id` 决定工作线程读取哪个项目的代、源目录和检索存储；队列仍全局串行。新项目构建只启用 Markdown 源适配器，插件配置表仍是全局的。
-- REST 的项目参数是可选的 `project`（缺省默认项目）。非默认项目在 #177 之前只有系统管理员可访问，其他用户一律得到 404。
+- REST 的项目参数是可选的 `project`。缺省解析规则见“项目接口”；解析结果决定源目录、知识代和检索存储，不能退回固定的默认项目。
 
 ## 数据库迁移
 
