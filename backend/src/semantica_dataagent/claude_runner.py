@@ -27,6 +27,14 @@ from .agent_plugin import (
 )
 from .skill import read_skill
 
+EFFORT_BY_LEVEL = {
+    "low": "low",
+    "medium": "medium",
+    "high": "high",
+    "extra": "xhigh",
+    "max": "max",
+}
+
 
 @dataclass
 class ClaudeEventParser(EventParser):
@@ -91,7 +99,7 @@ class ClaudeEventParser(EventParser):
 
 class ClaudeRunner:
     agent_id = "claude"
-    effort_levels = ()
+    effort_levels = tuple(EFFORT_BY_LEVEL)
 
     def __init__(self, binary=None):
         self.binary = binary
@@ -151,8 +159,11 @@ class ClaudeRunner:
             + read_skill(),
             "--resume" if existing else "--session-id",
             session,
-            request.prompt,
         ]
+        effort = EFFORT_BY_LEVEL.get(request.effort or "")
+        if effort:
+            command += ["--effort", effort]
+        command.append(request.prompt)
         async with turn:
             if sandboxed:
                 command, exec_header = turn.wrap_command(

@@ -66,7 +66,19 @@ const effortAgents = [
     id: "claude",
     name: "Claude",
     available: true,
-    effort_levels: [],
+    effort_levels: ["low", "medium", "high", "extra", "max"],
+  },
+  {
+    id: "codex",
+    name: "Codex",
+    available: true,
+    effort_levels: ["low", "medium", "high", "extra", "max"],
+  },
+  {
+    id: "limited",
+    name: "Limited",
+    available: true,
+    effort_levels: ["low", "high"],
   },
 ];
 
@@ -169,16 +181,35 @@ test("模型没有档位时不显示思考强度，有档位时置灰不支持�
   expect(optionDisabled("高")).toBe(false);
 });
 
+test.each(["claude", "codex"])(
+  "切换到 %s 后使用该 agent 支持的档位",
+  async (agent) => {
+    vi.stubGlobal("fetch", effortFetcher());
+    render(<ChatPage token="token" role="user" messages={getMessages("zh")} />);
+
+    await screen.findByLabelText("思考强度");
+    fireEvent.change(screen.getByLabelText("Agent"), {
+      target: { value: agent },
+    });
+    await openComposerSelect("思考强度");
+    for (const label of ["低", "中（推荐）", "高", "超高", "最高"]) {
+      expect(optionDisabled(label)).toBe(false);
+    }
+  },
+);
+
 test("切换 agent 后不支持的档位一起置灰", async () => {
   vi.stubGlobal("fetch", effortFetcher());
   render(<ChatPage token="token" role="user" messages={getMessages("zh")} />);
 
   await screen.findByLabelText("思考强度");
   fireEvent.change(screen.getByLabelText("Agent"), {
-    target: { value: "claude" },
+    target: { value: "limited" },
   });
   await openComposerSelect("思考强度");
-  for (const label of ["低", "中（推荐）", "高", "超高", "最高"]) {
+  expect(optionDisabled("低")).toBe(false);
+  expect(optionDisabled("高")).toBe(false);
+  for (const label of ["中（推荐）", "超高", "最高"]) {
     expect(optionDisabled(label)).toBe(true);
   }
 });

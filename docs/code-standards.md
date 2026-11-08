@@ -260,7 +260,21 @@ provider 的 base_url 与 api_key 每轮按会话当前设置重新下发给 run
 
 `POST /api/v1/conversations/ask` 带 `conversation_id` 时可以改用同一 agent 允许范围内的其他 provider / model；改 agent 仍返回 409，要求新建对话。provider 不在该 agent 的 `assistant_agent_profiles.providers` 允许列表时返回 422（列表为空或未配置表示不限制），model 不在 provider 的 `models` 中同样返回 422。切换后本轮及之后的轮次使用新值，会话行的 `provider_id` / `model` 更新为最近一次使用；每轮在 `turns.provider_id` / `turns.model` 记录自己使用的值，旧数据的空值按会话值展示。切换 provider 时按该轮 provider 重新下发凭据，旧 provider 的 key 不沿用。
 
-`ask` 还可带可选的 `effort`，取值固定为 `low` / `medium` / `high` / `extra` / `max`。它必须同时出现在该模型的 `model_capabilities.effort_levels` 和该 agent 的 `effort_levels` 中，否则返回 422；模型没有任何档位而传了 `effort` 也是 422，不传则保持 agent 的默认行为。`GET /api/v1/agents` 的每个 agent 返回 `effort_levels`：pi 为五档全集，Claude 与 Codex 本阶段为空集合（收到 `effort` 时忽略，不报错）。强度可随每一轮切换，`turns.effort` 记录该轮实际值，旧数据与未传强度的轮次为空；会话详情的 `turns` 原样返回。pi 的映射为 `low→low`、`medium→medium`、`high→high`、`extra→xhigh`、`max→max`，通过 `--thinking` 传入，未传时不加该参数。
+`ask` 还可带可选的 `effort`，取值固定为 `low` / `medium` / `high` / `extra` / `max`。它必须同时出现在该模型的 `model_capabilities.effort_levels` 和该 agent 的 `effort_levels` 中，否则返回 422；模型没有任何档位而传了 `effort` 也是 422，不传则保持 agent 的默认行为。`GET /api/v1/agents` 的每个 agent 返回 `effort_levels`，这是前端置灰的唯一来源；三个内置 agent 当前都返回五档全集。强度可随每一轮切换，`turns.effort` 记录该轮实际值，旧数据与未传强度的轮次为空；会话详情的 `turns` 原样返回。
+
+三个 agent 的映射如下，未传 `effort` 时不加任何相关参数：
+
+| 统一档位 | pi `--thinking` | Claude `--effort` | Codex `-c model_reasoning_effort="…"` |
+| --- | --- | --- | --- |
+| `low` | `low` | `low` | `low` |
+| `medium` | `medium` | `medium` | `medium` |
+| `high` | `high` | `high` | `high` |
+| `extra` | `xhigh` | `xhigh` | `xhigh` |
+| `max` | `max` | `max` | `max` |
+
+映射值以各 CLI 的真实可接受值为准，而不是凭字段名推断。当前固定版本：pi 1.2.0；Claude Code 2.1.318（`--effort` 的帮助文本列出 `low, medium, high, xhigh, max`，2.1.318 的 `sdk-tools.d.ts` 同样只允许这五档）；Codex 0.166.0（`ReasoningEffort` 包含 `low`、`medium`、`high`、`xhigh`、`max`，还有未暴露给统一界面的 `ultra` 和任意自定义值）。因此 Codex 支持 `max`，不需要降级为 `xhigh`，也不存在对 Codex 置灰的档位。升级任一 CLI 前重新核对这些取值；若新版本不再接受某一档，就从该 agent 的 `effort_levels` 去掉它，让前端自动置灰，不要强行映射到相邻档位。
+
+首轮与续跑路径都带同一参数：pi 用固定 session id，Claude 在 `--resume` 时、Codex 在 `exec resume` 时仍传入上述映射。
 
 ## Kubernetes 会话沙箱
 

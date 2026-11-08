@@ -27,6 +27,9 @@ class MyAgentRunner:
 provider、模型、MCP 地址、token 和可选的 `effort`。`effort` 是后端已按模型与
 agent 能力校验过的统一档位（`low` / `medium` / `high` / `extra` / `max`），
 runner 只需映射到自己的参数；不支持时返回空 `effort_levels`，收到值也应忽略。
+内置三种 runner 的映射和已验证的 CLI 版本见
+[`docs/code-standards.md` 的“会话管理接口”一节](../code-standards.md)：取值必须用
+CLI 真实接受的值，映射不了的档位不要写进 `effort_levels`，由前端置灰。
 `run` 必须以 `done` 或 `error` 结束；
 `conversation_api` 和 `ask_api` 只消费这里产出的事件。
 
