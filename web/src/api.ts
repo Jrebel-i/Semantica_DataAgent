@@ -173,7 +173,8 @@ export interface paths {
         delete: operations["delete_conversation_api_v1_conversations__conversation_id__delete"];
         options?: never;
         head?: never;
-        patch?: never;
+        /** Patch Conversation */
+        patch: operations["patch_conversation_api_v1_conversations__conversation_id__patch"];
         trace?: never;
     };
     "/api/v1/conversations/{conversation_id}/end": {
@@ -973,6 +974,8 @@ export interface components {
         ConversationDetail: {
             /** Agent */
             agent: string;
+            /** Archived */
+            archived: boolean;
             /**
              * Created At
              * Format: date-time
@@ -982,6 +985,8 @@ export interface components {
             id: string;
             /** Model */
             model: string;
+            /** Pinned */
+            pinned: boolean;
             /** Provider Id */
             provider_id: string;
             /** Resumable */
@@ -998,10 +1003,21 @@ export interface components {
              */
             updated_at: string;
         };
+        /** ConversationPatch */
+        ConversationPatch: {
+            /** Archived */
+            archived?: boolean | null;
+            /** Pinned */
+            pinned?: boolean | null;
+            /** Title */
+            title?: string | null;
+        };
         /** ConversationView */
         ConversationView: {
             /** Agent */
             agent: string;
+            /** Archived */
+            archived: boolean;
             /**
              * Created At
              * Format: date-time
@@ -1011,6 +1027,8 @@ export interface components {
             id: string;
             /** Model */
             model: string;
+            /** Pinned */
+            pinned: boolean;
             /** Provider Id */
             provider_id: string;
             /** Resumable */
@@ -1820,7 +1838,9 @@ export interface operations {
     };
     conversations_api_v1_conversations_get: {
         parameters: {
-            query?: never;
+            query?: {
+                archived?: boolean;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -1834,6 +1854,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ConversationView"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -1919,6 +1948,41 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    patch_conversation_api_v1_conversations__conversation_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                conversation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConversationPatch"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConversationView"];
+                };
             };
             /** @description Validation Error */
             422: {
