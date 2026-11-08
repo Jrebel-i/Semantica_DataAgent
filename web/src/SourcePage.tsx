@@ -2,9 +2,26 @@ import { useCallback, useEffect, useState } from "react";
 import { Alert, Checkbox, Upload } from "antd";
 import type { components } from "./api";
 import type { Messages } from "./i18n";
+import { ProjectSelector, storedProject } from "./ProjectSelector";
 
 type Version = components["schemas"]["SourceHistory"];
 type Tree = { directories: Record<string, Tree>; files: string[] };
+type Category = { name: string };
+type Preview = {
+  category: string;
+  target: string;
+  added: string[];
+  overwritten: string[];
+  unchanged: string[];
+  deleted: string[];
+  counts: {
+    added: number;
+    overwritten: number;
+    unchanged: number;
+    deleted: number;
+  };
+  truncated: boolean;
+};
 
 function tree(paths: string[]): Tree {
   const root: Tree = { directories: {}, files: [] };
@@ -112,10 +129,16 @@ export function SourcePage({
   token: string;
   messages: Messages;
 }) {
+  const [project, setProject] = useState(storedProject);
   const [paths, setPaths] = useState<string[]>([]);
-  const [target, setTarget] = useState("knowledge/");
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [category, setCategory] = useState("");
+  const [newCategory, setNewCategory] = useState("");
+  const [subfolder, setSubfolder] = useState("");
   const [files, setFiles] = useState<File[]>([]);
   const [replace, setReplace] = useState(false);
+  const [preview, setPreview] = useState<Preview | null>(null);
+  const [busy, setBusy] = useState(false);
   const [path, setPath] = useState("");
   const [content, setContent] = useState("");
   const [binary, setBinary] = useState(false);
@@ -127,48 +150,104 @@ export function SourcePage({
   const [success, setSuccess] = useState("");
   const request = useCallback(
     async (url: string, init?: RequestInit) => {
-      const response = await fetch(url, {
-        ...init,
-        headers: { Authorization: `Bearer ${token}`, ...(init?.headers ?? {}) },
-      });
+      const separator = url.includes("?") ? "&" : "?";
+      const response = await fetch(
+        `${url}${separator}project=${encodeURIComponent(project)}`,
+        {
+          ...init,
+          headers: {
+            Authorization: `Bearer ${token}`,
+            ...(init?.headers ?? {}),
+          },
+        },
+      );
       if (!response.ok) throw new Error();
       return response.json();
     },
-    [token],
+    [project, token],
   );
   const refresh = useCallback(async () => {
     setPaths((await request("/api/v1/source/files")) as string[]);
   }, [request]);
+  const loadCategories = useCallback(async () => {
+    setCategories((await request("/api/v1/categories")) as Category[]);
+  }, [request]);
   useEffect(() => {
     void refresh().catch(() => setError(t.sourceError));
   }, [refresh, t.sourceError]);
+  useEffect(() => {
+    void loadCategories().catch(() => setCategories([]));
+  }, [loadCategories]);
+  useEffect(() => {
+    setPreview(null);
+  }, [files, category, newCategory, subfolder, replace, project]);
+  const selectedCategory = newCategory.trim() || category;
+  function chooseFiles(next: File[]) {
+    setFiles(next);
+    if (!next.length) return;
+    const root = next[0].webkitRelativePath?.split("/")[0];
+    if (root) {
+      setNewCategory(root);
+      setCategory("");
+    }
+  }
+  async function body(): Promise<Record<string, unknown>> {
+    const archive =
+      files.length === 1 && files[0].name.toLowerCase().endsWith(".zip");
+    const values = archive
+      ? { archive_base64: await encoded(files[0]) }
+      : {
+          files: await Promise.all(
+            files.map(async (file) => ({
+              path: file.webkitRelativePath
+                ? file.webkitRelativePath.split("/").slice(1).join("/")
+                : file.name,
+              content_base64: await encoded(file),
+            })),
+          ),
+        };
+    return {
+      category: selectedCategory,
+      ...(subfolder.trim() ? { subfolder: subfolder.trim() } : {}),
+      replace,
+      ...values,
+    };
+  }
+  async function loadPreview() {
+    if (!files.length || !selectedCategory) return;
+    setBusy(true);
+    try {
+      setPreview(
+        (await request("/api/v1/source/upload/preview", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(await body()),
+        })) as Preview,
+      );
+      setError("");
+    } catch {
+      setError(t.sourceError);
+    } finally {
+      setBusy(false);
+    }
+  }
   async function send() {
     try {
-      if (!files.length) throw new Error();
-      const archive =
-        files.length === 1 && files[0].name.toLowerCase().endsWith(".zip");
-      const values = archive
-        ? { archive_base64: await encoded(files[0]) }
-        : {
-            files: await Promise.all(
-              files.map(async (file) => ({
-                path: file.webkitRelativePath
-                  ? file.webkitRelativePath.split("/").slice(1).join("/")
-                  : file.name,
-                content_base64: await encoded(file),
-              })),
-            ),
-          };
+      if (!files.length || !preview) throw new Error();
+      setBusy(true);
       const result = (await request("/api/v1/source/upload", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ target, replace, ...values }),
+        body: JSON.stringify(await body()),
       })) as { commit: string };
       setError("");
       setSuccess(result.commit);
+      setPreview(null);
       await refresh();
     } catch {
       setError(t.sourceError);
+    } finally {
+      setBusy(false);
     }
   }
   async function open(pathname: string) {
@@ -208,6 +287,12 @@ export function SourcePage({
           <h1 className="page-title">{t.source}</h1>
           <p className="page-subtitle">{t.sourceHint}</p>
         </div>
+        <ProjectSelector
+          token={token}
+          value={project}
+          onChange={setProject}
+          messages={t}
+        />
       </div>
       {error && <Alert type="error" title={error} />}
       {success && <Alert type="success" title={`${t.uploaded}: ${success}`} />}
@@ -218,14 +303,6 @@ export function SourcePage({
               <h2 className="card-title">{t.sourceUpload}</h2>
             </div>
             <div className="stack">
-              <label className="field">
-                <span className="field-label">{t.sourceTarget}</span>
-                <input
-                  aria-label={t.sourceTarget}
-                  value={target}
-                  onChange={(e) => setTarget(e.target.value)}
-                />
-              </label>
               <div className="field">
                 <span className="field-label">{t.sourceFiles}</span>
                 <FilePicker
@@ -234,7 +311,7 @@ export function SourcePage({
                   emptyLabel={t.sourceNoFile}
                   countLabel={t.sourceFileCount}
                   chooseLabel={t.sourceChoose}
-                  onChange={(next) => setFiles(next)}
+                  onChange={chooseFiles}
                 />
               </div>
               <div className="field">
@@ -246,19 +323,136 @@ export function SourcePage({
                   countLabel={t.sourceFileCount}
                   chooseLabel={t.sourceChoose}
                   directory
-                  onChange={(next) => setFiles(next)}
+                  onChange={chooseFiles}
                 />
               </div>
-              <Checkbox
-                className="plugin-enable"
-                checked={replace}
-                onChange={(e) => setReplace(e.target.checked)}
-              >
-                {t.sourceReplace}
-              </Checkbox>
+              <label className="field">
+                <span className="field-label">{t.sourceCategory}</span>
+                <select
+                  aria-label={t.sourceCategory}
+                  value={category}
+                  onChange={(e) => {
+                    setCategory(e.target.value);
+                    setNewCategory("");
+                  }}
+                >
+                  <option value="">{t.sourceCategoryPlaceholder}</option>
+                  {categories.map((item) => (
+                    <option value={item.name} key={item.name}>
+                      {item.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="field">
+                <span className="field-label">{t.sourceNewCategory}</span>
+                <input
+                  aria-label={t.sourceNewCategory}
+                  placeholder={t.sourceNewCategoryPlaceholder}
+                  value={newCategory}
+                  onChange={(e) => {
+                    setNewCategory(e.target.value);
+                    setCategory("");
+                  }}
+                />
+              </label>
+              <label className="field">
+                <span className="field-label">{t.sourceSubfolder}</span>
+                <input
+                  aria-label={t.sourceSubfolder}
+                  placeholder={t.sourceSubfolderPlaceholder}
+                  value={subfolder}
+                  onChange={(e) => setSubfolder(e.target.value)}
+                />
+              </label>
+              <details className="advanced-options">
+                <summary>{t.sourceAdvanced}</summary>
+                <Checkbox
+                  className="plugin-enable"
+                  checked={replace}
+                  onChange={(e) => setReplace(e.target.checked)}
+                >
+                  {t.sourceReplace}
+                </Checkbox>
+              </details>
+              <p className="field-hint">{t.sourceIndexHint}</p>
+              {preview && (
+                <div className="upload-preview">
+                  <p className="preview-counts">
+                    <span className="preview-added">
+                      {t.sourcePreviewAdded.replace(
+                        "{count}",
+                        String(preview.counts.added),
+                      )}
+                    </span>{" "}
+                    <span className="preview-overwritten">
+                      {t.sourcePreviewOverwritten.replace(
+                        "{count}",
+                        String(preview.counts.overwritten),
+                      )}
+                    </span>{" "}
+                    <span className="muted">
+                      {t.sourcePreviewUnchanged.replace(
+                        "{count}",
+                        String(preview.counts.unchanged),
+                      )}
+                    </span>
+                  </p>
+                  {preview.counts.deleted > 0 && (
+                    <Alert
+                      type="error"
+                      title={t.sourcePreviewDeleted.replace(
+                        "{count}",
+                        String(preview.counts.deleted),
+                      )}
+                    />
+                  )}
+                  <details>
+                    <summary>{t.sourcePreviewPaths}</summary>
+                    {(
+                      [
+                        ["added", t.sourcePreviewAddedTitle],
+                        ["overwritten", t.sourcePreviewOverwrittenTitle],
+                        ["unchanged", t.sourcePreviewUnchangedTitle],
+                        ["deleted", t.sourcePreviewDeletedTitle],
+                      ] as const
+                    ).map(([key, label]) =>
+                      preview[key].length ? (
+                        <div key={key}>
+                          <h4 className={`preview-${key}`}>{label}</h4>
+                          <ul>
+                            {preview[key].map((item) => (
+                              <li className="mono" key={item}>
+                                {item}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      ) : null,
+                    )}
+                  </details>
+                </div>
+              )}
               <div className="save-bar" style={{ marginTop: 0 }}>
-                <button type="button" onClick={() => void send()}>
-                  {t.sourceUpload}
+                <button
+                  type="button"
+                  disabled={busy || !files.length || !selectedCategory}
+                  onClick={() => void loadPreview()}
+                >
+                  {t.sourcePreview}
+                </button>
+                <button
+                  type="button"
+                  className={replace && preview ? "danger" : undefined}
+                  disabled={busy || !preview}
+                  onClick={() => void send()}
+                >
+                  {replace && preview
+                    ? t.sourceConfirmDelete.replace(
+                        "{count}",
+                        String(preview.counts.deleted),
+                      )
+                    : t.sourceConfirm}
                 </button>
               </div>
             </div>

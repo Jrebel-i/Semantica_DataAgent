@@ -2074,6 +2074,69 @@
         "title": "SourceHistory",
         "type": "object"
       },
+      "SourcePreview": {
+        "properties": {
+          "added": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Added",
+            "type": "array"
+          },
+          "category": {
+            "title": "Category",
+            "type": "string"
+          },
+          "counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Counts",
+            "type": "object"
+          },
+          "deleted": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Deleted",
+            "type": "array"
+          },
+          "overwritten": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Overwritten",
+            "type": "array"
+          },
+          "target": {
+            "title": "Target",
+            "type": "string"
+          },
+          "truncated": {
+            "title": "Truncated",
+            "type": "boolean"
+          },
+          "unchanged": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Unchanged",
+            "type": "array"
+          }
+        },
+        "required": [
+          "category",
+          "target",
+          "added",
+          "overwritten",
+          "unchanged",
+          "deleted",
+          "counts",
+          "truncated"
+        ],
+        "title": "SourcePreview",
+        "type": "object"
+      },
       "SourceUpload": {
         "properties": {
           "archive_base64": {
@@ -2086,6 +2149,17 @@
               }
             ],
             "title": "Archive Base64"
+          },
+          "category": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Category"
           },
           "files": {
             "default": [],
@@ -2100,14 +2174,29 @@
             "title": "Replace",
             "type": "boolean"
           },
+          "subfolder": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subfolder"
+          },
           "target": {
-            "title": "Target",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target"
           }
         },
-        "required": [
-          "target"
-        ],
         "title": "SourceUpload",
         "type": "object"
       },
@@ -5769,6 +5858,67 @@
           }
         ],
         "summary": "Upload Sources"
+      }
+    },
+    "/api/v1/source/upload/preview": {
+      "post": {
+        "operationId": "preview_sources_api_v1_source_upload_preview_post",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "project",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Project"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SourceUpload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourcePreview"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Preview Sources"
       }
     },
     "/api/v1/table-lineage": {
