@@ -241,6 +241,52 @@ def test_sql_tools_follow_the_uniform_registration_contract(monkeypatch):
     assert too_few.structuredContent["retryable"] is False
 
 
+def test_validate_sql_returns_partition_issues_and_propose_explains_invalid_sql(
+    monkeypatch,
+):
+    from semantica_dataagent import sql_validation
+    from semantica_dataagent.app import create_mcp
+
+    snapshot = sql_validation.Snapshot(
+        [
+            {
+                "database": "shop",
+                "name": "orders",
+                "ref": "table:shop.orders",
+                "fields": [
+                    {"name": "id", "partition": False},
+                    {"name": "dt", "partition": True},
+                ],
+            }
+        ],
+        [],
+        [],
+    )
+    monkeypatch.setattr(sql_validation, "load_snapshot", lambda: snapshot)
+    server = create_mcp()
+    sql = "SELECT id FROM shop.orders"
+
+    validation = call_registered(server, "validate_sql", {"sql": sql})
+    assert not validation.isError
+    body = validation.structuredContent
+    assert body["status"] == "issues"
+    partition = next(item for item in body["issues"] if item["kind"] == "partition")
+    assert partition["table"] == "shop.orders"
+    assert partition["field"] == "dt"
+    assert "缺少分区条件" in partition["message"]
+    assert "MAX(dt)" in partition["suggestion"]
+
+    proposed = call_registered(server, "propose_query", {"sql": sql})
+    assert proposed.isError
+    assert proposed.structuredContent["code"] == "invalid_input"
+    assert "缺少分区条件" in proposed.structuredContent["message"]
+
+    missing = call_registered(server, "propose_query", {})
+    assert missing.isError
+    assert missing.structuredContent["code"] == "invalid_input"
+    assert "sql" in missing.structuredContent["message"]
+
+
 def test_find_join_path_rejects_table_count_without_loading_snapshot(monkeypatch):
     from semantica_dataagent import sql_validation
     from semantica_dataagent.app import create_mcp

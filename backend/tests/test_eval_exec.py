@@ -54,6 +54,19 @@ def test_exec_cli_is_available():
     assert args.max_queries == 40
 
 
+def test_condition_columns_and_missing_condition_detection():
+    from semantica_dataagent.eval_exec import where_columns
+
+    reference = (
+        "SELECT COUNT(*) FROM shop.orders "
+        "WHERE dt >= '2025-01-01' AND status = 'paid'"
+    )
+    agent = "SELECT COUNT(*) FROM shop.orders WHERE dt >= '2025-01-01'"
+
+    assert where_columns(reference, "hive") == {"dt", "status"}
+    assert where_columns(agent, "hive") == {"dt"}
+
+
 def test_comparison_handles_large_duplicate_multiset():
     result = {"columns": ["x"], "rows": [[1]] * 1100}
     assert evaluation.compare_results(result, result) == "equal"
