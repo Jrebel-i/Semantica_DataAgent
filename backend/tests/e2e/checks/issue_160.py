@@ -83,9 +83,7 @@ def check_validate_sql_reports_partition_details(ctx):
     ctx.require("缺少分区条件" in str(partition.get("message", "")), partition)
     ctx.require("MAX(dt)" in str(partition.get("suggestion", "")), partition)
 
-    valid = ctx.mcp_call(
-        "validate_sql", {"sql": VALID_PARTITION, "dialect": "hive"}
-    )
+    valid = ctx.mcp_call("validate_sql", {"sql": VALID_PARTITION, "dialect": "hive"})
     ctx.require(valid.get("status") == "pass", f"valid partition: {valid}")
     ctx.require(valid.get("issues") == [], f"passing SQL has issues: {valid}")
     return {"kind": partition["kind"], "field": partition["field"]}
