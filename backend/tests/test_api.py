@@ -838,7 +838,6 @@ def test_dtb_puller_token_is_encrypted_and_not_returned(client):
 def test_manual_pull_commits_then_queues_incremental_build(
     client, tmp_path, monkeypatch
 ):
-    from semantica_dataagent import pull_service
     from semantica_dataagent.dtb_puller import DtbPuller
 
     c, token = client
@@ -927,7 +926,6 @@ def test_failed_pull_does_not_change_source(client, tmp_path, monkeypatch):
 
 
 def test_partial_pull_records_failed_tables(client, tmp_path, monkeypatch):
-    from semantica_dataagent import pull_service
     from semantica_dataagent.dtb_puller import DtbPuller
 
     c, token = client
