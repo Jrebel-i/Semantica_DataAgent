@@ -143,3 +143,31 @@ def test_generation_names_and_collections_do_not_collide_between_projects():
     )
     assert short.collection_name(short_generation).startswith("sda_a_")
     assert long.collection_name(long_generation).startswith("sda_ab_")
+
+
+class _EmptyStorage:
+    def __init__(self, project_type):
+        self.is_incremental = False
+        self.all_records = None
+        self.build_id = 1
+        self._settings = {"_project_type": project_type}
+        self.vectors = []
+
+    def execute(self, *_args, **_kwargs):
+        return []
+
+    def add_vectors(self, refs, texts, payloads):
+        self.vectors.extend(refs)
+
+
+def test_document_projects_can_build_without_tables():
+    from semantica_dataagent import table_stage
+
+    document = _EmptyStorage("document")
+    result = table_stage.write([], "docs_initial", document)
+    assert result.counts == {"table": 0, "field": 0}
+    assert document.vectors == []
+
+    warehouse = _EmptyStorage("warehouse")
+    with pytest.raises(ValueError, match="Source has no tables"):
+        table_stage.write([], "warehouse_initial", warehouse)
