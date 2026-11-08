@@ -189,6 +189,10 @@ def _delete_database(project_id: str, settings: dict) -> None:
             db.query(TurnEvent).filter(TurnEvent.turn_id.in_(turn_ids)).delete(
                 synchronize_session=False
             )
+            db.query(Turn).filter(Turn.id.in_(turn_ids)).delete(
+                synchronize_session=False
+            )
+        if conversation_ids:
             db.query(Clarification).filter(
                 Clarification.conversation_id.in_(conversation_ids)
             ).delete(synchronize_session=False)
@@ -198,9 +202,6 @@ def _delete_database(project_id: str, settings: dict) -> None:
             db.query(QueryExecution).filter(
                 QueryExecution.conversation_id.in_(conversation_ids)
             ).delete(synchronize_session=False)
-            db.query(Turn).filter(Turn.id.in_(turn_ids)).delete(
-                synchronize_session=False
-            )
         db.query(Conversation).filter(Conversation.project_id == project_id).delete(
             synchronize_session=False
         )
