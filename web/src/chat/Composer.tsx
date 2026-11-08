@@ -1,8 +1,15 @@
-import type { FormEvent } from "react";
+import { useRef, type FormEvent } from "react";
 import { Button, Input, Select } from "antd";
-import { ArrowUpOutlined } from "@ant-design/icons";
+import {
+  ArrowUpOutlined,
+  CloseOutlined,
+  FileOutlined,
+  PaperClipOutlined,
+  PictureOutlined,
+} from "@ant-design/icons";
 import type { AgentProfiles } from "../agentProfiles";
 import type { Messages } from "../i18n";
+import { formatAttachmentSize, type PendingAttachment } from "./attachments";
 import { EFFORT_LEVELS } from "./effort";
 import type {
   Agent,
@@ -41,6 +48,11 @@ export function Composer({
   onEffortChange,
   canAsk,
   conversationSelectionChanged,
+  attachments,
+  attachmentError,
+  addAttachments,
+  removeAttachment,
+  visionEnabled,
 }: {
   messages: Messages;
   question: string;
@@ -70,7 +82,14 @@ export function Composer({
   onEffortChange: (value: EffortLevel | "") => void;
   canAsk: boolean;
   conversationSelectionChanged: boolean;
+  attachments: PendingAttachment[];
+  attachmentError: string;
+  addAttachments: (files: File[]) => void;
+  removeAttachment: (id: string) => void;
+  visionEnabled: boolean;
 }) {
+  const fileInput = useRef<HTMLInputElement>(null);
+  const imageInput = useRef<HTMLInputElement>(null);
   const t = messages;
   const effortLabels: Record<EffortLevel, string> = {
     low: t.effortLow,
@@ -94,6 +113,45 @@ export function Composer({
     <div className="chat-composer">
       {emptyConversation && <h1 className="chat-greeting">{t.chatGreeting}</h1>}
       <form className="composer-box" onSubmit={(event) => onAsk(event)}>
+        {attachments.length > 0 && (
+          <div className="composer-attachments" aria-label={t.attachments}>
+            {attachments.map((attachment) => (
+              <div className="composer-attachment" key={attachment.id}>
+                {attachment.isImage && attachment.previewUrl ? (
+                  <img
+                    className="composer-attachment-thumb"
+                    src={attachment.previewUrl}
+                    alt={attachment.file.name}
+                  />
+                ) : (
+                  <FileOutlined className="composer-attachment-icon" />
+                )}
+                <div className="composer-attachment-text">
+                  <span className="composer-attachment-name">
+                    {attachment.file.name}
+                  </span>
+                  <span className="composer-attachment-size">
+                    {formatAttachmentSize(attachment.file.size)}
+                  </span>
+                </div>
+                <Button
+                  type="text"
+                  size="small"
+                  htmlType="button"
+                  aria-label={`${t.removeAttachment} ${attachment.file.name}`}
+                  onClick={() => removeAttachment(attachment.id)}
+                >
+                  <CloseOutlined />
+                </Button>
+              </div>
+            ))}
+          </div>
+        )}
+        {attachmentError && (
+          <div className="composer-attachment-error" role="alert">
+            {attachmentError}
+          </div>
+        )}
         <Input.TextArea
           aria-label={t.askQuestion}
           value={question}
@@ -106,6 +164,48 @@ export function Composer({
         />
         <div className="composer-controls">
           <div className="chat-selectors">
+            <span className="composer-attach-actions">
+              <label className="composer-attach-button" title={t.attachFile}>
+                <PaperClipOutlined />
+                <input
+                  ref={fileInput}
+                  className="composer-file-input"
+                  type="file"
+                  multiple
+                  aria-label={t.attachFile}
+                  onChange={(event) => {
+                    const files = Array.from(event.target.files ?? []);
+                    if (files.length) addAttachments(files);
+                    event.target.value = "";
+                  }}
+                />
+              </label>
+              <label
+                className={`composer-attach-button${visionEnabled ? "" : " composer-attach-button--disabled"}`}
+                title={visionEnabled ? t.attachImage : t.attachmentVisionHint}
+              >
+                <PictureOutlined />
+                <input
+                  ref={imageInput}
+                  className="composer-file-input"
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  aria-label={t.attachImage}
+                  disabled={!visionEnabled}
+                  onChange={(event) => {
+                    const files = Array.from(event.target.files ?? []);
+                    if (files.length) addAttachments(files);
+                    event.target.value = "";
+                  }}
+                />
+              </label>
+              {!visionEnabled && (
+                <span className="chat-selector-hint">
+                  {t.attachmentVisionHint}
+                </span>
+              )}
+            </span>
             {projects.length === 1 && (
               <span className="composer-project-label" title={projects[0].name}>
                 {projects[0].name}

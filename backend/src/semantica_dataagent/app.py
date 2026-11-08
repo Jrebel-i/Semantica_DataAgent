@@ -25,6 +25,7 @@ from sqlalchemy import text, update
 
 from . import auto_build, knowledge, project_context
 from .api_time import UtcDatetime
+from .attachments import MAX_REQUEST_BYTES
 from .auth import admin, authenticate_mcp, bearer, current_user
 from .build_queue import build_queue, recover_interrupted_builds
 from .db import (
@@ -149,6 +150,25 @@ app = FastAPI(
     openapi_url=None,
     lifespan=lifespan,
 )
+
+
+@app.middleware("http")
+async def reject_oversized_attachment_request(request: Request, call_next):
+    if request.url.path == "/api/v1/conversations/ask-with-attachments":
+        length = request.headers.get("content-length")
+        if length:
+            try:
+                too_large = int(length) > MAX_REQUEST_BYTES
+            except ValueError:
+                too_large = False
+            if too_large:
+                return JSONResponse(
+                    {"detail": "一条消息的附件总大小不能超过 50MB"},
+                    status_code=413,
+                )
+    return await call_next(request)
+
+
 KEYS = (
     {
         "neo4j_uri",

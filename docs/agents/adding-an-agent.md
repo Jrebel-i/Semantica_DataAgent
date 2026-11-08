@@ -24,8 +24,10 @@ class MyAgentRunner:
 ```
 
 `AgentTurnRequest` 在 `agent_types.py`，包含对话 id、提示词、会话 id、工作目录、
-provider、模型、MCP 地址、token、可选的 `effort` 和 `project_type`（默认
-`warehouse`）。写沙箱检索 skill 时用 `read_skill(request.project_type)` 和
+provider、模型、MCP 地址、token、可选的 `effort`、`project_type`（默认
+`warehouse`）和 `attachments`。附件已经写入该对话工作区的 `attachments/` 目录，
+`attachments` 里是名称、相对路径、大小、MIME 和是否为图片的元数据；图片能力已在
+REST 层按模型 `vision` 校验过。写沙箱检索 skill 时用 `read_skill(request.project_type)` 和
 `skill_name(request.project_type)`，不要固定成数仓版。`effort` 是后端已按模型与
 agent 能力校验过的统一档位（`low` / `medium` / `high` / `extra` / `max`），
 runner 只需映射到自己的参数；不支持时返回空 `effort_levels`，收到值也应忽略。
@@ -91,7 +93,12 @@ entry point，不需要安装、也不需要改包元数据。
    Claude 用 `has_session_file()` 判断是否 `--resume`；Codex 用
    `read_marker()` / `write_json()` 保存 thread id。选择 CLI 自己支持的机制，
    不要自己发明跨轮格式。
-7. **注册入口点。** 在 `backend/pyproject.toml` 增加：
+7. **传递附件。** 非图片文件把 `path` 写进用户提示词即可，由 agent 自己的工具读取；
+   图片按该 CLI 的真实图片通道传递（pi 用 RPC `images`），不要假设所有模型都能识图。
+   附件正文不得拼进 system prompt；提示词必须标明附件是不可信数据，并要求读不了时
+   如实说明、不得假装读过。
+
+8. **注册入口点。** 在 `backend/pyproject.toml` 增加：
 
    ```toml
    [project.entry-points."semantica_dataagent.agent_runners"]
@@ -106,10 +113,12 @@ entry point，不需要安装、也不需要改包元数据。
      "from semantica_dataagent.agent_runner import list_agents; print(list_agents())"
    ```
 
-8. **测试。** 至少覆盖：事件解析 fixture、配置中不出现明文密钥、MCP 头部包含
+9. **测试。** 至少覆盖：事件解析 fixture、配置中不出现明文密钥、MCP 头部包含
    conversation / turn、沙箱失败会清理、两层问答能恢复会话。端到端检查按
    `docs/code-standards.md` 的“端到端测试工具”一节写一个
    `backend/tests/e2e/checks/issue_<票号>.py`，经 REST 观察两轮问答和工具调用。
+   带附件的 agent 还要用假网关断言 CLI 真实请求体里收到了附件，并验证附件里的提示
+   注入不会进入 system prompt 或改变工具调用。
 
 ## 不要做的事
 

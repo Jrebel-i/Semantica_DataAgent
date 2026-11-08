@@ -1,5 +1,6 @@
 """pi CLI adapter using RPC mode with a per-conversation config directory."""
 
+import base64
 import json
 import os
 from dataclasses import dataclass
@@ -163,19 +164,20 @@ class PiRunner:
         work = request.workspace / "work"
         for directory in (config, sessions, work):
             directory.mkdir(parents=True, exist_ok=True)
+        model_entry = {
+            "id": request.model,
+            "name": request.model,
+            "contextWindow": 128000,
+            "maxTokens": 8192,
+        }
+        if any(attachment.is_image for attachment in request.attachments):
+            model_entry["input"] = ["text", "image"]
         provider = {
             "name": request.provider.name,
             "baseUrl": model_url or request.provider.base_url,
             "api": request.provider.type,
             "apiKey": f"${KEY_ENV}" if request.provider.api_key else "unused",
-            "models": [
-                {
-                    "id": request.model,
-                    "name": request.model,
-                    "contextWindow": 128000,
-                    "maxTokens": 8192,
-                }
-            ],
+            "models": [model_entry],
         }
         models = {"providers": {PROVIDER_KEY: provider}}
         mcp = {
@@ -272,15 +274,25 @@ class PiRunner:
             ) as process:
                 parser = PiEventParser()
                 secrets = request_secrets(request)
-                process.write(
-                    (
-                        json.dumps(
-                            {"id": "turn", "type": "prompt", "message": request.prompt},
-                            ensure_ascii=False,
-                        )
-                        + "\n"
-                    ).encode()
-                )
+                payload = {
+                    "id": "turn",
+                    "type": "prompt",
+                    "message": request.prompt,
+                }
+                images = [
+                    {
+                        "type": "image",
+                        "data": base64.b64encode(
+                            (request.workspace / "work" / attachment.path).read_bytes()
+                        ).decode("ascii"),
+                        "mimeType": attachment.mime_type,
+                    }
+                    for attachment in request.attachments
+                    if attachment.is_image
+                ]
+                if images:
+                    payload["images"] = images
+                process.write((json.dumps(payload, ensure_ascii=False) + "\n").encode())
                 await process.drain()
                 while True:
                     line = await process.readline()

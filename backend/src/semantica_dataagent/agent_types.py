@@ -49,6 +49,17 @@ class ProviderConfig:
 
 
 @dataclass(slots=True)
+class AttachmentInput:
+    """One attachment already stored in the conversation workspace."""
+
+    name: str
+    path: str
+    size: int
+    mime_type: str
+    is_image: bool
+
+
+@dataclass(slots=True)
 class AgentTurnRequest:
     conversation_id: str
     prompt: str
@@ -61,6 +72,7 @@ class AgentTurnRequest:
     turn_id: int | None = None
     effort: str | None = None
     project_type: str = "warehouse"
+    attachments: tuple[AttachmentInput, ...] = ()
 
 
 class AgentRunner(Protocol):

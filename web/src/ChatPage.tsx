@@ -170,6 +170,9 @@ export function ChatPage({
     applyProbeResult,
   } = useProviders({ token, messages: t, onError: setError });
 
+  const visionEnabled =
+    activeProvider?.model_capabilities?.[model]?.vision ?? false;
+
   const {
     copied,
     citationRef,
@@ -189,6 +192,11 @@ export function ChatPage({
     chooseClarification,
     canAsk,
     executePlan,
+    attachments,
+    attachmentError,
+    addAttachments,
+    removeAttachment,
+    clearAttachments,
   } = useAsk({
     token,
     messages: t,
@@ -197,6 +205,7 @@ export function ChatPage({
     model,
     effort,
     projectId,
+    visionEnabled,
     currentConversationId,
     setCurrentConversationId,
     sending,
@@ -328,6 +337,7 @@ export function ChatPage({
     resetCitation();
     setLive(null);
     setError("");
+    clearAttachments();
   }
 
   const currentConversation = [...conversations, ...archivedConversations].find(
@@ -594,6 +604,11 @@ export function ChatPage({
               onEffortChange={selectEffort}
               canAsk={canAsk}
               conversationSelectionChanged={conversationSelectionChanged}
+              attachments={attachments}
+              attachmentError={attachmentError}
+              addAttachments={addAttachments}
+              removeAttachment={removeAttachment}
+              visionEnabled={visionEnabled}
             />
           </div>
           {citationRef && (

@@ -4,20 +4,35 @@ import asyncio
 import json
 import logging
 import os
-import shutil
 import uuid
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Request,
+    UploadFile,
+)
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, text
 
+from .agent_plugin import build_attachment_prompt
 from .agent_runner import DONE, ERROR, AgentEvent, AgentTurnRequest, get_runner
 from .api_time import UtcDatetime
+from .attachments import (
+    AttachmentLimitError,
+    AttachmentStorageError,
+    remove_conversation_workspace,
+    stage_uploads,
+    store_uploads,
+)
 from .auth import Requester, current_requester, issue_agent_credential
 from .db import (
     AgentCredential,
@@ -134,9 +149,7 @@ def cleanup_expired_sessions() -> None:
             .all()
         )
         for row in rows:
-            workspace = agent_root() / row.id
-            if workspace.exists():
-                shutil.rmtree(workspace)
+            remove_conversation_workspace(agent_root(), row.id)
             turn_ids = db.query(Turn.id).filter_by(conversation_id=row.id)
             db.query(TurnEvent).filter(
                 TurnEvent.turn_id.in_(turn_ids), TurnEvent.type == "query_result"
@@ -459,9 +472,7 @@ def delete_conversation(
             synchronize_session=False
         )
         db.delete(conversation)
-    workspace = agent_root() / conversation_id
-    if workspace.exists():
-        shutil.rmtree(workspace)
+    remove_conversation_workspace(agent_root(), conversation_id)
 
 
 def _agent_allowed_providers(db, agent_id: str) -> set[str] | None:
@@ -532,11 +543,34 @@ def _validate_effort(provider, model: str, runner, effort: str | None) -> None:
         )
 
 
-@router.post("/api/v1/conversations/ask")
-async def ask(
+def _model_allows_images(provider: Provider, model: str) -> bool:
+    if not provider.model_capabilities:
+        return False
+    try:
+        capabilities = json.loads(provider.model_capabilities)
+    except (TypeError, ValueError):
+        return False
+    if not isinstance(capabilities, dict):
+        return False
+    capability = capabilities.get(model)
+    return bool(isinstance(capability, dict) and capability.get("vision") is True)
+
+
+def _reject_images_for_text_model(provider: Provider, model: str, staged) -> None:
+    if any(item.is_image for item in staged) and not _model_allows_images(
+        provider, model
+    ):
+        raise HTTPException(
+            422,
+            "当前模型不支持图片，请更换支持图片的模型或移除图片附件",
+        )
+
+
+async def _start_turn(
     body: AskRequest,
+    staged,
     request: Request,
-    requester: Annotated[Requester, Depends(current_requester)],
+    requester: Requester,
 ):
     now = datetime.now(UTC)
     cleanup_expired_sessions()
@@ -605,6 +639,7 @@ async def ask(
         if runner is None:
             raise HTTPException(422, "Unknown agent")
         _validate_effort(provider, model, runner, body.effort)
+        _reject_images_for_text_model(provider, model, staged)
         if not runner.available():
             raise HTTPException(503, "Agent runtime is not installed")
         conversation.agent = agent_id
@@ -631,9 +666,22 @@ async def ask(
         provider_settings = provider_config(provider)
 
     workspace = agent_root() / conversation_id
+    prompt = body.question.strip()
+    if staged:
+        try:
+            attachments = store_uploads(agent_root(), conversation_id, staged)
+        except (AttachmentLimitError, AttachmentStorageError, OSError):
+            message = "附件保存失败，请重试"
+            _finish_turn(
+                turn_id, "failed", AgentEvent(ERROR, {"message": message}), message
+            )
+            raise HTTPException(500, message) from None
+        prompt = build_attachment_prompt(prompt, attachments)
+    else:
+        attachments = []
     run_request = AgentTurnRequest(
         conversation_id=conversation_id,
-        prompt=body.question.strip(),
+        prompt=prompt,
         session_id=conversation_id,
         workspace=workspace,
         provider=provider_settings,
@@ -644,6 +692,7 @@ async def ask(
         ),
         turn_id=turn_id,
         effort=body.effort,
+        attachments=tuple(attachments),
     )
     return StreamingResponse(
         _stream(run_request, runner, turn_id, conversation_id, request),
@@ -654,6 +703,50 @@ async def ask(
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@router.post("/api/v1/conversations/ask")
+async def ask(
+    body: AskRequest,
+    request: Request,
+    requester: Annotated[Requester, Depends(current_requester)],
+):
+    return await _start_turn(body, [], request, requester)
+
+
+@router.post("/api/v1/conversations/ask-with-attachments")
+async def ask_with_attachments(
+    request: Request,
+    requester: Annotated[Requester, Depends(current_requester)],
+    question: Annotated[str, Form(min_length=1, max_length=20000, pattern=r"\S")],
+    attachments: Annotated[list[UploadFile] | None, File()] = None,
+    agent: Annotated[str | None, Form()] = None,
+    provider_id: Annotated[str | None, Form()] = None,
+    model: Annotated[str | None, Form()] = None,
+    effort: Annotated[str | None, Form()] = None,
+    conversation_id: Annotated[str | None, Form()] = None,
+    project: Annotated[str | None, Form()] = None,
+):
+    try:
+        body = AskRequest(
+            question=question,
+            agent=agent,
+            provider_id=provider_id,
+            model=model,
+            effort=effort,
+            conversation_id=conversation_id,
+            project=project,
+        )
+    except ValueError:
+        raise HTTPException(422, "请求参数不合法") from None
+    try:
+        staged = await stage_uploads(attachments or [])
+    except AttachmentLimitError as exc:
+        raise HTTPException(413, str(exc)) from None
+    try:
+        return await _start_turn(body, staged.items, request, requester)
+    finally:
+        staged.close()
 
 
 @router.post(
