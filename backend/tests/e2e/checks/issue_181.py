@@ -12,8 +12,10 @@ from __future__ import annotations
 import base64
 import json
 import sqlite3
+import struct
 import threading
 import time
+import zlib
 from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -73,8 +75,17 @@ class _FakeGateway(BaseHTTPRequestHandler):
         else:
             raise _Rejected(404, f"unexpected path {path}")
 
+        image = _image_data(path, body) if kind == "vision" else None
         if model == "no-vision-model" and kind == "vision":
             raise _Rejected(400, "image input is not supported")
+        if model == "discard-image-model" and kind == "vision":
+            _check_png(image)
+            return 200, _success(path, "图片里没有颜色信息")
+        if model == "min-size-model" and kind == "vision":
+            width, height, pixel = _check_png(image)
+            if width < 64 or height < 64:
+                raise _Rejected(400, "image dimensions must be at least 64x64")
+            return 200, _success(path, _color_answer(pixel))
         if model in {"partial-effort-model", "slow-model"} and kind != "vision":
             level = _effort_level(body)
             if model == "partial-effort-model" and level == "high":
@@ -86,6 +97,9 @@ class _FakeGateway(BaseHTTPRequestHandler):
         if model == "slow-model" and kind == "vision":
             self.gateway.slow_started.set()
             time.sleep(3.0)
+        if kind == "vision":
+            _, _, pixel = _check_png(image)
+            return 200, _success(path, _color_answer(pixel))
         return 200, _success(path)
 
     def _send(self, status, payload):
@@ -118,13 +132,13 @@ def _error(message):
     return {"error": {"type": "invalid_request_error", "message": message}}
 
 
-def _success(path):
+def _success(path, text="OK"):
     if path == "/v1/messages":
         return {
             "id": "msg_probe",
             "type": "message",
             "role": "assistant",
-            "content": [{"type": "text", "text": "OK"}],
+            "content": [{"type": "text", "text": text}],
             "stop_reason": "end_turn",
         }
     if path == "/v1/chat/completions":
@@ -134,7 +148,7 @@ def _success(path):
             "choices": [
                 {
                     "index": 0,
-                    "message": {"role": "assistant", "content": "OK"},
+                    "message": {"role": "assistant", "content": text},
                     "finish_reason": "stop",
                 }
             ],
@@ -148,11 +162,13 @@ def _success(path):
                 {
                     "type": "message",
                     "role": "assistant",
-                    "content": [{"type": "output_text", "text": "OK"}],
+                    "content": [{"type": "output_text", "text": text}],
                 }
             ],
         }
-    return {"candidates": [{"content": {"role": "model", "parts": [{"text": "OK"}]}}]}
+    return {
+        "candidates": [{"content": {"role": "model", "parts": [{"text": text}]}}]
+    }
 
 
 def _check_png(data):
@@ -162,6 +178,53 @@ def _check_png(data):
         raise _Rejected(400, f"invalid base64 image: {exc}") from None
     if not raw.startswith(PNG_SIGNATURE):
         raise _Rejected(400, "image is not a real PNG")
+    width, height = struct.unpack(">II", raw[16:24])
+    bit_depth = raw[24]
+    color_type = raw[25]
+    channels = {2: 3, 6: 4}.get(color_type)
+    if bit_depth != 8 or channels is None:
+        raise _Rejected(400, "unsupported PNG pixel format")
+    position = 8
+    compressed = b""
+    while position < len(raw):
+        length = struct.unpack(">I", raw[position : position + 4])[0]
+        kind = raw[position + 4 : position + 8]
+        chunk = raw[position + 8 : position + 8 + length]
+        if kind == b"IDAT":
+            compressed += chunk
+        position += 12 + length
+    pixels = zlib.decompress(compressed)
+    if pixels[0] != 0:
+        raise _Rejected(400, "unexpected PNG filter")
+    red, green, blue = pixels[1 : 1 + channels][:3]
+    return width, height, (red, green, blue)
+
+
+def _color_answer(pixel):
+    red, green, blue = pixel
+    if red > 200 and green < 50 and blue < 50:
+        return "深红色。"
+    if blue > 200 and red < 50 and green < 50:
+        return "蓝色"
+    return ""
+
+
+def _image_data(path, body):
+    if path == "/v1/messages":
+        content = body["messages"][0]["content"]
+        image = next(item for item in content if item.get("type") == "image")
+        return image["source"]["data"]
+    if path == "/v1/chat/completions":
+        content = body["messages"][0]["content"]
+        image = next(item for item in content if item.get("type") == "image_url")
+        return image["image_url"]["url"].split(",", 1)[1]
+    if path == "/v1/responses":
+        content = body["input"][0]["content"]
+        image = next(item for item in content if item.get("type") == "input_image")
+        return image["image_url"].split(",", 1)[1]
+    parts = body["contents"][0]["parts"]
+    image = next(part for part in parts if "inlineData" in part)
+    return image["inlineData"]["data"]
 
 
 def _anthropic_kind(body):
@@ -350,7 +413,13 @@ def check_provider_probe(ctx):
             "issue 181 anthropic",
             "anthropic-messages",
             base_url,
-            ["no-vision-model", "partial-effort-model", "slow-model"],
+            [
+                "no-vision-model",
+                "discard-image-model",
+                "min-size-model",
+                "partial-effort-model",
+                "slow-model",
+            ],
         )
         with ThreadPoolExecutor(max_workers=2) as pool:
             slow = pool.submit(_probe, ctx, anthropic["id"], "slow-model")
@@ -382,6 +451,37 @@ def check_provider_probe(ctx):
         ctx.require(
             set(no_vision_body["effort"].values()) == {"yes"},
             f"accepted efforts were not reported yes: {no_vision_body}",
+        )
+        ctx.require(
+            "HTTP 400" in no_vision_body["notes"]
+            and "image input is not supported" in no_vision_body["notes"],
+            f"rejected image reason is missing: {no_vision_body['notes']}",
+        )
+
+        discarded = _probe(ctx, anthropic["id"], "discard-image-model")
+        ctx.require(
+            discarded.status_code == 200,
+            f"probe failed: {discarded.status_code} {discarded.text}",
+        )
+        discarded_body = discarded.json()
+        ctx.require(
+            discarded_body["vision"] == "no",
+            f"discarded image did not report no: {discarded_body}",
+        )
+        ctx.require(
+            "请求被接受但模型未能识别图片内容" in discarded_body["notes"],
+            f"discarded image reason is missing: {discarded_body['notes']}",
+        )
+
+        qwen_like = _probe(ctx, anthropic["id"], "min-size-model")
+        ctx.require(
+            qwen_like.status_code == 200,
+            f"probe failed: {qwen_like.status_code} {qwen_like.text}",
+        )
+        qwen_like_body = qwen_like.json()
+        ctx.require(
+            qwen_like_body["vision"] == "yes",
+            f"image at least 64x64 was not recognized: {qwen_like_body}",
         )
 
         partial = _probe(ctx, anthropic["id"], "partial-effort-model")
@@ -517,6 +617,37 @@ def check_provider_probe(ctx):
             f"probe created conversations/turns/events: before={before} after={after}",
         )
 
+        image_info = []
+        for item in state.requests:
+            path = item["path"].split("?", 1)[0]
+            try:
+                image_info.append(_check_png(_image_data(path, item["body"])))
+            except (
+                AttributeError,
+                KeyError,
+                StopIteration,
+                TypeError,
+                _Rejected,
+                struct.error,
+                zlib.error,
+            ):
+                continue
+        ctx.require(
+            len(image_info) == 16,
+            f"expected two images per probe, got {len(image_info)} image requests",
+        )
+        ctx.require(
+            all(
+                width >= 64 and height >= 64
+                for width, height, _ in image_info
+            ),
+            f"probe sent an image smaller than 64x64: {image_info}",
+        )
+        ctx.require(
+            {pixel for _, _, pixel in image_info} == {(255, 0, 0), (0, 0, 255)},
+            f"probe did not send one red and one blue image: {image_info}",
+        )
+
         headers_seen = [item["headers"] for item in state.requests]
         ctx.require(
             any(headers.get("x-api-key") == SECRET for headers in headers_seen),
@@ -534,6 +665,7 @@ def check_provider_probe(ctx):
             "info": {
                 "providers_probed": 4,
                 "requests": len(state.requests),
+                "images": len(image_info),
                 "concurrency": "slow probe returned 409 for the concurrent request",
                 "effort": partial_body["effort"],
             },
