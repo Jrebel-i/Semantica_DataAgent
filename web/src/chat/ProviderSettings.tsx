@@ -2,7 +2,7 @@ import type { FormEvent } from "react";
 import { Alert, Button, Checkbox, Input, Tag } from "antd";
 import type { Messages } from "../i18n";
 import { PROVIDER_TYPES } from "./types";
-import type { EffortLevel, Provider } from "./types";
+import type { EffortLevel, Provider, ProviderProbeResult } from "./types";
 
 export type ProviderModelCapabilityForm = {
   description: string;
@@ -34,10 +34,15 @@ export function ProviderSettings({
   providerForm,
   setProviderForm,
   editingProviderId,
+  probeResults,
+  probeLoadingModel,
+  probeError,
   onEditProvider,
   onDeleteProvider,
   onSaveProvider,
   onResetProviderForm,
+  onProbeModel,
+  onApplyProbe,
 }: {
   messages: Messages;
   role: string;
@@ -47,10 +52,15 @@ export function ProviderSettings({
   providerForm: ProviderForm;
   setProviderForm: (value: ProviderForm) => void;
   editingProviderId: string;
+  probeResults: Record<string, ProviderProbeResult>;
+  probeLoadingModel: string;
+  probeError: string;
   onEditProvider: (provider: Provider) => void;
   onDeleteProvider: (provider: Provider) => void;
   onSaveProvider: (event: FormEvent) => void;
   onResetProviderForm: () => void;
+  onProbeModel: (providerId: string, model: string) => void;
+  onApplyProbe: (model: string) => void;
 }) {
   const t = messages;
   const models = providerForm.models
@@ -79,6 +89,14 @@ export function ProviderSettings({
         },
       },
     });
+  const outcomeLabel = (outcome: ProviderProbeResult["vision"]) =>
+    outcome === "yes"
+      ? t.providerProbeYes
+      : outcome === "no"
+        ? t.providerProbeNo
+        : t.providerProbeUnknown;
+  const outcomeMark = (outcome: ProviderProbeResult["vision"]) =>
+    outcome === "yes" ? "✓" : outcome === "no" ? "✕" : "?";
   return (
     <div className="stack">
       <div className="page-header">
@@ -240,11 +258,14 @@ export function ProviderSettings({
                   <span className="field-hint">
                     {t.providerModelCapabilitiesHint}
                   </span>
+                  {probeError && <Alert type="error" title={probeError} />}
                   <div className="provider-capability-list">
                     {models.map((model) => {
                       const capability =
                         providerForm.model_capabilities[model] ??
                         EMPTY_CAPABILITY;
+                      const probing = probeLoadingModel === model;
+                      const probeResult = probeResults[model];
                       return (
                         <div className="provider-capability-card" key={model}>
                           <code className="provider-capability-model">
@@ -301,6 +322,73 @@ export function ProviderSettings({
                                 </Checkbox>
                               ))}
                             </div>
+                            <div className="provider-probe-row">
+                              <Button
+                                size="small"
+                                loading={probing}
+                                disabled={
+                                  !editingProviderId ||
+                                  (Boolean(probeLoadingModel) && !probing)
+                                }
+                                aria-label={`${model} ${t.providerProbe}`}
+                                onClick={() =>
+                                  onProbeModel(editingProviderId, model)
+                                }
+                              >
+                                {probing
+                                  ? t.providerProbeRunning
+                                  : t.providerProbe}
+                              </Button>
+                              {probing && (
+                                <span className="field-hint" role="status">
+                                  {t.providerProbeRunning}
+                                </span>
+                              )}
+                              {!editingProviderId && (
+                                <span className="field-hint">
+                                  {t.providerProbeNeedsSave}
+                                </span>
+                              )}
+                            </div>
+                            {probeResult && (
+                              <div
+                                className="provider-probe-result"
+                                aria-label={`${model} ${t.providerProbeResult}`}
+                                aria-live="polite"
+                              >
+                                <div className="provider-probe-row">
+                                  <span
+                                    aria-label={`${model} ${t.providerProbeVision} ${t.providerProbeResult}`}
+                                  >
+                                    {t.providerProbeVision}:{" "}
+                                    {outcomeLabel(probeResult.vision)}
+                                  </span>
+                                  <Button
+                                    size="small"
+                                    aria-label={`${model} ${t.providerProbeApply}`}
+                                    onClick={() => onApplyProbe(model)}
+                                  >
+                                    {t.providerProbeApply}
+                                  </Button>
+                                </div>
+                                <div className="provider-probe-effort">
+                                  {effortOptions.map((option) => (
+                                    <Tag
+                                      key={option.value}
+                                      aria-label={`${model} ${option.label} ${t.providerProbeResult}`}
+                                    >
+                                      {option.label}{" "}
+                                      {outcomeMark(
+                                        probeResult.effort[option.value],
+                                      )}
+                                    </Tag>
+                                  ))}
+                                </div>
+                                <span className="field-hint">
+                                  {probeResult.notes}
+                                </span>
+                              </div>
+                            )}
                           </div>
                         </div>
                       );

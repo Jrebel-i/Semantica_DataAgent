@@ -1010,6 +1010,64 @@
         "title": "PluginView",
         "type": "object"
       },
+      "ProbeEffortResult": {
+        "properties": {
+          "extra": {
+            "enum": [
+              "yes",
+              "no",
+              "unknown"
+            ],
+            "title": "Extra",
+            "type": "string"
+          },
+          "high": {
+            "enum": [
+              "yes",
+              "no",
+              "unknown"
+            ],
+            "title": "High",
+            "type": "string"
+          },
+          "low": {
+            "enum": [
+              "yes",
+              "no",
+              "unknown"
+            ],
+            "title": "Low",
+            "type": "string"
+          },
+          "max": {
+            "enum": [
+              "yes",
+              "no",
+              "unknown"
+            ],
+            "title": "Max",
+            "type": "string"
+          },
+          "medium": {
+            "enum": [
+              "yes",
+              "no",
+              "unknown"
+            ],
+            "title": "Medium",
+            "type": "string"
+          }
+        },
+        "required": [
+          "low",
+          "medium",
+          "high",
+          "extra",
+          "max"
+        ],
+        "title": "ProbeEffortResult",
+        "type": "object"
+      },
       "ProjectUpdate": {
         "additionalProperties": false,
         "properties": {
@@ -1283,6 +1341,53 @@
           "models"
         ],
         "title": "ProviderCreate",
+        "type": "object"
+      },
+      "ProviderProbeRequest": {
+        "properties": {
+          "model": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Model",
+            "type": "string"
+          }
+        },
+        "required": [
+          "model"
+        ],
+        "title": "ProviderProbeRequest",
+        "type": "object"
+      },
+      "ProviderProbeView": {
+        "properties": {
+          "effort": {
+            "$ref": "#/components/schemas/ProbeEffortResult"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "notes": {
+            "title": "Notes",
+            "type": "string"
+          },
+          "vision": {
+            "enum": [
+              "yes",
+              "no",
+              "unknown"
+            ],
+            "title": "Vision",
+            "type": "string"
+          }
+        },
+        "required": [
+          "model",
+          "vision",
+          "effort",
+          "notes"
+        ],
+        "title": "ProviderProbeView",
         "type": "object"
       },
       "ProviderUpdate": {
@@ -3731,6 +3836,60 @@
           }
         ],
         "summary": "Update Provider"
+      }
+    },
+    "/api/v1/providers/{provider_id}/probe": {
+      "post": {
+        "operationId": "probe_provider_api_v1_providers__provider_id__probe_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "provider_id",
+            "required": true,
+            "schema": {
+              "title": "Provider Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProviderProbeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProviderProbeView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Probe Provider"
       }
     },
     "/api/v1/pulls": {

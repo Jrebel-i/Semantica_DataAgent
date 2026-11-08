@@ -3,7 +3,8 @@ import type { FormEvent } from "react";
 import { parseAgentProfiles, type AgentProfiles } from "../agentProfiles";
 import type { Messages } from "../i18n";
 import type { ProviderForm } from "./ProviderSettings";
-import type { Agent, Provider } from "./types";
+import { EFFORT_LEVELS } from "./types";
+import type { Agent, Provider, ProviderProbeResult } from "./types";
 
 export function useProviders({
   token,
@@ -38,6 +39,11 @@ export function useProviders({
   const [editingProviderId, setEditingProviderId] = useState("");
   const [providerError, setProviderError] = useState("");
   const [providerNotice, setProviderNotice] = useState("");
+  const [probeResults, setProbeResults] = useState<
+    Record<string, ProviderProbeResult>
+  >({});
+  const [probeLoadingModel, setProbeLoadingModel] = useState("");
+  const [probeError, setProbeError] = useState("");
 
   const loadProviders = useCallback(async () => {
     try {
@@ -199,6 +205,9 @@ export function useProviders({
     });
     setProviderError("");
     setProviderNotice("");
+    setProbeResults({});
+    setProbeLoadingModel("");
+    setProbeError("");
   }
 
   function resetProviderForm() {
@@ -211,6 +220,58 @@ export function useProviders({
       models: "",
       model_capabilities: {},
     });
+    setProbeResults({});
+    setProbeLoadingModel("");
+    setProbeError("");
+  }
+
+  async function probeProviderModel(providerId: string, model: string) {
+    if (!providerId) return;
+    setProbeError("");
+    setProbeLoadingModel(model);
+    try {
+      const response = await fetch(`/api/v1/providers/${providerId}/probe`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ model }),
+      });
+      if (response.status === 409) {
+        setProbeError(t.providerProbeBusy);
+        return;
+      }
+      if (!response.ok) throw new Error();
+      const data = (await response.json()) as ProviderProbeResult;
+      setProbeResults((current) => ({ ...current, [model]: data }));
+    } catch {
+      setProbeError(t.providerProbeFailed);
+    } finally {
+      setProbeLoadingModel("");
+    }
+  }
+
+  function applyProbeResult(model: string) {
+    const result = probeResults[model];
+    if (!result) return;
+    setProviderForm((current) => ({
+      ...current,
+      model_capabilities: {
+        ...current.model_capabilities,
+        [model]: {
+          ...(current.model_capabilities[model] ?? {
+            description: "",
+            vision: false,
+            effort_levels: [],
+          }),
+          vision: result.vision === "yes",
+          effort_levels: EFFORT_LEVELS.filter(
+            (level) => result.effort[level] === "yes",
+          ),
+        },
+      },
+    }));
   }
 
   async function saveProvider(event: FormEvent) {
@@ -297,6 +358,9 @@ export function useProviders({
     editingProviderId,
     providerError,
     providerNotice,
+    probeResults,
+    probeLoadingModel,
+    probeError,
     activeProvider,
     setAgentId,
     setProviderId,
@@ -310,5 +374,7 @@ export function useProviders({
     resetProviderForm,
     saveProvider,
     deleteProvider,
+    probeProviderModel,
+    applyProbeResult,
   };
 }
