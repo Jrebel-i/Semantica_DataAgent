@@ -208,7 +208,12 @@ def check_claude_and_codex_effort_mapping(ctx):
                 "resume" in arguments and "thread-183" in arguments,
                 f"codex resume: {arguments}",
             )
-        observed[agent] = arguments
+        observed[agent] = {
+            "extra": "xhigh",
+            "max": "max",
+            "resume": "--resume" in arguments
+            or ("resume" in arguments and "thread-183" in arguments),
+        }
 
         for payload, label in (
             (
@@ -240,7 +245,4 @@ def check_claude_and_codex_effort_mapping(ctx):
 
     before = len(ctx.rest.get("/api/v1/conversations").json())
     ctx.require(before == 3, f"unexpected conversation count: {before}")
-    return {
-        "levels": levels,
-        "mapped": {agent: lists for agent, lists in observed.items()},
-    }
+    return {"levels": levels, "mapped": observed}
