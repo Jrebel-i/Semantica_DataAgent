@@ -1869,7 +1869,11 @@ export function ChatPage({
               <aside className="chat-sessions">
                 <div className="session-head">
                   <h1 className="session-title">
-                    {sessionTarget ? t.conversationHistory : t.chat}
+                    {showArchived
+                      ? t.archived
+                      : sessionTarget
+                        ? t.conversationHistory
+                        : t.chat}
                   </h1>
                   {!sessionTarget && (
                     <Button
