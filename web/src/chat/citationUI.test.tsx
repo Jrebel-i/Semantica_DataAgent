@@ -11,6 +11,7 @@ import {
 import { ChatPage } from "../ChatPage";
 import { getMessages } from "../i18n";
 import {
+  composerSelectText,
   conversationFetcher,
   conversationRow,
   cssDeclarations,
@@ -53,9 +54,7 @@ test("streams tools and text, copies SQL, and opens table and document citations
   );
 
   await waitFor(() =>
-    expect((screen.getByLabelText("模型") as HTMLSelectElement).value).toBe(
-      provider.models[0],
-    ),
+    expect(composerSelectText("模型")).toBe(provider.models[0]),
   );
   fireEvent.change(screen.getByLabelText("问题"), {
     target: { value: "支付销售额怎么统计？" },
@@ -136,9 +135,7 @@ test("字段引用的血缘标签显示字段血缘", async () => {
   vi.stubGlobal("fetch", fetcher);
   render(<ChatPage token="token" role="user" messages={getMessages("zh")} />);
   await waitFor(() =>
-    expect((screen.getByLabelText("模型") as HTMLSelectElement).value).toBe(
-      provider.models[0],
-    ),
+    expect(composerSelectText("模型")).toBe(provider.models[0]),
   );
   fireEvent.change(screen.getByLabelText("问题"), {
     target: { value: "查询字段" },
@@ -191,9 +188,7 @@ test("引用标签合并后点击打开文档与数据表抽屉", async () => {
     <ChatPage token="token" role="user" messages={getMessages("zh")} />,
   );
   await waitFor(() =>
-    expect((screen.getByLabelText("模型") as HTMLSelectElement).value).toBe(
-      provider.models[0],
-    ),
+    expect(composerSelectText("模型")).toBe(provider.models[0]),
   );
   fireEvent.change(screen.getByLabelText("问题"), {
     target: { value: "引用测试" },
@@ -275,9 +270,7 @@ test("超过六个引用时折叠为更多 N 个并可展开", async () => {
     <ChatPage token="token" role="user" messages={getMessages("zh")} />,
   );
   await waitFor(() =>
-    expect((screen.getByLabelText("模型") as HTMLSelectElement).value).toBe(
-      provider.models[0],
-    ),
+    expect(composerSelectText("模型")).toBe(provider.models[0]),
   );
   fireEvent.change(screen.getByLabelText("问题"), {
     target: { value: "很多引用" },

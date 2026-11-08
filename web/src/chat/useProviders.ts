@@ -2,9 +2,14 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { parseAgentProfiles, type AgentProfiles } from "../agentProfiles";
 import type { Messages } from "../i18n";
+import {
+  allowedEffortLevels,
+  defaultEffort,
+  modelEffortLevels,
+} from "./effort";
 import type { ProviderForm } from "./ProviderSettings";
 import { EFFORT_LEVELS } from "./types";
-import type { Agent, Provider, ProviderProbeResult } from "./types";
+import type { Agent, EffortLevel, Provider, ProviderProbeResult } from "./types";
 
 export function useProviders({
   token,
@@ -28,6 +33,7 @@ export function useProviders({
   const [agentId, setAgentId] = useState("pi");
   const [providerId, setProviderId] = useState("");
   const [model, setModel] = useState("");
+  const [effort, setEffort] = useState<EffortLevel | "">("");
   const [providerForm, setProviderForm] = useState<ProviderForm>({
     name: "",
     type: "anthropic-messages",
@@ -149,6 +155,22 @@ export function useProviders({
   }, [providers, profiles, defaults]);
 
   const activeProvider = providers.find((item) => item.id === providerId);
+  const effortLevels = modelEffortLevels(activeProvider, model);
+  const allowedEfforts = allowedEffortLevels(
+    agents,
+    agentId,
+    activeProvider,
+    model,
+  );
+  const effortKey = `${effortLevels.join(",")}|${allowedEfforts.join(",")}`;
+
+  useEffect(() => {
+    setEffort((current) =>
+      allowedEfforts.includes(current as EffortLevel)
+        ? current
+        : defaultEffort(allowedEfforts),
+    );
+  }, [effortKey]);
 
   function selectAgent(value: string) {
     selectionTouched.current = true;
@@ -179,6 +201,10 @@ export function useProviders({
   function selectModel(value: string) {
     selectionTouched.current = true;
     setModel(value);
+  }
+
+  function selectEffort(value: EffortLevel | "") {
+    setEffort(value);
   }
 
   function editProvider(provider: Provider) {
@@ -353,6 +379,9 @@ export function useProviders({
     agentId,
     providerId,
     model,
+    effort,
+    effortLevels,
+    allowedEfforts,
     selectionTouched,
     providerForm,
     editingProviderId,
@@ -369,6 +398,7 @@ export function useProviders({
     selectAgent,
     selectProvider,
     selectModel,
+    selectEffort,
     loadProviders,
     editProvider,
     resetProviderForm,

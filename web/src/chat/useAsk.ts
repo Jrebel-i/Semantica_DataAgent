@@ -6,6 +6,7 @@ import { citationsOf, sqlBlocks } from "./citations";
 import type {
   Clarification,
   Conversation,
+  EffortLevel,
   LiveTurn,
   QueryPlan,
   Turn,
@@ -19,6 +20,7 @@ export function useAsk({
   agentId,
   providerId,
   model,
+  effort,
   currentConversationId,
   setCurrentConversationId,
   sending,
@@ -41,6 +43,7 @@ export function useAsk({
   agentId: string;
   providerId: string;
   model: string;
+  effort: EffortLevel | "";
   currentConversationId: string;
   setCurrentConversationId: Dispatch<SetStateAction<string>>;
   sending: boolean;
@@ -180,6 +183,7 @@ export function useAsk({
           agent: agentId,
           provider_id: providerId,
           model,
+          ...(effort ? { effort } : {}),
           ...(currentConversationId
             ? { conversation_id: currentConversationId }
             : {}),

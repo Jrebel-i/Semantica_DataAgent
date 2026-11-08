@@ -1,9 +1,10 @@
 import type { FormEvent } from "react";
-import { Button, Input } from "antd";
+import { Button, Input, Select } from "antd";
 import { ArrowUpOutlined } from "@ant-design/icons";
 import type { AgentProfiles } from "../agentProfiles";
 import type { Messages } from "../i18n";
-import type { Agent, Conversation, Provider } from "./types";
+import { EFFORT_LEVELS } from "./effort";
+import type { Agent, Conversation, EffortLevel, Provider } from "./types";
 
 export function Composer({
   messages,
@@ -24,6 +25,10 @@ export function Composer({
   model,
   activeProvider,
   onModelChange,
+  effort,
+  effortLevels,
+  allowedEfforts,
+  onEffortChange,
   canAsk,
   conversationSelectionChanged,
 }: {
@@ -45,10 +50,32 @@ export function Composer({
   model: string;
   activeProvider?: Provider;
   onModelChange: (value: string) => void;
+  effort: EffortLevel | "";
+  effortLevels: EffortLevel[];
+  allowedEfforts: EffortLevel[];
+  onEffortChange: (value: EffortLevel | "") => void;
   canAsk: boolean;
   conversationSelectionChanged: boolean;
 }) {
   const t = messages;
+  const effortLabels: Record<EffortLevel, string> = {
+    low: t.effortLow,
+    medium: t.effortMedium,
+    high: t.effortHigh,
+    extra: t.effortExtra,
+    max: t.effortMax,
+  };
+  const modelOptions = (activeProvider?.models ?? []).map((item) => ({
+    value: item,
+    label: item,
+    description: activeProvider?.model_capabilities?.[item]?.description ?? "",
+  }));
+  const effortOptions = EFFORT_LEVELS.map((level) => ({
+    value: level,
+    label: effortLabels[level],
+    disabled: !allowedEfforts.includes(level),
+    hint: level === "max" ? t.effortMaxHint : "",
+  }));
   return (
     <div className="chat-composer">
       {emptyConversation && <h1 className="chat-greeting">{t.chatGreeting}</h1>}
@@ -113,20 +140,54 @@ export function Composer({
               </select>
             </label>
             <label>
-              <select
+              <span>{t.askModel}</span>
+              <Select
                 aria-label={t.askModel}
-                title={t.askModel}
-                value={model}
-                onChange={(event) => onModelChange(event.target.value)}
+                className="composer-select composer-model-select"
+                value={model || undefined}
+                onChange={(value) => onModelChange(value)}
                 disabled={!activeProvider}
-              >
-                {(activeProvider?.models ?? []).map((item) => (
-                  <option key={item} value={item}>
-                    {item}
-                  </option>
-                ))}
-              </select>
+                options={modelOptions}
+                popupMatchSelectWidth={false}
+                optionRender={(option) => (
+                  <div className="model-option">
+                    <span className="model-option-name">{option.label}</span>
+                    {option.data.description && (
+                      <span
+                        className="model-option-description"
+                        title={option.data.description}
+                      >
+                        {option.data.description}
+                      </span>
+                    )}
+                  </div>
+                )}
+              />
             </label>
+            {effortLevels.length > 0 && (
+              <label>
+                <span>{t.askEffort}</span>
+                <Select
+                  aria-label={t.askEffort}
+                  className="composer-select composer-effort-select"
+                  value={effort || undefined}
+                  placeholder={t.effortDefault}
+                  onChange={(value) => onEffortChange(value as EffortLevel)}
+                  options={effortOptions}
+                  popupMatchSelectWidth={false}
+                  optionRender={(option) => (
+                    <div className="effort-option">
+                      <span>{option.label}</span>
+                      {option.data.hint && (
+                        <span className="effort-option-hint">
+                          {option.data.hint}
+                        </span>
+                      )}
+                    </div>
+                  )}
+                />
+              </label>
+            )}
           </div>
           <Button
             htmlType="submit"

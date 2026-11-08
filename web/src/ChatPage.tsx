@@ -108,6 +108,9 @@ export function ChatPage({
     agentId,
     providerId,
     model,
+    effort,
+    effortLevels,
+    allowedEfforts,
     selectionTouched,
     providerForm,
     editingProviderId,
@@ -124,6 +127,7 @@ export function ChatPage({
     selectAgent,
     selectProvider,
     selectModel,
+    selectEffort,
     loadProviders,
     editProvider,
     resetProviderForm,
@@ -158,6 +162,7 @@ export function ChatPage({
     agentId,
     providerId,
     model,
+    effort,
     currentConversationId,
     setCurrentConversationId,
     sending,
@@ -536,6 +541,10 @@ export function ChatPage({
               model={model}
               activeProvider={activeProvider}
               onModelChange={selectModel}
+              effort={effort}
+              effortLevels={effortLevels}
+              allowedEfforts={allowedEfforts}
+              onEffortChange={selectEffort}
               canAsk={canAsk}
               conversationSelectionChanged={conversationSelectionChanged}
             />

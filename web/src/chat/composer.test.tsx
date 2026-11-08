@@ -13,8 +13,10 @@ import { getMessages } from "../i18n";
 import {
   conversationFetcher,
   conversationRow,
+  chooseComposerOption,
+  composerSelectDisabled,
+  composerSelectText,
   cssDeclarations,
-  document,
   json,
   openHistory,
   provider,
@@ -92,37 +94,43 @@ function effortFetcher(onAsk?: (body: Record<string, unknown>) => void) {
 
 async function openComposerSelect(label: string) {
   fireEvent.mouseDown(screen.getByLabelText(label));
-  await screen.findByRole("listbox");
-}
-
-function composerSelectText(label: string) {
-  const input = screen.getByLabelText(label);
-  return (
-    input
-      .closest(".ant-select")
-      ?.querySelector(".ant-select-selection-item")
-      ?.textContent?.trim() ?? ""
-  );
+  await waitFor(() => {
+    const dropdown = Array.from(
+      document.querySelectorAll(".ant-select-dropdown"),
+    ).find(
+      (element) =>
+        !element.classList.contains("ant-select-dropdown-hidden") &&
+        !element.className.includes("-leave"),
+    );
+    expect(dropdown?.querySelector('[role="option"]')).toBeTruthy();
+  });
 }
 
 function optionDisabled(text: string) {
-  const option = screen.getByRole("option", { name: new RegExp(text) });
+  const dropdown = Array.from(
+    document.querySelectorAll(".ant-select-dropdown"),
+  ).find(
+    (element) =>
+      !element.classList.contains("ant-select-dropdown-hidden") &&
+      !element.className.includes("-leave"),
+  );
+  const option = Array.from(
+    dropdown?.querySelectorAll('[role="option"]') ?? [],
+  ).find((element) => new RegExp(text).test(element.textContent ?? ""));
+  expect(option).toBeTruthy();
   return (
-    option.getAttribute("aria-disabled") === "true" ||
-    option.classList.contains("ant-select-item-option-disabled")
+    option?.getAttribute("aria-disabled") === "true" ||
+    option?.classList.contains("ant-select-item-option-disabled") === true
   );
 }
 
 test("思考强度默认中并在提问请求里携带", async () => {
   let askBody: Record<string, unknown> = {};
-  vi.stubGlobal("fetch", effortFetcher((body) => (askBody = body)));
-  render(
-    <ChatPage
-      token="token"
-      role="user"
-      messages={getMessages("zh")}
-    />,
+  vi.stubGlobal(
+    "fetch",
+    effortFetcher((body) => (askBody = body)),
   );
+  render(<ChatPage token="token" role="user" messages={getMessages("zh")} />);
 
   await screen.findByLabelText("思考强度");
   expect(composerSelectText("思考强度")).toBe("中（推荐）");
@@ -140,12 +148,10 @@ test("模型没有档位时不显示思考强度，有档位时置灰不支持�
   render(<ChatPage token="token" role="user" messages={getMessages("zh")} />);
 
   await screen.findByLabelText("思考强度");
-  await openComposerSelect("模型");
-  fireEvent.click(screen.getByRole("option", { name: "model-none" }));
+  await chooseComposerOption("模型", /^model-none/);
   await waitFor(() => expect(screen.queryByLabelText("思考强度")).toBeNull());
 
-  await openComposerSelect("模型");
-  fireEvent.click(screen.getByRole("option", { name: "model-partial" }));
+  await chooseComposerOption("模型", /^model-partial/);
   await screen.findByLabelText("思考强度");
   expect(composerSelectText("思考强度")).toBe("默认");
   await openComposerSelect("思考强度");
@@ -185,12 +191,14 @@ test("最高档在下拉里提示用量更大，长模型说明可悬停看全�
 
 test("切换模型和强度后提问使用新的强度", async () => {
   let askBody: Record<string, unknown> = {};
-  vi.stubGlobal("fetch", effortFetcher((body) => (askBody = body)));
+  vi.stubGlobal(
+    "fetch",
+    effortFetcher((body) => (askBody = body)),
+  );
   render(<ChatPage token="token" role="user" messages={getMessages("zh")} />);
 
   await screen.findByLabelText("思考强度");
-  await openComposerSelect("思考强度");
-  fireEvent.click(screen.getByRole("option", { name: "高" }));
+  await chooseComposerOption("思考强度", /^高/);
   expect(composerSelectText("思考强度")).toBe("高");
   fireEvent.change(screen.getByLabelText("问题"), {
     target: { value: "继续追问" },
@@ -237,9 +245,7 @@ test("新会话发送所选 agent 与模型且仅锁定 agent", async () => {
   fireEvent.change(screen.getByLabelText("Agent"), {
     target: { value: "claude" },
   });
-  fireEvent.change(screen.getByLabelText("模型"), {
-    target: { value: "model-b" },
-  });
+  await chooseComposerOption("模型", /^model-b/);
   fireEvent.change(screen.getByLabelText("问题"), {
     target: { value: "订单在哪里？" },
   });
@@ -264,9 +270,7 @@ test("新会话发送所选 agent 与模型且仅锁定 agent", async () => {
       true,
     ),
   );
-  expect((screen.getByLabelText("模型") as HTMLSelectElement).disabled).toBe(
-    false,
-  );
+  expect(composerSelectDisabled("模型")).toBe(false);
   expect(
     (screen.getByLabelText("Provider") as HTMLSelectElement).disabled,
   ).toBe(false);
@@ -317,12 +321,8 @@ test("对话中可切换 provider 与模型并在下一条消息使用", async (
   fireEvent.change(screen.getByLabelText(messages.askProvider), {
     target: { value: second.id },
   });
-  expect(
-    (screen.getByLabelText(messages.askModel) as HTMLSelectElement).value,
-  ).toBe("model-b");
-  fireEvent.change(screen.getByLabelText(messages.askModel), {
-    target: { value: "model-c" },
-  });
+  expect(composerSelectText(messages.askModel)).toBe("model-b");
+  await chooseComposerOption(messages.askModel, /^model-c/);
   expect(
     await screen.findByText(
       messages.nextMessageModel.replace("{model}", "model-c"),
@@ -343,9 +343,7 @@ test("对话中可切换 provider 与模型并在下一条消息使用", async (
   expect(
     (screen.getByLabelText(messages.askProvider) as HTMLSelectElement).disabled,
   ).toBe(false);
-  expect(
-    (screen.getByLabelText(messages.askModel) as HTMLSelectElement).disabled,
-  ).toBe(false);
+  expect(composerSelectDisabled(messages.askModel)).toBe(false);
 });
 
 test("新会话切换 agent 时使用该 agent 的 provider 和默认模型", async () => {
@@ -397,9 +395,7 @@ test("新会话切换 agent 时使用该 agent 的 provider 和默认模型", as
   expect((screen.getByLabelText("Provider") as HTMLSelectElement).value).toBe(
     "provider-2",
   );
-  expect((screen.getByLabelText("模型") as HTMLSelectElement).value).toBe(
-    "model-b",
-  );
+  expect(composerSelectText("模型")).toBe("model-b");
   expect(screen.queryByRole("option", { name: "Local gateway" })).toBeNull();
 });
 
@@ -444,9 +440,7 @@ test("新建会话不会恢复不允许使用的默认 provider", async () => {
   expect((screen.getByLabelText("Provider") as HTMLSelectElement).value).toBe(
     "provider-2",
   );
-  expect((screen.getByLabelText("模型") as HTMLSelectElement).value).toBe(
-    "model-b",
-  );
+  expect(composerSelectText("模型")).toBe("model-b");
 });
 
 test("示例问题只填入输入框而不发送请求", async () => {

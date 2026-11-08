@@ -2482,6 +2482,58 @@ code {
   margin: 0;
   flex-wrap: wrap;
 }
+.composer-controls .chat-selectors label {
+  min-width: 0;
+}
+.composer-select {
+  min-width: 96px;
+}
+.composer-model-select {
+  min-width: 150px;
+}
+.composer-effort-select {
+  min-width: 92px;
+}
+.composer-controls .ant-select-selector {
+  min-height: 30px !important;
+  border-radius: 16px !important;
+}
+.composer-controls .ant-select-selection-item,
+.composer-controls .ant-select-selection-placeholder {
+  font-size: 12px;
+}
+.model-option,
+.effort-option {
+  display: flex;
+  min-width: 0;
+}
+.model-option {
+  flex-direction: column;
+  gap: 1px;
+}
+.model-option-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.model-option-description {
+  max-width: 360px;
+  overflow: hidden;
+  color: var(--ink-3);
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.effort-option {
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+.effort-option-hint {
+  color: var(--ink-3);
+  font-size: 11px;
+  white-space: nowrap;
+}
 .composer-controls .ant-btn {
   min-height: 38px;
 }
@@ -2561,6 +2613,12 @@ code {
   }
   .chat-selectors select {
     max-width: 110px;
+  }
+  .composer-model-select {
+    max-width: 190px;
+  }
+  .composer-effort-select {
+    max-width: 130px;
   }
 }
 .side-nav.expanded .new-conversation {
