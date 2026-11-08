@@ -1,5 +1,5 @@
 import { createPortal } from "react-dom";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { Alert, Button } from "antd";
 import type { Language, Messages } from "./i18n";
@@ -16,7 +16,6 @@ import {
 import type {
   CitationDetail,
   Clarification,
-  Conversation,
   ConversationDetail,
   DocumentView,
   LiveTurn,
@@ -36,6 +35,7 @@ import { Composer } from "./chat/Composer";
 import { ContextDrawer } from "./chat/ContextDrawer";
 import { ProviderSettings } from "./chat/ProviderSettings";
 import { useProviders } from "./chat/useProviders";
+import { useConversations } from "./chat/useConversations";
 import {
   applyToolEnd,
   applyToolStart,
@@ -79,19 +79,6 @@ export function ChatPage({
   refreshKey?: number;
 }) {
   const askSequence = useRef(0);
-  const [conversations, setConversations] = useState<Conversation[]>([]);
-  const [archivedConversations, setArchivedConversations] = useState<
-    Conversation[]
-  >([]);
-  const [showArchived, setShowArchived] = useState(false);
-  const [menuId, setMenuId] = useState("");
-  const [editingId, setEditingId] = useState("");
-  const [draftTitle, setDraftTitle] = useState("");
-  const [hoveredConversationId, setHoveredConversationId] = useState("");
-  const [focusedConversationId, setFocusedConversationId] = useState("");
-  const [confirmingDeleteId, setConfirmingDeleteId] = useState("");
-  const [deletingConversationId, setDeletingConversationId] = useState("");
-  const [sessionError, setSessionError] = useState("");
   const [question, setQuestion] = useState("");
   const [turns, setTurns] = useState<Turn[]>([]);
   const [live, setLive] = useState<LiveTurn | null>(null);
@@ -109,6 +96,39 @@ export function ChatPage({
   );
   const [citationError, setCitationError] = useState("");
   const [citationLoading, setCitationLoading] = useState(false);
+
+  const {
+    conversations,
+    archivedConversations,
+    showArchived,
+    menuId,
+    editingId,
+    draftTitle,
+    hoveredConversationId,
+    focusedConversationId,
+    confirmingDeleteId,
+    deletingConversationId,
+    sessionError,
+    setShowArchived,
+    setMenuId,
+    setEditingId,
+    setDraftTitle,
+    setHoveredConversationId,
+    setFocusedConversationId,
+    setConfirmingDeleteId,
+    refreshConversations,
+    deleteConversation,
+    patchConversation,
+    saveTitle,
+  } = useConversations({
+    token,
+    messages: t,
+    settingsOnly,
+    refreshKey,
+    currentConversationId,
+    onNewConversation: newConversation,
+    onError: setError,
+  });
 
   const {
     agents,
@@ -249,33 +269,6 @@ export function ChatPage({
       setError(t.copyError);
     }
   }
-
-  const refreshConversations = useCallback(async () => {
-    try {
-      const response = await fetch("/api/v1/conversations", {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (!response.ok) throw new Error();
-      const rows = (await response.json()) as Conversation[];
-      if (!Array.isArray(rows)) throw new Error("Invalid conversation list");
-      setConversations(rows);
-      const archivedResponse = await fetch(
-        "/api/v1/conversations?archived=true",
-        { headers: { Authorization: `Bearer ${token}` } },
-      );
-      if (!archivedResponse.ok) throw new Error();
-      const archivedRows: unknown = await archivedResponse.json();
-      if (!Array.isArray(archivedRows))
-        throw new Error("Invalid archived conversation list");
-      setArchivedConversations(archivedRows);
-    } catch {
-      setError(t.askError);
-    }
-  }, [token, t.askError]);
-
-  useEffect(() => {
-    if (!settingsOnly) void refreshConversations();
-  }, [refreshConversations, settingsOnly, refreshKey]);
 
   function updateLive(change: (current: LiveTurn) => LiveTurn) {
     setLive((current) => (current ? change(current) : current));
@@ -549,75 +542,6 @@ export function ChatPage({
     } catch {
       setError(t.copyError);
     }
-  }
-
-  async function deleteConversation(id: string) {
-    if (deletingConversationId) return;
-    setDeletingConversationId(id);
-    setSessionError("");
-    try {
-      const response = await fetch(
-        `/api/v1/conversations/${encodeURIComponent(id)}`,
-        {
-          method: "DELETE",
-          headers: { Authorization: `Bearer ${token}` },
-        },
-      );
-      if (response.status === 409) {
-        setSessionError(t.deleteConversationRunning);
-        return;
-      }
-      if (!response.ok) {
-        setSessionError(t.operationFailed);
-        return;
-      }
-      setConversations((current) =>
-        current.filter((conversation) => conversation.id !== id),
-      );
-      if (id === currentConversationId) newConversation();
-      await refreshConversations();
-    } catch {
-      setSessionError(t.operationFailed);
-    } finally {
-      setDeletingConversationId("");
-      setConfirmingDeleteId("");
-    }
-  }
-
-  async function patchConversation(
-    id: string,
-    patch: { title?: string; pinned?: boolean; archived?: boolean },
-  ) {
-    setSessionError("");
-    try {
-      const response = await fetch(
-        `/api/v1/conversations/${encodeURIComponent(id)}`,
-        {
-          method: "PATCH",
-          headers: {
-            Authorization: `Bearer ${token}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify(patch),
-        },
-      );
-      if (response.status === 409) {
-        setSessionError(t.deleteConversationRunning);
-        return;
-      }
-      if (!response.ok) throw new Error();
-      if (patch.archived && id === currentConversationId) newConversation();
-      if (patch.archived === false) setShowArchived(false);
-      await refreshConversations();
-    } catch {
-      setSessionError(t.operationFailed);
-    }
-  }
-
-  function saveTitle(id: string) {
-    if (editingId !== id) return;
-    setEditingId("");
-    void patchConversation(id, { title: draftTitle });
   }
 
   const canAsk = Boolean(
