@@ -370,3 +370,98 @@ def check_prompt_injection_does_not_change_requests(ctx):
             _delete(ctx, conversation_id)
         server.shutdown()
         server.server_close()
+
+
+def check_attachment_boundaries_and_cross_user(ctx):
+    server, _state, base_url = _start_gateway()
+    provider = _provider(ctx, base_url)
+    conversations: list[str] = []
+    try:
+        ten = _ask(
+            ctx,
+            provider,
+            "text-model",
+            [(f"file-{index}.txt", b"x", "text/plain") for index in range(10)],
+        )
+        ctx.require(ten.status_code == 200, ten.text)
+        conversations.append(_conversation_id(ten.text))
+
+        twenty = _ask(
+            ctx,
+            provider,
+            "text-model",
+            [("twenty.bin", b"x" * (20 * MEGABYTE), "application/octet-stream")],
+        )
+        ctx.require(twenty.status_code == 200, twenty.text)
+        conversations.append(_conversation_id(twenty.text))
+
+        exact_total = [
+            ("one.bin", b"x" * (20 * MEGABYTE), "application/octet-stream"),
+            ("two.bin", b"x" * (20 * MEGABYTE), "application/octet-stream"),
+            ("three.bin", b"x" * (10 * MEGABYTE), "application/octet-stream"),
+        ]
+        fifty = _ask(ctx, provider, "text-model", exact_total)
+        ctx.require(fifty.status_code == 200, fifty.text)
+        conversation_id = _conversation_id(fifty.text)
+        conversations.append(conversation_id)
+
+        over_total = _ask(
+            ctx,
+            provider,
+            "text-model",
+            [
+                ("one.bin", b"x" * (20 * MEGABYTE), "application/octet-stream"),
+                ("two.bin", b"x" * (20 * MEGABYTE), "application/octet-stream"),
+                (
+                    "three.bin",
+                    b"x" * (10 * MEGABYTE + 1),
+                    "application/octet-stream",
+                ),
+            ],
+        )
+        ctx.require(400 <= over_total.status_code < 500, over_total.text)
+        ctx.require("50MB" in over_total.text, over_total.text)
+
+        attachment = (
+            _workspace(ctx, conversation_id) / "work" / "attachments" / "three.bin"
+        )
+        ctx.require(
+            attachment.stat().st_size == 10 * MEGABYTE,
+            "exact total was not stored intact",
+        )
+
+        other = ctx.rest.post(
+            "/api/v1/tokens",
+            json={"name": "issue-188-e2e-user", "role": "user"},
+        )
+        ctx.require(other.status_code == 201, other.text)
+        other_token = other.json()["token"]
+        headers = {"Authorization": f"Bearer {other_token}"}
+        data = {
+            "question": "偷看",
+            "agent": "pi",
+            "provider_id": provider["id"],
+            "model": "text-model",
+            "conversation_id": conversation_id,
+        }
+        intrude = ctx.rest.post(
+            "/api/v1/conversations/ask-with-attachments",
+            headers=headers,
+            data=data,
+            files=[("attachments", ("intrude.txt", b"intrude", "text/plain"))],
+        )
+        ctx.require(intrude.status_code == 404, intrude.text)
+        ctx.require(
+            attachment.stat().st_size == 10 * MEGABYTE,
+            "another user changed the attachment",
+        )
+        deleted = ctx.rest.delete(
+            f"/api/v1/conversations/{conversation_id}", headers=headers
+        )
+        ctx.require(deleted.status_code == 404, deleted.text)
+        return {"exact_total": 50 * MEGABYTE, "cross_user": 404}
+    finally:
+        for conversation_id in conversations:
+            _delete(ctx, conversation_id)
+        server.shutdown()
+        server.server_close()
