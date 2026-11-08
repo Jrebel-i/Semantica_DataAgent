@@ -30,6 +30,7 @@ export function Composer({
   emptyConversation,
   projects,
   projectId,
+  projectArchived,
   selectProject,
   projectLocked,
   agents,
@@ -64,6 +65,7 @@ export function Composer({
   emptyConversation: boolean;
   projects: Project[];
   projectId: string;
+  projectArchived: boolean;
   selectProject: (value: string) => void;
   projectLocked: boolean;
   agents: Agent[];
@@ -109,6 +111,11 @@ export function Composer({
     disabled: !allowedEfforts.includes(level),
     hint: level === "max" ? t.effortMaxHint : "",
   }));
+  const currentProject = projects.find((project) => project.id === projectId);
+  const activeProjects = projects.filter(
+    (project) => project.status === "active",
+  );
+  const showProjectSelect = !projectArchived && activeProjects.length > 1;
   return (
     <div className="chat-composer">
       {emptyConversation && <h1 className="chat-greeting">{t.chatGreeting}</h1>}
@@ -156,11 +163,19 @@ export function Composer({
           aria-label={t.askQuestion}
           value={question}
           placeholder={
-            currentConversation?.archived ? t.restoreFirst : t.askPlaceholder
+            projectArchived
+              ? t.projectArchivedNotice
+              : currentConversation?.archived
+                ? t.restoreFirst
+                : t.askPlaceholder
           }
           autoSize={{ minRows: 1, maxRows: 5 }}
           onChange={(event) => setQuestion(event.target.value)}
-          disabled={!resumable || Boolean(currentConversation?.archived)}
+          disabled={
+            !resumable ||
+            projectArchived ||
+            Boolean(currentConversation?.archived)
+          }
         />
         <div className="composer-controls">
           <div className="chat-selectors">
@@ -206,12 +221,15 @@ export function Composer({
                 </span>
               )}
             </span>
-            {projects.length === 1 && (
-              <span className="composer-project-label" title={projects[0].name}>
-                {projects[0].name}
+            {!showProjectSelect && currentProject && (
+              <span
+                className="composer-project-label"
+                title={currentProject.name}
+              >
+                {currentProject.name}
               </span>
             )}
-            {projects.length > 1 && (
+            {showProjectSelect && (
               <label>
                 <select
                   aria-label={t.projects}
@@ -220,7 +238,7 @@ export function Composer({
                   disabled={projectLocked}
                   onChange={(event) => selectProject(event.target.value)}
                 >
-                  {projects.map((project) => (
+                  {activeProjects.map((project) => (
                     <option key={project.id} value={project.id}>
                       {project.name}
                     </option>
@@ -228,7 +246,12 @@ export function Composer({
                 </select>
               </label>
             )}
-            {projectLocked && projects.length > 1 && (
+            {projectArchived && (
+              <span className="chat-selector-hint" role="status">
+                {t.projectArchivedNotice}
+              </span>
+            )}
+            {projectLocked && !projectArchived && activeProjects.length > 1 && (
               <span className="chat-selector-hint">{t.projectLockedHint}</span>
             )}
             <label>
@@ -354,7 +377,11 @@ export function Composer({
             {t.examples.slice(0, 3).map((example) => (
               <Button
                 key={example}
-                disabled={!resumable || Boolean(currentConversation?.archived)}
+                disabled={
+                  !resumable ||
+                  projectArchived ||
+                  Boolean(currentConversation?.archived)
+                }
                 onClick={() => setQuestion(example)}
               >
                 {example}
