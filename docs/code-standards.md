@@ -50,7 +50,7 @@
 - 代保留清理和中断清理只处理本项目：先按 `project_id` 圈定代记录，再删除存储数据。跨项目误删是必须被测试守护的缺陷。
 - `project_settings(project_id, key, value)` 只存项目级覆盖；默认项目没有覆盖行，仍读全局 `settings`。`current_project(project_id)` 返回“全局设置 + 本项目覆盖”。
 - 新项目源目录为 `$DATAAGENT_PROJECTS_ROOT/<项目 id>/source`；未设置该环境变量时取数据库文件同目录下的 `projects/<项目 id>/source`。默认项目继续使用全局 `source_directory`。
-- `builds.project_id` 决定工作线程读取哪个项目的代、源目录和检索存储；队列仍全局串行。新项目构建只启用 Markdown 源适配器，插件配置表仍是全局的。
+- `builds.project_id` 决定工作线程读取哪个项目的代、源目录和检索存储。构建队列按项目并行：同一项目任一时刻最多一个构建，后续构建排队；不同项目可同时运行，并发上限取全局设置 `build_concurrency`（默认 2）。一个项目失败或卡住不阻塞其它项目，排队与运行状态用 `GET /api/v1/builds?project=<id>` 查看。新项目构建只启用 Markdown 源适配器，插件配置表仍是全局的。
 - REST 的项目参数是可选的 `project`。缺省解析规则见“项目接口”；解析结果决定源目录、知识代和检索存储，不能退回固定的默认项目。
 
 ## 数据库迁移
@@ -210,7 +210,7 @@ grep -E '^E2E_(RESULT|DONE) ' "$LOG"
 
 ## 构建和知识浏览
 
-`source_directory` 指向项目仓库以外、包含规范数据模型文件的目录。`embedding_url` 是 OpenAI 兼容 embedding 服务的 base URL，应用向其 `/embeddings` 发送请求；应用配置的 `embedding_model` 默认 `model/bge-m3`（infinity 部署的模型名），本地日常集成测试则显式配置小模型。构建集合维度取自 embedding 响应，不在构建或检索代码里写死 1024；512 / 1024 两种维度都必须可用。embedding 客户端（`embedding_client.py`）在进程内共享一个并发上限，构建写入向量和 MCP 检索都要先取得槽位；每次请求的超时为 `embedding_timeout_seconds + embedding_timeout_per_input_seconds × 批内文本数`。默认并发 2、基础超时 60 秒、每条文本 20 秒、重试 2 次、退避基数 1 秒。只重试连接断开、超时和 5xx；4xx 及响应格式错误直接失败。构建记录在 `counts` 里写入 `embedding_requests`、`embedding_successful_batches`、`embedding_retries`、`embedding_elapsed_ms`。`knowledge_generation` 默认 `default`，只允许英文字母开头、后接字母数字下划线；构建和检索只操作这一代。管理员调用 `POST /api/v1/builds`，请求以 `queued` 记录持久化并按提交顺序逐个执行；前一个结束后自动开始下一个，不再返回冲突。用 `GET /api/v1/builds` 或 `/api/v1/builds/{id}` 查看状态、逐阶段日志和统计；统计中的实体计数是本次构建实际写入或变更的实体数，所有时间字段为带时区的 UTC。进程重启时，运行中的构建标为 `failed`（中断），排队中的构建标为 `cancelled` 并记录原因。已认证用户可从 `/api/v1/tables` 查询知识浏览数据；列表默认 `view=full`，保持字段与文档明细，`view=summary` 只返回表名、库名、说明、`ref`、字段数、文档数和是否有分区字段。`GET /api/v1/tables/{database}/{table}` 返回单表完整信息，不存在时返回 404。MCP streamable HTTP 地址为 `/mcp/`。全量重建写入新知识代，成功后切换当前指针；默认保留两代，管理员可配置保留数和切换已保留的代。
+`source_directory` 指向项目仓库以外、包含规范数据模型文件的目录。`embedding_url` 是 OpenAI 兼容 embedding 服务的 base URL，应用向其 `/embeddings` 发送请求；应用配置的 `embedding_model` 默认 `model/bge-m3`（infinity 部署的模型名），本地日常集成测试则显式配置小模型。构建集合维度取自 embedding 响应，不在构建或检索代码里写死 1024；512 / 1024 两种维度都必须可用。embedding 客户端（`embedding_client.py`）在进程内共享一个并发上限，构建写入向量和 MCP 检索都要先取得槽位；每次请求的超时为 `embedding_timeout_seconds + embedding_timeout_per_input_seconds × 批内文本数`。默认并发 2、基础超时 60 秒、每条文本 20 秒、重试 2 次、退避基数 1 秒。只重试连接断开、超时和 5xx；4xx 及响应格式错误直接失败。构建记录在 `counts` 里写入 `embedding_requests`、`embedding_successful_batches`、`embedding_retries`、`embedding_elapsed_ms`。`knowledge_generation` 默认 `default`，只允许英文字母开头、后接字母数字下划线；构建和检索只操作这一代。管理员调用 `POST /api/v1/builds`，请求以 `queued` 记录持久化。队列按项目并行：同项目按提交顺序逐个执行，前一个结束后自动开始下一个；不同项目在 `build_concurrency` 上限内同时运行，不再返回冲突。重复的手动、定时与纠错触发在同一项目内合并为一条活动构建。用 `GET /api/v1/builds` 或 `/api/v1/builds/{id}` 查看本项目状态、逐阶段日志和统计；统计中的实体计数是本次构建实际写入或变更的实体数，所有时间字段为带时区的 UTC。进程重启时逐项目恢复：运行中的构建标为 `failed`（中断），排队中的非纠错构建标为 `cancelled` 并记录原因，纠错触发的增量构建保留在队列；单个项目恢复失败不阻止其它项目启动。已认证用户可从 `/api/v1/tables` 查询知识浏览数据；列表默认 `view=full`，保持字段与文档明细，`view=summary` 只返回表名、库名、说明、`ref`、字段数、文档数和是否有分区字段。`GET /api/v1/tables/{database}/{table}` 返回单表完整信息，不存在时返回 404。MCP streamable HTTP 地址为 `/mcp/`。全量重建写入新知识代，成功后切换当前指针；默认保留两代，管理员可配置保留数和切换已保留的代。
 
 ## 源目录上传
 
@@ -226,7 +226,11 @@ grep -E '^E2E_(RESULT|DONE) ' "$LOG"
 
 ## 增量构建与来源
 
-`POST /api/v1/builds` 不传请求体时保持原全量构建；传 `{"build_type":"incremental"}` 在当前知识代增量构建，返回记录包含构建类型、令牌名称和源目录 commit。源目录未处于干净 Git 提交时 commit 为 null。增量以同一知识代上一次成功构建的源文件哈希为基线；首次构建、源目录/启用插件/过滤规则/维度上限/embedding 配置变化或最近一次全量构建失败后需先做全量构建。文件统计区分新增、变化、删除；自动生成索引的派生哈希不计入源文件统计。上传和构建读取共享目录锁，构建在读取完来源快照后释放锁。定时增量构建使用 `schedule_interval_seconds`（0 或空值关闭，1–604800 秒启用），配置保存后立即重新计时；重启后按保存的间隔恢复，并与手动构建共用队列。
+`POST /api/v1/builds` 不传请求体时保持原全量构建；传 `{"build_type":"incremental"}` 在当前知识代增量构建，返回记录包含构建类型、令牌名称和源目录 commit。源目录未处于干净 Git 提交时 commit 为 null。增量以同一知识代上一次成功构建的源文件哈希为基线；首次构建、源目录/启用插件/过滤规则/维度上限/embedding 配置变化或最近一次全量构建失败后需先做全量构建。文件统计区分新增、变化、删除；自动生成索引的派生哈希不计入源文件统计。上传和构建读取共享目录锁，构建在读取完来源快照后释放锁。调度按项目独立计时：默认项目的 `schedule_interval_seconds` 仍读全局设置，其它项目读项目级设置；`GET/PUT /api/v1/projects/{id}/schedule` 读写 `interval_seconds`（0 关闭，1–604800 秒启用），保存后该项目立即重新计时，新建项目默认关闭，重启后逐项目恢复。定时构建与手动、纠错构建在同一项目内去重，并与其它项目并行。
+
+## 纠错审批与知识缺口
+
+`correction_proposals`、`knowledge_gaps` 和 `metadata_overrides` 都带 `project_id`；迁移把旧行回填为 `default`。纠错提交、列表和详情接受可选 `project`（缺省默认项目），读路径走 `project_scope`；批准和驳回走 `admin_project_scope`，只有系统管理员或该项目管理员能操作。批准文档纠错只写入提案所属项目的源目录并创建该项目的 Git 提交，状态经过 `applying`；失败回滚，启动时逐项目补完成或回滚中断的审批，一个提案失败不影响其它项目。批准后只在提案所属项目入队增量构建，并与该项目已有的纠错构建去重。表格/字段纠错写入该项目作用域的 `metadata_overrides`，构建时只应用本项目的覆盖。知识缺口列表按 `project` 过滤；MCP 提交的纠错与缺口在 #178 前仍归默认项目。
 
 每个节点和向量记录来源路径及写入它的 build id。自动生成索引记录其派生来源列表；空目录不产生知识类节点。修改或删除源文件时删除其节点、相关关系和向量，再写新记录；字段、维度值、文档与表的关系以及依赖边根据当前记录重新合并。维度值去重和别名可能跨文件依赖同一张表的行：该表涉及的维度值作为一个受影响单元重算；其他表和文件不重写。失败的增量构建记录待修复来源和向量 id，下一次增量即使源文件已恢复也会重试清理。Neo4j 与 Milvus 之间不做事务；运行中仍可能看到部分更新：单文件删除至重写期间检索可能暂时缺失，也可能因存储可见性延迟返回旧内容；完成后读取更新后的内容。失败后需重试。
 

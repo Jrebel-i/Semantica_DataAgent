@@ -826,6 +826,10 @@
             "title": "Owner Id",
             "type": "string"
           },
+          "project_id": {
+            "title": "Project Id",
+            "type": "string"
+          },
           "question": {
             "title": "Question",
             "type": "string"
@@ -833,6 +837,7 @@
         },
         "required": [
           "id",
+          "project_id",
           "owner_id",
           "question",
           "missing",
@@ -1221,6 +1226,35 @@
         "title": "ProjectMemberView",
         "type": "object"
       },
+      "ProjectScheduleUpdate": {
+        "additionalProperties": false,
+        "properties": {
+          "interval_seconds": {
+            "maximum": 604800.0,
+            "minimum": 0.0,
+            "title": "Interval Seconds",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "interval_seconds"
+        ],
+        "title": "ProjectScheduleUpdate",
+        "type": "object"
+      },
+      "ProjectScheduleView": {
+        "properties": {
+          "interval_seconds": {
+            "title": "Interval Seconds",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "interval_seconds"
+        ],
+        "title": "ProjectScheduleView",
+        "type": "object"
+      },
       "ProjectUpdate": {
         "additionalProperties": false,
         "properties": {
@@ -1407,6 +1441,10 @@
             "title": "Patch",
             "type": "string"
           },
+          "project_id": {
+            "title": "Project Id",
+            "type": "string"
+          },
           "reason": {
             "title": "Reason",
             "type": "string"
@@ -1445,6 +1483,7 @@
         },
         "required": [
           "id",
+          "project_id",
           "owner_id",
           "conversation_id",
           "target",
@@ -3378,6 +3417,24 @@
     "/api/v1/corrections": {
       "get": {
         "operationId": "list_proposals_api_v1_corrections_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "project",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Project"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -3392,6 +3449,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
           }
         },
         "security": [
@@ -3403,6 +3470,24 @@
       },
       "post": {
         "operationId": "create_proposal_api_v1_corrections_post",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "project",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Project"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -3453,6 +3538,22 @@
               "title": "Proposal Id",
               "type": "string"
             }
+          },
+          {
+            "in": "query",
+            "name": "project",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Project"
+            }
           }
         ],
         "responses": {
@@ -3496,6 +3597,22 @@
             "schema": {
               "title": "Proposal Id",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "project",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Project"
             }
           }
         ],
@@ -3557,6 +3674,22 @@
             "schema": {
               "title": "Proposal Id",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "project",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Project"
             }
           }
         ],
@@ -3844,6 +3977,24 @@
     "/api/v1/knowledge-gaps": {
       "get": {
         "operationId": "list_gaps_api_v1_knowledge_gaps_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "project",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Project"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -3858,6 +4009,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
           }
         },
         "security": [
@@ -4395,6 +4556,102 @@
           }
         ],
         "summary": "Put Project Member"
+      }
+    },
+    "/api/v1/projects/{project_id}/schedule": {
+      "get": {
+        "operationId": "get_project_schedule_api_v1_projects__project_id__schedule_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectScheduleView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Project Schedule"
+      },
+      "put": {
+        "operationId": "set_project_schedule_api_v1_projects__project_id__schedule_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProjectScheduleUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectScheduleView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Set Project Schedule"
       }
     },
     "/api/v1/providers": {

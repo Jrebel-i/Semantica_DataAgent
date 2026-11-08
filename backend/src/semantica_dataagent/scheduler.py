@@ -1,9 +1,12 @@
-"""Schedule incremental builds on the same persisted queue as manual builds."""
+"""Schedule incremental builds per project on the shared persisted queue."""
 
+import logging
 import threading
 import time
 
 from . import project_context
+
+DEFAULT_PROJECT_ID = "default"
 
 
 class Schedule:
@@ -27,30 +30,55 @@ class Schedule:
 
 
 class Scheduler:
-    def __init__(self, action=None):
-        self._action = action or (
-            lambda: project_context.enqueue_build("incremental", "scheduler")
-        )
+    def __init__(self, action=None, clock=time.monotonic):
+        self._action = action or self._scheduled_build
+        self._clock = clock
         self._condition = threading.Condition()
-        self._schedule = Schedule()
+        self._schedules = {}
         self._thread = None
         self._stopping = False
 
-    def start(self, interval):
+    @staticmethod
+    def _scheduled_build(project_id):
+        project_context.enqueue_build(
+            "incremental", "scheduler", project_id=project_id, dedupe=True
+        )
+
+    def start(self, interval, project_id=DEFAULT_PROJECT_ID):
         with self._condition:
+            self._configure(project_id, interval)
             if self._thread and self._thread.is_alive():
                 return
             self._stopping = False
-            self._schedule.configure(interval)
             self._thread = threading.Thread(
                 target=self._run, name="dataagent-scheduler", daemon=True
             )
             self._thread.start()
 
-    def configure(self, interval):
+    def configure(self, interval, project_id=DEFAULT_PROJECT_ID):
         with self._condition:
-            self._schedule.configure(interval)
+            self._configure(project_id, interval)
             self._condition.notify_all()
+
+    def remove(self, project_id):
+        with self._condition:
+            self._schedules.pop(project_id, None)
+            self._condition.notify_all()
+
+    def _configure(self, project_id, interval):
+        schedule = self._schedules.get(project_id)
+        if schedule is None:
+            schedule = Schedule(self._clock)
+            self._schedules[project_id] = schedule
+        schedule.configure(interval)
+
+    def due_projects(self):
+        with self._condition:
+            return [
+                project_id
+                for project_id, schedule in sorted(self._schedules.items())
+                if schedule.due()
+            ]
 
     def stop(self):
         with self._condition:
@@ -65,23 +93,32 @@ class Scheduler:
             with self._condition:
                 if self._stopping:
                     return
-                if not self._schedule.due():
-                    self._condition.wait(self._schedule.remaining())
+                due = [
+                    project_id
+                    for project_id, schedule in self._schedules.items()
+                    if schedule.due()
+                ]
+                if not due:
+                    remaining = [
+                        schedule.remaining()
+                        for schedule in self._schedules.values()
+                        if schedule.remaining() is not None
+                    ]
+                    self._condition.wait(min(remaining) if remaining else None)
                     continue
-            try:
-                self._action()
-            except Exception:
-                import logging
-
-                logging.getLogger(__name__).exception(
-                    "Could not enqueue scheduled build"
-                )
+            for project_id in due:
+                try:
+                    self._action(project_id)
+                except Exception:
+                    logging.getLogger(__name__).exception(
+                        "Could not enqueue scheduled build for project %s", project_id
+                    )
 
 
 scheduler = Scheduler()
 
 
-def _scheduled_pull():
+def _scheduled_pull(project_id=None):
     from .pull_service import run_pull
 
     run_pull()

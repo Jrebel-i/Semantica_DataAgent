@@ -1,6 +1,7 @@
 """Scheduler timing and persisted queue behavior without external services."""
 
 import threading
+import time
 from datetime import UTC, datetime
 
 from cryptography.fernet import Fernet
@@ -133,3 +134,191 @@ def test_puller_interval_restored_on_restart(tmp_path, monkeypatch):
     with TestClient(app):
         pass
     assert starts == [0, 42]
+
+
+def test_each_project_has_its_own_schedule_clock():
+    from semantica_dataagent.scheduler import Scheduler
+
+    now = [0.0]
+    scheduler = Scheduler(clock=lambda: now[0])
+    scheduler.configure(10, project_id="a")
+    scheduler.configure(20, project_id="b")
+    now[0] = 9
+    assert scheduler.due_projects() == []
+    now[0] = 10
+    assert scheduler.due_projects() == ["a"]
+    assert scheduler.due_projects() == []
+    now[0] = 20
+    assert scheduler.due_projects() == ["a", "b"]
+    scheduler.remove("a")
+    now[0] = 40
+    assert scheduler.due_projects() == ["b"]
+
+
+def test_project_schedule_api_reads_writes_and_restarts_timer(tmp_path, monkeypatch):
+    from semantica_dataagent.app import app
+    from semantica_dataagent.cli import initialize
+    from semantica_dataagent.scheduler import scheduler
+
+    monkeypatch.setenv("DATAAGENT_DB_PATH", str(tmp_path / "schedule.db"))
+    monkeypatch.setenv("DATAAGENT_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    token = initialize()
+    configured = []
+    original = scheduler.configure
+
+    def observe(interval, project_id="default"):
+        configured.append((project_id, interval))
+        original(interval, project_id=project_id)
+
+    monkeypatch.setattr(scheduler, "configure", observe)
+    headers = {"Authorization": f"Bearer {token}"}
+    with TestClient(app, headers=headers) as client:
+        configured.clear()
+        saved = client.put(
+            "/api/v1/projects/default/schedule", json={"interval_seconds": 15}
+        )
+        assert saved.status_code == 200, saved.text
+        assert saved.json() == {"interval_seconds": 15}
+        assert (
+            client.get("/api/v1/settings").json()["schedule_interval_seconds"] == "15"
+        )
+        assert client.get("/api/v1/projects/default/schedule").json() == {
+            "interval_seconds": 15
+        }
+        assert configured == [("default", 15)]
+
+        configured.clear()
+        disabled = client.put(
+            "/api/v1/projects/default/schedule", json={"interval_seconds": 0}
+        )
+        assert disabled.status_code == 200, disabled.text
+        assert disabled.json() == {"interval_seconds": 0}
+        assert configured == [("default", 0)]
+
+        for value in (-1, 604801):
+            invalid = client.put(
+                "/api/v1/projects/default/schedule",
+                json={"interval_seconds": value},
+            )
+            assert invalid.status_code == 422, invalid.text
+
+
+def test_scheduled_enqueue_merges_duplicates_per_project(tmp_path, monkeypatch):
+    from semantica_dataagent.build_queue import enqueue_build
+    from semantica_dataagent.cli import initialize
+    from semantica_dataagent.project_api import create_project_record
+
+    monkeypatch.setenv("DATAAGENT_DB_PATH", str(tmp_path / "dedupe.db"))
+    monkeypatch.setenv("DATAAGENT_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    monkeypatch.setenv("DATAAGENT_PROJECTS_ROOT", str(tmp_path / "projects"))
+    initialize()
+    a = create_project_record("Schedule A", "document")
+    first = enqueue_build(
+        "incremental", "scheduler", project_id=a.id, notify=False, dedupe=True
+    )
+    second = enqueue_build(
+        "incremental", "scheduler", project_id=a.id, notify=False, dedupe=True
+    )
+    assert first == second
+    other = enqueue_build(
+        "incremental", "scheduler", project_id="default", notify=False, dedupe=True
+    )
+    assert other != first
+
+
+def test_scheduler_thread_fires_each_project_and_remove_takes_effect():
+    from semantica_dataagent.scheduler import Scheduler
+
+    fired = []
+    condition = threading.Condition()
+
+    def action(project_id):
+        with condition:
+            fired.append(project_id)
+            condition.notify_all()
+
+    scheduler = Scheduler(action=action)
+    scheduler.start(0)
+    try:
+        scheduler.configure(0.2, project_id="a")
+        scheduler.configure(0.4, project_id="b")
+        deadline = time.monotonic() + 5
+        with condition:
+            while not {"a", "b"} <= set(fired) and time.monotonic() < deadline:
+                condition.wait(0.1)
+        assert {"a", "b"} <= set(fired), fired
+
+        scheduler.remove("a")
+        time.sleep(0.3)
+        with condition:
+            fired.clear()
+        time.sleep(0.5)
+        with condition:
+            assert "a" not in fired, fired
+    finally:
+        scheduler.stop()
+
+
+def test_each_project_schedule_api_and_startup_wiring(tmp_path, monkeypatch):
+    from semantica_dataagent.app import app
+    from semantica_dataagent.cli import initialize
+    from semantica_dataagent.db import ProjectSetting, sessions
+    from semantica_dataagent.project_api import create_project_record
+    from semantica_dataagent.project_context import (
+        SCHEDULE_INTERVAL_KEY,
+        project_schedule_intervals,
+        start_schedule,
+    )
+    from semantica_dataagent.scheduler import scheduler
+
+    monkeypatch.setenv("DATAAGENT_DB_PATH", str(tmp_path / "project-schedule.db"))
+    monkeypatch.setenv("DATAAGENT_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    monkeypatch.setenv("DATAAGENT_PROJECTS_ROOT", str(tmp_path / "projects"))
+    token = initialize()
+    project = create_project_record("Scheduled docs", "document")
+    with sessions().begin() as db:
+        db.add(
+            ProjectSetting(
+                project_id=project.id,
+                key=SCHEDULE_INTERVAL_KEY,
+                value="7",
+            )
+        )
+    assert project_schedule_intervals()[project.id] == 7
+
+    seen = []
+    monkeypatch.setattr(
+        scheduler,
+        "start",
+        lambda interval, project_id="default": seen.append(
+            ("start", project_id, interval)
+        ),
+    )
+    monkeypatch.setattr(
+        scheduler,
+        "configure",
+        lambda interval, project_id="default": seen.append(
+            ("configure", project_id, interval)
+        ),
+    )
+    start_schedule()
+    assert ("configure", project.id, 7) in seen
+
+    headers = {"Authorization": f"Bearer {token}"}
+    with TestClient(app, headers=headers) as client:
+        loaded = client.get(f"/api/v1/projects/{project.id}/schedule")
+        assert loaded.status_code == 200, loaded.text
+        assert loaded.json() == {"interval_seconds": 7}
+        saved = client.put(
+            f"/api/v1/projects/{project.id}/schedule",
+            json={"interval_seconds": 11},
+        )
+        assert saved.status_code == 200, saved.text
+        assert client.get(f"/api/v1/projects/{project.id}/schedule").json() == {
+            "interval_seconds": 11
+        }
+        assert ("configure", project.id, 11) in seen
+        from semantica_dataagent.project_context import schedule_interval
+
+        assert schedule_interval() == 0
+        assert schedule_interval(project.id) == 11

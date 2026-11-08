@@ -59,7 +59,23 @@ test("shows queue state, logs, stats and triggers both build types", async () =>
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url: string, options?: RequestInit) => {
-      if (url === "/api/v1/builds" && options?.method === "POST") {
+      if (url === "/api/v1/projects")
+        return Response.json([
+          {
+            id: "default",
+            name: "业务数据",
+            type: "warehouse",
+            status: "active",
+            created_at: "2026-01-01T00:00:00Z",
+            my_role: "admin",
+          },
+        ]);
+      if (url === "/api/v1/projects/default/schedule")
+        return Response.json({ interval_seconds: 60 });
+      if (
+        url === "/api/v1/builds?project=default" &&
+        options?.method === "POST"
+      ) {
         const body = JSON.parse(String(options.body)) as {
           build_type: "full" | "incremental";
         };
@@ -80,7 +96,15 @@ test("shows queue state, logs, stats and triggers both build types", async () =>
         builds.unshift(created as (typeof builds)[number]);
         return Response.json(created, { status: 202 });
       }
-      return Response.json(builds);
+      if (url === "/api/v1/builds?project=default")
+        return Response.json(builds);
+      if (url === "/api/v1/generations?project=default")
+        return Response.json({
+          generations: [],
+          behind: false,
+          source_head: null,
+        });
+      return Response.json([]);
     }),
   );
   render(<BuildPage token="token" messages={getMessages("zh")} />);
@@ -102,6 +126,57 @@ test("shows queue state, logs, stats and triggers both build types", async () =>
     ]),
   );
   expect(await screen.findByText("full build queued")).toBeTruthy();
+});
+
+test("shows and saves the selected project's schedule", async () => {
+  const requests: Array<{ url: string; body?: string }> = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string, options?: RequestInit) => {
+      requests.push({ url, body: options?.body as string | undefined });
+      if (url === "/api/v1/projects")
+        return Response.json([
+          {
+            id: "default",
+            name: "业务数据",
+            type: "warehouse",
+            status: "active",
+            created_at: "2026-01-01T00:00:00Z",
+            my_role: "admin",
+          },
+        ]);
+      if (url === "/api/v1/projects/default/schedule")
+        return Response.json(
+          options?.method === "PUT"
+            ? { interval_seconds: 5 }
+            : { interval_seconds: 60 },
+        );
+      if (url === "/api/v1/builds?project=default") return Response.json([]);
+      if (url === "/api/v1/generations?project=default")
+        return Response.json({
+          generations: [],
+          behind: false,
+          source_head: null,
+        });
+      return Response.json([]);
+    }),
+  );
+  render(<BuildPage token="token" messages={getMessages("zh")} />);
+  const input = (await screen.findByLabelText(
+    "间隔秒数（0 为关闭）",
+  )) as HTMLInputElement;
+  await waitFor(() => expect(input.value).toBe("60"));
+  fireEvent.change(input, { target: { value: "5" } });
+  fireEvent.click(screen.getByRole("button", { name: "保存定时" }));
+  await waitFor(() =>
+    expect(
+      requests.find(
+        (request) =>
+          request.url === "/api/v1/projects/default/schedule" &&
+          request.body === JSON.stringify({ interval_seconds: 5 }),
+      ),
+    ).toBeTruthy(),
+  );
 });
 
 test("loads and saves the scheduled build interval", async () => {

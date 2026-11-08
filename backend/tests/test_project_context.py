@@ -63,6 +63,49 @@ def test_normalization_keeps_old_defaults():
     assert values["embedding_model"] == "model/bge-m3"
 
 
+def test_non_default_project_schedule_does_not_inherit_the_global_value(
+    tmp_path, monkeypatch
+):
+    from cryptography.fernet import Fernet
+
+    from semantica_dataagent.cli import initialize
+    from semantica_dataagent.db import ProjectSetting, Setting, sessions
+    from semantica_dataagent.project_api import create_project_record
+
+    monkeypatch.setenv("DATAAGENT_DB_PATH", str(tmp_path / "app.db"))
+    monkeypatch.setenv("DATAAGENT_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    monkeypatch.setenv("DATAAGENT_PROJECTS_ROOT", str(tmp_path / "projects"))
+    initialize()
+    with sessions().begin() as db:
+        row = db.get(Setting, project_context.SCHEDULE_INTERVAL_KEY)
+        if row is None:
+            db.add(
+                Setting(
+                    key=project_context.SCHEDULE_INTERVAL_KEY,
+                    value="30",
+                )
+            )
+        else:
+            row.value = "30"
+    project = create_project_record("Schedule scope", "document")
+
+    assert project_context.current_project().schedule_interval_seconds == 30
+    assert project_context.schedule_interval() == 30
+    assert project_context.current_project(project.id).schedule_interval_seconds == 0
+    assert project_context.schedule_interval(project.id) == 0
+
+    with sessions().begin() as db:
+        db.add(
+            ProjectSetting(
+                project_id=project.id,
+                key=project_context.SCHEDULE_INTERVAL_KEY,
+                value="7",
+            )
+        )
+    assert project_context.current_project(project.id).schedule_interval_seconds == 7
+    assert project_context.schedule_interval(project.id) == 7
+
+
 def test_new_generation_keeps_the_project_prefix():
     project = project_context.from_values(
         {"knowledge_generation": "abc_initial", "_project_id": "abc"}
@@ -70,3 +113,35 @@ def test_new_generation_keeps_the_project_prefix():
     generation = project.new_generation()
     assert generation.startswith("abc_")
     assert project.collection_name(generation) == "sda_" + generation
+
+
+def test_instance_schedule_methods_target_the_contexts_own_project(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        project_context,
+        "configure_schedule",
+        lambda interval, project_id="default": calls.append(
+            ("configure", interval, project_id)
+        ),
+    )
+    project = project_context.from_values(
+        {
+            "knowledge_generation": "abc_initial",
+            "_project_id": "abc",
+            "schedule_interval_seconds": "11",
+        }
+    )
+    project.configure_schedule(11)
+
+    from semantica_dataagent import scheduler
+
+    monkeypatch.setattr(
+        scheduler.scheduler,
+        "start",
+        lambda interval, project_id="default": calls.append(
+            ("start", interval, project_id)
+        ),
+    )
+    project.start_schedule()
+
+    assert calls == [("configure", 11, "abc"), ("start", 11, "abc")]

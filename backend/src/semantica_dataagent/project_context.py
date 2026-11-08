@@ -90,6 +90,7 @@ def neo4j_password(values: Mapping[str, Any]) -> str | None:
 def _read_settings(db, project_id: str = DEFAULT_PROJECT_ID) -> dict[str, str]:
     values = {row.key: row.value for row in db.query(Setting).all()}
     if project_id != DEFAULT_PROJECT_ID:
+        values.pop(SCHEDULE_INTERVAL_KEY, None)
         values.update(
             {
                 row.key: row.value
@@ -262,12 +263,12 @@ class ProjectContext:
         wake_build_queue()
 
     def configure_schedule(self, interval: int) -> None:
-        configure_schedule(interval)
+        configure_schedule(interval, self.project_id)
 
     def start_schedule(self) -> None:
         from .scheduler import scheduler
 
-        scheduler.start(self.schedule_interval_seconds)
+        scheduler.start(self.schedule_interval_seconds, project_id=self.project_id)
 
     @contextmanager
     def source_repository(self):
@@ -457,11 +458,16 @@ def enqueue_build(
     *,
     project_id: str = DEFAULT_PROJECT_ID,
     notify: bool = True,
+    dedupe: bool = False,
 ) -> int:
     from .build_queue import enqueue_build as _enqueue_build
 
     return _enqueue_build(
-        build_type, triggered_by, project_id=project_id, notify=notify
+        build_type,
+        triggered_by,
+        project_id=project_id,
+        notify=notify,
+        dedupe=dedupe,
     )
 
 
@@ -471,13 +477,45 @@ def wake_build_queue() -> None:
     build_queue.enqueue()
 
 
-def configure_schedule(interval: int) -> None:
+def schedule_interval(project_id: str = DEFAULT_PROJECT_ID) -> int:
+    with sessions()() as db:
+        if project_id == DEFAULT_PROJECT_ID:
+            row = db.get(Setting, SCHEDULE_INTERVAL_KEY)
+        else:
+            row = db.get(ProjectSetting, (project_id, SCHEDULE_INTERVAL_KEY))
+        return int(row.value) if row is not None and row.value else 0
+
+
+def project_schedule_intervals() -> dict[str, int]:
+    """Read every project's interval; a broken project does not hide the others."""
+    with sessions()() as db:
+        project_ids = [row.id for row in db.query(Project).all()]
+    result = {DEFAULT_PROJECT_ID: schedule_interval(DEFAULT_PROJECT_ID)}
+    for project_id in project_ids:
+        if project_id == DEFAULT_PROJECT_ID:
+            continue
+        try:
+            result[project_id] = schedule_interval(project_id)
+        except Exception:
+            import logging
+
+            logging.getLogger(__name__).exception(
+                "Could not read schedule for project %s", project_id
+            )
+            result[project_id] = 0
+    return result
+
+
+def configure_schedule(interval: int, project_id: str = DEFAULT_PROJECT_ID) -> None:
     from .scheduler import scheduler
 
-    scheduler.configure(interval)
+    scheduler.configure(interval, project_id=project_id)
 
 
 def start_schedule() -> None:
     from .scheduler import scheduler
 
-    scheduler.start(current_project().schedule_interval_seconds)
+    intervals = project_schedule_intervals()
+    scheduler.start(intervals.pop(DEFAULT_PROJECT_ID, 0))
+    for project_id, interval in intervals.items():
+        scheduler.configure(interval, project_id=project_id)
