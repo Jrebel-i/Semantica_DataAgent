@@ -253,6 +253,14 @@ def admin_project_path_scope(
     return _require_project_admin(scope, requester)
 
 
+def admin_project_path_write_scope(
+    project_id: str,
+    requester: Annotated[Requester, Depends(current_requester)],
+) -> ProjectContext:
+    scope = _resolve_project_context(project_id, requester)
+    return _require_project_admin(scope, requester)
+
+
 ProjectSourceState = Literal["pending", "building", "effective", "failed", "unknown"]
 
 
@@ -503,7 +511,7 @@ def list_project_adapters(
 def put_project_adapters(
     project_id: str,
     body: ProjectAdaptersUpdate,
-    scope: Annotated[ProjectContext, Depends(admin_project_path_scope)],
+    scope: Annotated[ProjectContext, Depends(admin_project_path_write_scope)],
 ):
     from jsonschema import Draft202012Validator
 

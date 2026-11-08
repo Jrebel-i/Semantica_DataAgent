@@ -700,3 +700,25 @@ def test_adapter_configuration_is_snapshotted_for_a_build(client, monkeypatch):
     assert {p.id: e for _, p, e, _ in snapshot if p.id == "markdown"} == {
         "markdown": True
     }
+
+
+def test_archived_project_adapters_are_read_only(client):
+    c, admin = client
+    project = _create_project(c, admin, "Frozen", "warehouse")
+    url = f"/api/v1/projects/{project['id']}/adapters"
+    body = {"adapters": [{"id": "markdown", "enabled": False, "parameters": {}}]}
+
+    assert c.put(url, headers=_headers(admin), json=body).status_code == 200
+    archived = c.post(
+        f"/api/v1/projects/{project['id']}/archive", headers=_headers(admin)
+    )
+    assert archived.status_code == 200, archived.text
+
+    rejected = c.put(url, headers=_headers(admin), json=body)
+    assert rejected.status_code == 409, rejected.text
+    assert rejected.json()["detail"] == "项目已归档"
+
+    listed = c.get(url, headers=_headers(admin))
+    assert listed.status_code == 200, listed.text
+    markdown = next(row for row in listed.json() if row["id"] == "markdown")
+    assert markdown["enabled"] is False

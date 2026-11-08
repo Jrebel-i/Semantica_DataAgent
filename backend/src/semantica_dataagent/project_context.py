@@ -510,6 +510,13 @@ def upsert_plugin_config(
     return row
 
 
+def delete_plugin_configs(db, project_id: str) -> None:
+    """Remove every adapter/puller configuration row owned by a project."""
+    db.query(PluginConfig).filter(PluginConfig.project_id == project_id).delete(
+        synchronize_session=False
+    )
+
+
 def plugin_secret(project_id: str, key: str) -> str | None:
     """Read a project-scoped plugin secret, falling back to the legacy global row."""
     with sessions()() as db:
