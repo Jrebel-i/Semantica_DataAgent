@@ -115,8 +115,8 @@ class CodexRunner:
             'model_provider = "dataagent"\n'
             + "developer_instructions = "
             + json.dumps(
-                "Follow this retrieval skill exactly for warehouse questions.\n\n"
-                + read_skill(),
+                "Follow this retrieval skill exactly for this project's questions.\n\n"
+                + read_skill(request.project_type),
                 ensure_ascii=False,
             )
             + '\n[model_providers.dataagent]\nname = "dataagent"\nbase_url = '

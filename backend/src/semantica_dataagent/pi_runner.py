@@ -28,7 +28,7 @@ from .agent_plugin import (
     write_json,
 )
 from .agent_types import AgentEvent, AgentTurnRequest
-from .skill import read_skill
+from .skill import read_skill, skill_name
 
 PROVIDER_KEY = "dataagent"
 THINKING_BY_EFFORT = {
@@ -203,9 +203,9 @@ class PiRunner:
         write_json(config / "models.json", models)
         write_json(config / "mcp.json", mcp)
         write_json(config / "settings.json", settings)
-        skill_path = config / "skills" / "dataagent-retrieval" / "SKILL.md"
+        skill_path = config / "skills" / skill_name(request.project_type) / "SKILL.md"
         skill_path.parent.mkdir(parents=True, exist_ok=True)
-        skill_path.write_text(read_skill(), encoding="utf-8")
+        skill_path.write_text(read_skill(request.project_type), encoding="utf-8")
         os.chmod(skill_path, 0o600)
         return config, sessions, str(work)
 
@@ -220,7 +220,7 @@ class PiRunner:
         )
         env = self._environment(request, config, sessions)
         model = f"{PROVIDER_KEY}/{request.model}"
-        skill = read_skill()
+        skill = read_skill(request.project_type)
         command = [
             "pi" if sandboxed else self._binary(),
             "--mode",
@@ -236,7 +236,8 @@ class PiRunner:
             "--no-prompt-templates",
             "--no-themes",
             "--append-system-prompt",
-            "Follow this retrieval skill exactly for warehouse questions.\n\n" + skill,
+            "Follow this retrieval skill exactly for this project's questions.\n\n"
+            + skill,
         ]
         thinking = THINKING_BY_EFFORT.get(request.effort or "")
         if thinking:

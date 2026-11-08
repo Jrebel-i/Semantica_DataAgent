@@ -60,6 +60,7 @@ class AgentTurnRequest:
     mcp_token: str
     turn_id: int | None = None
     effort: str | None = None
+    project_type: str = "warehouse"
 
 
 class AgentRunner(Protocol):
