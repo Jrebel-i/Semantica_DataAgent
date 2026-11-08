@@ -1573,7 +1573,156 @@ def test_mcp_turn_header_selects_owned_turn_and_rejects_forgery(client, monkeypa
     }
 
 
-def test_existing_conversation_rejects_changed_agent_or_model(client):
+class SwitchRunner:
+    agent_id = "pi"
+
+    def __init__(self):
+        self.requests: list[AgentTurnRequest] = []
+
+    def available(self):
+        return True
+
+    async def run(self, request):
+        self.requests.append(request)
+        yield AgentEvent(
+            DONE,
+            {"text": f"answer for {request.model}", "sql": [], "citations": []},
+        )
+
+
+def _create_provider(c, headers, name, models, api_key=None, base_url=None):
+    body = {
+        "name": name,
+        "base_url": base_url or f"http://127.0.0.1/{name}",
+        "models": models,
+    }
+    if api_key is not None:
+        body["api_key"] = api_key
+    response = c.post("/api/v1/providers", headers=headers, json=body)
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
+def _ask(c, headers, question, **values):
+    with c.stream(
+        "POST",
+        "/api/v1/conversations/ask",
+        headers=headers,
+        json={"question": question, **values},
+    ) as response:
+        body = "".join(response.iter_text())
+        return response.status_code, body
+
+
+def test_conversation_switches_model_and_records_each_turn(client, monkeypatch):
+    from semantica_dataagent import agent_runner
+
+    runner = SwitchRunner()
+    monkeypatch.setitem(agent_runner.RUNNERS, "pi", runner)
+    c, token = client
+    headers = {"Authorization": f"Bearer {token}"}
+    provider = _create_provider(
+        c, headers, "switch-model", ["model-a", "model-b"]
+    )
+    status, body = _ask(
+        c,
+        headers,
+        "first",
+        agent="pi",
+        provider_id=provider["id"],
+        model="model-a",
+    )
+    assert status == 200, body
+    conversation_id = _sse(body)[0][1]["conversation_id"]
+    status, body = _ask(
+        c,
+        headers,
+        "second",
+        conversation_id=conversation_id,
+        model="model-b",
+    )
+    assert status == 200, body
+    assert [request.model for request in runner.requests] == ["model-a", "model-b"]
+    assert {request.provider.id for request in runner.requests} == {provider["id"]}
+    assert runner.requests[0].session_id == runner.requests[1].session_id
+    assert runner.requests[0].workspace == runner.requests[1].workspace
+    detail = c.get(
+        f"/api/v1/conversations/{conversation_id}", headers=headers
+    ).json()
+    assert (detail["provider_id"], detail["model"]) == (
+        provider["id"],
+        "model-b",
+    )
+    assert [
+        (turn["provider_id"], turn["model"]) for turn in detail["turns"]
+    ] == [
+        (provider["id"], "model-a"),
+        (provider["id"], "model-b"),
+    ]
+
+
+def test_conversation_switches_provider_with_new_credentials(client, monkeypatch):
+    from semantica_dataagent import agent_runner
+
+    runner = SwitchRunner()
+    monkeypatch.setitem(agent_runner.RUNNERS, "pi", runner)
+    c, token = client
+    headers = {"Authorization": f"Bearer {token}"}
+    first = _create_provider(
+        c,
+        headers,
+        "provider-a",
+        ["model-a"],
+        api_key="secret-provider-a",
+        base_url="http://127.0.0.1:9001",
+    )
+    second = _create_provider(
+        c,
+        headers,
+        "provider-b",
+        ["model-b"],
+        api_key="secret-provider-b",
+        base_url="http://127.0.0.1:9002",
+    )
+    status, body = _ask(
+        c,
+        headers,
+        "first",
+        agent="pi",
+        provider_id=first["id"],
+        model="model-a",
+    )
+    assert status == 200, body
+    conversation_id = _sse(body)[0][1]["conversation_id"]
+    status, body = _ask(
+        c,
+        headers,
+        "second",
+        conversation_id=conversation_id,
+        provider_id=second["id"],
+        model="model-b",
+    )
+    assert status == 200, body
+    assert runner.requests[0].provider.id == first["id"]
+    assert runner.requests[0].provider.api_key == "secret-provider-a"
+    assert runner.requests[1].provider.id == second["id"]
+    assert runner.requests[1].provider.api_key == "secret-provider-b"
+    assert runner.requests[1].provider.base_url == "http://127.0.0.1:9002"
+    assert "secret-provider-a" not in body
+    assert "secret-provider-b" not in body
+    detail = c.get(
+        f"/api/v1/conversations/{conversation_id}", headers=headers
+    ).json()
+    assert (detail["provider_id"], detail["model"]) == (second["id"], "model-b")
+    assert [
+        (turn["provider_id"], turn["model"]) for turn in detail["turns"]
+    ] == [(first["id"], "model-a"), (second["id"], "model-b")]
+    database = Path(os.environ["DATAAGENT_DB_PATH"]).read_bytes()
+    assert b"secret-provider-a" not in database
+    assert b"secret-provider-b" not in database
+
+
+def test_conversation_still_rejects_changed_agent(client):
     from semantica_dataagent.db import Conversation, Token, digest, sessions
 
     c, token = client
@@ -1581,7 +1730,7 @@ def test_existing_conversation_rejects_changed_agent_or_model(client):
         owner_id = db.get(Token, digest(token)).id
         db.add(
             Conversation(
-                id="fixed-settings",
+                id="fixed-agent",
                 owner_id=owner_id,
                 title="test",
                 agent="pi",
@@ -1590,17 +1739,100 @@ def test_existing_conversation_rejects_changed_agent_or_model(client):
             )
         )
     headers = {"Authorization": f"Bearer {token}"}
-    for override in (
-        {"agent": "claude"},
-        {"provider_id": "other"},
-        {"model": "model-b"},
-    ):
-        response = c.post(
-            "/api/v1/conversations/ask",
-            headers=headers,
-            json={"conversation_id": "fixed-settings", "question": "继续", **override},
-        )
-        assert response.status_code == 409, response.text
+    response = c.post(
+        "/api/v1/conversations/ask",
+        headers=headers,
+        json={"conversation_id": "fixed-agent", "question": "继续", "agent": "claude"},
+    )
+    assert response.status_code == 409, response.text
+
+
+def test_provider_must_be_allowed_for_the_conversation_agent(client, monkeypatch):
+    from semantica_dataagent import agent_runner
+
+    monkeypatch.setitem(agent_runner.RUNNERS, "pi", SwitchRunner())
+    c, token = client
+    headers = {"Authorization": f"Bearer {token}"}
+    allowed = _create_provider(c, headers, "allowed", ["model-a"])
+    blocked = _create_provider(c, headers, "blocked", ["model-b"])
+    profiles = {
+        "pi": {
+            "providers": [allowed["id"]],
+            "default_provider": allowed["id"],
+            "default_model": "model-a",
+        }
+    }
+    response = c.put(
+        "/api/v1/settings",
+        headers=headers,
+        json={"values": {"assistant_agent_profiles": json.dumps(profiles)}},
+    )
+    assert response.status_code == 200, response.text
+    status, body = _ask(
+        c,
+        headers,
+        "first",
+        agent="pi",
+        provider_id=allowed["id"],
+        model="model-a",
+    )
+    assert status == 200, body
+    conversation_id = _sse(body)[0][1]["conversation_id"]
+    status, body = _ask(
+        c,
+        headers,
+        "switch",
+        conversation_id=conversation_id,
+        provider_id=blocked["id"],
+        model="model-b",
+    )
+    assert status == 422, body
+    status, body = _ask(
+        c,
+        headers,
+        "new conversation",
+        agent="pi",
+        provider_id=blocked["id"],
+        model="model-b",
+    )
+    assert status == 422, body
+    detail = c.get(
+        f"/api/v1/conversations/{conversation_id}", headers=headers
+    ).json()
+    assert (detail["provider_id"], len(detail["turns"])) == (allowed["id"], 1)
+
+
+def test_switched_model_must_belong_to_the_provider(client, monkeypatch):
+    from semantica_dataagent import agent_runner
+
+    runner = SwitchRunner()
+    monkeypatch.setitem(agent_runner.RUNNERS, "pi", runner)
+    c, token = client
+    headers = {"Authorization": f"Bearer {token}"}
+    provider = _create_provider(c, headers, "models", ["model-a"])
+    status, body = _ask(
+        c,
+        headers,
+        "first",
+        agent="pi",
+        provider_id=provider["id"],
+        model="model-a",
+    )
+    assert status == 200, body
+    conversation_id = _sse(body)[0][1]["conversation_id"]
+    status, body = _ask(
+        c,
+        headers,
+        "switch",
+        conversation_id=conversation_id,
+        model="model-missing",
+    )
+    assert status == 422, body
+    assert len(runner.requests) == 1
+    detail = c.get(
+        f"/api/v1/conversations/{conversation_id}", headers=headers
+    ).json()
+    assert (detail["model"], len(detail["turns"])) == ("model-a", 1)
 
 
 def test_conversation_can_be_renamed_and_archived(client):

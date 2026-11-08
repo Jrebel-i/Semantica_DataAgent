@@ -67,8 +67,8 @@ def test_migrate_upgrades_from_0016_and_keeps_data(database, capsys):
     assert cli.main(["migrate"]) == 0
 
     output = capsys.readouterr().out
-    assert "0016" in output and "0024" in output
-    assert _schema_version(database) == "0024"
+    assert "0016" in output and "0025" in output
+    assert _schema_version(database) == "0025"
     assert _kept_rows(database) == (("kept token", "admin"), ("kept value",))
 
 
@@ -83,7 +83,7 @@ def test_migrate_backs_up_before_upgrade_and_is_repeatable(database, capsys):
 
     capsys.readouterr()
     assert cli.main(["migrate"]) == 0
-    assert "0024" in capsys.readouterr().out
+    assert "0025" in capsys.readouterr().out
     assert len(_backups(database)) == 1
 
 
@@ -108,14 +108,14 @@ def test_serve_migrates_before_starting(database, capsys, monkeypatch):
 
     assert cli.main(["serve"]) == 0
     assert started == [True]
-    assert _schema_version(database) == "0024"
+    assert _schema_version(database) == "0025"
     assert _kept_rows(database) == (("kept token", "admin"), ("kept value",))
     assert len(_backups(database)) == 1
 
     assert cli.main(["serve"]) == 0
     assert started == [True, True]
     assert len(_backups(database)) == 1
-    assert "0024" in capsys.readouterr().out
+    assert "0025" in capsys.readouterr().out
 
 
 def test_serve_does_not_start_when_migration_fails(database, capsys, monkeypatch):
@@ -136,7 +136,7 @@ def test_init_still_initializes_an_empty_database(database):
     token = cli.initialize()
 
     assert token
-    assert _schema_version(database) == "0024"
+    assert _schema_version(database) == "0025"
     with sqlite3.connect(database) as db:
         row = db.execute("SELECT name, role FROM tokens").fetchone()
     assert row == ("initial admin", "admin")
@@ -161,7 +161,7 @@ def test_serve_upgrades_0023_conversations_and_backs_up(database, monkeypatch):
         )
     monkeypatch.setattr(cli, "_serve", lambda: None)
     assert cli.main(["serve"]) == 0
-    assert _schema_version(database) == "0024"
+    assert _schema_version(database) == "0025"
     with sqlite3.connect(database) as db:
         assert db.execute(
             "SELECT title, pinned_at, archived_at FROM conversations WHERE id='old'"
@@ -174,3 +174,40 @@ def test_serve_upgrades_0023_conversations_and_backs_up(database, monkeypatch):
         assert db.execute(
             "SELECT title FROM conversations WHERE id='old'"
         ).fetchone() == ("旧会话",)
+
+def test_turn_switch_columns_migrate_without_rewriting_history(database):
+    command.upgrade(_config(database), "0024")
+    with sqlite3.connect(database) as db:
+        db.execute(
+            "INSERT INTO conversations (id, owner_id, title, agent, provider_id, model, created_at, updated_at, resumable) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                "old",
+                "owner",
+                "旧会话",
+                "pi",
+                "provider",
+                "model-a",
+                "2026-01-01",
+                "2026-01-01",
+                1,
+            ),
+        )
+        db.execute(
+            "INSERT INTO turns (conversation_id, sequence, question, status, answer, sql, citations, started_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            ("old", 1, "旧问题", "completed", "旧回答", "[]", "[]", "2026-01-01"),
+        )
+    command.upgrade(_config(database), "0025")
+    with sqlite3.connect(database) as db:
+        columns = {
+            row[1] for row in db.execute("PRAGMA table_info(turns)").fetchall()
+        }
+        assert {"provider_id", "model"} <= columns
+        assert db.execute(
+            "SELECT provider_id, model FROM turns WHERE conversation_id='old'"
+        ).fetchone() == (None, None)
+    command.downgrade(_config(database), "0024")
+    with sqlite3.connect(database) as db:
+        columns = {
+            row[1] for row in db.execute("PRAGMA table_info(turns)").fetchall()
+        }
+        assert "provider_id" not in columns and "model" not in columns
