@@ -1154,7 +1154,7 @@ def _attachment_request(
     return AgentTurnRequest(
         conversation_id=f"conv-{agent}-attachments",
         prompt=build_attachment_prompt("看看附件", attachments),
-        session_id=f"conv-{agent}-attachments",
+        session_id="00000000-0000-4000-8000-000000000042",
         workspace=workspace,
         provider=ProviderConfig(
             id="provider-one",

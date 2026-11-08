@@ -1,5 +1,6 @@
 """Claude Code adapter for the online agent protocol."""
 
+import base64
 import json
 import shutil
 import uuid
@@ -9,12 +10,15 @@ from pathlib import Path
 from .agent_plugin import (
     MCP_SERVER,
     TOKEN_ENV,
+    AttachmentPathError,
     EventParser,
     SandboxTurn,
     agent_process,
+    attachment_path,
     available_in_runtime,
     clarification_event,
     default_sandbox_class,
+    error_event,
     has_session_file,
     is_sandboxed,
     mcp_server_config,
@@ -23,6 +27,7 @@ from .agent_plugin import (
     redact_event,
     request_secrets,
     result_summary,
+    supported_image_attachments,
     write_json,
 )
 from .skill import read_skill
@@ -118,10 +123,34 @@ class ClaudeRunner:
         write_json(config / "mcp.json", {"mcpServers": {MCP_SERVER: server}})
         return config
 
+    def _prompt_content(self, request, images):
+        content = [{"type": "text", "text": request.prompt}]
+        for attachment in images:
+            path = attachment_path(request.workspace, attachment)
+            content.append(
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": attachment.mime_type,
+                        "data": base64.b64encode(path.read_bytes()).decode("ascii"),
+                    },
+                }
+            )
+        return content
+
     async def run(self, request):
         sandboxed = self._sandboxed()
         work = request.workspace / "work"
         work.mkdir(parents=True, exist_ok=True)
+        try:
+            for attachment in request.attachments:
+                attachment_path(request.workspace, attachment)
+            images = supported_image_attachments(request)
+            content = self._prompt_content(request, images) if images else None
+        except (AttachmentPathError, OSError) as exc:
+            yield error_event(f"附件读取失败：{exc}")
+            return
         turn = SandboxTurn(
             request,
             sandbox_class=default_sandbox_class() if sandboxed else None,
@@ -163,7 +192,10 @@ class ClaudeRunner:
         effort = EFFORT_BY_LEVEL.get(request.effort or "")
         if effort:
             command += ["--effort", effort]
-        command.append(request.prompt)
+        if content is None:
+            command.append(request.prompt)
+        else:
+            command += ["--input-format", "stream-json"]
         async with turn:
             if sandboxed:
                 command, exec_header = turn.wrap_command(
@@ -184,7 +216,18 @@ class ClaudeRunner:
                 cwd=str(work),
                 env=env,
                 header=exec_header,
+                stdin_open=content is not None,
             ) as process:
+                if content is not None:
+                    payload = {
+                        "type": "user",
+                        "message": {"role": "user", "content": content},
+                    }
+                    process.write(
+                        (json.dumps(payload, ensure_ascii=False) + "\n").encode()
+                    )
+                    await process.drain()
+                    process.close_stdin()
                 parser = ClaudeEventParser()
                 secrets = request_secrets(request)
                 async for line in process.lines():

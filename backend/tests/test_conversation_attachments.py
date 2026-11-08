@@ -261,9 +261,7 @@ def test_attachment_is_removed_with_the_conversation(client, monkeypatch):
 
 
 @pytest.mark.parametrize("agent", ["pi", "claude", "codex"])
-def test_conversation_b_cannot_escape_into_conversation_a(
-    client, monkeypatch, agent
-):
+def test_conversation_b_cannot_escape_into_conversation_a(client, monkeypatch, agent):
     c, admin = client
     _install_runner(monkeypatch, agent)
     provider = _provider(c, admin)
