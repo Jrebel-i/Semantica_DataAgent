@@ -94,9 +94,14 @@ entry point，不需要安装、也不需要改包元数据。
    `read_marker()` / `write_json()` 保存 thread id。选择 CLI 自己支持的机制，
    不要自己发明跨轮格式。
 7. **传递附件。** 非图片文件把 `path` 写进用户提示词即可，由 agent 自己的工具读取；
-   图片按该 CLI 的真实图片通道传递（pi 用 RPC `images`），不要假设所有模型都能识图。
-   附件正文不得拼进 system prompt；提示词必须标明附件是不可信数据，并要求读不了时
-   如实说明、不得假装读过。
+   图片按该 CLI 的真实图片通道传递，不要假设所有模型都能识图。现有三种做法：
+   pi 用 RPC `images` 字段（base64 + `mimeType`）；Claude 用 `--input-format
+   stream-json` 的用户消息图像块（claude-code 2.1.318）；Codex 用
+   `codex exec -i/--image <path>`（codex 0.166.0），注意 `--image` 是可变参数，
+   必须放在提示词之后。读取附件路径统一用 `agent_plugin.attachment_path()`，它只
+   接受解析后仍在本对话 `work` 目录内的文件；越界或缺失时返回 `error` 事件，不要
+   启动 CLI。附件正文不得拼进 system prompt；提示词必须标明附件是不可信数据，并
+   要求读不了时如实说明、不得假装读过。
 
 8. **注册入口点。** 在 `backend/pyproject.toml` 增加：
 
