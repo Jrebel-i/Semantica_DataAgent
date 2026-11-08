@@ -19,7 +19,7 @@ from .conversation_api import (
 )
 from .db import Conversation, Provider, Setting, Turn, sessions
 from .mcp_context import current_requester
-from .mcp_contract import ToolUnavailable
+from .mcp_contract import ToolInvalidInput, ToolUnavailable
 from .provider_api import provider_config
 
 DEFAULT_TIMEOUT_SECONDS = 300.0
@@ -204,7 +204,11 @@ async def _run_turn(context: dict, question: str, timeout: float) -> dict:
         raise
 
 
-async def ask_dataagent(question: str, conversation_id: str | None = None) -> dict:
+async def ask_dataagent(
+    question: str,
+    conversation_id: str | None = None,
+    project_id: str | None = None,
+) -> dict:
     """Ask the configured online agent and wait for its final answer.
 
     Reuse ``conversation_id`` to continue the same conversation and agent
@@ -214,6 +218,10 @@ async def ask_dataagent(question: str, conversation_id: str | None = None) -> di
     """
     if not question or not question.strip():
         raise ValueError("question is required")
+    from .project_context import DEFAULT_PROJECT_ID
+
+    if project_id not in (None, DEFAULT_PROJECT_ID):
+        raise ToolInvalidInput("项目问答将在对话绑定项目后支持")
     requester = current_requester()
     timeout = _timeout()
     context = _start_turn(question, conversation_id, requester.id)

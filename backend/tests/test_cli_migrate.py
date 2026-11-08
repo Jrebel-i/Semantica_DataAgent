@@ -488,3 +488,43 @@ def test_migrate_adds_null_effort_for_existing_turns(database):
         assert db.execute(
             "SELECT effort FROM turns WHERE conversation_id='legacy'"
         ).fetchone() == (None,)
+
+
+def test_migrate_backfills_agent_credential_project(database):
+    command.upgrade(_config(database), "0031")
+    with sqlite3.connect(database) as db:
+        db.execute(
+            "INSERT INTO agent_credentials "
+            "(digest, owner_id, conversation_id, turn_id) VALUES (?, ?, ?, ?)",
+            ("credential-digest", "owner", "conversation", 1),
+        )
+
+    assert cli.main(["migrate"]) == 0
+
+    with sqlite3.connect(database) as db:
+        project = db.execute(
+            "SELECT project_id FROM agent_credentials WHERE digest = ?",
+            ("credential-digest",),
+        ).fetchone()
+    assert project == ("default",)
+    assert _schema_version(database) == "0032"
+
+
+def test_migrated_builds_index_is_unique_per_project_and_status(database):
+    assert cli.main(["migrate"]) == 0
+
+    with sqlite3.connect(database) as db:
+        index = db.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'index' "
+            "AND name = 'one_running_build_per_project'"
+        ).fetchone()
+        assert index is not None, "one_running_build_per_project is missing"
+        assert "WHERE status = 'running'" in index[0]
+        insert = (
+            "INSERT INTO builds "
+            "(project_id, status, started_at, counts) VALUES (?, 'running', ?, '{}')"
+        )
+        db.execute(insert, ("default", "2026-01-01T00:00:00+00:00"))
+        db.execute(insert, ("other", "2026-01-01T00:00:00+00:00"))
+        with pytest.raises(sqlite3.IntegrityError):
+            db.execute(insert, ("default", "2026-01-01T00:00:01+00:00"))

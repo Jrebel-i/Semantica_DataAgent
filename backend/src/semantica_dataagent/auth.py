@@ -16,6 +16,7 @@ class Requester:
     id: str
     role: str
     token: str
+    project_id: str | None = None
 
 
 def _authenticated(
@@ -43,7 +44,12 @@ def _authenticated(
         return Requester(id=token.id, role=token.role, token=credentials.credentials)
 
 
-def issue_agent_credential(owner_id: str, conversation_id: str, turn_id: int) -> str:
+def issue_agent_credential(
+    owner_id: str,
+    conversation_id: str,
+    turn_id: int,
+    project_id: str = "default",
+) -> str:
     token = secrets.token_urlsafe(32)
     with sessions().begin() as db:
         conversation = db.get(Conversation, conversation_id)
@@ -63,6 +69,7 @@ def issue_agent_credential(owner_id: str, conversation_id: str, turn_id: int) ->
                 owner_id=owner_id,
                 conversation_id=conversation_id,
                 turn_id=turn_id,
+                project_id=project_id,
             )
         )
     return token
@@ -92,7 +99,12 @@ def authenticate_mcp(credentials, conversation_id, turn_id) -> Requester:
             or owner is None
         ):
             raise HTTPException(401, "Invalid token")
-        return Requester(id=owner.id, role=owner.role, token=credentials.credentials)
+        return Requester(
+            id=owner.id,
+            role=owner.role,
+            token=credentials.credentials,
+            project_id=scoped.project_id,
+        )
 
 
 def current_user(

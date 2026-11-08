@@ -42,9 +42,13 @@ def _atomic_write(path: Path, content: str) -> None:
             Path(name).unlink(missing_ok=True)
 
 
-def propose_correction(target: Text, patch: Text, reason: Text) -> dict:
-    """Propose a correction in the default project from an MCP caller."""
-    return propose_in_project(project_context.DEFAULT_PROJECT_ID, target, patch, reason)
+def propose_correction(
+    target: Text, patch: Text, reason: Text, project_id: str = "default"
+) -> dict:
+    """Propose a correction in the resolved project from an MCP caller."""
+    return propose_in_project(
+        project_id or project_context.DEFAULT_PROJECT_ID, target, patch, reason
+    )
 
 
 def _settings(project_id):

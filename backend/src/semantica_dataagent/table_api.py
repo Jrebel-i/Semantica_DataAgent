@@ -90,8 +90,10 @@ def table_detail(
     return match
 
 
-def describe_tables(names: list[str]) -> list[dict]:
-    return knowledge.describe(names=names)
+def describe_tables(names: list[str], project_id: str | None = None) -> list[dict]:
+    if project_id in (None, DEFAULT_PROJECT_ID):
+        return knowledge.describe(names=names)
+    return knowledge.describe(names=names, project_id=project_id)
 
 
 def search_knowledge(

@@ -66,7 +66,7 @@ def _owned_conversation(conversation_id: str, owner_id: str) -> None:
         raise ValueError("Conversation not found")
 
 
-def request_clarification(questions: Questions) -> dict:
+def request_clarification(questions: Questions, project_id: str | None = None) -> dict:
     """Ask the questioner to pick an evidence-backed interpretation.
 
     A clarification never changes retrieval or answer rules.  The caller's
@@ -84,7 +84,10 @@ def request_clarification(questions: Questions) -> dict:
     refs = [option.ref for question in normalized for option in question.options]
     if not refs:
         raise ValueError("Clarification requires evidence references")
-    existing = knowledge.existing_refs(refs)
+    if project_id in (None, "default"):
+        existing = knowledge.existing_refs(refs)
+    else:
+        existing = knowledge.existing_refs(refs, project_id)
     missing = sorted(set(refs) - existing)
     if missing:
         raise ValueError(

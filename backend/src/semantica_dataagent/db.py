@@ -71,6 +71,7 @@ class AgentCredential(Base):
     owner_id: Mapped[str]
     conversation_id: Mapped[str]
     turn_id: Mapped[int]
+    project_id: Mapped[str] = mapped_column(default="default", server_default="default")
 
 
 class Setting(Base):

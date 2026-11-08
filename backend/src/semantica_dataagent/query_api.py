@@ -320,9 +320,13 @@ def _partition_issues(tree, tables):
     return names, latest_runtime, problems
 
 
-def _partition_analysis(tree):
+def _partition_analysis(tree, project_id=None):
     try:
-        tables = knowledge.describe()
+        tables = (
+            knowledge.describe()
+            if project_id in (None, "default")
+            else knowledge.describe(project_id=project_id)
+        )
     except Exception as exc:
         raise HTTPException(503, "无法读取分区元数据") from exc
     names, latest_runtime, problems = _partition_issues(tree, tables)
@@ -332,8 +336,8 @@ def _partition_analysis(tree):
     return names, latest_runtime
 
 
-def _tables_and_partitions(tree):
-    names, _ = _partition_analysis(tree)
+def _tables_and_partitions(tree, project_id=None):
+    names, _ = _partition_analysis(tree, project_id=project_id)
     return names
 
 
@@ -369,9 +373,11 @@ async def plan(body: PlanInput, user: Annotated[Requester, Depends(current_reque
     return await _create_plan(body, user)
 
 
-async def _create_plan(body, user, conversation_id=None, turn_id=None, source=None):
+async def _create_plan(
+    body, user, conversation_id=None, turn_id=None, source=None, project_id=None
+):
     tree = _validate_sql(body.sql)
-    tables, latest_partition = _partition_analysis(tree)
+    tables, latest_partition = _partition_analysis(tree, project_id=project_id)
     plugin, config = _config()
     estimate = await plugin.bind(config, "").estimate(body.sql)
     query_id = uuid.uuid4().hex
@@ -384,6 +390,7 @@ async def _create_plan(body, user, conversation_id=None, turn_id=None, source=No
         "estimated_rows": estimate.get("rows"),
         "row_limit": config.get("row_limit", 1000),
         "execution_limit": config.get("download_limit", 100000),
+        "project_id": project_id or "default",
     }
     if latest_partition:
         plan_data["partition_selection"] = "latest_at_runtime"
@@ -415,7 +422,7 @@ async def _create_plan(body, user, conversation_id=None, turn_id=None, source=No
     return plan_data
 
 
-async def propose_query(sql: str) -> dict:
+async def propose_query(sql: str, project_id: str | None = None) -> dict:
     """Propose a validated Doris SQL query for the questioner to confirm.
 
     This creates a plan only; it does not execute the query. After proposing,
@@ -427,7 +434,11 @@ async def propose_query(sql: str) -> dict:
 
     if not isinstance(sql, str) or not sql.strip():
         raise ToolInvalidInput("sql 参数不能为空")
-    validation = sql_validation.validate_sql(sql, dialect="doris")
+    validation = (
+        sql_validation.validate_sql(sql, dialect="doris")
+        if project_id in (None, "default")
+        else sql_validation.validate_sql(sql, dialect="doris", project_id=project_id)
+    )
     if validation.get("status") != "pass":
         details = "; ".join(
             str(issue.get("message") or issue.get("kind"))
@@ -452,6 +463,7 @@ async def propose_query(sql: str) -> dict:
             current_requester(),
             conversation_id,
             int(supplied_turn) if supplied_turn else None,
+            project_id=project_id,
         )
     except HTTPException as exc:
         if 400 <= exc.status_code < 500:
@@ -460,7 +472,9 @@ async def propose_query(sql: str) -> dict:
 
 
 async def execute_query(
-    sql: str | None = None, confirmation_id: str | None = None
+    sql: str | None = None,
+    confirmation_id: str | None = None,
+    project_id: str | None = None,
 ) -> dict:
     """Plan SQL, then execute only after the user explicitly confirms the plan.
 
@@ -479,7 +493,9 @@ async def execute_query(
     user = current_requester()
     try:
         if sql:
-            return await _create_plan(PlanInput(sql=sql), user, source="mcp")
+            return await _create_plan(
+                PlanInput(sql=sql), user, source="mcp", project_id=project_id
+            )
         _cleanup_expired_conversation_results(confirmation_id, user)
         with sessions()() as db:
             row = db.get(QueryExecution, confirmation_id)
@@ -489,6 +505,10 @@ async def execute_query(
                 or row.conversation_id is not None
             ):
                 raise HTTPException(404, "查询不存在")
+            if project_id is not None:
+                planned = json.loads(row.plan_data) if row.plan_data else {}
+                if planned.get("project_id", "default") != project_id:
+                    raise HTTPException(404, "查询不存在")
         result = await _execute_with_audit(
             confirmation_id, ExecuteInput(), user, kind="mcp"
         )
@@ -541,7 +561,7 @@ async def _execute(
     status, result, key = "failed", None, None
     try:
         tree = _validate_sql(sql)
-        _tables_and_partitions(tree)
+        _tables_and_partitions(tree, project_id=saved_plan.get("project_id", "default"))
         cap = min(
             config.get("download_limit", 100000),
             saved_plan.get("execution_limit", config.get("download_limit", 100000)),

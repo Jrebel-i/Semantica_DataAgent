@@ -134,20 +134,23 @@ class ProjectNameTaken(ValueError):
     """A project with the requested display name already exists."""
 
 
+def _accessible_projects_query(db, requester: Requester):
+    query = db.query(Project)
+    if requester.role != "admin":
+        query = query.join(
+            ProjectMember, ProjectMember.project_id == Project.id
+        ).filter(ProjectMember.token_id == requester.id)
+    return query.order_by(Project.created_at, Project.id)
+
+
+def accessible_projects(requester: Requester) -> list[Project]:
+    """Return the projects this caller may read, in stable creation order."""
+    with sessions()() as db:
+        return list(_accessible_projects_query(db, requester))
+
+
 def _accessible_project_ids(db, requester: Requester) -> list[str]:
-    if requester.role == "admin":
-        return [
-            row.id
-            for row in db.query(Project.id).order_by(Project.created_at, Project.id)
-        ]
-    return [
-        row.project_id
-        for row in db.query(ProjectMember.project_id)
-        .join(Project, Project.id == ProjectMember.project_id)
-        .filter(ProjectMember.token_id == requester.id)
-        .order_by(Project.created_at, Project.id)
-        .all()
-    ]
+    return [row.id for row in _accessible_projects_query(db, requester)]
 
 
 def _resolve_project_context(
@@ -177,6 +180,11 @@ def _resolve_project_context(
         return current_project(resolved)
     except ProjectNotFound as exc:
         raise HTTPException(status_code=404, detail="Project not found") from exc
+
+
+def resolve_project_scope(project_id: str, requester: Requester) -> ProjectContext:
+    """Public entry to the single access rule used by REST and MCP."""
+    return _resolve_project_context(project_id, requester)
 
 
 def _require_project_admin(
