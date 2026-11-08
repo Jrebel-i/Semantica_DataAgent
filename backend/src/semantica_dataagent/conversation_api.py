@@ -13,7 +13,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, text
 
 from .agent_runner import DONE, ERROR, AgentEvent, AgentTurnRequest, get_runner
@@ -73,6 +73,23 @@ class ConversationView(BaseModel):
     updated_at: UtcDatetime
     turn_count: int
     resumable: bool
+    pinned: bool
+    archived: bool
+
+
+class ConversationPatch(BaseModel):
+    title: str | None = None
+    pinned: bool | None = None
+    archived: bool | None = None
+
+    @field_validator("title")
+    @classmethod
+    def validate_title(cls, value):
+        if value is not None:
+            value = value.strip()
+            if not 1 <= len(value) <= 200:
+                raise ValueError("Title must be 1–200 characters")
+        return value
 
 
 class ConversationDetail(ConversationView):
@@ -188,6 +205,8 @@ def _view(row: Conversation, turn_count: int) -> ConversationView:
         updated_at=row.updated_at,
         turn_count=turn_count,
         resumable=row.resumable,
+        pinned=row.pinned_at is not None,
+        archived=row.archived_at is not None,
     )
 
 
@@ -239,13 +258,24 @@ def _finish_turn(turn_id: int, status: str, event: AgentEvent | None, error=None
 
 
 @router.get("/api/v1/conversations", response_model=list[ConversationView])
-def conversations(requester: Annotated[Requester, Depends(current_requester)]):
+def conversations(
+    requester: Annotated[Requester, Depends(current_requester)], archived: bool = False
+):
     cleanup_expired_sessions()
     with sessions()() as db:
         rows = (
             db.query(Conversation)
-            .filter(Conversation.owner_id == requester.id)
-            .order_by(Conversation.updated_at.desc(), Conversation.id)
+            .filter(
+                Conversation.owner_id == requester.id,
+                Conversation.archived_at.is_not(None)
+                if archived
+                else Conversation.archived_at.is_(None),
+            )
+            .order_by(
+                Conversation.pinned_at.desc(),
+                Conversation.updated_at.desc(),
+                Conversation.id,
+            )
             .all()
         )
         counts = (
@@ -308,6 +338,49 @@ async def end_conversation(
         if row is None or row.owner_id != requester.id:
             raise HTTPException(404, "Conversation not found")
     await asyncio.to_thread(end_session, conversation_id)
+
+
+@router.patch(
+    "/api/v1/conversations/{conversation_id}", response_model=ConversationView
+)
+def patch_conversation(
+    conversation_id: str,
+    body: ConversationPatch,
+    requester: Annotated[Requester, Depends(current_requester)],
+):
+    with sessions().begin() as db:
+        db.execute(text("BEGIN IMMEDIATE"))
+        row = db.get(Conversation, conversation_id)
+        if row is None or row.owner_id != requester.id:
+            raise HTTPException(404, "Conversation not found")
+        if body.archived is True and (
+            db.query(Turn)
+            .filter_by(conversation_id=conversation_id, status="running")
+            .first()
+            or db.query(QueryExecution)
+            .filter_by(conversation_id=conversation_id, status="running")
+            .first()
+        ):
+            raise HTTPException(409, "Conversation is running")
+        now = datetime.now(UTC)
+        if body.title is not None:
+            row.title = body.title
+        if body.pinned is not None:
+            if body.pinned and row.pinned_at is None:
+                row.pinned_at = now
+            elif not body.pinned:
+                row.pinned_at = None
+        if body.archived is not None:
+            if body.archived and row.archived_at is None:
+                row.archived_at = now
+            elif not body.archived:
+                row.archived_at = None
+        count = (
+            db.query(func.count(Turn.id))
+            .filter_by(conversation_id=conversation_id)
+            .scalar()
+        )
+        return _view(row, count)
 
 
 @router.delete("/api/v1/conversations/{conversation_id}", status_code=204)

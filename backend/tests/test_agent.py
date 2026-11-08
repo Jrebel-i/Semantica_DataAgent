@@ -1602,8 +1602,21 @@ def test_conversation_can_be_renamed_and_archived(client):
     headers = {"Authorization": f"Bearer {token}"}
     with sessions().begin() as db:
         owner = db.query(Token).first()
-        db.add(Conversation(id="menu-test", owner_id=owner.id, title="original", agent="pi", provider_id="p", model="m"))
-    response = c.patch("/api/v1/conversations/menu-test", headers=headers, json={"title": "  renamed  ", "pinned": True, "archived": True})
+        db.add(
+            Conversation(
+                id="menu-test",
+                owner_id=owner.id,
+                title="original",
+                agent="pi",
+                provider_id="p",
+                model="m",
+            )
+        )
+    response = c.patch(
+        "/api/v1/conversations/menu-test",
+        headers=headers,
+        json={"title": "  renamed  ", "pinned": True, "archived": True},
+    )
     assert response.status_code == 200
     assert response.json()["title"] == "renamed"
     assert c.get("/api/v1/conversations", headers=headers).json() == []
