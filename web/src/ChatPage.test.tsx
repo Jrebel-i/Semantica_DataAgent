@@ -2937,7 +2937,13 @@ test.each([
 );
 test("会话菜单提供重命名、置顶、归档和删除", async () => {
   const messages = getMessages("zh");
-  vi.stubGlobal("fetch", conversationFetcher([conversationRow("conv-1", "订单分析")], () => new Response(null, { status: 204 })));
+  vi.stubGlobal(
+    "fetch",
+    conversationFetcher(
+      [conversationRow("conv-1", "订单分析")],
+      () => new Response(null, { status: 204 }),
+    ),
+  );
   render(<ChatPage token="token" role="user" messages={messages} />);
   fireEvent.click(await screen.findByRole("button", { name: "会话菜单" }));
   for (const name of ["重命名", "置顶", "归档", "删除"]) {
