@@ -161,3 +161,48 @@ def test_new_mcp_tools_must_use_the_project_context():
         "MCP tools bypass the project context; call _mcp_project_id() or add a "
         f"justified whitelist entry: {missing}"
     )
+
+
+def _list_tools(server):
+    import asyncio
+
+    from mcp.types import ListToolsRequest
+
+    async def run():
+        handler = server._mcp_server.request_handlers[ListToolsRequest]
+        return (await handler(ListToolsRequest(method="tools/list"))).root.tools
+
+    return {tool.name for tool in asyncio.run(run())}
+
+
+def test_tools_list_is_filtered_by_the_resolved_project_type(client):
+    from semantica_dataagent.app import create_mcp
+    from semantica_dataagent.mcp_context import bind_mcp_context
+    from semantica_dataagent.project_types import (
+        DOCUMENT_TOOL_NAMES,
+        TOOL_PROJECT_TYPES,
+    )
+
+    c, admin = client
+    project = _project(c, admin, "Document project")
+    server = create_mcp()
+    requester = _requester(admin)
+
+    with bind_mcp_context(requester, project_id=DEFAULT):
+        assert _list_tools(server) == set(TOOL_PROJECT_TYPES)
+    with bind_mcp_context(requester, project_id=project["id"]):
+        assert _list_tools(server) == DOCUMENT_TOOL_NAMES
+
+
+def test_document_project_rejects_warehouse_only_tools(client):
+    from semantica_dataagent.app import create_mcp
+    from semantica_dataagent.mcp_context import bind_mcp_context
+
+    c, admin = client
+    project = _project(c, admin, "Document project")
+    server = create_mcp()
+    requester = _requester(admin)
+    with bind_mcp_context(requester, project_id=project["id"]):
+        result = call_registered(server, "describe_tables", {"names": ["shop.orders"]})
+    assert result.isError
+    assert "该项目类型不支持此工具" in result.structuredContent["message"]
