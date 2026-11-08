@@ -406,3 +406,59 @@ test("regular users cannot see or open the projects page", async () => {
   expect(screen.queryByRole("link", { name: "项目" })).toBeNull();
   history.replaceState(null, "", "/");
 });
+
+test("ordinary project admins get the project management menu entry", async () => {
+  history.replaceState(null, "", "/");
+  localStorage.setItem("token", "user");
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) => {
+      if (url === "/api/v1/me") return Response.json({ role: "user" });
+      if (url === "/api/v1/projects")
+        return Response.json([
+          {
+            id: "alpha",
+            name: "Alpha",
+            type: "document",
+            status: "active",
+            created_at: "2026-01-01T00:00:00Z",
+            my_role: "admin",
+          },
+        ]);
+      return Response.json({});
+    }),
+  );
+  render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: "用户菜单" }));
+  fireEvent.click(await screen.findByRole("link", { name: "项目管理" }));
+  expect(await screen.findByText("Alpha")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "创建项目" })).toBeNull();
+  history.replaceState(null, "", "/");
+});
+
+test("ordinary members do not get the project management menu entry", async () => {
+  history.replaceState(null, "", "/");
+  localStorage.setItem("token", "user");
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) => {
+      if (url === "/api/v1/me") return Response.json({ role: "user" });
+      if (url === "/api/v1/projects")
+        return Response.json([
+          {
+            id: "alpha",
+            name: "Alpha",
+            type: "document",
+            status: "active",
+            created_at: "2026-01-01T00:00:00Z",
+            my_role: "member",
+          },
+        ]);
+      return Response.json({});
+    }),
+  );
+  render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: "用户菜单" }));
+  expect(screen.queryByRole("link", { name: "项目管理" })).toBeNull();
+  history.replaceState(null, "", "/");
+});

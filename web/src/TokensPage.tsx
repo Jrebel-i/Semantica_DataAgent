@@ -13,7 +13,11 @@ import {
 import type { components } from "./api";
 import type { Messages } from "./i18n";
 
-type TokenRow = components["schemas"]["TokenInfo"];
+type TokenRow = components["schemas"]["TokenInfo"] & {
+  projects?: { project_id: string; role: "admin" | "member" }[];
+};
+type ProjectRow = components["schemas"]["ProjectView"];
+type Membership = { project_id: string; role: "admin" | "member" };
 
 function localTime(value: string | null) {
   return value ? new Date(value).toLocaleString() : "";
@@ -30,6 +34,8 @@ export function TokensPage({
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
   const [role, setRole] = useState<TokenRow["role"]>("user");
+  const [projects, setProjects] = useState<ProjectRow[]>([]);
+  const [memberships, setMemberships] = useState<Membership[]>([]);
   const [issued, setIssued] = useState("");
   const [confirm, setConfirm] = useState<string | null>(null);
   const [error, setError] = useState("");
@@ -44,9 +50,39 @@ export function TokensPage({
       setError(t.tokenError);
     }
   }, [token, t.tokenError]);
+  const refreshProjects = useCallback(async () => {
+    try {
+      const response = await fetch("/api/v1/projects", {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!response.ok) throw new Error();
+      setProjects((await response.json()) as ProjectRow[]);
+    } catch {
+      setError(t.projectError);
+    }
+  }, [token, t.projectError]);
   useEffect(() => {
     void refresh();
-  }, [refresh]);
+    void refreshProjects();
+  }, [refresh, refreshProjects]);
+  const projectName = (projectId: string) =>
+    projects.find((project) => project.id === projectId)?.name ?? projectId;
+  const selectProjects = (ids: string[]) =>
+    setMemberships((current) =>
+      ids.map(
+        (id) =>
+          current.find((item) => item.project_id === id) ?? {
+            project_id: id,
+            role: "member",
+          },
+      ),
+    );
+  const setProjectRole = (projectId: string, value: Membership["role"]) =>
+    setMemberships((current) =>
+      current.map((item) =>
+        item.project_id === projectId ? { ...item, role: value } : item,
+      ),
+    );
   async function create() {
     try {
       const response = await fetch("/api/v1/tokens", {
@@ -55,7 +91,13 @@ export function TokensPage({
           Authorization: `Bearer ${token}`,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ name, role }),
+        body: JSON.stringify({
+          name,
+          role,
+          ...(role === "user" && memberships.length > 0
+            ? { projects: memberships }
+            : {}),
+        }),
       });
       if (!response.ok) throw new Error();
       const result =
@@ -103,6 +145,7 @@ export function TokensPage({
               setOpen(true);
               setName("");
               setRole("user");
+              setMemberships([]);
               setError("");
             }}
           >
@@ -122,6 +165,24 @@ export function TokensPage({
               title: t.role,
               render: (_, row) =>
                 row.role === "admin" ? t.roleAdmin : t.roleUser,
+            },
+            {
+              title: t.tokenProjects,
+              render: (_, row) =>
+                row.projects && row.projects.length > 0 ? (
+                  <Space wrap>
+                    {row.projects.map((item) => (
+                      <Tag key={item.project_id}>
+                        {projectName(item.project_id)} ·{" "}
+                        {item.role === "admin"
+                          ? t.projectAdminRole
+                          : t.projectMemberRole}
+                      </Tag>
+                    ))}
+                  </Space>
+                ) : (
+                  t.noProjectMembership
+                ),
             },
             {
               title: t.created,
@@ -202,6 +263,41 @@ export function TokensPage({
                   { value: "admin", label: t.roleAdmin },
                 ]}
               />
+              {role === "user" && (
+                <>
+                  <Typography.Text>{t.tokenProjects}</Typography.Text>
+                  <Select
+                    mode="multiple"
+                    aria-label={t.selectProjects}
+                    placeholder={t.selectProjects}
+                    style={{ width: "100%" }}
+                    value={memberships.map((item) => item.project_id)}
+                    onChange={selectProjects}
+                    optionFilterProp="label"
+                    options={projects.map((project) => ({
+                      value: project.id,
+                      label: project.name,
+                    }))}
+                  />
+                  {memberships.map((item) => (
+                    <Space key={item.project_id} wrap>
+                      <span>{projectName(item.project_id)}</span>
+                      <Select
+                        aria-label={`${t.selectProjectRole}: ${projectName(item.project_id)}`}
+                        value={item.role}
+                        onChange={(value) =>
+                          setProjectRole(item.project_id, value)
+                        }
+                        options={[
+                          { value: "member", label: t.projectMemberRole },
+                          { value: "admin", label: t.projectAdminRole },
+                        ]}
+                      />
+                    </Space>
+                  ))}
+                  <p className="field-hint">{t.tokenProjectsHint}</p>
+                </>
+              )}
               <Space>
                 <Button
                   autoInsertSpace={false}

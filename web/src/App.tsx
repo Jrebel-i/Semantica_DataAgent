@@ -76,6 +76,7 @@ export function App() {
     createdAt: string | null;
   } | null>(null);
   const [dtbConfigured, setDtbConfigured] = useState<boolean | null>(null);
+  const [projectAdmin, setProjectAdmin] = useState(false);
   const t = getMessages(lang);
   const authenticate = useCallback(async (value: string) => {
     try {
@@ -109,6 +110,25 @@ export function App() {
   useEffect(() => {
     if (token) void authenticate(token);
   }, [authenticate, token]);
+  useEffect(() => {
+    if (!loggedIn || !token) return;
+    const headers = { Authorization: `Bearer ${token}` };
+    void fetch("/api/v1/projects", { headers })
+      .then((r) => (r.ok ? r.json() : Promise.reject()))
+      .then(
+        (
+          projects: {
+            id: string;
+            my_role: "admin" | "member";
+          }[],
+        ) => {
+          setProjectAdmin(
+            projects.some((project) => project.my_role === "admin"),
+          );
+        },
+      )
+      .catch(() => setProjectAdmin(false));
+  }, [loggedIn, refreshKey, token]);
   useEffect(() => {
     const onPop = () => setPath(window.location.pathname);
     window.addEventListener("popstate", onPop);
@@ -281,8 +301,8 @@ export function App() {
         <Alert title={t.forbidden} type="warning" />
       )
     ) : path === "/projects" ? (
-      role === "admin" ? (
-        <ProjectsPage token={token} messages={t} />
+      role === "admin" || projectAdmin ? (
+        <ProjectsPage token={token} messages={t} canCreate={role === "admin"} />
       ) : (
         <Alert title={t.forbidden} type="warning" />
       )
@@ -412,6 +432,20 @@ export function App() {
                       </span>
                       <span>{t.personalSettings}</span>
                     </a>
+                    {role !== "admin" && projectAdmin && (
+                      <a
+                        className="nav-item"
+                        href="/projects"
+                        aria-current={path === "/projects" ? "page" : undefined}
+                        onClick={(event) => {
+                          event.preventDefault();
+                          navigate("/projects");
+                          setPersonalOpen(false);
+                        }}
+                      >
+                        {t.projectManagement}
+                      </a>
+                    )}
                     {role === "admin" && (
                       <>
                         <Button
