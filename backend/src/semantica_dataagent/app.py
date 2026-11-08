@@ -14,7 +14,7 @@ from urllib.parse import urlsplit
 
 import httpx
 from cryptography.fernet import Fernet
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.security import HTTPAuthorizationCredentials
 from mcp.server.fastmcp import FastMCP
@@ -1307,11 +1307,7 @@ def source_repository(project_id=None):
 
 
 def source_category_root(scope):
-    config = (
-        project_context.plugin_config("source", "markdown")
-        if scope.project_id == project_context.DEFAULT_PROJECT_ID
-        else None
-    )
+    config = project_context.plugin_config("source", "markdown", scope.project_id)
     return config[1].get("path", "knowledge") if config else "knowledge"
 
 
@@ -1532,11 +1528,14 @@ class PullView(BaseModel):
 
 
 @app.post("/api/v1/pulls/dtb", response_model=PullView)
-def trigger_pull(_: Annotated[str, Depends(admin)]):
+def trigger_pull(
+    _: Annotated[str, Depends(admin)], project: Annotated[str | None, Query()] = None
+):
     from .pull_service import run_pull
 
+    project_id = project_context.resolve_project_id(project)
     try:
-        return run_pull()
+        return run_pull(project_id)
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
 

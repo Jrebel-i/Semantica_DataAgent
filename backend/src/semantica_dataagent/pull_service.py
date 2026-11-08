@@ -9,9 +9,9 @@ import httpx
 
 from . import project_context
 from .crypto import decrypt
-from .db import PullRecord, Setting, sessions
+from .db import PullRecord, sessions
 from .plugins import discover
-from .project_context import add_queued_build
+from .project_context import DEFAULT_PROJECT_ID, add_queued_build
 from .source_directory import git, publish_pull, repository
 
 _lock = threading.Lock()
@@ -22,7 +22,7 @@ def interval():
     return int(config[1].get("interval_seconds", 0)) if config and config[0] else 0
 
 
-def run_pull():
+def run_pull(project_id: str = DEFAULT_PROJECT_ID):
     if not _lock.acquire(blocking=False):
         raise ValueError("A pull is already running")
     try:
@@ -40,13 +40,13 @@ def run_pull():
             operation_id = record.operation_id
         try:
             with sessions()() as db:
-                config = project_context.plugin_config("puller", "dtb")
-                secret = db.get(Setting, "puller.dtb.token")
-                directory = project_context.source_directory_value()
+                config = project_context.plugin_config("puller", "dtb", project_id)
+                secret = project_context.plugin_secret(project_id, "puller.dtb.token")
+                directory = project_context.source_directory_value(project_id)
                 if not config or not config[0] or not secret or not directory:
                     raise ValueError("DTB puller configuration is incomplete")
                 parameters = config[1]
-                token = decrypt(secret.value)
+                token = decrypt(secret)
                 source = directory
             url = parameters.get("url", "")
             parsed = urlsplit(url)
@@ -75,7 +75,7 @@ def run_pull():
                 record.tables, record.tasks = counts["tables"], counts["tasks"]
             with repository(source) as root:
                 commit = publish_pull(root, files, operation_id=operation_id)
-            finalize_pull(record_id, commit, counts)
+            finalize_pull(record_id, commit, counts, project_id=project_id)
         except Exception as exc:  # noqa: BLE001 - persist failures from plugins and storage
             with sessions().begin() as db:
                 row = db.get(PullRecord, record_id)
@@ -90,11 +90,13 @@ def run_pull():
         _lock.release()
 
 
-def finalize_pull(record_id, commit, counts=None):
+def finalize_pull(record_id, commit, counts=None, project_id: str = DEFAULT_PROJECT_ID):
     with sessions().begin() as db:
         row = db.get(PullRecord, record_id)
         if row.build_id is None:
-            row.build_id = add_queued_build(db, "incremental", "定时拉取")
+            row.build_id = add_queued_build(
+                db, "incremental", "定时拉取", project_id=project_id
+            )
         failures = (counts or {}).get("failures") or []
         row.status, row.commit = "succeeded", commit
         row.error = (

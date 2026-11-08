@@ -61,9 +61,7 @@ def _add_member(
 
 
 def _adapter(c: TestClient, token: str, project_id: str, adapter_id: str) -> dict:
-    response = c.get(
-        f"/api/v1/projects/{project_id}/adapters", headers=_headers(token)
-    )
+    response = c.get(f"/api/v1/projects/{project_id}/adapters", headers=_headers(token))
     assert response.status_code == 200, response.text
     return next(row for row in response.json() if row["id"] == adapter_id)
 
@@ -271,7 +269,10 @@ def test_adapter_permissions(client):
     assert c.put(url, headers=_headers(member["token"]), json=body).status_code == 403
     assert c.get(url, headers=_headers(stranger["token"])).status_code == 404
     assert c.put(url, headers=_headers(stranger["token"]), json=body).status_code == 404
-    assert c.put(url, headers=_headers(project_admin["token"]), json=body).status_code == 200
+    assert (
+        c.put(url, headers=_headers(project_admin["token"]), json=body).status_code
+        == 200
+    )
 
 
 def test_default_project_keeps_existing_global_adapter_configuration(client):

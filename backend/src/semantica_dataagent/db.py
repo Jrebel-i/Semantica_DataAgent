@@ -141,6 +141,9 @@ class Build(Base):
 
 class PluginConfig(Base):
     __tablename__ = "plugin_config"
+    project_id: Mapped[str] = mapped_column(
+        primary_key=True, default="default", server_default="default"
+    )
     category: Mapped[str] = mapped_column(primary_key=True)
     plugin_id: Mapped[str] = mapped_column(primary_key=True)
     enabled: Mapped[bool]

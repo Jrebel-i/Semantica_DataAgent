@@ -72,6 +72,49 @@ def test_migrate_upgrades_from_0016_and_keeps_data(database, capsys):
     assert _kept_rows(database) == (("kept token", "admin"), ("kept value",))
 
 
+def test_migrate_moves_plugin_config_to_the_default_project(database):
+    command.upgrade(_config(database), "0034")
+    rows = [
+        ("source", "markdown", 1, '{"path": "legacy-knowledge"}'),
+        ("source", "dtb", 1, '{"snapshot_path": "legacy-dtb"}'),
+        ("puller", "dtb", 1, '{"url": "https://legacy.example"}'),
+        ("source", "canonical", 0, "{}"),
+    ]
+    with sqlite3.connect(database) as db:
+        db.executemany(
+            "INSERT INTO plugin_config (category, plugin_id, enabled, parameters) "
+            "VALUES (?, ?, ?, ?)",
+            rows,
+        )
+
+    command.upgrade(_config(database), "0035")
+
+    with sqlite3.connect(database) as db:
+        migrated = db.execute(
+            "SELECT project_id, category, plugin_id, enabled, parameters "
+            "FROM plugin_config ORDER BY category, plugin_id"
+        ).fetchall()
+    assert migrated == [
+        ("default", "puller", "dtb", 1, '{"url": "https://legacy.example"}'),
+        ("default", "source", "canonical", 0, "{}"),
+        ("default", "source", "dtb", 1, '{"snapshot_path": "legacy-dtb"}'),
+        ("default", "source", "markdown", 1, '{"path": "legacy-knowledge"}'),
+    ]
+
+    command.downgrade(_config(database), "0034")
+    with sqlite3.connect(database) as db:
+        restored = db.execute(
+            "SELECT category, plugin_id, enabled, parameters FROM plugin_config "
+            "ORDER BY category, plugin_id"
+        ).fetchall()
+    assert restored == [
+        ("puller", "dtb", 1, '{"url": "https://legacy.example"}'),
+        ("source", "canonical", 0, "{}"),
+        ("source", "dtb", 1, '{"snapshot_path": "legacy-dtb"}'),
+        ("source", "markdown", 1, '{"path": "legacy-knowledge"}'),
+    ]
+
+
 def test_migrate_creates_pending_builds_table(database):
     assert cli.main(["migrate"]) == 0
     with sqlite3.connect(database) as db:

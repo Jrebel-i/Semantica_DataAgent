@@ -226,10 +226,10 @@ class ProjectContext:
         return "SDA" + name
 
     def plugin_configs(self) -> dict[tuple[str, str], tuple[bool, dict]]:
-        return plugin_configs()
+        return plugin_configs(self.project_id)
 
     def plugin_config(self, category: str, plugin_id: str) -> tuple[bool, dict] | None:
-        return plugin_config(category, plugin_id)
+        return plugin_config(category, plugin_id, self.project_id)
 
     def upsert_plugin_config(
         self,
@@ -239,7 +239,9 @@ class ProjectContext:
         enabled: bool,
         parameters: Mapping[str, Any],
     ):
-        return upsert_plugin_config(db, category, plugin_id, enabled, parameters)
+        return upsert_plugin_config(
+            db, category, plugin_id, enabled, parameters, self.project_id
+        )
 
     def enqueue_build(self, build_type: str, triggered_by: str, *, notify: bool = True):
         return enqueue_build(
@@ -436,17 +438,25 @@ def recover_projects() -> None:
         pass
 
 
-def plugin_configs() -> dict[tuple[str, str], tuple[bool, dict]]:
+def plugin_configs(
+    project_id: str = DEFAULT_PROJECT_ID,
+) -> dict[tuple[str, str], tuple[bool, dict]]:
     with sessions()() as db:
         return {
             (row.category, row.plugin_id): (row.enabled, json.loads(row.parameters))
-            for row in db.query(PluginConfig).all()
+            for row in db.query(PluginConfig)
+            .filter(PluginConfig.project_id == project_id)
+            .all()
         }
 
 
-def plugin_config(category: str, plugin_id: str) -> tuple[bool, dict] | None:
+def plugin_config(
+    category: str,
+    plugin_id: str,
+    project_id: str = DEFAULT_PROJECT_ID,
+) -> tuple[bool, dict] | None:
     with sessions()() as db:
-        row = db.get(PluginConfig, (category, plugin_id))
+        row = db.get(PluginConfig, (project_id, category, plugin_id))
         if row is None:
             return None
         return row.enabled, json.loads(row.parameters)
@@ -458,10 +468,12 @@ def upsert_plugin_config(
     plugin_id: str,
     enabled: bool,
     parameters: Mapping[str, Any],
+    project_id: str = DEFAULT_PROJECT_ID,
 ):
-    row = db.get(PluginConfig, (category, plugin_id))
+    row = db.get(PluginConfig, (project_id, category, plugin_id))
     if row is None:
         row = PluginConfig(
+            project_id=project_id,
             category=category,
             plugin_id=plugin_id,
             enabled=enabled,
@@ -472,6 +484,30 @@ def upsert_plugin_config(
         row.enabled = enabled
         row.parameters = json.dumps(parameters)
     return row
+
+
+PLUGIN_SECRET_KEYS = frozenset({"puller.dtb.token"})
+
+
+def plugin_secret(project_id: str, key: str) -> str | None:
+    """Read a project-scoped plugin secret, falling back to the legacy global row."""
+    with sessions()() as db:
+        row = db.get(ProjectSetting, (project_id, key))
+        if row is None and project_id == DEFAULT_PROJECT_ID:
+            row = db.get(Setting, key)
+        return row.value if row is not None else None
+
+
+def set_plugin_secret(db, project_id: str, key: str, value: str | None) -> None:
+    row = db.get(ProjectSetting, (project_id, key))
+    if not value:
+        if row is not None:
+            db.delete(row)
+        return
+    if row is None:
+        db.add(ProjectSetting(project_id=project_id, key=key, value=value))
+    else:
+        row.value = value
 
 
 def add_queued_build(
