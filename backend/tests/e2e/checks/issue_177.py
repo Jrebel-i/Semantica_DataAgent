@@ -415,6 +415,30 @@ def check_issue_177_isolation_matrix(ctx):
             response = _request(
                 ctx,
                 "GET",
+                "/api/v1/source/file",
+                project="default",
+                params={"path": a_source_path},
+                token=actor["token"],
+            )
+            ctx.require(
+                response.status_code in MANAGE_DENIED,
+                f"{actor['name']} 越权读取 A 的源文件内容: {response.status_code}",
+            )
+        revoked_source_file = _request(
+            ctx,
+            "GET",
+            "/api/v1/source/file",
+            project="default",
+            params={"path": a_source_path},
+            token=revoked["token"],
+        )
+        ctx.require(
+            revoked_source_file.status_code == 401, revoked_source_file.status_code
+        )
+        for actor in (ua, ub, uz):
+            response = _request(
+                ctx,
+                "GET",
                 "/api/v1/source/files",
                 project=project_b_id,
                 token=actor["token"],
@@ -437,6 +461,30 @@ def check_issue_177_isolation_matrix(ctx):
         )
         ctx.require(b_file.status_code == 200, b_file.text[:300])
         ctx.require(marker_b in b_file.json()["content"], "源文件内容不属于 B")
+        for actor in (pa, ua, uz):
+            response = _request(
+                ctx,
+                "GET",
+                "/api/v1/source/file",
+                project=project_b_id,
+                params={"path": b_source_path},
+                token=actor["token"],
+            )
+            ctx.require(
+                response.status_code in MANAGE_DENIED,
+                f"{actor['name']} 越权读取 B 的源文件内容: {response.status_code}",
+            )
+        ub_source_file = _request(
+            ctx,
+            "GET",
+            "/api/v1/source/file",
+            project=project_b_id,
+            params={"path": b_source_path},
+            token=ub["token"],
+        )
+        ctx.require(
+            ub_source_file.status_code in MANAGE_DENIED, ub_source_file.status_code
+        )
 
         # B matrix: only ub and the system administrator may read.
         b_content = {
