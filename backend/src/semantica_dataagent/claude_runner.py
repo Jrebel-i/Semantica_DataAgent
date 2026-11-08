@@ -24,6 +24,7 @@ from .agent_plugin import (
     mcp_server_config,
     passthrough_environment,
     query_plan_event,
+    read_attachment_bytes,
     redact_event,
     request_secrets,
     result_summary,
@@ -126,14 +127,14 @@ class ClaudeRunner:
     def _prompt_content(self, request, images):
         content = [{"type": "text", "text": request.prompt}]
         for attachment in images:
-            path = attachment_path(request.workspace, attachment)
+            data = read_attachment_bytes(request.workspace, attachment)
             content.append(
                 {
                     "type": "image",
                     "source": {
                         "type": "base64",
                         "media_type": attachment.mime_type,
-                        "data": base64.b64encode(path.read_bytes()).decode("ascii"),
+                        "data": base64.b64encode(data).decode("ascii"),
                     },
                 }
             )

@@ -11,6 +11,7 @@ import contextlib
 import json
 import os
 import re
+import stat
 from collections import deque
 from collections.abc import AsyncIterator, Iterable
 from contextlib import asynccontextmanager
@@ -337,6 +338,23 @@ def attachment_path(workspace: Path, attachment: AttachmentInput) -> Path:
     if not resolved.is_file():
         raise AttachmentPathError(f"附件「{attachment.name}」不存在或不可读")
     return resolved
+
+
+def read_attachment_bytes(workspace: Path, attachment: AttachmentInput) -> bytes:
+    """Read one attachment without following a swapped-in final symlink."""
+    path = attachment_path(workspace, attachment)
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError as exc:
+        raise AttachmentPathError(f"附件「{attachment.name}」无法读取") from exc
+    try:
+        information = os.fstat(descriptor)
+        if not stat.S_ISREG(information.st_mode):
+            raise AttachmentPathError(f"附件「{attachment.name}」不是普通文件")
+        with os.fdopen(descriptor, "rb", closefd=False) as stream:
+            return stream.read()
+    finally:
+        os.close(descriptor)
 
 
 def supported_image_attachments(
