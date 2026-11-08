@@ -1069,10 +1069,7 @@ def test_claude_runner_maps_effort_on_first_and_resume_turns(
     request = _cli_request(tmp_path, "claude", effort, "anthropic-messages")
 
     async def collect():
-        return [
-            event
-            async for event in ClaudeRunner(binary=str(script)).run(request)
-        ]
+        return [event async for event in ClaudeRunner(binary=str(script)).run(request)]
 
     assert asyncio.run(collect())[-1].type == DONE
     session_file = (
@@ -1104,10 +1101,7 @@ def test_claude_runner_omits_effort_when_not_given(tmp_path: Path):
     request = _cli_request(tmp_path, "claude-none", None, "anthropic-messages")
 
     async def collect():
-        return [
-            event
-            async for event in ClaudeRunner(binary=str(script)).run(request)
-        ]
+        return [event async for event in ClaudeRunner(binary=str(script)).run(request)]
 
     assert asyncio.run(collect())[-1].type == DONE
     arguments = json.loads(capture.read_text(encoding="utf-8"))[0]
@@ -1122,16 +1116,14 @@ def test_codex_runner_maps_effort_on_first_and_resume_turns(
         tmp_path,
         "codex",
         'print(json.dumps({"type": "thread.started", "thread_id": "thread-one"}), '
-        'flush=True)\n'
+        "flush=True)\n"
         'print(json.dumps({"type": "item.completed", "item": '
         '{"type": "agent_message", "text": "ok"}}), flush=True)',
     )
     request = _cli_request(tmp_path, "codex", effort, "openai-responses")
 
     async def collect():
-        return [
-            event async for event in CodexRunner(binary=str(script)).run(request)
-        ]
+        return [event async for event in CodexRunner(binary=str(script)).run(request)]
 
     assert asyncio.run(collect())[-1].type == DONE
     assert asyncio.run(collect())[-1].type == DONE
@@ -1150,16 +1142,14 @@ def test_codex_runner_omits_effort_when_not_given(tmp_path: Path):
         tmp_path,
         "codex-none",
         'print(json.dumps({"type": "thread.started", "thread_id": "thread-none"}), '
-        'flush=True)\n'
+        "flush=True)\n"
         'print(json.dumps({"type": "item.completed", "item": '
         '{"type": "agent_message", "text": "ok"}}), flush=True)',
     )
     request = _cli_request(tmp_path, "codex-none", None, "openai-responses")
 
     async def collect():
-        return [
-            event async for event in CodexRunner(binary=str(script)).run(request)
-        ]
+        return [event async for event in CodexRunner(binary=str(script)).run(request)]
 
     assert asyncio.run(collect())[-1].type == DONE
     arguments = json.loads(capture.read_text(encoding="utf-8"))[0]
@@ -2062,7 +2052,7 @@ def test_ask_passes_effort_to_claude_and_codex_cli(
     else:
         output = (
             'print(json.dumps({"type": "thread.started", "thread_id": "thread-api"}), '
-            'flush=True)\n'
+            "flush=True)\n"
             'print(json.dumps({"type": "item.completed", "item": '
             '{"type": "agent_message", "text": "ok"}}), flush=True)'
         )

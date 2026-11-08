@@ -29,6 +29,14 @@ from .agent_plugin import (
 from .mcp_context import CONVERSATION_HEADER, TURN_HEADER
 from .skill import read_skill
 
+EFFORT_BY_LEVEL = {
+    "low": "low",
+    "medium": "medium",
+    "high": "high",
+    "extra": "xhigh",
+    "max": "max",
+}
+
 
 @dataclass
 class CodexEventParser(EventParser):
@@ -83,7 +91,7 @@ class CodexEventParser(EventParser):
 
 class CodexRunner:
     agent_id = "codex"
-    effort_levels = ()
+    effort_levels = tuple(EFFORT_BY_LEVEL)
 
     def __init__(self, binary=None):
         self.binary = binary
@@ -162,6 +170,9 @@ class CodexRunner:
             "-m",
             request.model,
         ]
+        effort = EFFORT_BY_LEVEL.get(request.effort or "")
+        if effort:
+            command += ["-c", f'model_reasoning_effort="{effort}"']
         if thread:
             command += ["resume", thread]
         command.append(request.prompt)
