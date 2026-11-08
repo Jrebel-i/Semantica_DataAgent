@@ -64,7 +64,16 @@ WAREHOUSE_TOOL_NAMES = frozenset(tools_for_project_type(WAREHOUSE))
 
 
 def supports_tool(project_type: str, tool_name: str) -> bool:
-    return tool_name in tools_for_project_type(project_type)
+    """Registered tools without a classification stay callable.
+
+    The exhaustive-table guard test catches unclassified tools in the
+    application; the runtime check only restricts classified tools so generic
+    FastMCP servers and third-party tools keep working.
+    """
+    supported = TOOL_PROJECT_TYPES.get(tool_name)
+    if supported is None:
+        return True
+    return project_type in supported
 
 
 def ensure_tool_supported(project_type: str, tool_name: str) -> None:
