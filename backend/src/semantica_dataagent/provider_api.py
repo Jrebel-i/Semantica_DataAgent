@@ -61,6 +61,7 @@ class AgentView(BaseModel):
     id: str
     name: str
     available: bool
+    effort_levels: list[EffortLevel]
 
 
 class ProviderView(BaseModel):

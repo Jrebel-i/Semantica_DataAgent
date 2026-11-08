@@ -31,6 +31,13 @@ from .agent_types import AgentEvent, AgentTurnRequest
 from .skill import read_skill
 
 PROVIDER_KEY = "dataagent"
+THINKING_BY_EFFORT = {
+    "low": "low",
+    "medium": "medium",
+    "high": "high",
+    "extra": "xhigh",
+    "max": "max",
+}
 
 __all__ = [
     "PiEventParser",
@@ -126,6 +133,7 @@ class PiEventParser(EventParser):
 
 class PiRunner:
     agent_id = "pi"
+    effort_levels = ("low", "medium", "high", "extra", "max")
 
     def __init__(self, binary: str | None = None):
         self.binary = binary
@@ -230,6 +238,9 @@ class PiRunner:
             "--append-system-prompt",
             "Follow this retrieval skill exactly for warehouse questions.\n\n" + skill,
         ]
+        thinking = THINKING_BY_EFFORT.get(request.effort or "")
+        if thinking:
+            command.extend(["--thinking", thinking])
         async with turn:
             if sandboxed:
                 command[command.index(str(sessions))] = "/sessions"

@@ -29,7 +29,7 @@ from .db import (
     TurnEvent,
     sessions,
 )
-from .provider_api import provider_config
+from .provider_api import EFFORT_LEVELS, EffortLevel, provider_config
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -40,6 +40,7 @@ class AskRequest(BaseModel):
     agent: str | None = None
     provider_id: str | None = None
     model: str | None = None
+    effort: EffortLevel | None = None
     conversation_id: str | None = None
 
 
@@ -54,6 +55,7 @@ class TurnView(BaseModel):
     sequence: int
     provider_id: str | None
     model: str | None
+    effort: str | None
     question: str
     status: str
     answer: str
@@ -191,6 +193,7 @@ def _turn(
         sequence=row.sequence,
         provider_id=row.provider_id or provider_id,
         model=row.model or model,
+        effort=row.effort,
         question=row.question,
         status=row.status,
         answer=row.answer,
@@ -462,6 +465,38 @@ def _validate_agent_provider(db, agent_id: str, provider_id: str, model: str):
     return provider
 
 
+def _model_effort_levels(provider: Provider, model: str) -> set[str]:
+    if not provider.model_capabilities:
+        return set()
+    try:
+        capabilities = json.loads(provider.model_capabilities)
+    except (TypeError, ValueError):
+        return set()
+    if not isinstance(capabilities, dict):
+        return set()
+    capability = capabilities.get(model)
+    if not isinstance(capability, dict):
+        return set()
+    levels = capability.get("effort_levels")
+    if not isinstance(levels, list):
+        return set()
+    return {level for level in levels if isinstance(level, str)}
+
+
+def _validate_effort(provider, model: str, runner, effort: str | None) -> None:
+    if effort is None:
+        return
+    agent_levels = set(getattr(runner, "effort_levels", ()) or ())
+    if (
+        effort not in EFFORT_LEVELS
+        or effort not in _model_effort_levels(provider, model)
+        or effort not in agent_levels
+    ):
+        raise HTTPException(
+            422, "Effort level is not supported for this model and agent"
+        )
+
+
 @router.post("/api/v1/conversations/ask")
 async def ask(
     body: AskRequest,
@@ -514,6 +549,7 @@ async def ask(
         runner = get_runner(agent_id)
         if runner is None:
             raise HTTPException(422, "Unknown agent")
+        _validate_effort(provider, model, runner, body.effort)
         if not runner.available():
             raise HTTPException(503, "Agent runtime is not installed")
         conversation.agent = agent_id
@@ -524,6 +560,7 @@ async def ask(
             conversation_id=conversation.id,
             provider_id=provider_id,
             model=model,
+            effort=body.effort,
             sequence=sequence,
             question=body.question.strip(),
             status="running",
@@ -549,6 +586,7 @@ async def ask(
         mcp_url=public_base_url() + "/mcp/",
         mcp_token=issue_agent_credential(requester.id, conversation_id, turn_id),
         turn_id=turn_id,
+        effort=body.effort,
     )
     return StreamingResponse(
         _stream(run_request, runner, turn_id, conversation_id, request),

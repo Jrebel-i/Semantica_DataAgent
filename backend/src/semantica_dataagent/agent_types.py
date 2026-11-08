@@ -59,10 +59,12 @@ class AgentTurnRequest:
     mcp_url: str
     mcp_token: str
     turn_id: int | None = None
+    effort: str | None = None
 
 
 class AgentRunner(Protocol):
     agent_id: str
+    effort_levels: tuple[str, ...]
 
     def available(self) -> bool: ...
 
