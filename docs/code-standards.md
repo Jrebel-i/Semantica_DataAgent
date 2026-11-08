@@ -296,7 +296,7 @@ provider 的 base_url 与 api_key 每轮按会话当前设置重新下发给 run
 
 ## 会话管理接口
 
-`GET /api/v1/conversations` 默认只列出未归档会话；`?archived=true` 列出已归档会话。响应包含 `project_id`、`project_name`、`pinned`、`archived`，置顶会话按置顶时间倒序，其余按更新时间倒序。列表只返回请求者当前仍有权限的项目的会话；已失去项目权限的会话不出现在列表里，但所有者直接读取详情仍可成功。`?project=<id>` 只返回该项目的会话，显式项目按 `project_scope` 校验（不存在与无权限统一 404）。`conversations.project_id` 在迁移 `0033` 增加并回填 `default`。
+`GET /api/v1/conversations` 默认只列出未归档会话；`?archived=true` 列出已归档会话。响应包含 `project_id`、`project_name`、`pinned`、`archived`，置顶会话按置顶时间倒序，其余按更新时间倒序。列表只返回请求者当前仍有权限的项目的会话；已失去项目权限的会话不出现在列表里，但所有者直接读取详情仍可成功。`?project=<id>` 只返回该项目的会话，显式项目按 `project_scope` 校验（不存在与无权限统一 404）。`conversations.project_id` 在迁移 `0034` 增加并回填 `default`。
 
 `POST /api/v1/conversations/ask` 新建对话时可带 `project`；显式项目走 `project_scope`，缺省时按“项目接口”的缺省规则解析，解析结果写入对话并锁定。续写时请求带其它项目返回 409（`对话已绑定其它项目，请新建对话`），不带则沿用原项目；续写仍校验请求者当前对该项目有权限。agent 凭据按对话项目签发，每轮重新签发时也沿用该值。
 
