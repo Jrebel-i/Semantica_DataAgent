@@ -330,6 +330,78 @@ def test_failed_step_is_retried_without_skipping_or_touching_other_projects(
     assert events == ["source", "neo4j", "milvus", "attachments"]
 
 
+def test_deletion_removes_conversation_rows_even_without_turns(client, monkeypatch):
+    c, admin = client
+    project = create_project(c, admin, "Turnless Docs")
+    project_id = project["id"]
+    archive(c, admin, project)
+
+    from semantica_dataagent.db import (
+        AgentCredential,
+        Clarification,
+        Conversation,
+        QueryExecution,
+        sessions,
+    )
+
+    owner = owner_id(admin)
+    with sessions().begin() as db:
+        db.add(
+            Conversation(
+                id="turnless",
+                owner_id=owner,
+                project_id=project_id,
+                title="没有轮次",
+                agent="pi",
+                provider_id="provider",
+                model="model",
+            )
+        )
+        db.add(
+            Clarification(
+                id="clarification",
+                owner_id=owner,
+                conversation_id="turnless",
+                questions="[]",
+            )
+        )
+        db.add(
+            AgentCredential(
+                digest="credential",
+                owner_id=owner,
+                conversation_id="turnless",
+                turn_id=0,
+                project_id=project_id,
+            )
+        )
+        db.add(
+            QueryExecution(
+                id="turnless-query",
+                owner_id=owner,
+                conversation_id="turnless",
+                turn_id=None,
+                sql="select 1",
+                status="succeeded",
+            )
+        )
+
+    from semantica_dataagent import project_deletion
+
+    monkeypatch.setattr(project_deletion, "_delete_source", lambda *args: None)
+    monkeypatch.setattr(project_deletion, "_delete_neo4j", lambda *args: None)
+    monkeypatch.setattr(project_deletion, "_delete_milvus", lambda *args: None)
+    monkeypatch.setattr(project_deletion, "_cleanup_attachments", lambda *args: None)
+
+    response = delete(c, admin, project)
+    assert response.status_code == 204, response.text
+
+    with sessions()() as db:
+        assert db.get(Conversation, "turnless") is None
+        assert db.get(Clarification, "clarification") is None
+        assert db.get(AgentCredential, "credential") is None
+        assert db.get(QueryExecution, "turnless-query") is None
+
+
 def test_prefix_matching_never_crosses_projects():
     from semantica_dataagent.project_deletion import (
         is_project_collection,
