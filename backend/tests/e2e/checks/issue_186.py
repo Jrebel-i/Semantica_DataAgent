@@ -217,9 +217,27 @@ def check_upload_debounce_status_and_switch(ctx):
         f"upload_to_searchable_ms={round((searchable_at - started) * 1000)}"
     )
 
-    response = _upload(ctx, category, {"d.md": f"{marker1}\nupdated\n"})
+    single_marker = f"{marker1}single"
+    single_started = time.monotonic()
+    response = _upload(ctx, category, {"e.md": f"{single_marker}\n"})
     ctx.require(response.status_code == 200, response.text[:300])
     second = _wait_effective(ctx, minimum=2)
+    single_effective = time.monotonic()
+    single_searchable = _wait(
+        lambda: (
+            time.monotonic()
+            if _contains(_search(ctx, single_marker), single_marker)
+            else None
+        ),
+        ctx,
+        "单文件增量构建完成后检索不到新内容",
+    )
+    ctx.logger.line(
+        "ISSUE186_SINGLE_TIMING "
+        f"upload_to_effective_ms={round((single_effective - single_started) * 1000)} "
+        f"effective_to_searchable_ms={round((single_searchable - single_effective) * 1000)} "
+        f"upload_to_searchable_ms={round((single_searchable - single_started) * 1000)}"
+    )
     ctx.require(len(_upload_builds(ctx)) == 2, _upload_builds(ctx))
     ctx.require(second["last_build_id"] != build_id, second)
 
