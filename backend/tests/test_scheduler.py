@@ -155,6 +155,9 @@ def test_each_project_has_its_own_schedule_clock():
         assert scheduler.due_projects() == []
         now[0] = 20
         assert scheduler.due_projects() == ["a", "b"]
+        scheduler.remove("a")
+        now[0] = 40
+        assert scheduler.due_projects() == ["b"]
     finally:
         scheduler.stop()
 

@@ -62,15 +62,22 @@ export function BuildPage({
       headers: { Authorization: `Bearer ${token}` },
     });
     if (versions.ok) setGenerations((await versions.json()) as Generations);
-    const schedule = await fetch(
-      `/api/v1/projects/${encodeURIComponent(project)}/schedule`,
-      { headers: { Authorization: `Bearer ${token}` } },
-    );
-    if (schedule.ok) {
-      const saved = (await schedule.json()) as { interval_seconds: number };
-      setInterval(String(saved.interval_seconds));
-    }
   }, [project, projectQuery, token]);
+  useEffect(() => {
+    let active = true;
+    void fetch(`/api/v1/projects/${encodeURIComponent(project)}/schedule`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then(async (response) => {
+        if (!response.ok) return;
+        const saved = (await response.json()) as { interval_seconds: number };
+        if (active) setInterval(String(saved.interval_seconds));
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, [project, token]);
   useEffect(() => {
     void load().catch(() => setError(t.buildError));
     const timer = window.setInterval(() => {

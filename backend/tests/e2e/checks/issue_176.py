@@ -38,12 +38,8 @@ def _wait_incremental(ctx, project_id):
     deadline = time.monotonic() + ctx.config.build_timeout
     candidate = None
     while time.monotonic() < deadline:
-        rows = ctx.rest.get(
-            "/api/v1/builds", params={"project": project_id}
-        ).json()
-        incremental = [
-            row for row in rows if row.get("build_type") == "incremental"
-        ]
+        rows = ctx.rest.get("/api/v1/builds", params={"project": project_id}).json()
+        incremental = [row for row in rows if row.get("build_type") == "incremental"]
         if incremental:
             candidate = max(incremental, key=lambda row: row["id"])
             if candidate["status"] in {"succeeded", "failed", "cancelled"}:
@@ -153,9 +149,7 @@ def check_project_schedules_builds_and_corrections(ctx):
             projects.append(response.json())
         project_a, project_b = projects
 
-        schedule = ctx.rest.get(
-            f"/api/v1/projects/{project_a['id']}/schedule"
-        )
+        schedule = ctx.rest.get(f"/api/v1/projects/{project_a['id']}/schedule")
         ctx.require(
             schedule.status_code == 200 and schedule.json()["interval_seconds"] == 0,
             f"新项目调度默认值异常: {schedule.text[:200]}",
@@ -169,9 +163,9 @@ def check_project_schedules_builds_and_corrections(ctx):
             saved.text[:300],
         )
         ctx.require(
-            ctx.rest.get(
-                f"/api/v1/projects/{project_a['id']}/schedule"
-            ).json()["interval_seconds"]
+            ctx.rest.get(f"/api/v1/projects/{project_a['id']}/schedule").json()[
+                "interval_seconds"
+            ]
             == 7,
             "项目调度没有持久化",
         )
@@ -185,8 +179,7 @@ def check_project_schedules_builds_and_corrections(ctx):
             json={"interval_seconds": 0},
         )
         ctx.require(
-            disabled.status_code == 200
-            and disabled.json()["interval_seconds"] == 0,
+            disabled.status_code == 200 and disabled.json()["interval_seconds"] == 0,
             disabled.text[:200],
         )
 
@@ -251,9 +244,12 @@ def check_project_schedules_builds_and_corrections(ctx):
         ctx.require(proposal.status_code == 201, proposal.text[:300])
         proposal_id = proposal.json()["proposal_id"]
         ctx.require(
-            [row["id"] for row in ctx.rest.get(
-                "/api/v1/corrections", params={"project": project_a["id"]}
-            ).json()]
+            [
+                row["id"]
+                for row in ctx.rest.get(
+                    "/api/v1/corrections", params={"project": project_a["id"]}
+                ).json()
+            ]
             == [proposal_id],
             "项目 A 看不到自己的纠错提案",
         )
@@ -310,8 +306,7 @@ def check_project_schedules_builds_and_corrections(ctx):
         )
         ctx.require(
             all(
-                row["status"] != "queued"
-                and row["build_type"] != "incremental"
+                row["status"] != "queued" and row["build_type"] != "incremental"
                 for row in ctx.rest.get(
                     "/api/v1/builds", params={"project": project_b["id"]}
                 ).json()
