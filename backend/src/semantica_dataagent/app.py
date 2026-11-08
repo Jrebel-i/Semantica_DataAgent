@@ -34,10 +34,16 @@ from .db import (
     Setting,
     Token,
     digest,
+    generation_pointer,
     sessions,
 )
 from .embedding_client import validate_settings
-from .project_api import ensure_default_project_member
+from .project_api import (
+    admin_project_scope,
+    ensure_default_project_member,
+    project_scope,
+)
+from .project_context import ProjectContext
 from .scheduler import pull_scheduler, scheduler
 
 
@@ -46,6 +52,8 @@ async def lifespan(application):
     from .agent_sandbox import cleanup_orphans
     from .conversation_api import cleanup_expired_sessions
     from .db import QueryAudit, QueryExecution, Turn
+
+    await asyncio.to_thread(project_context.recover_projects)
 
     if os.environ.get("DATAAGENT_AGENT_MODE", "sandbox") != "local":
         await asyncio.to_thread(cleanup_orphans)
@@ -396,8 +404,8 @@ def put_settings(
                 ) from None
     cipher = Fernet(os.environ["DATAAGENT_ENCRYPTION_KEY"].encode())
     with sessions().begin() as db:
-        if project_context.GENERATION_KEY in body.values and db.get(
-            GenerationPointer, 1
+        if project_context.GENERATION_KEY in body.values and generation_pointer(
+            db, project_context.DEFAULT_PROJECT_ID
         ):
             raise HTTPException(
                 status_code=409, detail="Use the generation switch endpoint"
@@ -491,6 +499,7 @@ class BuildLog(BaseModel):
 
 class BuildView(BaseModel):
     id: int
+    project_id: str
     status: Literal["queued", "running", "succeeded", "failed", "cancelled"]
     started_at: UtcDatetime
     finished_at: UtcDatetime | None
@@ -522,6 +531,7 @@ def build_logs(value: str | None) -> list[BuildLog]:
 def build_view(row: Build) -> BuildView:
     return BuildView(
         id=row.id,
+        project_id=row.project_id or "default",
         status=row.status,
         started_at=row.started_at,
         finished_at=row.finished_at,
@@ -550,11 +560,14 @@ class GenerationsView(BaseModel):
 
 
 @app.get("/api/v1/generations", response_model=GenerationsView)
-def list_generations(_: Annotated[str, Depends(current_user)]):
+def list_generations(
+    _: Annotated[str, Depends(current_user)],
+    scope: Annotated[ProjectContext, Depends(project_scope)],
+):
 
     from .source_directory import git
 
-    values = knowledge.settings()
+    values = knowledge.settings(scope.project_id)
     project = project_context.from_values(values)
     head = None
     try:
@@ -566,9 +579,10 @@ def list_generations(_: Annotated[str, Depends(current_user)]):
     except (KeyError, OSError, ValueError, RuntimeError):
         pass
     with sessions()() as db:
-        pointer = db.get(GenerationPointer, 1)
+        pointer = generation_pointer(db, project.project_id)
         rows = (
             db.query(KnowledgeGeneration)
+            .filter(KnowledgeGeneration.project_id == project.project_id)
             .order_by(KnowledgeGeneration.created_at.desc())
             .all()
         )
@@ -598,16 +612,19 @@ def list_generations(_: Annotated[str, Depends(current_user)]):
 
 
 @app.post("/api/v1/generations/{name}/switch", response_model=GenerationView)
-def switch_generation(name: str, _: Annotated[str, Depends(admin)]):
+def switch_generation(
+    name: str,
+    scope: Annotated[ProjectContext, Depends(admin_project_scope)],
+):
     with sessions().begin() as db:
         row = db.get(KnowledgeGeneration, name)
-        if row is None:
+        if row is None or row.project_id != scope.project_id:
             raise HTTPException(status_code=404, detail="Generation not found")
         if row.deleting:
             raise HTTPException(status_code=409, detail="Generation is being deleted")
-        pointer = db.get(GenerationPointer, 1)
+        pointer = generation_pointer(db, scope.project_id)
         if pointer is None:
-            db.add(GenerationPointer(id=1, generation=name))
+            db.add(GenerationPointer(project_id=scope.project_id, generation=name))
         else:
             pointer.generation = name
         build = db.get(Build, row.build_id) if row.build_id else None
@@ -622,14 +639,16 @@ def switch_generation(name: str, _: Annotated[str, Depends(admin)]):
 
 @app.post("/api/v1/builds", status_code=202, response_model=BuildView)
 def start_build(
-    _: Annotated[str, Depends(admin)],
+    scope: Annotated[ProjectContext, Depends(admin_project_scope)],
     credentials: Annotated[HTTPAuthorizationCredentials, Depends(bearer)],
     body: BuildRequest | None = None,
 ):
     build_type = body.build_type if body else "full"
     with sessions()() as db:
         token_name = db.get(Token, digest(credentials.credentials)).name
-    build_id = project_context.enqueue_build(build_type, token_name, notify=False)
+    build_id = project_context.enqueue_build(
+        build_type, token_name, project_id=scope.project_id, notify=False
+    )
     with sessions()() as db:
         result = build_view(db.get(Build, build_id))
     project_context.wake_build_queue()
@@ -637,18 +656,29 @@ def start_build(
 
 
 @app.get("/api/v1/builds", response_model=list[BuildView])
-def builds(_: Annotated[str, Depends(current_user)]):
+def builds(
+    _: Annotated[str, Depends(current_user)],
+    scope: Annotated[ProjectContext, Depends(project_scope)],
+):
     with sessions()() as db:
         return [
-            build_view(row) for row in db.query(Build).order_by(Build.id.desc()).all()
+            build_view(row)
+            for row in db.query(Build)
+            .filter(Build.project_id == scope.project_id)
+            .order_by(Build.id.desc())
+            .all()
         ]
 
 
 @app.get("/api/v1/builds/{build_id}", response_model=BuildView)
-def build_detail(build_id: int, _: Annotated[str, Depends(current_user)]):
+def build_detail(
+    build_id: int,
+    _: Annotated[str, Depends(current_user)],
+    scope: Annotated[ProjectContext, Depends(project_scope)],
+):
     with sessions()() as db:
         row = db.get(Build, build_id)
-        if row is None:
+        if row is None or (row.project_id or "default") != scope.project_id:
             raise HTTPException(status_code=404, detail="Build not found")
         return build_view(row)
 
@@ -943,19 +973,19 @@ class SourceDiff(BaseModel):
     diff: str
 
 
-def source_path():
-    value = project_context.source_directory_value()
+def source_path(project_id=None):
+    value = project_context.source_directory_value(project_id)
     if value is None:
         raise HTTPException(422, "Source directory is not configured")
     return value
 
 
 @contextmanager
-def source_repository():
+def source_repository(project_id=None):
     from . import source_directory
 
     try:
-        with source_directory.repository(source_path()) as root:
+        with source_directory.repository(source_path(project_id)) as root:
             yield root
     except (ValueError, OSError) as exc:
         raise HTTPException(422, str(exc)) from exc
@@ -964,7 +994,7 @@ def source_repository():
 @app.post("/api/v1/source/upload", response_model=SourceCommit)
 def upload_sources(
     body: SourceUpload,
-    _: Annotated[str, Depends(admin)],
+    scope: Annotated[ProjectContext, Depends(admin_project_scope)],
     credentials: Annotated[HTTPAuthorizationCredentials, Depends(bearer)],
 ):
     from . import source_directory as source
@@ -997,9 +1027,13 @@ def upload_sources(
     with sessions()() as db:
         user = db.get(Token, digest(credentials.credentials))
         author = user.name
-        config = project_context.plugin_config("source", "markdown")
+        config = (
+            project_context.plugin_config("source", "markdown")
+            if scope.project_id == project_context.DEFAULT_PROJECT_ID
+            else None
+        )
         category_root = config[1].get("path", "knowledge") if config else "knowledge"
-    with source_repository() as root:
+    with source_repository(scope.project_id) as root:
         return SourceCommit(
             commit=source.upload(
                 root, body.target, files, body.replace, author, category_root
@@ -1008,18 +1042,23 @@ def upload_sources(
 
 
 @app.get("/api/v1/source/files", response_model=list[str])
-def source_files(_: Annotated[str, Depends(admin)]):
+def source_files(
+    scope: Annotated[ProjectContext, Depends(admin_project_scope)],
+):
     from . import source_directory as source
 
-    with source_repository() as root:
+    with source_repository(scope.project_id) as root:
         return source.list_files(root)
 
 
 @app.get("/api/v1/source/file", response_model=SourceContent)
-def source_file(path: str, _: Annotated[str, Depends(admin)]):
+def source_file(
+    path: str,
+    scope: Annotated[ProjectContext, Depends(admin_project_scope)],
+):
     from . import source_directory as source
 
-    with source_repository() as root:
+    with source_repository(scope.project_id) as root:
         file = source.safe(root, source.relative(path))
         if not file.is_file():
             raise HTTPException(404, "Source file not found")
@@ -1036,18 +1075,26 @@ def source_file(path: str, _: Annotated[str, Depends(admin)]):
 
 
 @app.get("/api/v1/source/history", response_model=list[SourceHistory])
-def source_history(path: str, _: Annotated[str, Depends(admin)]):
+def source_history(
+    path: str,
+    scope: Annotated[ProjectContext, Depends(admin_project_scope)],
+):
     from . import source_directory as source
 
-    with source_repository() as root:
+    with source_repository(scope.project_id) as root:
         return source.history(root, path)
 
 
 @app.get("/api/v1/source/diff", response_model=SourceDiff)
-def source_diff(path: str, before: str, after: str, _: Annotated[str, Depends(admin)]):
+def source_diff(
+    path: str,
+    before: str,
+    after: str,
+    scope: Annotated[ProjectContext, Depends(admin_project_scope)],
+):
     from . import source_directory as source
 
-    with source_repository() as root:
+    with source_repository(scope.project_id) as root:
         return SourceDiff(diff=source.diff(root, path, before, after))
 
 

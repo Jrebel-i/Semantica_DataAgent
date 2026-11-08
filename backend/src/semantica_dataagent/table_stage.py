@@ -70,7 +70,11 @@ def write(records, generation, storage):
         (field["database"], field["table"]) not in table_keys for field in fields
     ):
         raise ValueError("A field refers to a missing table")
-    if not storage.is_incremental and not table_keys:
+    if (
+        not storage.is_incremental
+        and not table_keys
+        and storage._settings.get("_project_type") != "document"
+    ):
         raise ValueError("Source has no tables")
     storage.execute(
         "UNWIND $rows AS row CREATE (n:SDAEntity:SDATable) SET n = row, n.generation = $generation",

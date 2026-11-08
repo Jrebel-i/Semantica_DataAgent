@@ -350,3 +350,59 @@ test("status bar is hidden for regular users", async () => {
   expect(screen.queryByText(/当前代/)).toBeNull();
   expect(screen.queryByText(/DTB token/)).toBeNull();
 });
+
+test("admin opens the projects page from the management menu", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) => {
+      if (url === "/api/v1/me") return Response.json({ role: "admin" });
+      if (url === "/api/v1/projects")
+        return Response.json([
+          {
+            id: "default",
+            name: "业务数据",
+            type: "warehouse",
+            status: "active",
+            created_at: "2026-01-01T00:00:00Z",
+            my_role: "admin",
+          },
+          {
+            id: "docs",
+            name: "Platform Docs",
+            type: "document",
+            status: "active",
+            created_at: "2026-01-02T00:00:00Z",
+            my_role: "admin",
+          },
+        ]);
+      if (url === "/healthz") return Response.json({});
+      return Response.json({});
+    }),
+  );
+  localStorage.setItem("token", "admin");
+  render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: "用户菜单" }));
+  fireEvent.click(await screen.findByRole("button", { name: "管理" }));
+  fireEvent.click(await screen.findByRole("link", { name: "项目" }));
+  expect(await screen.findByText("Platform Docs")).toBeTruthy();
+  expect(screen.getByText("数仓型")).toBeTruthy();
+  expect(screen.getByText("文档型")).toBeTruthy();
+  history.replaceState(null, "", "/");
+});
+
+test("regular users cannot see or open the projects page", async () => {
+  history.replaceState(null, "", "/projects");
+  localStorage.setItem("token", "user");
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) =>
+      url === "/api/v1/me"
+        ? Response.json({ role: "user" })
+        : Response.json({}),
+    ),
+  );
+  render(<App />);
+  expect(await screen.findByText("无权限访问")).toBeTruthy();
+  expect(screen.queryByRole("link", { name: "项目" })).toBeNull();
+  history.replaceState(null, "", "/");
+});

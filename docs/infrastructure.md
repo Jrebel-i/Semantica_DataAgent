@@ -117,6 +117,12 @@ The script performs Cypher, creates and deletes a uniquely named Milvus collecti
 
 回滚到旧镜像前必须恢复迁移前的数据库备份：旧代码不认识新的 alembic 版本号，直接把镜像引用改回上一版会让旧应用读到新 schema 并启动失败。回滚时先让应用停止（把 Deployment 缩到 0，或保持已经因迁移失败而退出的 Pod），把本次升级前的 `/data/dataagent.db.bak-<UTC 时间戳>` 复制回 `/data/dataagent.db`，删除同目录残留的 `dataagent.db-wal`、`dataagent.db-shm`，再 apply 旧镜像引用；保留 PVC 和加密 Secret。全量知识构建和当前代切换按现有构建 API 执行，回滚知识使用保留代切换，镜像回滚不会自动切换知识代。
 
+## 项目隔离与目录
+
+项目共享同一套 Neo4j、Milvus 与 embedding 服务，但知识代名前缀为 `<项目 id>_`，Milvus 每代一个 `sda_<代名>` 集合；每代的 Neo4j 节点仍以 `generation` 属性隔离。项目 id 由系统生成（名称转小写英文数字；没有 ASCII 字母数字时回退为 `project`、`project2`……；冲突加后缀），只含小写字母和数字，最长 24 字符。清理任务只处理本项目的代。
+
+普通项目的源目录由 `DATAAGENT_PROJECTS_ROOT` 决定：设置时取 `$DATAAGENT_PROJECTS_ROOT/<项目 id>/source`，未设置时取 `DATAAGENT_DB_PATH` 所在目录下的 `projects/<项目 id>/source`。集群内数据库在 `/data/dataagent.db`，因此默认落在 `/data/projects/<项目 id>/source`（同一数据卷）；默认项目仍使用设置里的 `/data/source`。创建项目时会建好源目录，git 仓库在第一次上传时按现有逻辑初始化。构建队列仍只有一个工作线程，项目之间串行。
+
 2026-11-05 的部署验收使用 `samples/demo` 初始化 `/data/source`，首次全量构建 56.5 秒（20 张表、15 篇文档）；这只是示例知识，接入实际业务前由管理员上传并全量构建真实源目录。验收脚本 `backend/tests/e2e/k8s/verify.py` 从 `DATAAGENT_TOKEN` 环境变量取令牌，检查内网首页、pi 问答的 SQL 和引用、轮次后 Pod 清理以及本地 MCP 检索；出站限制使用票专属 harness 检查复验。不要把令牌写进命令历史或日志。
 
 

@@ -8,6 +8,8 @@ from pydantic import BaseModel
 
 from . import knowledge, project_context
 from .auth import current_user
+from .project_api import project_scope
+from .project_context import ProjectContext
 
 router = APIRouter()
 
@@ -17,6 +19,7 @@ def get_lineage(
     direction: Literal["up", "down"] = "up",
     depth: int = 1,
     column: str | None = None,
+    project_id: str | None = None,
 ) -> list[dict]:
     """Find table lineage, or field lineage when column is provided.
 
@@ -25,7 +28,11 @@ def get_lineage(
     """
     if not table or direction not in ("up", "down") or not 1 <= depth <= 3:
         raise ValueError("Invalid table, direction or depth")
-    values = knowledge.settings()
+    values = (
+        knowledge.settings()
+        if project_id in (None, project_context.DEFAULT_PROJECT_ID)
+        else knowledge.settings(project_id)
+    )
     project = project_context.from_values(values)
     if column is not None:
         if not column:
@@ -83,8 +90,12 @@ def get_lineage(
     ]
 
 
-def read_task_sql(task_id: str) -> dict:
-    values = knowledge.settings()
+def read_task_sql(task_id: str, project_id: str | None = None) -> dict:
+    values = (
+        knowledge.settings()
+        if project_id in (None, project_context.DEFAULT_PROJECT_ID)
+        else knowledge.settings(project_id)
+    )
     project = project_context.from_values(values)
     rows = knowledge.execute(
         knowledge.read_graph(values),
@@ -117,8 +128,16 @@ class TableLineageView(BaseModel):
 
 
 @router.get("/api/v1/table-lineage", response_model=TableLineageView)
-def table_lineage(table: str, _: Annotated[str, Depends(current_user)]):
-    values = knowledge.settings()
+def table_lineage(
+    table: str,
+    _: Annotated[str, Depends(current_user)],
+    scope: Annotated[ProjectContext, Depends(project_scope)],
+):
+    values = (
+        knowledge.settings()
+        if scope.project_id == project_context.DEFAULT_PROJECT_ID
+        else knowledge.settings(scope.project_id)
+    )
     project = project_context.from_values(values)
     rows = knowledge.execute(
         knowledge.read_graph(values),
@@ -126,8 +145,8 @@ def table_lineage(table: str, _: Annotated[str, Depends(current_user)]):
         {"generation": project.generation, "table": table},
     )
     return {
-        "upstream": get_lineage(table, "up"),
-        "downstream": get_lineage(table, "down"),
+        "upstream": get_lineage(table, "up", project_id=scope.project_id),
+        "downstream": get_lineage(table, "down", project_id=scope.project_id),
         "tasks": rows,
     }
 
@@ -137,9 +156,10 @@ def column_lineage(
     table: Annotated[str, Query(min_length=1)],
     column: Annotated[str, Query(min_length=1)],
     _: Annotated[str, Depends(current_user)],
+    scope: Annotated[ProjectContext, Depends(project_scope)],
     depth: Annotated[int, Query(ge=1, le=3)] = 1,
 ):
     return {
-        "upstream": get_lineage(table, "up", depth, column),
-        "downstream": get_lineage(table, "down", depth, column),
+        "upstream": get_lineage(table, "up", depth, column, scope.project_id),
+        "downstream": get_lineage(table, "down", depth, column, scope.project_id),
     }

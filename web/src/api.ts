@@ -445,7 +445,8 @@ export interface paths {
         /** List Projects */
         get: operations["list_projects_api_v1_projects_get"];
         put?: never;
-        post?: never;
+        /** Create Project */
+        post: operations["create_project_api_v1_projects_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -999,6 +1000,8 @@ export interface components {
             parse_failures: {
                 [key: string]: string;
             }[];
+            /** Project Id */
+            project_id: string;
             /** Source Commit */
             source_commit: string | null;
             /**
@@ -1334,6 +1337,16 @@ export interface components {
              * @enum {string}
              */
             medium: "yes" | "no" | "unknown";
+        };
+        /** ProjectCreate */
+        ProjectCreate: {
+            /** Name */
+            name: string;
+            /**
+             * Type
+             * @enum {string}
+             */
+            type: "warehouse" | "document";
         };
         /** ProjectUpdate */
         ProjectUpdate: {
@@ -1836,7 +1849,9 @@ export interface operations {
     };
     builds_api_v1_builds_get: {
         parameters: {
-            query?: never;
+            query?: {
+                project?: string | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -1852,11 +1867,22 @@ export interface operations {
                     "application/json": components["schemas"]["BuildView"][];
                 };
             };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
         };
     };
     start_build_api_v1_builds_post: {
         parameters: {
-            query?: never;
+            query?: {
+                project?: string | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -1889,7 +1915,9 @@ export interface operations {
     };
     build_detail_api_v1_builds__build_id__get: {
         parameters: {
-            query?: never;
+            query?: {
+                project?: string | null;
+            };
             header?: never;
             path: {
                 build_id: number;
@@ -1920,7 +1948,9 @@ export interface operations {
     };
     categories_route_api_v1_categories_get: {
         parameters: {
-            query?: never;
+            query?: {
+                project?: string | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -1936,12 +1966,22 @@ export interface operations {
                     "application/json": components["schemas"]["CategoryView"][];
                 };
             };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
         };
     };
     index_route_api_v1_category_index_get: {
         parameters: {
             query: {
                 category: string;
+                project?: string | null;
             };
             header?: never;
             path?: never;
@@ -1975,6 +2015,7 @@ export interface operations {
                 table: string;
                 column: string;
                 depth?: number;
+                project?: string | null;
             };
             header?: never;
             path?: never;
@@ -2378,6 +2419,7 @@ export interface operations {
             query: {
                 doc_id: string;
                 section?: string | null;
+                project?: string | null;
             };
             header?: never;
             path?: never;
@@ -2460,7 +2502,9 @@ export interface operations {
     };
     list_generations_api_v1_generations_get: {
         parameters: {
-            query?: never;
+            query?: {
+                project?: string | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -2476,11 +2520,22 @@ export interface operations {
                     "application/json": components["schemas"]["GenerationsView"];
                 };
             };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
         };
     };
     switch_generation_api_v1_generations__name__switch_post: {
         parameters: {
-            query?: never;
+            query?: {
+                project?: string | null;
+            };
             header?: never;
             path: {
                 name: string;
@@ -2676,6 +2731,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ProjectView"][];
+                };
+            };
+        };
+    };
+    create_project_api_v1_projects_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProjectCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -3131,6 +3219,7 @@ export interface operations {
                 scope?: "tables" | "fields" | "docs" | "tasks" | "all";
                 top_k?: number;
                 category?: string | null;
+                project?: string | null;
             };
             header?: never;
             path?: never;
@@ -3241,6 +3330,7 @@ export interface operations {
                 path: string;
                 before: string;
                 after: string;
+                project?: string | null;
             };
             header?: never;
             path?: never;
@@ -3272,6 +3362,7 @@ export interface operations {
         parameters: {
             query: {
                 path: string;
+                project?: string | null;
             };
             header?: never;
             path?: never;
@@ -3301,7 +3392,9 @@ export interface operations {
     };
     source_files_api_v1_source_files_get: {
         parameters: {
-            query?: never;
+            query?: {
+                project?: string | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -3317,12 +3410,22 @@ export interface operations {
                     "application/json": string[];
                 };
             };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
         };
     };
     source_history_api_v1_source_history_get: {
         parameters: {
             query: {
                 path: string;
+                project?: string | null;
             };
             header?: never;
             path?: never;
@@ -3352,7 +3455,9 @@ export interface operations {
     };
     upload_sources_api_v1_source_upload_post: {
         parameters: {
-            query?: never;
+            query?: {
+                project?: string | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -3387,6 +3492,7 @@ export interface operations {
         parameters: {
             query: {
                 table: string;
+                project?: string | null;
             };
             header?: never;
             path?: never;
@@ -3420,6 +3526,7 @@ export interface operations {
                 database?: string | null;
                 search?: string | null;
                 view?: "summary" | "full";
+                project?: string | null;
             };
             header?: never;
             path?: never;
@@ -3449,7 +3556,9 @@ export interface operations {
     };
     table_detail_api_v1_tables__database___table__get: {
         parameters: {
-            query?: never;
+            query?: {
+                project?: string | null;
+            };
             header?: never;
             path: {
                 database: string;

@@ -76,8 +76,14 @@ def discover():
     return found
 
 
-def configured():
+def configured(project_id=None):
     plugins = discover()
+    if project_id not in (None, project_context.DEFAULT_PROJECT_ID):
+        return [
+            (category, plugin, category == "source" and plugin.id == "markdown", {})
+            for (category, _), plugin in plugins.items()
+            if category in {"source", "parser"}
+        ]
     saved = project_context.plugin_configs()
     return [
         (

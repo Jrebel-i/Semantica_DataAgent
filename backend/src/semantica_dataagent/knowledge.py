@@ -6,7 +6,6 @@ import json
 import os
 import re
 import time
-import uuid
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager, suppress
@@ -30,7 +29,14 @@ from semantica.vector_store.milvus_store import MilvusStore
 
 from . import project_context
 from .canonical import KINDS
-from .db import Build, GenerationPointer, KnowledgeGeneration, sessions
+from .db import (
+    Build,
+    GenerationPointer,
+    KnowledgeGeneration,
+    Project,
+    generation_pointer,
+    sessions,
+)
 from .embedding_client import EmbeddingStats
 from .embedding_client import embed as embedding_embed
 from .filters import filter_records, get_filters
@@ -83,9 +89,15 @@ def validate_records(records):
             seen.add(key)
 
 
-def settings():
+def settings(project_id=None):
     """Return global settings plus the current project's project-level values."""
-    return project_context.current_project().values
+    return project_context.current_project(project_id).values
+
+
+def _project_settings(project_id=None):
+    if project_id in (None, project_context.DEFAULT_PROJECT_ID):
+        return settings()
+    return settings(project_id)
 
 
 def _close_quietly(resource):
@@ -588,20 +600,42 @@ def run_build(build_id):
             logs = _load_logs(build.logs)
             build_type = build.build_type or "full"
         _record_log(build_id, logs, "build", f"{build_type} build started")
-        values = settings()
-        project = project_context.from_values(values)
+        with sessions()() as db:
+            row = db.get(Build, build_id)
+            project_id = (row.project_id if row is not None else None) or "default"
+            project_row = db.get(Project, project_id)
+            project_type = project_row.type if project_row is not None else "warehouse"
+        values = (
+            settings()
+            if project_id == project_context.DEFAULT_PROJECT_ID
+            else settings(project_id)
+        )
+        values["_project_type"] = project_type
+        project = project_context.from_values(values, project_id)
         generation = project.generation
         with sessions().begin() as db:
-            if db.get(GenerationPointer, 1) is None:
+            if generation_pointer(db, project.project_id) is None:
                 if db.get(KnowledgeGeneration, generation) is None:
-                    db.add(KnowledgeGeneration(name=generation))
-                db.add(GenerationPointer(id=1, generation=generation))
+                    db.add(
+                        KnowledgeGeneration(
+                            name=generation, project_id=project.project_id
+                        )
+                    )
+                db.add(
+                    GenerationPointer(
+                        project_id=project.project_id, generation=generation
+                    )
+                )
         if build_type == "full":
-            generation = generation[:30] + "_" + uuid.uuid4().hex
+            generation = project.new_generation()
             values = project_context.with_generation(values, generation)
             project = project_context.from_values(values)
             new_values = values.copy()
-        plugins = configured()
+        plugins = (
+            configured()
+            if project.project_id == project_context.DEFAULT_PROJECT_ID
+            else configured(project.project_id)
+        )
         filters = get_filters()
         config = {
             project_context.SOURCE_DIRECTORY_KEY: str(project.source_directory),
@@ -654,6 +688,7 @@ def run_build(build_id):
                 db.query(Build)
                 .filter(
                     Build.id < build_id,
+                    Build.project_id == project.project_id,
                     Build.generation == generation,
                     Build.status == "succeeded",
                     Build.source_hashes.is_not(None),
@@ -677,6 +712,7 @@ def run_build(build_id):
             failed_builds = (
                 db.query(Build)
                 .filter(
+                    Build.project_id == project.project_id,
                     Build.generation == generation,
                     Build.id > (previous.id if previous else 0),
                     Build.id < build_id,
@@ -869,11 +905,20 @@ def run_build(build_id):
                 db.add(
                     KnowledgeGeneration(
                         name=generation,
+                        project_id=project.project_id,
                         build_id=build_id,
                         created_at=datetime.now(UTC).isoformat(),
                     )
                 )
-                db.get(GenerationPointer, 1).generation = generation
+                pointer = generation_pointer(db, project.project_id)
+                if pointer is None:
+                    db.add(
+                        GenerationPointer(
+                            project_id=project.project_id, generation=generation
+                        )
+                    )
+                else:
+                    pointer.generation = generation
                 build = db.get(Build, build_id)
                 build.status = "succeeded"
                 build.counts = json.dumps({**counts, **stats.counts()})
@@ -918,15 +963,17 @@ def run_build(build_id):
 
 
 def prune_generations(values):
-    retention = project_context.from_values(values).generation_retention
+    project = project_context.from_values(values)
+    retention = project.generation_retention
     with sessions()() as db:
-        pointer = db.get(GenerationPointer, 1)
+        pointer = generation_pointer(db, project.project_id)
         rows = (
             db.query(KnowledgeGeneration)
+            .filter(KnowledgeGeneration.project_id == project.project_id)
             .order_by(KnowledgeGeneration.created_at.desc())
             .all()
         )
-        keep = {pointer.generation}
+        keep = {pointer.generation} if pointer is not None else set()
         for row in rows:
             if len(keep) >= retention:
                 break
@@ -939,10 +986,11 @@ def prune_generations(values):
             claimed = db.execute(
                 update(KnowledgeGeneration)
                 .where(KnowledgeGeneration.name == name)
+                .where(KnowledgeGeneration.project_id == project.project_id)
                 .where(
                     KnowledgeGeneration.name
                     != select(GenerationPointer.generation)
-                    .where(GenerationPointer.id == 1)
+                    .where(GenerationPointer.project_id == project.project_id)
                     .scalar_subquery()
                 )
                 .values(deleting=True)
@@ -952,8 +1000,8 @@ def prune_generations(values):
         delete_generation_data(project_context.with_generation(values, name))
         with sessions().begin() as db:
             row = db.get(KnowledgeGeneration, name)
-            pointer = db.get(GenerationPointer, 1)
-            if row and pointer.generation != name:
+            pointer = generation_pointer(db, project.project_id)
+            if row and (pointer is None or pointer.generation != name):
                 db.delete(row)
 
 
@@ -964,7 +1012,7 @@ def cleanup_interrupted_generations():
     interrupted = "Build interrupted by application shutdown"
     with sessions()() as db:
         candidates = [
-            (row.id, row.generation)
+            (row.id, row.generation, row.project_id or "default")
             for row in db.query(Build).filter(
                 Build.status == "failed",
                 Build.error == interrupted,
@@ -973,13 +1021,14 @@ def cleanup_interrupted_generations():
             )
             if db.get(KnowledgeGeneration, row.generation) is None
             and not (
-                db.get(GenerationPointer, 1)
-                and db.get(GenerationPointer, 1).generation == row.generation
+                generation_pointer(db, row.project_id or "default")
+                and generation_pointer(db, row.project_id or "default").generation
+                == row.generation
             )
         ]
-    for build_id, generation in candidates:
+    for build_id, generation, project_id in candidates:
         try:
-            values = settings()
+            values = _project_settings(project_id)
             delete_generation_data(project_context.with_generation(values, generation))
             with sessions().begin() as db:
                 row = db.get(Build, build_id)
@@ -1013,12 +1062,12 @@ def delete_generation_data(values):
         client.close()
 
 
-def existing_refs(refs):
+def existing_refs(refs, project_id=None):
     """Return the evidence ids present in the current knowledge generation."""
     wanted = sorted({ref for ref in refs if ref})
     if not wanted:
         return set()
-    values = settings()
+    values = _project_settings(project_id)
     project = project_context.from_values(values)
     rows = execute(
         read_graph(values),
@@ -1030,8 +1079,8 @@ def existing_refs(refs):
     return {row["ref"] for row in rows if row.get("ref")}
 
 
-def describe(names=None, database=None, search=None, summary=False):
-    values = settings()
+def describe(names=None, database=None, search=None, summary=False, project_id=None):
+    values = _project_settings(project_id)
     project = project_context.from_values(values)
     store = read_graph(values)
     filters = """MATCH (t:SDATable {generation:$generation})
@@ -1091,9 +1140,9 @@ def describe(names=None, database=None, search=None, summary=False):
     ]
 
 
-def dimension_values(database, table, field):
+def dimension_values(database, table, field, project_id=None):
     """Return every indexed value for one field in the current generation."""
-    values = settings()
+    values = _project_settings(project_id)
     project = project_context.from_values(values)
     rows = execute(
         read_graph(values),
@@ -1159,9 +1208,16 @@ def mark_ambiguity(results, query):
     return results
 
 
-def search(query, scope, top_k, category=None):
-    values = settings()
+def search(query, scope, top_k, category=None, project_id=None):
+    values = _project_settings(project_id)
     project = project_context.from_values(values)
+    if (
+        project.project_id != project_context.DEFAULT_PROJECT_ID
+        and not project_context.generation_is_built(
+            project.project_id, project.generation
+        )
+    ):
+        return []
     vector = np.array(embed(values, [query])[0], dtype=np.float32)
     generation = project.generation
     limit = max(50, top_k)

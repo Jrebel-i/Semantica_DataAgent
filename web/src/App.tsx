@@ -12,6 +12,7 @@ import { SourcePage } from "./SourcePage";
 import { Login } from "./Login";
 import { StatusPage, type Health } from "./StatusPage";
 import { TokensPage } from "./TokensPage";
+import { ProjectsPage } from "./ProjectsPage";
 import { PersonalSettingsPage } from "./PersonalSettingsPage";
 import { McpAccessPage } from "./McpAccessPage";
 import { AgentSettings } from "./AgentSettings";
@@ -184,6 +185,7 @@ export function App() {
     { path: "/config", label: t.workbenchConfig },
     { path: "/plugins", label: t.plugins },
     { path: "/tokens", label: t.tokens },
+    { path: "/projects", label: t.projects },
     { path: "/mcp-access", label: t.mcpAccess },
     { path: "/status", label: t.status },
   ];
@@ -275,6 +277,12 @@ export function App() {
     ) : path === "/tokens" ? (
       role === "admin" ? (
         <TokensPage token={token} messages={t} />
+      ) : (
+        <Alert title={t.forbidden} type="warning" />
+      )
+    ) : path === "/projects" ? (
+      role === "admin" ? (
+        <ProjectsPage token={token} messages={t} />
       ) : (
         <Alert title={t.forbidden} type="warning" />
       )
