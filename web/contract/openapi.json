@@ -1994,6 +1994,28 @@
             "title": "Id",
             "type": "integer"
           },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "provider_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider Id"
+          },
           "question": {
             "title": "Question",
             "type": "string"
@@ -2023,6 +2045,8 @@
         "required": [
           "id",
           "sequence",
+          "provider_id",
+          "model",
           "question",
           "status",
           "answer",
