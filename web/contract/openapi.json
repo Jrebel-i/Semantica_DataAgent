@@ -900,6 +900,37 @@
         "title": "HTTPValidationError",
         "type": "object"
       },
+      "ModelCapability": {
+        "properties": {
+          "description": {
+            "default": "",
+            "maxLength": 200,
+            "title": "Description",
+            "type": "string"
+          },
+          "effort_levels": {
+            "items": {
+              "enum": [
+                "low",
+                "medium",
+                "high",
+                "extra",
+                "max"
+              ],
+              "type": "string"
+            },
+            "title": "Effort Levels",
+            "type": "array"
+          },
+          "vision": {
+            "default": false,
+            "title": "Vision",
+            "type": "boolean"
+          }
+        },
+        "title": "ModelCapability",
+        "type": "object"
+      },
       "PlanInput": {
         "properties": {
           "sql": {
@@ -1144,6 +1175,20 @@
             "title": "Base Url",
             "type": "string"
           },
+          "model_capabilities": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/ModelCapability"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Capabilities"
+          },
           "models": {
             "items": {
               "type": "string"
@@ -1197,6 +1242,20 @@
               }
             ],
             "title": "Base Url"
+          },
+          "model_capabilities": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/ModelCapability"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Capabilities"
           },
           "models": {
             "anyOf": [
@@ -1260,6 +1319,13 @@
             "title": "Id",
             "type": "string"
           },
+          "model_capabilities": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ModelCapability"
+            },
+            "title": "Model Capabilities",
+            "type": "object"
+          },
           "models": {
             "items": {
               "type": "string"
@@ -1287,6 +1353,7 @@
           "type",
           "base_url",
           "models",
+          "model_capabilities",
           "has_api_key",
           "created_at",
           "updated_at"

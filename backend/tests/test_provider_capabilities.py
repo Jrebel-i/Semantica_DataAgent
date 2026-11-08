@@ -189,7 +189,9 @@ def test_update_capabilities_replaces_explicit_mapping(client):
 
 def test_update_capabilities_cannot_reference_removed_model(client):
     c, token = client
-    created = c.post("/api/v1/providers", headers=_headers(token), json=_payload()).json()
+    created = c.post(
+        "/api/v1/providers", headers=_headers(token), json=_payload()
+    ).json()
 
     updated = c.put(
         f"/api/v1/providers/{created['id']}",
@@ -233,7 +235,15 @@ def test_old_provider_without_capability_column_reads_as_defaults(
             "INSERT INTO tokens "
             "(digest, name, role, id, created_at, last_used_at, revoked) "
             "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (digest("old-admin-token"), "old admin", "admin", "old-id", "2026-01-01", None, 0),
+            (
+                digest("old-admin-token"),
+                "old admin",
+                "admin",
+                "old-id",
+                "2026-01-01",
+                None,
+                0,
+            ),
         )
     command.upgrade(config, "head")
 
@@ -248,6 +258,4 @@ def test_old_provider_without_capability_column_reads_as_defaults(
     assert response.status_code == 200
     body = response.json()
     assert body[0]["models"] == ["legacy-model"]
-    assert body[0]["model_capabilities"] == {
-        "legacy-model": DEFAULT_CAPABILITY
-    }
+    assert body[0]["model_capabilities"] == {"legacy-model": DEFAULT_CAPABILITY}

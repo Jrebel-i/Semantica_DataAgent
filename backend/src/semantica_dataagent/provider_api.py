@@ -3,7 +3,7 @@
 import json
 import uuid
 from datetime import UTC, datetime
-from typing import Annotated
+from typing import Annotated, Literal
 from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -22,6 +22,15 @@ PROVIDER_TYPES = {
     "openai-responses",
     "google-generative-ai",
 }
+EFFORT_LEVELS = ("low", "medium", "high", "extra", "max")
+EffortLevel = Literal["low", "medium", "high", "extra", "max"]
+DESCRIPTION_LIMIT = 200
+
+
+class ModelCapability(BaseModel):
+    description: str = Field(default="", max_length=DESCRIPTION_LIMIT)
+    vision: bool = False
+    effort_levels: list[EffortLevel] = Field(default_factory=list)
 
 
 class ProviderCreate(BaseModel):
@@ -30,6 +39,7 @@ class ProviderCreate(BaseModel):
     base_url: str
     api_key: str | None = Field(default=None, max_length=10000)
     models: list[str] = Field(min_length=1)
+    model_capabilities: dict[str, ModelCapability] | None = None
 
 
 class ProviderUpdate(BaseModel):
@@ -38,6 +48,7 @@ class ProviderUpdate(BaseModel):
     base_url: str | None = None
     api_key: str | None = Field(default=None, max_length=10000)
     models: list[str] | None = None
+    model_capabilities: dict[str, ModelCapability] | None = None
 
 
 class AgentView(BaseModel):
@@ -52,6 +63,7 @@ class ProviderView(BaseModel):
     type: str
     base_url: str
     models: list[str]
+    model_capabilities: dict[str, ModelCapability]
     has_api_key: bool
     created_at: UtcDatetime
     updated_at: UtcDatetime
@@ -94,13 +106,56 @@ def _validate_models(values: list[str]) -> list[str]:
     return models
 
 
+def _stored_capabilities(row: Provider) -> dict[str, ModelCapability]:
+    if not row.model_capabilities:
+        return {}
+    values = json.loads(row.model_capabilities)
+    return {
+        name: ModelCapability.model_validate(value) for name, value in values.items()
+    }
+
+
+def _validate_capabilities(
+    values: dict[str, ModelCapability], models: list[str]
+) -> dict[str, ModelCapability]:
+    unknown = sorted(set(values) - set(models))
+    if unknown:
+        raise HTTPException(422, "Capability model is not in models")
+    capabilities: dict[str, ModelCapability] = {}
+    for name, value in values.items():
+        selected = set(value.effort_levels)
+        capabilities[name] = ModelCapability(
+            description=value.description.strip(),
+            vision=value.vision,
+            effort_levels=[level for level in EFFORT_LEVELS if level in selected],
+        )
+    return capabilities
+
+
+def _dump_capabilities(capabilities: dict[str, ModelCapability]) -> str | None:
+    if not capabilities:
+        return None
+    return json.dumps(
+        {name: value.model_dump() for name, value in capabilities.items()},
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+
+
+def _capabilities_view(row: Provider, models: list[str]) -> dict[str, ModelCapability]:
+    stored = _stored_capabilities(row)
+    return {model: stored.get(model, ModelCapability()) for model in models}
+
+
 def view(row: Provider) -> ProviderView:
+    models = json.loads(row.models)
     return ProviderView(
         id=row.id,
         name=row.name,
         type=row.type,
         base_url=row.base_url,
-        models=json.loads(row.models),
+        models=models,
+        model_capabilities=_capabilities_view(row, models),
         has_api_key=bool(row.api_key),
         created_at=row.created_at,
         updated_at=row.updated_at,
@@ -134,13 +189,16 @@ def providers(_: Annotated[str, Depends(current_user)]):
 @router.post("/api/v1/providers", response_model=ProviderView, status_code=201)
 def create_provider(body: ProviderCreate, _: Annotated[str, Depends(admin)]):
     now = datetime.now(UTC)
+    models = _validate_models(body.models)
+    capabilities = _validate_capabilities(body.model_capabilities or {}, models)
     row = Provider(
         id=uuid.uuid4().hex,
         name=body.name.strip(),
         type=_validate_type(body.type),
         base_url=_validate_address(body.base_url),
         api_key=encrypt(body.api_key) if body.api_key else None,
-        models=json.dumps(_validate_models(body.models)),
+        models=json.dumps(models),
+        model_capabilities=_dump_capabilities(capabilities),
         created_at=now,
         updated_at=now,
     )
@@ -164,8 +222,20 @@ def update_provider(
             row.type = _validate_type(body.type)
         if body.base_url is not None:
             row.base_url = _validate_address(body.base_url)
+        models: list[str] | None = None
         if body.models is not None:
-            row.models = json.dumps(_validate_models(body.models))
+            models = _validate_models(body.models)
+            row.models = json.dumps(models)
+        if body.model_capabilities is not None:
+            current_models = models or json.loads(row.models)
+            capabilities = _validate_capabilities(
+                body.model_capabilities, current_models
+            )
+            row.model_capabilities = _dump_capabilities(capabilities)
+        elif models is not None:
+            stored = _stored_capabilities(row)
+            kept = {model: value for model, value in stored.items() if model in models}
+            row.model_capabilities = _dump_capabilities(kept)
         if "api_key" in body.model_fields_set:
             row.api_key = encrypt(body.api_key) if body.api_key else None
         row.updated_at = datetime.now(UTC)
