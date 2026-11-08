@@ -99,9 +99,7 @@ test("admins probe each model and apply the result before saving", async () => {
     "?",
   );
   expect(screen.getByText(result.notes)).toBeTruthy();
-  expect(
-    screen.getByText("yes = 网关接受该参数，不保证生效幅度"),
-  ).toBeTruthy();
+  expect(screen.getByText("yes = 网关接受该参数，不保证生效幅度")).toBeTruthy();
 
   const probeCall = fetcher.mock.calls.find(
     ([input]) => String(input) === `/api/v1/providers/${configured.id}/probe`,
@@ -150,11 +148,7 @@ test("admins probe each model and apply the result before saving", async () => {
 
 test.each([
   ["yes", "支持（已验证模型能识别图片内容）", "vision: 两次都识别正确"],
-  [
-    "no",
-    "不支持",
-    "vision: 请求被接受但模型未能识别图片内容",
-  ],
+  ["no", "不支持", "vision: 请求被接受但模型未能识别图片内容"],
   ["unknown", "未知", "vision: timeout"],
 ])(
   "shows the %s image probe outcome and its reason",
