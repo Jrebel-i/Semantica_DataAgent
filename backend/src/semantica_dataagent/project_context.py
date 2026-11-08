@@ -450,6 +450,30 @@ def plugin_configs(
         }
 
 
+def plugin_intervals(category: str, plugin_id: str) -> dict[str, int]:
+    """Enabled intervals for one plugin, keyed by project id."""
+    with sessions()() as db:
+        rows = (
+            db.query(PluginConfig)
+            .filter(
+                PluginConfig.category == category,
+                PluginConfig.plugin_id == plugin_id,
+                PluginConfig.enabled.is_(True),
+            )
+            .all()
+        )
+    result = {}
+    for row in rows:
+        try:
+            parameters = json.loads(row.parameters)
+        except (TypeError, ValueError):
+            continue
+        value = parameters.get("interval_seconds", 0)
+        if isinstance(value, int) and value > 0:
+            result[row.project_id] = value
+    return result
+
+
 def plugin_config(
     category: str,
     plugin_id: str,

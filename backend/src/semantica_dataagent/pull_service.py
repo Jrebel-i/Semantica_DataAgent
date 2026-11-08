@@ -1,6 +1,5 @@
 """Execute configured metadata pulls and record their outcome."""
 
-import json
 import threading
 import uuid
 from datetime import UTC, datetime
@@ -10,7 +9,7 @@ import httpx
 
 from . import project_context
 from .crypto import decrypt
-from .db import PluginConfig, PullRecord, sessions
+from .db import PullRecord, sessions
 from .plugins import discover
 from .project_context import DEFAULT_PROJECT_ID, add_queued_build
 from .source_directory import git, publish_pull, repository
@@ -26,26 +25,7 @@ def interval():
 
 def intervals() -> dict[str, int]:
     """Enabled DTB pull intervals, keyed by project."""
-    with sessions()() as db:
-        rows = (
-            db.query(PluginConfig)
-            .filter(
-                PluginConfig.category == "puller",
-                PluginConfig.plugin_id == "dtb",
-                PluginConfig.enabled.is_(True),
-            )
-            .all()
-        )
-    result = {}
-    for row in rows:
-        try:
-            parameters = json.loads(row.parameters)
-        except (TypeError, ValueError):
-            continue
-        value = parameters.get("interval_seconds", 0)
-        if isinstance(value, int) and value > 0:
-            result[row.project_id] = value
-    return result
+    return project_context.plugin_intervals("puller", "dtb")
 
 
 def _lock_for(project_id: str) -> threading.Lock:
