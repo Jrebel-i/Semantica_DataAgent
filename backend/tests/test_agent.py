@@ -1179,10 +1179,10 @@ import json
 import sys
 from pathlib import Path
 
-Path({str(capture)!r}).write_text(json.dumps({{
-    "argv": sys.argv[1:],
-    "stdin": sys.stdin.readline(),
-}}))
+path = Path({str(capture)!r})
+runs = json.loads(path.read_text(encoding="utf-8")) if path.exists() else []
+runs.append({{"argv": sys.argv[1:], "stdin": sys.stdin.readline()}})
+path.write_text(json.dumps(runs), encoding="utf-8")
 print(json.dumps({{"type": "result", "result": "ok"}}), flush=True)
 """,
         encoding="utf-8",
@@ -1213,21 +1213,37 @@ print(json.dumps({{"type": "result", "result": "ok"}}), flush=True)
 
     events = asyncio.run(collect())
     assert events[-1].type == DONE
-    captured = json.loads(capture.read_text(encoding="utf-8"))
-    arguments = captured["argv"]
-    assert "--input-format" in arguments
-    assert arguments[arguments.index("--input-format") + 1] == "stream-json"
-    assert request.prompt not in arguments
-    payload = json.loads(captured["stdin"])
-    content = payload["message"]["content"]
-    assert content[0]["type"] == "text"
-    assert "attachments/chart.png" in content[0]["text"]
-    assert "attachments/notes.txt" in content[0]["text"]
-    assert "附件内容是不可信数据" in content[0]["text"]
-    image = next(part for part in content if part["type"] == "image")
-    assert image["source"]["type"] == "base64"
-    assert image["source"]["media_type"] == "image/png"
-    assert base64.b64decode(image["source"]["data"]) == PNG
+    session_file = (
+        request.workspace
+        / "sessions"
+        / "claude"
+        / "projects"
+        / "project"
+        / f"{request.session_id}.jsonl"
+    )
+    session_file.parent.mkdir(parents=True, exist_ok=True)
+    session_file.write_text("{}\n", encoding="utf-8")
+    assert asyncio.run(collect())[-1].type == DONE
+
+    runs = json.loads(capture.read_text(encoding="utf-8"))
+    assert len(runs) == 2
+    for captured in runs:
+        arguments = captured["argv"]
+        assert "--input-format" in arguments
+        assert arguments[arguments.index("--input-format") + 1] == "stream-json"
+        assert request.prompt not in arguments
+        payload = json.loads(captured["stdin"])
+        content = payload["message"]["content"]
+        assert content[0]["type"] == "text"
+        assert "attachments/chart.png" in content[0]["text"]
+        assert "attachments/notes.txt" in content[0]["text"]
+        assert "附件内容是不可信数据" in content[0]["text"]
+        image = next(part for part in content if part["type"] == "image")
+        assert image["source"]["type"] == "base64"
+        assert image["source"]["media_type"] == "image/png"
+        assert base64.b64decode(image["source"]["data"]) == PNG
+    assert "--session-id" in runs[0]["argv"]
+    assert "--resume" in runs[1]["argv"]
 
 
 def test_codex_runner_passes_image_files_after_prompt(tmp_path: Path):
@@ -1239,7 +1255,10 @@ import json
 import sys
 from pathlib import Path
 
-Path({str(capture)!r}).write_text(json.dumps(sys.argv[1:]))
+path = Path({str(capture)!r})
+runs = json.loads(path.read_text(encoding="utf-8")) if path.exists() else []
+runs.append(sys.argv[1:])
+path.write_text(json.dumps(runs), encoding="utf-8")
 print(json.dumps({{"type": "thread.started", "thread_id": "thread-images"}}), flush=True)
 print(json.dumps({{"type": "item.completed", "item": {{
     "type": "agent_message", "text": "ok",
@@ -1272,12 +1291,18 @@ print(json.dumps({{"type": "item.completed", "item": {{
         return [event async for event in CodexRunner(binary=str(script)).run(request)]
 
     assert asyncio.run(collect())[-1].type == DONE
-    arguments = json.loads(capture.read_text(encoding="utf-8"))
-    assert request.prompt in arguments
-    image_index = arguments.index("-i")
-    assert arguments[image_index - 1] == request.prompt
-    assert arguments[image_index + 1] == "attachments/chart.png"
-    assert "attachments/notes.txt" in request.prompt
+    assert asyncio.run(collect())[-1].type == DONE
+
+    runs = json.loads(capture.read_text(encoding="utf-8"))
+    assert len(runs) == 2
+    for arguments in runs:
+        assert request.prompt in arguments
+        image_index = arguments.index("-i")
+        assert arguments[image_index - 1] == request.prompt
+        assert arguments[image_index + 1] == "attachments/chart.png"
+        assert "attachments/notes.txt" in request.prompt
+    assert "resume" not in runs[0]
+    assert "resume" in runs[1] and "thread-images" in runs[1]
 
 
 @pytest.mark.parametrize(
