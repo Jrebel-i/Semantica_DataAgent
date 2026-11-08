@@ -634,6 +634,7 @@ async def confirm_query(
             raise HTTPException(503, "Agent runtime is unavailable")
         provider_settings = provider_config(provider)
         model = turn.model or conversation.model
+        effort = turn.effort
         seq = (
             db.query(func.max(TurnEvent.seq)).filter_by(turn_id=turn_id).scalar() or 0
         ) + 1
@@ -677,6 +678,7 @@ async def confirm_query(
         mcp_url=public_base_url() + "/mcp/",
         mcp_token=issue_agent_credential(requester.id, conversation_id, turn_id),
         turn_id=turn_id,
+        effort=effort,
     )
 
     async def resumed():

@@ -406,6 +406,7 @@ def test_confirmed_query_resumes_agent_and_respects_interpretation_setting(
 
     class Runner:
         agent_id = "pi"
+        effort_levels = ("low", "medium", "high", "extra", "max")
 
         def __init__(self):
             self.requests = []
@@ -435,6 +436,12 @@ def test_confirmed_query_resumes_agent_and_respects_interpretation_setting(
             "models": ["model"],
         },
     ).json()
+    updated = c.put(
+        f"/api/v1/providers/{provider['id']}",
+        headers=headers,
+        json={"model_capabilities": {"model": {"effort_levels": ["high"]}}},
+    )
+    assert updated.status_code == 200, updated.text
     response = c.post(
         "/api/v1/conversations/ask",
         headers=headers,
@@ -443,6 +450,7 @@ def test_confirmed_query_resumes_agent_and_respects_interpretation_setting(
             "agent": "pi",
             "provider_id": provider["id"],
             "model": "model",
+            "effort": "high",
         },
     )
     initial = _sse(response.text)
@@ -481,6 +489,7 @@ def test_confirmed_query_resumes_agent_and_respects_interpretation_setting(
     else:
         assert "private-value" not in runner.requests[1].prompt
     assert all("private-value" not in json.dumps(trace) for trace in traces)
+    assert [request.effort for request in runner.requests] == ["high", "high"]
     assert c.post(path, headers=headers).status_code == 409
     other_headers = {"Authorization": f"Bearer {other_token}"}
     assert (
@@ -495,6 +504,7 @@ def test_confirmed_query_resumes_agent_and_respects_interpretation_setting(
     )
     detail = c.get(f"/api/v1/conversations/{conversation_id}", headers=headers).json()
     assert detail["turns"][0]["answer"] == "结论"
+    assert detail["turns"][0]["effort"] == "high"
     assert any(
         event["type"] == "query_result" for event in detail["turns"][0]["events"]
     )
