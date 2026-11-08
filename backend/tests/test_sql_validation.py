@@ -56,10 +56,14 @@ def test_partition_issue_lists_table_field_message_and_fix():
 @pytest.mark.parametrize(
     "sql",
     [
-        "SELECT o.id FROM shop.orders o "
-        "WHERE o.dt = (SELECT MAX(dt) FROM shop.orders)",
-        "SELECT o.id FROM shop.orders o "
-        "WHERE o.dt >= '2025-01-01' AND o.dt <= '2025-01-31'",
+        (
+            "SELECT o.id FROM shop.orders o "
+            "WHERE o.dt = (SELECT MAX(dt) FROM shop.orders)"
+        ),
+        (
+            "SELECT o.id FROM shop.orders o "
+            "WHERE o.dt >= '2025-01-01' AND o.dt <= '2025-01-31'"
+        ),
     ],
 )
 def test_partitioned_sql_passes_with_no_issues(sql):

@@ -200,7 +200,12 @@ def parse_args(argv: list[str] | None = None) -> Config:
     parser.add_argument("--no-builtin-checks", action="store_true")
     parser.add_argument("--expect-table", default="shop.orders")
     parser.add_argument("--search-query", default="销售额")
-    parser.add_argument("--validate-sql", default="SELECT id FROM shop.orders")
+    parser.add_argument(
+        "--validate-sql",
+        default=(
+            "SELECT id FROM shop.orders WHERE dt = (SELECT MAX(dt) FROM shop.orders)"
+        ),
+    )
     parser.add_argument(
         "--validate-dialect", choices=("hive", "spark", "doris"), default="hive"
     )

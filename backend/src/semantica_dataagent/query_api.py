@@ -172,11 +172,13 @@ def _latest_partition_subquery(term, field, alias, scope, table):
     return select
 
 
-def _partition_analysis(tree):
-    try:
-        tables = knowledge.describe()
-    except Exception as exc:
-        raise HTTPException(503, "无法读取分区元数据") from exc
+def _partition_issues(tree, tables):
+    """Return table names, latest-partition usage and actionable problems.
+
+    ``tables`` uses the same shape as ``knowledge.describe()``.  Keeping the
+    rules in one place lets ``validate_sql`` show the same rejection that the
+    execution path would raise, instead of maintaining a second copy.
+    """
     lookup = {}
     for table in tables:
         lookup.setdefault(table["name"].lower(), []).append(table)
@@ -185,6 +187,7 @@ def _partition_analysis(tree):
         )
     names = []
     records = []
+    problems = []
     for scope in traverse_scope(tree):
         # A predicate beneath OR or NOT cannot prove the partition is constrained.
         terms = _partition_terms(scope.expression.args.get("where"))
@@ -193,11 +196,34 @@ def _partition_analysis(tree):
             if not isinstance(table, exp.Table):
                 continue
             if not isinstance(table.this, exp.Identifier) or table.catalog:
-                raise HTTPException(422, "不支持此表来源")
+                problems.append(
+                    (
+                        422,
+                        {
+                            "kind": "partition_metadata",
+                            "table": table.sql(dialect="doris"),
+                            "condition": table.sql(dialect="doris"),
+                            "message": "不支持此表来源",
+                            "suggestion": "只使用 database.table 形式的物理表。",
+                        },
+                    )
+                )
+                continue
             name = ".".join(part for part in (table.db, table.name) if part).lower()
             matches = lookup.get(name, [])
             if len(matches) != 1:
-                raise HTTPException(422, f"无法确定表的分区元数据: {name}")
+                problems.append(
+                    (
+                        422,
+                        {
+                            "kind": "partition_metadata",
+                            "table": name,
+                            "message": f"无法确定表的分区元数据: {name}",
+                            "suggestion": "确认知识库中存在唯一的 database.table 元数据。",
+                        },
+                    )
+                )
+                continue
             metadata = matches[0]
             fields = metadata.get("fields")
             if (
@@ -210,7 +236,18 @@ def _partition_analysis(tree):
                     for f in fields
                 )
             ):
-                raise HTTPException(503, f"无法确定表的分区元数据: {name}")
+                problems.append(
+                    (
+                        503,
+                        {
+                            "kind": "partition_metadata",
+                            "table": name,
+                            "message": f"无法确定表的分区元数据: {name}",
+                            "suggestion": "重新构建知识库，确保字段带有 partition 布尔标记。",
+                        },
+                    )
+                )
+                continue
             names.append(name)
             partitions = [f["name"].lower() for f in fields if f.get("partition")]
             records.append((scope, terms, alias, table, name, partitions))
@@ -260,7 +297,36 @@ def _partition_analysis(tree):
                 )
 
             if not any(valid(term) for term in terms):
-                raise HTTPException(422, f"分区表 {name} 缺少分区条件: {field}")
+                qualified = ".".join(part for part in (table.db, table.name) if part)
+                problems.append(
+                    (
+                        422,
+                        {
+                            "kind": "partition",
+                            "table": name,
+                            "field": field,
+                            "message": f"分区表 {name} 缺少分区条件: {field}",
+                            "suggestion": (
+                                f"在 WHERE 中限定 {field}：快照表用 "
+                                f"{field} = (SELECT MAX({field}) FROM {qualified})；"
+                                f"增量表用 {field} 的范围条件，如 "
+                                f"{field} >= '2025-01-01'。"
+                            ),
+                        },
+                    )
+                )
+    return names, latest_runtime, problems
+
+
+def _partition_analysis(tree):
+    try:
+        tables = knowledge.describe()
+    except Exception as exc:
+        raise HTTPException(503, "无法读取分区元数据") from exc
+    names, latest_runtime, problems = _partition_issues(tree, tables)
+    if problems:
+        status, issue = problems[0]
+        raise HTTPException(status, issue["message"])
     return names, latest_runtime
 
 
@@ -355,9 +421,21 @@ async def propose_query(sql: str) -> dict:
     """
     from . import sql_validation
     from .mcp_context import current_conversation_id, current_requester, current_turn_id
+    from .mcp_contract import ToolInvalidInput
 
-    if sql_validation.validate_sql(sql, dialect="doris").get("status") != "pass":
-        raise ValueError("SQL validation did not pass")
+    if not isinstance(sql, str) or not sql.strip():
+        raise ToolInvalidInput("sql 参数不能为空")
+    validation = sql_validation.validate_sql(sql, dialect="doris")
+    if validation.get("status") != "pass":
+        details = "; ".join(
+            str(issue.get("message") or issue.get("kind"))
+            for issue in validation.get("issues", [])
+            if isinstance(issue, dict)
+        )
+        message = "SQL validation did not pass"
+        if details:
+            message += ": " + details
+        raise ToolInvalidInput(message[:4000])
     conversation_id = current_conversation_id()
     supplied_turn = current_turn_id()
     if conversation_id and (
@@ -365,13 +443,18 @@ async def propose_query(sql: str) -> dict:
         or not supplied_turn.isascii()
         or not supplied_turn.isdecimal()
     ):
-        raise ValueError("Active conversation turn not found")
-    return await _create_plan(
-        PlanInput(sql=sql),
-        current_requester(),
-        conversation_id,
-        int(supplied_turn) if supplied_turn else None,
-    )
+        raise ToolInvalidInput("Active conversation turn not found")
+    try:
+        return await _create_plan(
+            PlanInput(sql=sql),
+            current_requester(),
+            conversation_id,
+            int(supplied_turn) if supplied_turn else None,
+        )
+    except HTTPException as exc:
+        if 400 <= exc.status_code < 500:
+            raise ToolInvalidInput(str(exc.detail)) from exc
+        raise
 
 
 async def execute_query(
