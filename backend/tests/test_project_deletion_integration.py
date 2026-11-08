@@ -177,8 +177,10 @@ def _fork_child(action, **kwargs) -> int:
 
 def _recover_in_fresh_process() -> int:
     def recover():
+        from semantica_dataagent import project_context
         from semantica_dataagent.project_deletion import recover_project_deletions
 
+        project_context.recover_projects()
         recover_project_deletions()
 
     return _fork_child(recover)
