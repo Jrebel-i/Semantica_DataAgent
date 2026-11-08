@@ -1,14 +1,11 @@
 import { createPortal } from "react-dom";
-import { ColumnLineage } from "./ColumnLineage";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { Alert, Button, Input, Tag } from "antd";
 import type { Language, Messages } from "./i18n";
-import { TaskLineage } from "./TaskLineage";
-import { CloseOutlined, PlusOutlined } from "@ant-design/icons";
+import { PlusOutlined } from "@ant-design/icons";
 import { parseAgentProfiles, type AgentProfiles } from "./agentProfiles";
 import { Markdown } from "./Markdown";
-import { safeDecodePath } from "./paths";
 import { loadTableDetail, tablePartsFromRef } from "./tableDetail";
 import {
   citationLabel,
@@ -19,21 +16,14 @@ import {
 } from "./chat/citations";
 import type {
   Agent,
-  Citation,
   CitationDetail,
-  CitationGroup,
-  CitationLabel,
   Clarification,
   Conversation,
   ConversationDetail,
   DocumentView,
-  EventView,
   LiveTurn,
   Provider,
   QueryPlan,
-  QueryResult,
-  SqlBlock,
-  ToolCall,
   Turn,
 } from "./chat/types";
 import { PROVIDER_TYPES } from "./chat/types";
@@ -47,6 +37,7 @@ import { QuestionText } from "./chat/QuestionText";
 import { TurnBlock } from "./chat/TurnBlock";
 import { ConversationSidebar } from "./chat/ConversationSidebar";
 import { Composer } from "./chat/Composer";
+import { ContextDrawer } from "./chat/ContextDrawer";
 import {
   applyToolEnd,
   applyToolStart,
@@ -1108,105 +1099,17 @@ export function ChatPage({
             />
           </div>
           {citationRef && (
-            <aside className="chat-context">
-              <div className="context-header">
-                <div className="context-heading">
-                  <strong title={citationHeading?.title}>
-                    {citationHeading?.label ?? t.citations}
-                  </strong>
-                  {citationDetail?.kind === "document" && (
-                    <div className="context-ref">
-                      {safeDecodePath(citationDetail.document.path)}
-                    </div>
-                  )}
-                </div>
-                <Button
-                  type="text"
-                  aria-label={t.close}
-                  onClick={closeCitation}
-                >
-                  <CloseOutlined />
-                </Button>
-              </div>
-              <div className="context-body">
-                {citationLoading && <p>{t.loadingCitation}</p>}
-                {citationError && <Alert type="error" title={citationError} />}
-                {selectedTable ? (
-                  <div className="context-schema">
-                    <div className="context-schema-head">
-                      <div className="context-schema-title">
-                        <strong>
-                          {safeDecodePath(
-                            `${selectedTable.database}.${selectedTable.name}`,
-                          )}
-                        </strong>
-                        {selectedTable.comment && (
-                          <span className="muted">{selectedTable.comment}</span>
-                        )}
-                      </div>
-                    </div>
-                    <div className="context-schema-body">
-                      <table className="schema-table">
-                        <thead>
-                          <tr>
-                            <th>{t.field}</th>
-                            <th>{t.dataType}</th>
-                            <th>{t.comment}</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {selectedTable.fields.map((field) => (
-                            <tr key={field.name}>
-                              <td>{field.name}</td>
-                              <td>{field.type}</td>
-                              <td>
-                                {field.comment}
-                                {field.partition ? ` · ${t.partition}` : ""}
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                      {citationRef.startsWith("field:") ? (
-                        <ColumnLineage
-                          token={token}
-                          table={`${selectedTable.database}.${selectedTable.name}`}
-                          column={citationRef
-                            .slice(6)
-                            .split(".")
-                            .slice(2)
-                            .join(".")}
-                        />
-                      ) : (
-                        <TaskLineage
-                          token={token}
-                          messages={t}
-                          table={`${selectedTable.database}.${selectedTable.name}`}
-                          showTasks={false}
-                        />
-                      )}
-                    </div>
-                  </div>
-                ) : citationDetail?.kind === "document" ? (
-                  <article className="context-document">
-                    <div className="doc-content">
-                      {safeDecodePath(citationDetail.document.path)
-                        .toLowerCase()
-                        .endsWith(".md") ? (
-                        <Markdown text={citationDetail.document.content} />
-                      ) : (
-                        <pre>{citationDetail.document.content}</pre>
-                      )}
-                    </div>
-                  </article>
-                ) : (
-                  <div className="empty-state">{t.emptyContext}</div>
-                )}
-                {citationDetail?.kind === "message" && (
-                  <Alert type="info" title={citationDetail.message} />
-                )}
-              </div>
-            </aside>
+            <ContextDrawer
+              messages={t}
+              citationRef={citationRef}
+              citationHeading={citationHeading}
+              citationDetail={citationDetail}
+              selectedTable={selectedTable}
+              citationLoading={citationLoading}
+              citationError={citationError}
+              token={token}
+              onClose={closeCitation}
+            />
           )}
         </div>
       )}
