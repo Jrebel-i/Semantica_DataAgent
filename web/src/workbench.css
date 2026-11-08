@@ -2552,9 +2552,7 @@ code {
   box-shadow: 0 8px 24px #30251c1a;
   opacity: 1;
 }
-.ant-select-dropdown.composer-select-dropdown:not(.ant-slide-up-leave):not(
-    .ant-slide-down-leave
-  ) {
+.ant-select-dropdown.composer-select-dropdown:not(.ant-slide-up-leave):not(.ant-slide-down-leave) {
   opacity: 1 !important;
 }
 .composer-controls .ant-select-selector {
