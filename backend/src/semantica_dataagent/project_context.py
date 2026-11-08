@@ -90,6 +90,7 @@ def neo4j_password(values: Mapping[str, Any]) -> str | None:
 def _read_settings(db, project_id: str = DEFAULT_PROJECT_ID) -> dict[str, str]:
     values = {row.key: row.value for row in db.query(Setting).all()}
     if project_id != DEFAULT_PROJECT_ID:
+        values.pop(SCHEDULE_INTERVAL_KEY, None)
         values.update(
             {
                 row.key: row.value
