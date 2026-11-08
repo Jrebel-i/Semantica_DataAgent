@@ -157,6 +157,19 @@ def check_provider_model_capabilities(ctx):
         f"explicit capability mapping was not replaced: {moved.json()['model_capabilities']}",
     )
 
+    readded = ctx.rest.put(
+        f"/api/v1/providers/{configured_body['id']}",
+        json={"models": ["text-model", "vision-model", "new-model"]},
+    )
+    ctx.require(
+        readded.status_code == 200,
+        f"re-adding a model failed: {readded.status_code} {readded.text}",
+    )
+    ctx.require(
+        readded.json()["model_capabilities"]["vision-model"] == DEFAULT_CAPABILITY,
+        "re-added model restored stale capabilities instead of defaults",
+    )
+
     return {
         "ok": True,
         "info": {

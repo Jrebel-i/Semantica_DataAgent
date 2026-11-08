@@ -148,6 +148,23 @@ def test_update_prunes_capabilities_when_models_are_removed(client):
         "model-c": DEFAULT_CAPABILITY,
     }
 
+    readded = c.put(
+        f"/api/v1/providers/{created['id']}",
+        headers=_headers(token),
+        json={"models": ["model-a", "model-b", "model-c"]},
+    )
+
+    assert readded.status_code == 200
+    assert readded.json()["model_capabilities"] == {
+        "model-a": DEFAULT_CAPABILITY,
+        "model-b": {
+            "description": "b",
+            "vision": False,
+            "effort_levels": ["max"],
+        },
+        "model-c": DEFAULT_CAPABILITY,
+    }
+
 
 def test_update_capabilities_replaces_explicit_mapping(client):
     c, token = client
