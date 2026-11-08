@@ -46,7 +46,7 @@ test("sign in and render dependency states", async () => {
     "fetch",
     vi.fn(async (url: string) =>
       url === "/api/v1/me"
-        ? new Response("{}", { status: 200 })
+        ? Response.json({ role: "admin" })
         : new Response(
             JSON.stringify({
               neo4j: { status: "up", elapsed_ms: 1 },
@@ -276,12 +276,13 @@ test("user cannot access correction review", async () => {
 });
 
 test("status bar distinguishes knowledge generations by suffix and tooltip", async () => {
+  history.replaceState(null, "", "/");
   const name = "default_4177a9e7c8a844aa9a889b5166999f";
-  localStorage.setItem("token", "user");
+  localStorage.setItem("token", "admin");
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url: string) => {
-      if (url === "/api/v1/me") return Response.json({ role: "user" });
+      if (url === "/api/v1/me") return Response.json({ role: "admin" });
       if (url === "/api/v1/generations")
         return Response.json({
           generations: [
@@ -314,4 +315,38 @@ test("status bar distinguishes knowledge generations by suffix and tooltip", asy
   const item = suffix.closest(".status-item");
   expect(item?.getAttribute("title")).toBe(name);
   expect(screen.queryByText(/default_4177a9e7c8a844aa9a…/)).toBeNull();
+});
+
+test("status bar is rendered for admins", async () => {
+  history.replaceState(null, "", "/");
+  localStorage.setItem("token", "admin");
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) => {
+      if (url === "/api/v1/me") return Response.json({ role: "admin" });
+      return Response.json({});
+    }),
+  );
+  const { container } = render(<App />);
+  await screen.findByRole("button", { name: "用户菜单" });
+  expect(container.querySelector(".status-bar")).not.toBeNull();
+  expect(screen.getByText(/当前代/)).toBeTruthy();
+  expect(screen.getByText(/DTB token/)).toBeTruthy();
+});
+
+test("status bar is hidden for regular users", async () => {
+  history.replaceState(null, "", "/");
+  localStorage.setItem("token", "user");
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) => {
+      if (url === "/api/v1/me") return Response.json({ role: "user" });
+      return Response.json({});
+    }),
+  );
+  const { container } = render(<App />);
+  await screen.findByRole("button", { name: "用户菜单" });
+  expect(container.querySelector(".status-bar")).toBeNull();
+  expect(screen.queryByText(/当前代/)).toBeNull();
+  expect(screen.queryByText(/DTB token/)).toBeNull();
 });

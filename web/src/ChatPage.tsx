@@ -546,15 +546,17 @@ async function readSse(
 function ToolList({
   tools,
   messages,
+  failed,
 }: {
   tools: ToolCall[];
   messages: Messages;
+  failed: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
   const failures = tools.filter((tool) => tool.status === "error").length;
   useEffect(() => {
-    if (failures) setExpanded(true);
-  }, [failures]);
+    if (failed) setExpanded(true);
+  }, [failed]);
   if (tools.length === 0) return null;
   const running = tools.find((tool) => tool.status === "running");
   return (
@@ -565,6 +567,11 @@ function ToolList({
         aria-expanded={expanded}
       >
         已使用 {tools.length} 个工具 {expanded ? "▾" : "▸"}
+        {failures > 0 && !expanded && (
+          <span className="tool-failures">
+            {messages.toolFailuresHint.replace("{count}", String(failures))}
+          </span>
+        )}
       </button>
       {running && <span>正在{toolLabel(running.name)}…</span>}
       {expanded && (
@@ -599,6 +606,27 @@ function ToolList({
       )}
     </section>
   );
+}
+
+function turnFailed(turn: {
+  status: string;
+  answer?: string;
+  error?: string | null;
+}) {
+  return (
+    turn.status === "failed" ||
+    Boolean(turn.error) ||
+    (turn.status === "error" && !turn.answer)
+  );
+}
+
+function resultCountText(messages: Messages, count: number) {
+  if (count > 20) {
+    return messages.resultRowsLimited.replace("{count}", String(count));
+  }
+  return count === 1
+    ? messages.resultRowSingle
+    : messages.resultRows.replace("{count}", String(count));
 }
 
 function toolLabel(name: string) {
@@ -780,6 +808,7 @@ function TurnBlock({
   onDownload,
   onCopyLink,
   executing,
+  expiredPlans,
 }: {
   turn: Turn;
   messages: Messages;
@@ -794,6 +823,7 @@ function TurnBlock({
   onDownload: (id: string, format: string) => void;
   onCopyLink: (id: string) => void;
   executing: boolean;
+  expiredPlans: string[];
 }) {
   const plan = queryEvent<QueryPlan>(turn.events ?? [], "query_plan");
   const result = queryEvent<QueryResult>(turn.events ?? [], "query_result");
@@ -813,6 +843,7 @@ function TurnBlock({
   const sql = sqlBlocks(turn.sql).filter(
     (block) => !awaitingPlan || normalizeSql(block.sql) !== planSql,
   );
+  const planExpired = plan ? expiredPlans.includes(plan.id) : false;
   return (
     <article className="turn">
       <div className="message">
@@ -828,7 +859,11 @@ function TurnBlock({
           AI
         </span>
         <div className="message-body">
-          <ToolList tools={tools} messages={messages} />
+          <ToolList
+            tools={tools}
+            messages={messages}
+            failed={turnFailed(turn)}
+          />
           {awaitingPlan && plan && (
             <section className="card query-confirmation">
               <SqlList
@@ -842,19 +877,21 @@ function TurnBlock({
               </p>
               <Button
                 type="primary"
-                disabled={executing}
+                disabled={executing || planExpired}
                 onClick={() => onExecute(turn, plan)}
               >
-                {executing
-                  ? messages.confirmExecuting
-                  : messages.confirmExecute}
+                {planExpired
+                  ? messages.confirmExpired
+                  : executing
+                    ? messages.confirmExecuting
+                    : messages.confirmExecute}
               </Button>
             </section>
           )}
           {result && (
             <div className="card query-result-preview">
               <ResultTable result={result} limit={20} />
-              <p>共 {result.row_count} 行，已显示前 20 行</p>
+              <p>{resultCountText(messages, result.row_count)}</p>
               {plan &&
                 result.row_count >=
                   Math.min(
@@ -873,7 +910,11 @@ function TurnBlock({
                 ))}
                 <Button onClick={() => onCopyLink(result.id)}>复制链接</Button>
               </Space>
-              <p className="muted">{messages.downloadLinkHint}</p>
+              <p className="muted">
+                {result.row_count > 20
+                  ? messages.downloadLinkHint
+                  : messages.downloadResultHint}
+              </p>
             </div>
           )}
           <div className="answer">
@@ -971,7 +1012,6 @@ export function ChatPage({
 }) {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [profiles, setProfiles] = useState<AgentProfiles>({});
-  const openedRecent = useRef(false);
   const selectionTouched = useRef(false);
   const askSequence = useRef(0);
   const [defaults, setDefaults] = useState({
@@ -992,6 +1032,7 @@ export function ChatPage({
   const [question, setQuestion] = useState("");
   const [turns, setTurns] = useState<Turn[]>([]);
   const [live, setLive] = useState<LiveTurn | null>(null);
+  const [expiredPlans, setExpiredPlans] = useState<string[]>([]);
   const [currentConversationId, setCurrentConversationId] = useState("");
   const [resumable, setResumable] = useState(true);
   const [sending, setSending] = useState(false);
@@ -1037,6 +1078,11 @@ export function ChatPage({
         const body = (await response.json().catch(() => null)) as {
           detail?: string;
         } | null;
+        if (response.status === 410) {
+          setExpiredPlans((current) =>
+            current.includes(plan.id) ? current : [...current, plan.id],
+          );
+        }
         throw new Error(body?.detail || t.askError);
       }
       await readSse(response, (name, data) => {
@@ -1132,16 +1178,10 @@ export function ChatPage({
       const rows = (await response.json()) as Conversation[];
       if (!Array.isArray(rows)) throw new Error("Invalid conversation list");
       setConversations(rows);
-      if (!openedRecent.current && !settingsOnly) {
-        if (rows.length) {
-          openedRecent.current = true;
-          void openConversation(rows[0].id);
-        }
-      }
     } catch {
       setError(t.askError);
     }
-  }, [token, t.askError, settingsOnly]);
+  }, [token, t.askError]);
 
   const loadProviders = useCallback(async () => {
     try {
@@ -1223,7 +1263,7 @@ export function ChatPage({
           model: profile?.default_model || data.assistant_model || "",
         };
         setDefaults(next);
-        if (!openedRecent.current && !selectionTouched.current) {
+        if (!selectionTouched.current) {
           setAgentId(next.agent);
           if (next.provider) setProviderId(next.provider);
           if (next.model) setModel(next.model);
@@ -1233,8 +1273,7 @@ export function ChatPage({
   }, [token]);
 
   useEffect(() => {
-    if (selectionTouched.current || openedRecent.current || !providers.length)
-      return;
+    if (selectionTouched.current || !providers.length) return;
     const profile = profiles[defaults.agent];
     const options = providers.filter(
       (provider) =>
@@ -1331,9 +1370,6 @@ export function ChatPage({
           name === "conversation" &&
           typeof data.conversation_id === "string"
         ) {
-          // Keep the live answer mounted; reloading the list must not replace
-          // it with a partially persisted turn.
-          openedRecent.current = true;
           conversationId = data.conversation_id;
           setCurrentConversationId(data.conversation_id);
         } else if (name === "text_delta" && typeof data.text === "string") {
@@ -1870,6 +1906,7 @@ export function ChatPage({
                   onDownload={(id, format) => void downloadQuery(id, format)}
                   onCopyLink={(id) => void copyDownloadLink(id)}
                   executing={sending}
+                  expiredPlans={expiredPlans}
                 />
               ))}
               {live && (
@@ -1887,7 +1924,11 @@ export function ChatPage({
                       AI
                     </span>
                     <div className="message-body">
-                      <ToolList tools={live.tools} messages={t} />
+                      <ToolList
+                        tools={live.tools}
+                        messages={t}
+                        failed={turnFailed(live)}
+                      />
                       <div className="answer">
                         {liveAnswer.text ? (
                           <Markdown text={liveAnswer.text} />
