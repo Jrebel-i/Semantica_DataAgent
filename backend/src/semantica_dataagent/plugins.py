@@ -1,14 +1,13 @@
 """Entry point contracts and persisted plugin configuration."""
 
-import json
 from dataclasses import dataclass
 from importlib.metadata import entry_points
 from typing import Literal, Protocol
 
 from jsonschema import Draft202012Validator
 
+from . import project_context
 from .canonical import Record
-from .db import PluginConfig, sessions
 
 GROUPS = {
     "source": "semantica_dataagent.source_adapters",
@@ -79,11 +78,7 @@ def discover():
 
 def configured():
     plugins = discover()
-    with sessions()() as db:
-        saved = {
-            (r.category, r.plugin_id): (r.enabled, json.loads(r.parameters))
-            for r in db.query(PluginConfig).all()
-        }
+    saved = project_context.plugin_configs()
     return [
         (
             category,

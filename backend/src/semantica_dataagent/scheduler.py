@@ -3,7 +3,7 @@
 import threading
 import time
 
-from .build_queue import enqueue_build
+from . import project_context
 
 
 class Schedule:
@@ -28,7 +28,9 @@ class Schedule:
 
 class Scheduler:
     def __init__(self, action=None):
-        self._action = action or (lambda: enqueue_build("incremental", "scheduler"))
+        self._action = action or (
+            lambda: project_context.enqueue_build("incremental", "scheduler")
+        )
         self._condition = threading.Condition()
         self._schedule = Schedule()
         self._thread = None

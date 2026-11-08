@@ -82,19 +82,17 @@ def _prepare(records, limit):
 
 
 def write(records, generation, storage):
-    values, statuses, skipped = _prepare(
-        records, int(storage._settings.get("dimension_value_limit", "1000"))
-    )
+    from . import project_context
+
+    limit = project_context.from_values(storage._settings).dimension_value_limit_int
+    values, statuses, skipped = _prepare(records, limit)
     changed_fields = {
         (r.data["database"], r.data["table"], r.data["name"])
         for r in records
         if r.kind == "field"
     }
     if storage.is_incremental and changed_fields:
-        _, all_statuses, _ = _prepare(
-            storage.all_records,
-            int(storage._settings.get("dimension_value_limit", "1000")),
-        )
+        _, all_statuses, _ = _prepare(storage.all_records, limit)
         statuses = [
             s
             for s in statuses
@@ -120,10 +118,15 @@ def write(records, generation, storage):
         value["source_file"] = min(primary_sources[key])
         value["build_id"] = storage.build_id
     storage.execute(
-        "CREATE FULLTEXT INDEX sda_dimension_values IF NOT EXISTS FOR (n:SDADimensionValue) ON EACH [n.normalized, n.aliases] OPTIONS {indexConfig: {`fulltext.analyzer`: 'cjk'}}",
+        "CREATE FULLTEXT INDEX __DIMENSION_INDEX__ IF NOT EXISTS FOR (n:SDADimensionValue) ON EACH [n.normalized, n.aliases] OPTIONS {indexConfig: {`fulltext.analyzer`: 'cjk'}}".replace(
+            "__DIMENSION_INDEX__", project_context.index_name("dimension_values")
+        ),
         {},
     )
-    storage.execute("CALL db.awaitIndex('sda_dimension_values', 120)", {})
+    storage.execute(
+        f"CALL db.awaitIndex('{project_context.index_name('dimension_values')}', 120)",
+        {},
+    )
     for rows, query in (
         (
             statuses,

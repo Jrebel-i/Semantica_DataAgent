@@ -6,7 +6,7 @@ from urllib.parse import quote
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 
-from . import knowledge
+from . import knowledge, project_context
 from .auth import current_user
 
 router = APIRouter()
@@ -26,6 +26,7 @@ def get_lineage(
     if not table or direction not in ("up", "down") or not 1 <= depth <= 3:
         raise ValueError("Invalid table, direction or depth")
     values = knowledge.settings()
+    project = project_context.from_values(values)
     if column is not None:
         if not column:
             raise ValueError("Invalid column")
@@ -44,7 +45,7 @@ def get_lineage(
             + "OPTIONAL MATCH (task:SDATask {generation:$generation, name:edge.task_id}) "
             + "RETURN DISTINCT properties(edge) AS edge, task.type AS task_type",
             {
-                "generation": values["knowledge_generation"],
+                "generation": project.generation,
                 "table": table,
                 "column": column,
             },
@@ -66,7 +67,7 @@ def get_lineage(
         "MATCH (start:SDALineageTable {generation:$generation, name:$table}) MATCH p="
         + (pattern % depth)
         + " UNWIND relationships(p) AS edge RETURN DISTINCT properties(edge) AS edge",
-        {"generation": values["knowledge_generation"], "table": table},
+        {"generation": project.generation, "table": table},
     )
     return [
         {
@@ -84,10 +85,11 @@ def get_lineage(
 
 def read_task_sql(task_id: str) -> dict:
     values = knowledge.settings()
+    project = project_context.from_values(values)
     rows = knowledge.execute(
         knowledge.read_graph(values),
         "MATCH (t:SDATask {generation:$generation, name:$name}) RETURN properties(t) AS task",
-        {"generation": values["knowledge_generation"], "name": task_id},
+        {"generation": project.generation, "name": task_id},
     )
     if not rows:
         raise ValueError("Task not found")
@@ -117,10 +119,11 @@ class TableLineageView(BaseModel):
 @router.get("/api/v1/table-lineage", response_model=TableLineageView)
 def table_lineage(table: str, _: Annotated[str, Depends(current_user)]):
     values = knowledge.settings()
+    project = project_context.from_values(values)
     rows = knowledge.execute(
         knowledge.read_graph(values),
         "MATCH (t:SDATask {generation:$generation})-[:PRODUCES]->(:SDALineageTable {generation:$generation, name:$table}) RETURN t.name AS name, t.ref AS ref",
-        {"generation": values["knowledge_generation"], "table": table},
+        {"generation": project.generation, "table": table},
     )
     return {
         "upstream": get_lineage(table, "up"),

@@ -26,15 +26,19 @@ def apply_overrides(records):
 
 
 def write(records, generation, storage):
+    from . import project_context
     from .knowledge import reference
     from .stage_contract import StageResult
 
     truncations = {}
+    index = project_context.index_name("knowledge")
     storage.execute(
-        "CREATE FULLTEXT INDEX sda_knowledge IF NOT EXISTS FOR (n:SDATable|SDAField|SDATask|SDAChunk) ON EACH [n.name, n.comment, n.description, n.content] OPTIONS {indexConfig: {`fulltext.analyzer`: 'cjk'}}",
+        "CREATE FULLTEXT INDEX __KNOWLEDGE_INDEX__ IF NOT EXISTS FOR (n:SDATable|SDAField|SDATask|SDAChunk) ON EACH [n.name, n.comment, n.description, n.content] OPTIONS {indexConfig: {`fulltext.analyzer`: 'cjk'}}".replace(
+            "__KNOWLEDGE_INDEX__", index
+        ),
         {},
     )
-    storage.execute("CALL db.awaitIndex('sda_knowledge', 120)", {})
+    storage.execute(f"CALL db.awaitIndex('{index}', 120)", {})
     tables = [
         dict(
             r.data,

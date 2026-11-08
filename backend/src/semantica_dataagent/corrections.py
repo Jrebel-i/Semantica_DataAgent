@@ -9,10 +9,11 @@ from typing import Annotated
 
 from pydantic import Field
 
-from . import knowledge
+from . import knowledge, project_context
 from .clarification import _owned_conversation
 from .db import CorrectionProposal, sessions
 from .mcp_context import bind_mcp_context, current_conversation_id, current_requester
+from .project_context import add_queued_build
 
 Text = Annotated[str, Field(min_length=1, max_length=20000, pattern=r"\S")]
 
@@ -52,10 +53,11 @@ def propose_correction(target: Text, patch: Text, reason: Text) -> dict:
     if target not in knowledge.existing_refs([target]):
         raise ValueError("Target is not in the current knowledge generation")
     values = knowledge.settings()
+    project = project_context.from_values(values)
     rows = knowledge.execute(
         knowledge.read_graph(values),
         "MATCH (n:SDAEntity {generation:$generation, ref:$ref}) RETURN properties(n) AS node",
-        {"generation": values["knowledge_generation"], "ref": target},
+        {"generation": project.generation, "ref": target},
     )
     if len(rows) != 1:
         raise ValueError("Correction target is ambiguous or missing")
@@ -108,7 +110,6 @@ from sqlalchemy import text
 from .api_time import UtcDatetime
 from .auth import Requester, admin
 from .auth import current_requester as rest_requester
-from .build_queue import add_queued_build, build_queue
 from .db import MetadataOverride, Token
 from .source_directory import git, relative, repository, safe
 
@@ -213,7 +214,7 @@ def _finalize(proposal_id: str, commit_sha: str) -> ProposalView:
         )
         db.flush()
         result = ProposalView.model_validate(row)
-    build_queue.enqueue()
+    project_context.wake_build_queue()
     return result
 
 
@@ -337,14 +338,15 @@ def approve(
             db.flush()
             return ProposalView.model_validate(row)
         values = knowledge.settings()
+        project = project_context.from_values(values)
         nodes = knowledge.execute(
             knowledge.read_graph(values),
             "MATCH (n:SDADocument {generation:$generation, ref:$ref}) RETURN properties(n) AS node",
-            {"generation": values["knowledge_generation"], "ref": row.target},
+            {"generation": project.generation, "ref": row.target},
         )
         if len(nodes) != 1 or not nodes[0]["node"].get("source_file"):
             raise HTTPException(409, "Document no longer exists")
-        row.source_directory = values["source_directory"]
+        row.source_directory = project.source_directory_value
         row.source_path = nodes[0]["node"]["source_file"]
         row.patch = patch
         row.diff = "".join(

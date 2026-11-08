@@ -5,7 +5,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from . import knowledge
+from . import knowledge, project_context
 from .auth import current_user
 
 router = APIRouter()
@@ -35,12 +35,13 @@ class DocumentView(BaseModel):
 
 def list_categories() -> list[dict]:
     values = knowledge.settings()
+    project = project_context.from_values(values)
     rows = knowledge.execute(
         knowledge.read_graph(values),
         """MATCH (c:SDACategory {generation:$generation})
         OPTIONAL MATCH (c)-[:HAS_DOCUMENT]->(d:SDADocument)
         RETURN c.name AS name, c.ref AS ref, collect(properties(d)) AS docs ORDER BY name""",
-        {"generation": values["knowledge_generation"]},
+        {"generation": project.generation},
     )
     result = []
     for row in rows:
@@ -71,10 +72,11 @@ def list_categories() -> list[dict]:
 
 def read_document(doc_id: str, section: str | None = None) -> dict:
     values = knowledge.settings()
+    project = project_context.from_values(values)
     rows = knowledge.execute(
         knowledge.read_graph(values),
         "MATCH (d:SDADocument {generation:$generation, ref:$ref}) RETURN properties(d) AS doc",
-        {"generation": values["knowledge_generation"], "ref": doc_id},
+        {"generation": project.generation, "ref": doc_id},
     )
     if not rows:
         raise ValueError("Document not found")

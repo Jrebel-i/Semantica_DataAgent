@@ -2,7 +2,7 @@
 
 import re
 
-from . import knowledge
+from . import knowledge, project_context
 
 
 def lookup_dim_values(table: str, keyword: str, field: str | None = None) -> list[dict]:
@@ -10,9 +10,10 @@ def lookup_dim_values(table: str, keyword: str, field: str | None = None) -> lis
     if not table or not keyword:
         raise ValueError("table and keyword are required")
     values = knowledge.settings()
+    project = project_context.from_values(values)
     store = knowledge.read_graph(values)
     params = {
-        "generation": values["knowledge_generation"],
+        "generation": project.generation,
         "table": table,
         "field": field,
         "keyword": keyword,
@@ -25,7 +26,9 @@ def lookup_dim_values(table: str, keyword: str, field: str | None = None) -> lis
     )
     fulltext = knowledge.execute(
         store,
-        "CALL db.index.fulltext.queryNodes('sda_dimension_values', $query) YIELD node WHERE node.generation = $generation AND (node.table = $table OR node.database + '.' + node.table = $table) AND ($field IS NULL OR node.field = $field) RETURN properties(node) AS item",
+        "CALL db.index.fulltext.queryNodes('"
+        + project_context.index_name("dimension_values")
+        + "', $query) YIELD node WHERE node.generation = $generation AND (node.table = $table OR node.database + '.' + node.table = $table) AND ($field IS NULL OR node.field = $field) RETURN properties(node) AS item",
         params,
     )
     result = {}
