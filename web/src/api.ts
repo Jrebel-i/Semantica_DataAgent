@@ -522,6 +522,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{project_id}/schedule": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Project Schedule */
+        get: operations["get_project_schedule_api_v1_projects__project_id__schedule_get"];
+        /** Set Project Schedule */
+        put: operations["set_project_schedule_api_v1_projects__project_id__schedule_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/providers": {
         parameters: {
             query?: never;
@@ -1297,6 +1315,8 @@ export interface components {
             missing: string;
             /** Owner Id */
             owner_id: string;
+            /** Project Id */
+            project_id: string;
             /** Question */
             question: string;
         };
@@ -1459,6 +1479,16 @@ export interface components {
              */
             role: "admin" | "member";
         };
+        /** ProjectScheduleUpdate */
+        ProjectScheduleUpdate: {
+            /** Interval Seconds */
+            interval_seconds: number;
+        };
+        /** ProjectScheduleView */
+        ProjectScheduleView: {
+            /** Interval Seconds */
+            interval_seconds: number;
+        };
         /** ProjectUpdate */
         ProjectUpdate: {
             /** Name */
@@ -1535,6 +1565,8 @@ export interface components {
             owner_id: string;
             /** Patch */
             patch: string;
+            /** Project Id */
+            project_id: string;
             /** Reason */
             reason: string;
             /** Reviewed At */
@@ -2415,7 +2447,9 @@ export interface operations {
     };
     list_proposals_api_v1_corrections_get: {
         parameters: {
-            query?: never;
+            query?: {
+                project?: string | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -2431,11 +2465,22 @@ export interface operations {
                     "application/json": components["schemas"]["ProposalView"][];
                 };
             };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
         };
     };
     create_proposal_api_v1_corrections_post: {
         parameters: {
-            query?: never;
+            query?: {
+                project?: string | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -2468,7 +2513,9 @@ export interface operations {
     };
     get_proposal_api_v1_corrections__proposal_id__get: {
         parameters: {
-            query?: never;
+            query?: {
+                project?: string | null;
+            };
             header?: never;
             path: {
                 proposal_id: string;
@@ -2499,7 +2546,10 @@ export interface operations {
     };
     approve_api_v1_corrections__proposal_id__approve_post: {
         parameters: {
-            query?: never;
+            query?: {
+                project_id?: string | null;
+                project?: string | null;
+            };
             header?: never;
             path: {
                 proposal_id: string;
@@ -2534,7 +2584,9 @@ export interface operations {
     };
     reject_api_v1_corrections__proposal_id__reject_post: {
         parameters: {
-            query?: never;
+            query?: {
+                project?: string | null;
+            };
             header?: never;
             path: {
                 proposal_id: string;
@@ -2715,7 +2767,9 @@ export interface operations {
     };
     list_gaps_api_v1_knowledge_gaps_get: {
         parameters: {
-            query?: never;
+            query?: {
+                project?: string | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -2729,6 +2783,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["GapView"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -3071,6 +3134,72 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_project_schedule_api_v1_projects__project_id__schedule_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectScheduleView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_project_schedule_api_v1_projects__project_id__schedule_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProjectScheduleUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectScheduleView"];
+                };
             };
             /** @description Validation Error */
             422: {

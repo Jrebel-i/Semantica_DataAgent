@@ -226,24 +226,6 @@ def admin_project_path_scope(
     return _require_project_admin(scope, requester)
 
 
-def project_scope_by_path(
-    project_id: str,
-    requester: Annotated[Requester, Depends(current_requester)],
-) -> ProjectContext:
-    """Resolve a project named in the URL through the shared read dependency."""
-    return project_scope(requester, project=project_id)
-
-
-def admin_project_scope_by_path(
-    project_id: str,
-    requester: Annotated[Requester, Depends(current_requester)],
-) -> ProjectContext:
-    """Resolve a URL project and apply the same admin rules as the query form."""
-    scope = project_scope(requester, project=project_id)
-    admin(requester.role)
-    return admin_project_scope(scope, requester.role)
-
-
 class ProjectScheduleUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -289,7 +271,7 @@ def _save_schedule_interval(db, project_id: str, interval: int) -> None:
 )
 def get_project_schedule(
     project_id: str,
-    scope: Annotated[ProjectContext, Depends(admin_project_scope_by_path)],
+    scope: Annotated[ProjectContext, Depends(admin_project_path_scope)],
 ):
     with sessions()() as db:
         return ProjectScheduleView(
@@ -303,7 +285,7 @@ def get_project_schedule(
 def set_project_schedule(
     project_id: str,
     body: ProjectScheduleUpdate,
-    scope: Annotated[ProjectContext, Depends(admin_project_scope_by_path)],
+    scope: Annotated[ProjectContext, Depends(admin_project_path_scope)],
 ):
     with sessions().begin() as db:
         _save_schedule_interval(db, scope.project_id, body.interval_seconds)
