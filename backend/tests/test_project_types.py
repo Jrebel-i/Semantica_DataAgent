@@ -260,6 +260,7 @@ def test_document_project_build_never_runs_dtb_even_when_globally_enabled(
     c, admin = client
     headers = {"Authorization": f"Bearer {admin}"}
     project = _create_project(c, admin, "Handbook", "document")
+    warehouse = _create_project(c, admin, "Warehouse", "warehouse")
     enabled = c.put(
         "/api/v1/plugins/source/dtb",
         headers=headers,
@@ -271,6 +272,10 @@ def test_document_project_build_never_runs_dtb_even_when_globally_enabled(
     doc = source / "knowledge" / "guide" / "install.md"
     doc.parent.mkdir(parents=True)
     doc.write_text("# Install\n\nRun the installer.\n", encoding="utf-8")
+    warehouse_source = project_context.project_source_directory(warehouse["id"])
+    warehouse_doc = warehouse_source / "knowledge" / "guide" / "install.md"
+    warehouse_doc.parent.mkdir(parents=True)
+    warehouse_doc.write_text("# Install\n\nRun the installer.\n", encoding="utf-8")
 
     calls = []
 
@@ -293,14 +298,21 @@ def test_document_project_build_never_runs_dtb_even_when_globally_enabled(
 
     values = {
         **project_context.current_project(project["id"]).values,
-        "source_directory": str(source),
         "neo4j_uri": "bolt://localhost",
         "neo4j_user": "neo4j",
         "milvus_uri": "http://localhost",
         "embedding_model": "test",
         "embedding_url": "http://localhost",
     }
-    monkeypatch.setattr(knowledge, "settings", lambda project_id=None: dict(values))
+    sources = {project["id"]: source, warehouse["id"]: warehouse_source}
+
+    def fake_settings(project_id=None):
+        return {
+            **values,
+            "source_directory": str(sources[project_id or project["id"]]),
+        }
+
+    monkeypatch.setattr(knowledge, "settings", fake_settings)
     monkeypatch.setattr(
         knowledge,
         "build_storage",
@@ -319,25 +331,32 @@ def test_document_project_build_never_runs_dtb_even_when_globally_enabled(
         [lambda records, generation, storage: seen.extend(records) or StageResult()],
     )
 
-    with sessions().begin() as db:
-        row = Build(
-            status="running",
-            started_at="now",
-            project_id=project["id"],
-            counts="{}",
-        )
-        db.add(row)
-        db.flush()
-        build_id = row.id
-    knowledge.run_build(build_id)
+    def run_build_for(project_id):
+        with sessions().begin() as db:
+            row = Build(
+                status="running",
+                started_at="now",
+                project_id=project_id,
+                counts="{}",
+            )
+            db.add(row)
+            db.flush()
+            build_id = row.id
+        knowledge.run_build(build_id)
+        with sessions()() as db:
+            row = db.get(Build, build_id)
+            assert row.status == "succeeded", row.error
+            return json.loads(row.source_hashes)
 
+    document_hashes = run_build_for(project["id"])
     assert calls == []
     documents = {record.data["path"] for record in seen if record.kind == "document"}
     assert "install.md" in documents
     assert "sentinel.md" not in documents
-    with sessions()() as db:
-        row = db.get(Build, build_id)
-        assert row.status == "succeeded", row.error
-        hashes = json.loads(row.source_hashes)
-    assert "knowledge/guide/install.md" in hashes
-    assert not any(path.startswith("dtb/") for path in hashes)
+    assert "knowledge/guide/install.md" in document_hashes
+    assert not any(path.startswith("dtb/") for path in document_hashes)
+
+    seen.clear()
+    warehouse_hashes = run_build_for(warehouse["id"])
+    assert calls == [{}]
+    assert "dtb/sentinel.md" in warehouse_hashes
