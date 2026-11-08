@@ -110,5 +110,6 @@ def test_skill_source_is_a_valid_agent_skill():
     assert "field:db.table.column" in normalized
     assert "one option per candidate field" in normalized
     assert "at most one ambiguous word per turn" in normalized
+    assert "do not write SQL or call `propose_query` in that turn" in normalized
     assert "different representations of the same field" in normalized
     assert "Do not clarify when" in normalized

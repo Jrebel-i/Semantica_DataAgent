@@ -343,6 +343,7 @@ def check_field_level_ambiguity_uses_retrieved_field_refs(ctx):
         "field:db.table.column",
         "one option per candidate field",
         "at most one ambiguous word per turn",
+        "do not write SQL or call `propose_query` in that turn",
         "different representations of the same field",
         "Do not clarify when",
     ):
