@@ -64,6 +64,8 @@ def request_upload_build(project_id: str, requested_by: str) -> bool:
     The request lives in the database, so a restart inside the window still
     builds once the deadline passes.
     """
+    if project_context.project_is_frozen(project_id):
+        return False
     now = datetime.now(UTC)
     with sessions().begin() as db:
         if not auto_build_enabled(project_id, db):
@@ -114,6 +116,8 @@ def process_due_pending_builds(now: datetime | None = None) -> list[str]:
         for row in rows:
             project_id = row.project_id
             db.delete(row)
+            if project_context.project_is_frozen(project_id):
+                continue
             if not auto_build_enabled(project_id, db):
                 continue
             queued = (

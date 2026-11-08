@@ -57,6 +57,9 @@ async def lifespan(application):
     from .db import QueryAudit, QueryExecution, Turn
 
     await asyncio.to_thread(project_context.recover_projects)
+    from .project_deletion import recover_project_deletions
+
+    await asyncio.to_thread(recover_project_deletions)
 
     if os.environ.get("DATAAGENT_AGENT_MODE", "sandbox") != "local":
         await asyncio.to_thread(cleanup_orphans)

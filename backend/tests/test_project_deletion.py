@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -40,7 +41,9 @@ def create_project(client: TestClient, admin: str, name: str) -> dict:
     return response.json()
 
 
-def create_user(client: TestClient, admin: str, name: str, projects: list[dict]) -> dict:
+def create_user(
+    client: TestClient, admin: str, name: str, projects: list[dict]
+) -> dict:
     response = client.post(
         "/api/v1/tokens",
         headers=headers(admin),
@@ -64,21 +67,28 @@ def seed_project_data(project_id: str, token: str) -> None:
         CorrectionProposal,
         GenerationPointer,
         KnowledgeGeneration,
-        ProjectSetting,
         Turn,
         sessions,
     )
 
     with sessions().begin() as db:
         db.add(KnowledgeGeneration(name=f"{project_id}_gen", project_id=project_id))
-        db.add(
-            GenerationPointer(project_id=project_id, generation=f"{project_id}_gen")
+        pointer = (
+            db.query(GenerationPointer)
+            .filter(GenerationPointer.project_id == project_id)
+            .first()
         )
+        if pointer is None:
+            db.add(
+                GenerationPointer(project_id=project_id, generation=f"{project_id}_gen")
+            )
+        else:
+            pointer.generation = f"{project_id}_gen"
         db.add(
             Build(
                 project_id=project_id,
                 status="succeeded",
-                started_at="2026-01-01T00:00:00+00:00",
+                started_at=datetime(2026, 1, 1, tzinfo=UTC),
                 counts="{}",
                 build_type="full",
             )
@@ -114,7 +124,7 @@ def seed_project_data(project_id: str, token: str) -> None:
                 answer="a",
                 sql="[]",
                 citations="[]",
-                started_at="2026-01-01T00:00:00+00:00",
+                started_at=datetime(2026, 1, 1, tzinfo=UTC),
             )
         )
 
@@ -168,9 +178,7 @@ def test_deletion_requires_archive_name_and_system_admin(client):
     assert "默认项目" in response.json()["detail"]
 
 
-def test_deletion_removes_project_data_but_keeps_tokens_and_audit(
-    client, monkeypatch
-):
+def test_deletion_removes_project_data_but_keeps_tokens_and_audit(client, monkeypatch):
     c, admin = client
     project = create_project(c, admin, "Gone Docs")
     project_id = project["id"]
@@ -209,7 +217,9 @@ def test_deletion_removes_project_data_but_keeps_tokens_and_audit(
         project_deletion, "_delete_milvus", lambda *args: calls.append("milvus")
     )
     monkeypatch.setattr(
-        project_deletion, "_cleanup_attachments", lambda *args: calls.append("attachments")
+        project_deletion,
+        "_cleanup_attachments",
+        lambda *args: calls.append("attachments"),
     )
 
     response = delete(c, admin, project)
@@ -227,9 +237,7 @@ def test_deletion_removes_project_data_but_keeps_tokens_and_audit(
             .first()
             is None
         )
-        assert (
-            db.query(Build).filter(Build.project_id == project_id).first() is None
-        )
+        assert db.query(Build).filter(Build.project_id == project_id).first() is None
         assert (
             db.query(CorrectionProposal)
             .filter(CorrectionProposal.project_id == project_id)
@@ -237,9 +245,7 @@ def test_deletion_removes_project_data_but_keeps_tokens_and_audit(
             is None
         )
         assert (
-            db.query(Conversation)
-            .filter(Conversation.project_id == project_id)
-            .first()
+            db.query(Conversation).filter(Conversation.project_id == project_id).first()
             is None
         )
         assert db.query(Turn).filter(Turn.conversation_id == "old").first() is None
@@ -304,7 +310,9 @@ def test_failed_step_is_retried_without_skipping_or_touching_other_projects(
 
     monkeypatch.setattr(project_deletion, "_delete_milvus", fail_once)
     monkeypatch.setattr(
-        project_deletion, "_cleanup_attachments", lambda *args: events.append("attachments")
+        project_deletion,
+        "_cleanup_attachments",
+        lambda *args: events.append("attachments"),
     )
 
     first = delete(c, admin, project)

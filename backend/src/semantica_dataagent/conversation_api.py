@@ -133,6 +133,17 @@ def retention_cutoff(db):
     return datetime.now(UTC) - timedelta(days=int(setting.value) if setting else 30)
 
 
+def cleanup_conversation_attachments(conversation_id: str) -> None:
+    """Let #188 remove a conversation's attachments when it is installed."""
+    try:
+        from . import attachments
+    except ImportError:
+        return
+    cleanup = getattr(attachments, "cleanup_conversation", None)
+    if callable(cleanup):
+        cleanup(conversation_id)
+
+
 def cleanup_expired_sessions() -> None:
     """Serialize cleanup with turn creation so active work cannot be removed."""
     with sessions().begin() as db:
@@ -150,6 +161,7 @@ def cleanup_expired_sessions() -> None:
         )
         for row in rows:
             remove_conversation_workspace(agent_root(), row.id)
+            cleanup_conversation_attachments(row.id)
             turn_ids = db.query(Turn.id).filter_by(conversation_id=row.id)
             db.query(TurnEvent).filter(
                 TurnEvent.turn_id.in_(turn_ids), TurnEvent.type == "query_result"
@@ -312,7 +324,9 @@ def conversations(
 ):
     cleanup_expired_sessions()
     if project is not None:
-        allowed = [resolve_project_scope(project, requester).project_id]
+        allowed = [
+            resolve_project_scope(project, requester, allow_frozen=True).project_id
+        ]
     else:
         allowed = [row.id for row in accessible_projects(requester)]
     if not allowed:
@@ -473,6 +487,7 @@ def delete_conversation(
         )
         db.delete(conversation)
     remove_conversation_workspace(agent_root(), conversation_id)
+    cleanup_conversation_attachments(conversation_id)
 
 
 def _agent_allowed_providers(db, agent_id: str) -> set[str] | None:

@@ -41,6 +41,11 @@ DEFAULT_PROJECT_ID = "default"
 DEFAULT_PROJECT_NAME = "业务数据"
 DEFAULT_PROJECT_TYPE = "warehouse"
 DEFAULT_PROJECT_STATUS = "active"
+ACTIVE_STATUS = "active"
+ARCHIVED_STATUS = "archived"
+DELETING_STATUS = "deleting"
+FROZEN_STATUSES = frozenset({ARCHIVED_STATUS, DELETING_STATUS})
+ARCHIVED_DETAIL = "项目已归档"
 
 GENERATION_KEY = "knowledge_generation"
 SOURCE_DIRECTORY_KEY = "source_directory"
@@ -298,6 +303,23 @@ def current_project(
             raise ProjectNotFound(resolved)
         values = normalize_values(_read_settings(db, resolved))
     return ProjectContext(resolved, values, project.name, project.type, project.status)
+
+
+def project_status(project_id: str = DEFAULT_PROJECT_ID) -> str:
+    """Return a project's lifecycle status; the implicit default is active."""
+    with sessions()() as db:
+        project = db.get(Project, project_id)
+        if project is None:
+            raise ProjectNotFound(project_id)
+        return project.status
+
+
+def project_is_frozen(project_id: str = DEFAULT_PROJECT_ID) -> bool:
+    """Archived and deleting projects reject project-scoped work."""
+    try:
+        return project_status(project_id) in FROZEN_STATUSES
+    except ProjectNotFound:
+        return True
 
 
 def project_type(project_id: str | None = None) -> str:

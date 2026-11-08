@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -41,7 +42,9 @@ def create_project(client: TestClient, admin: str, name: str) -> dict:
     return response.json()
 
 
-def create_user(client: TestClient, admin: str, name: str, projects: list[dict]) -> dict:
+def create_user(
+    client: TestClient, admin: str, name: str, projects: list[dict]
+) -> dict:
     response = client.post(
         "/api/v1/tokens",
         headers=headers(admin),
@@ -100,7 +103,7 @@ def seed_history(token: str, project_id: str) -> tuple[str, str]:
                 answer="旧答案",
                 sql="[]",
                 citations="[]",
-                started_at="2026-01-01T00:00:00+00:00",
+                started_at=datetime(2026, 1, 1, tzinfo=UTC),
             )
         )
         db.add(
@@ -129,7 +132,9 @@ def test_archive_freezes_access_and_restore_reopens(client):
 
     listing = c.get("/api/v1/projects", headers=headers(admin))
     assert listing.status_code == 200
-    assert {row["id"]: row["status"] for row in listing.json()}[project_id] == "archived"
+    assert {row["id"]: row["status"] for row in listing.json()}[
+        project_id
+    ] == "archived"
 
     ask = c.post(
         "/api/v1/conversations/ask",
@@ -171,9 +176,12 @@ def test_archive_freezes_access_and_restore_reopens(client):
     restored = c.post(f"/api/v1/projects/{project_id}/restore", headers=headers(admin))
     assert restored.status_code == 200, restored.text
     assert restored.json()["status"] == "active"
-    assert c.get(
-        f"/api/v1/conversations/{conversation_id}", headers=headers(admin)
-    ).status_code == 200
+    assert (
+        c.get(
+            f"/api/v1/conversations/{conversation_id}", headers=headers(admin)
+        ).status_code
+        == 200
+    )
 
 
 def test_owner_can_still_delete_an_archived_projects_conversation(client):
@@ -240,7 +248,7 @@ def test_archiving_discards_pending_and_queued_builds(client):
             Build(
                 project_id=project_id,
                 status="queued",
-                started_at="2026-01-01T00:00:00+00:00",
+                started_at=datetime(2026, 1, 1, tzinfo=UTC),
                 counts="{}",
                 build_type="incremental",
             )
@@ -277,10 +285,9 @@ def test_archived_project_rejects_mcp_and_agent_credentials(client):
 
     from fastapi import HTTPException, status
 
-    from semantica_dataagent.auth import issue_agent_credential
-    from semantica_dataagent.mcp_project import resolve_mcp_project
+    from semantica_dataagent.auth import Requester, issue_agent_credential
     from semantica_dataagent.mcp_contract import ToolInvalidInput
-    from semantica_dataagent.auth import Requester
+    from semantica_dataagent.mcp_project import resolve_mcp_project
 
     with pytest.raises(ToolInvalidInput) as exc:
         resolve_mcp_project(

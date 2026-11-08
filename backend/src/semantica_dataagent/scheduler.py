@@ -40,6 +40,8 @@ class Scheduler:
 
     @staticmethod
     def _scheduled_build(project_id):
+        if project_context.project_is_frozen(project_id):
+            return
         project_context.enqueue_build(
             "incremental", "scheduler", project_id=project_id, dedupe=True
         )

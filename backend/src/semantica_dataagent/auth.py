@@ -7,6 +7,7 @@ from fastapi import Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from .db import AgentCredential, Conversation, Token, Turn, digest, sessions
+from .project_context import ARCHIVED_DETAIL, project_is_frozen
 
 bearer = HTTPBearer(auto_error=False)
 
@@ -50,6 +51,8 @@ def issue_agent_credential(
     turn_id: int,
     project_id: str = "default",
 ) -> str:
+    if project_is_frozen(project_id):
+        raise HTTPException(status_code=409, detail=ARCHIVED_DETAIL)
     token = secrets.token_urlsafe(32)
     with sessions().begin() as db:
         conversation = db.get(Conversation, conversation_id)
@@ -92,6 +95,8 @@ def authenticate_mcp(credentials, conversation_id, turn_id) -> Requester:
             raise HTTPException(401, "Invalid token")
         turn = db.get(Turn, scoped.turn_id)
         owner = db.query(Token).filter_by(id=scoped.owner_id, revoked=False).first()
+        if project_is_frozen(scoped.project_id):
+            raise HTTPException(status_code=409, detail=ARCHIVED_DETAIL)
         if (
             turn is None
             or turn.status != "running"
