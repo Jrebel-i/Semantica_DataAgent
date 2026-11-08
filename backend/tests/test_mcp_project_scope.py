@@ -208,3 +208,15 @@ def test_document_project_rejects_warehouse_only_tools(client):
         result = call_registered(server, "describe_tables", {"names": ["shop.orders"]})
     assert result.isError
     assert "该项目类型不支持此工具" in result.structuredContent["message"]
+
+
+def test_tools_list_fails_closed_when_the_project_cannot_be_resolved(client):
+    from semantica_dataagent.app import create_mcp
+    from semantica_dataagent.mcp_context import bind_mcp_context
+
+    c, admin = client
+    server = create_mcp()
+    requester = _requester(admin)
+
+    with bind_mcp_context(requester, project_error="请指定项目"):
+        assert _list_tools(server) == set()

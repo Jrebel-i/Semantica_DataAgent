@@ -144,8 +144,8 @@ def install_contract(server):
         result = await original_list_tools(request)
         try:
             allowed = tools_for_project_type(current_project_type())
-        except Exception:  # noqa: BLE001 - an unresolved project still lists tools
-            return result
+        except Exception:  # noqa: BLE001 - the capability guard fails closed
+            allowed = set()
         result.root.tools = [tool for tool in result.root.tools if tool.name in allowed]
         return result
 

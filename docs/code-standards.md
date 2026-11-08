@@ -59,7 +59,7 @@ MCP 请求必须解析出**一个**项目，所有读知识库的工具都只经
 
 ### 按项目类型限制工具与 skill
 
-`project_types.py` 是“工具 → 适用项目类型”的唯一权威表。数仓型项目保留全部工具；文档型项目只暴露 `search_knowledge`、`read_document`、`list_categories`、`read_category_index`、`request_clarification`、`propose_correction`、`report_knowledge_gap`、`get_capabilities`。`tools/list` 按当前请求解析出的项目类型过滤，调用被排除的工具返回 `invalid_input` “该项目类型不支持此工具”；`get_capabilities.tools` 返回同一份过滤后的列表。新增或删除 MCP 工具时必须同步更新这张表，`test_project_types.py` 的守护测试会拦住未归类的工具。
+`project_types.py` 是“工具 → 适用项目类型”的唯一权威表。数仓型项目保留全部工具；文档型项目只暴露 `search_knowledge`、`read_document`、`list_categories`、`read_category_index`、`request_clarification`、`propose_correction`、`report_knowledge_gap`、`get_capabilities`。`tools/list` 按当前请求解析出的项目类型过滤，调用被排除的工具返回 `invalid_input` “该项目类型不支持此工具”；`get_capabilities.tools` 返回同一份过滤后的列表。项目解析失败时工具列表为空（失败关闭），不回退到全部工具。新增或删除 MCP 工具时必须同步更新这张表，`test_project_types.py` 的守护测试会拦住未归类的工具。
 
 项目类型也决定检索 skill：数仓型使用 `skills/dataagent-retrieval`，文档型使用 `skills/dataagent-document-retrieval`。`GET /api/v1/skill` 接受可选的 `project`（缺省按项目选择规则），返回对应类型的 Markdown 和文件名；runner 把 skill 写进沙箱时读取 `AgentTurnRequest.project_type`（默认 `warehouse`），#184 绑定对话项目后由调用方传入。
 

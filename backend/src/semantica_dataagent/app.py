@@ -999,8 +999,8 @@ def create_mcp():
 
         try:
             allowed = tools_for_project_type(current_project_type())
-        except Exception:  # noqa: BLE001 - capabilities still answer metadata
-            allowed = {tool.name for tool in server._tool_manager.list_tools()}
+        except Exception:  # noqa: BLE001 - the capability guard fails closed
+            allowed = set()
         return {
             "application_version": version("semantica-dataagent"),
             "schema_version": "v1",
