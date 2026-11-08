@@ -264,7 +264,7 @@ def test_real_runner_validate_sql_event_summary_keeps_status_and_issues(agent):
     ]
     assert len(ends) == 1
     summary = ends[0].data["summary"]
-    assert "status=issues" in summary
+    assert summary.startswith("status=issues")
     assert "缺少分区条件" in summary
     assert "MAX(dt)" in summary
     assert "unknown" not in summary
@@ -279,7 +279,7 @@ def test_real_runner_propose_query_event_summary_keeps_error_code(agent):
     ]
     assert len(ends) == 1
     summary = ends[0].data["summary"]
-    assert "invalid_input" in summary
+    assert summary.startswith("invalid_input:")
     assert "SQL validation did not pass" in summary
 
 
