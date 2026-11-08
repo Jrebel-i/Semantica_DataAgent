@@ -58,6 +58,7 @@ import type {
 } from "./chat/types";
 import { PROVIDER_TYPES } from "./chat/types";
 import { copyText, readSse } from "./chat/sse";
+import { ResultTable } from "./chat/ResultTable";
 import {
   applyToolEnd,
   applyToolStart,
@@ -78,37 +79,6 @@ export {
   stripCitationRefs,
 } from "./chat/citations";
 export type { CitationGroup, CitationLabel } from "./chat/types";
-
-function ResultTable({
-  result,
-  limit,
-}: {
-  result: QueryResult;
-  limit?: number;
-}) {
-  return (
-    <div className="result-table-scroll">
-      <table>
-        <thead>
-          <tr>
-            {result.columns.map((column, index) => (
-              <th key={index}>{column}</th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {result.rows.slice(0, limit).map((row, index) => (
-            <tr key={index}>
-              {row.map((value, column) => (
-                <td key={column}>{value == null ? "" : String(value)}</td>
-              ))}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
 
 function ToolList({
   tools,
