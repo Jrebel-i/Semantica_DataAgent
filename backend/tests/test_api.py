@@ -1018,6 +1018,51 @@ def test_interrupted_pull_recovers_committed_snapshot_once(client, tmp_path):
         assert db.query(Build).filter(Build.id == record.build_id).count() == 1
 
 
+def test_interrupted_project_pull_recovers_build_in_its_project(client, tmp_path):
+    from datetime import UTC, datetime
+
+    from semantica_dataagent.db import Build, PullRecord, sessions
+    from semantica_dataagent.pull_service import recover_pulls
+    from semantica_dataagent.source_directory import publish_pull, repository
+
+    c, token = client
+    response = c.post(
+        "/api/v1/projects",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Pull Project", "type": "warehouse"},
+    )
+    assert response.status_code == 201, response.text
+    project_id = response.json()["id"]
+    root = tmp_path / "project-pull-source"
+    with sessions().begin() as db:
+        record = PullRecord(
+            project_id=project_id,
+            status="running",
+            started_at=datetime.now(UTC),
+            tables=0,
+            tasks=0,
+            source_directory=str(root),
+            operation_id="project-operation",
+        )
+        db.add(record)
+        db.flush()
+        record_id = record.id
+    with repository(root) as source:
+        commit = publish_pull(
+            source, {"任务信息.json": b"x"}, operation_id="project-operation"
+        )
+
+    recover_pulls()
+
+    with sessions()() as db:
+        record = db.get(PullRecord, record_id)
+        assert record.status == "succeeded"
+        assert record.commit == commit
+        assert record.build_id is not None
+        build = db.get(Build, record.build_id)
+        assert build.project_id == project_id
+
+
 def test_failed_recovery_does_not_prevent_startup_and_can_retry(tmp_path, monkeypatch):
     from datetime import UTC, datetime
 

@@ -136,6 +136,59 @@ def test_puller_interval_restored_on_restart(tmp_path, monkeypatch):
     assert starts == [0, 42]
 
 
+def test_pull_scheduler_runs_the_due_project(monkeypatch):
+    from semantica_dataagent import pull_service
+    from semantica_dataagent.scheduler import _scheduled_pull
+
+    calls = []
+    monkeypatch.setattr(
+        pull_service, "run_pull", lambda project_id: calls.append(project_id)
+    )
+
+    _scheduled_pull("alpha")
+
+    assert calls == ["alpha"]
+
+
+def test_pull_intervals_are_collected_per_project(tmp_path, monkeypatch):
+    from semantica_dataagent.app import app
+    from semantica_dataagent.cli import initialize
+    from semantica_dataagent.pull_service import intervals
+
+    monkeypatch.setenv("DATAAGENT_DB_PATH", str(tmp_path / "pull-intervals.db"))
+    monkeypatch.setenv("DATAAGENT_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    token = initialize()
+    headers = {"Authorization": f"Bearer {token}"}
+    with TestClient(app, headers=headers) as client:
+        created = client.post(
+            "/api/v1/projects", json={"name": "Pull Intervals", "type": "warehouse"}
+        )
+        assert created.status_code == 201, created.text
+        project_id = created.json()["id"]
+        saved = client.put(
+            f"/api/v1/projects/{project_id}/adapters",
+            json={
+                "adapters": [
+                    {
+                        "id": "dtb",
+                        "enabled": True,
+                        "parameters": {},
+                        "pull": {
+                            "enabled": True,
+                            "parameters": {
+                                "url": "https://dtb.example",
+                                "interval_seconds": 7,
+                            },
+                        },
+                    }
+                ]
+            },
+        )
+        assert saved.status_code == 200, saved.text
+
+    assert intervals() == {project_id: 7}
+
+
 def test_each_project_has_its_own_schedule_clock():
     from semantica_dataagent.scheduler import Scheduler
 
