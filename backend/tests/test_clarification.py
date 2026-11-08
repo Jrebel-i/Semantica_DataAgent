@@ -446,7 +446,8 @@ def test_ask_dataagent_returns_answer_sql_citations_and_reuses_conversation(
         assert conversation.owner_id == requester.id
         assert db.query(Turn).filter_by(conversation_id=conversation_id).count() == 1
     assert runner.requests[0].session_id == conversation_id
-    assert runner.requests[0].mcp_token == requester.token
+    assert runner.requests[0].mcp_token
+    assert runner.requests[0].mcp_token != requester.token
 
     second = call(
         create_mcp(),
@@ -458,6 +459,7 @@ def test_ask_dataagent_returns_answer_sql_citations_and_reuses_conversation(
     assert second.structuredContent["conversation_id"] == conversation_id
     assert runner.requests[1].session_id == conversation_id
     assert runner.requests[1].prompt == "再按月份拆分"
+    assert runner.requests[1].mcp_token != runner.requests[0].mcp_token
     with sessions()() as db:
         assert db.query(Turn).filter_by(conversation_id=conversation_id).count() == 2
 
