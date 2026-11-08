@@ -346,7 +346,7 @@ button {
   font-size: 14px;
   font-weight: 600;
 }
-.form-card > label {
+.form-card > label:not(.ant-checkbox-wrapper):not(.ant-radio-wrapper) {
   display: grid;
   grid-template-columns: 180px minmax(0, 1fr);
   align-items: center;
@@ -2916,7 +2916,21 @@ code {
 .admin-page .knowledge-table-scroll .data-table {
   min-width: 760px;
 }
-.admin-page .knowledge-table-scroll .data-table td {
+.admin-page .knowledge-table-scroll .data-table th.field-name,
+.admin-page .knowledge-table-scroll .data-table td.field-name {
+  min-width: 180px;
+  white-space: nowrap;
+}
+.admin-page .knowledge-table-scroll .data-table th.field-type,
+.admin-page .knowledge-table-scroll .data-table td.field-type {
+  min-width: 130px;
+  white-space: nowrap;
+}
+.admin-page .knowledge-table-scroll .data-table td.field-name button {
+  white-space: nowrap;
+}
+.admin-page .knowledge-table-scroll .data-table td.field-comment,
+.admin-page .knowledge-table-scroll .data-table td.field-dimension {
   overflow-wrap: anywhere;
 }
 .admin-page.stack {
@@ -3008,9 +3022,37 @@ code {
 .admin-page .detail-section-title,
 .admin-page .ant-card-head-title,
 .admin-page .agent-card-head h3,
+.admin-page .search-result h3,
+.admin-page .gap-card h3,
+.admin-page .plugin-card h3,
 .admin-page label,
 .admin-page .field-label {
   font-family: var(--font-sans);
+}
+.admin-page .card-title,
+.admin-page .detail-section-title,
+.admin-page .agent-card-head h3,
+.admin-page .search-result h3,
+.admin-page .gap-card h3,
+.admin-page .plugin-card h3 {
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+.admin-page .ant-card-head-title {
+  font-size: 15px;
+  font-weight: 600;
+}
+.page-content:has(> .config-section.admin-page) .card-title,
+.page-content:has(> .config-section.admin-page) .ant-card-head-title,
+.page-content:has(> .config-section.admin-page) label,
+.page-content:has(> .config-section.admin-page) .field-label {
+  font-family: var(--font-sans);
+}
+.page-content:has(> .config-section.admin-page) .card-title {
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.4;
 }
 .admin-page .file-picker.ant-upload-wrapper {
   display: block;
@@ -3075,4 +3117,7 @@ code {
 }
 .admin-page .plugin-param .ant-checkbox-wrapper {
   justify-self: start;
+}
+.admin-page .form-card > .ant-checkbox-wrapper {
+  align-self: flex-start;
 }

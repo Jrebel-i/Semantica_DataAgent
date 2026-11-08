@@ -10,7 +10,22 @@ describe("admin page polish", () => {
       /\.admin-page \.page-title,\s*\.admin-page \.detail-title\s*\{[^}]*font-family: var\(--font-serif\);/,
     );
     expect(css).toMatch(
-      /\.admin-page \.card-title,\s*\.admin-page \.detail-section-title,\s*\.admin-page \.ant-card-head-title,\s*\.admin-page \.agent-card-head h3,\s*\.admin-page label,\s*\.admin-page \.field-label\s*\{[^}]*font-family: var\(--font-sans\);/,
+      /\.admin-page \.card-title,\s*\.admin-page \.detail-section-title,\s*\.admin-page \.ant-card-head-title,\s*\.admin-page \.agent-card-head h3,\s*\.admin-page \.search-result h3,\s*\.admin-page \.gap-card h3,\s*\.admin-page \.plugin-card h3,\s*\.admin-page label,\s*\.admin-page \.field-label\s*\{[^}]*font-family: var\(--font-sans\);/,
+    );
+    expect(css).toMatch(
+      /\.admin-page \.card-title,\s*\.admin-page \.detail-section-title,\s*\.admin-page \.agent-card-head h3,\s*\.admin-page \.search-result h3,\s*\.admin-page \.gap-card h3,\s*\.admin-page \.plugin-card h3\s*\{[^}]*font-size: 15px;[^}]*font-weight: 600;/,
+    );
+    expect(css).toMatch(
+      /\.page-content:has\(> \.config-section\.admin-page\) \.card-title,\s*\.page-content:has\(> \.config-section\.admin-page\) \.ant-card-head-title,\s*\.page-content:has\(> \.config-section\.admin-page\) label,\s*\.page-content:has\(> \.config-section\.admin-page\) \.field-label\s*\{[^}]*font-family: var\(--font-sans\);/,
+    );
+  });
+
+  test("form rows do not turn checkbox wrappers into two-column grids", () => {
+    expect(css).toMatch(
+      /\.form-card > label:not\(\.ant-checkbox-wrapper\):not\(\.ant-radio-wrapper\)\s*\{[^}]*display: grid;/,
+    );
+    expect(css).toMatch(
+      /\.admin-page \.form-card > \.ant-checkbox-wrapper\s*\{[^}]*align-self: flex-start;/,
     );
   });
 
@@ -28,6 +43,12 @@ describe("admin page polish", () => {
     );
     expect(css).toMatch(
       /\.admin-page \.knowledge-table-scroll \.data-table\s*\{[^}]*min-width: 760px;/,
+    );
+    expect(css).toMatch(
+      /\.admin-page \.knowledge-table-scroll \.data-table th\.field-name,\s*\.admin-page \.knowledge-table-scroll \.data-table td\.field-name\s*\{[^}]*min-width: 180px;[^}]*white-space: nowrap;/,
+    );
+    expect(css).toMatch(
+      /\.admin-page \.knowledge-table-scroll \.data-table th\.field-type,\s*\.admin-page \.knowledge-table-scroll \.data-table td\.field-type\s*\{[^}]*min-width: 130px;[^}]*white-space: nowrap;/,
     );
   });
 

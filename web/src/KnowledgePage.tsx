@@ -601,18 +601,24 @@ export function KnowledgePage({
                       <table className="data-table">
                         <thead>
                           <tr>
-                            <th>{messages.field}</th>
-                            <th>{messages.dataType}</th>
-                            <th>{messages.comment}</th>
-                            <th>{messages.dimStatus}</th>
-                            <th>{messages.partition}</th>
+                            <th className="field-name">{messages.field}</th>
+                            <th className="field-type">{messages.dataType}</th>
+                            <th className="field-comment">
+                              {messages.comment}
+                            </th>
+                            <th className="field-dimension">
+                              {messages.dimStatus}
+                            </th>
+                            <th className="field-partition">
+                              {messages.partition}
+                            </th>
                           </tr>
                         </thead>
                         <tbody>
                           {detail.fields.map((field) => (
                             <Fragment key={field.name}>
                               <tr>
-                                <td>
+                                <td className="field-name">
                                   <button
                                     type="button"
                                     aria-expanded={
@@ -629,9 +635,17 @@ export function KnowledgePage({
                                     {field.name}
                                   </button>
                                 </td>
-                                <td title={field.type}>{field.type}</td>
-                                <td title={field.comment}>{field.comment}</td>
+                                <td className="field-type" title={field.type}>
+                                  {field.type}
+                                </td>
                                 <td
+                                  className="field-comment"
+                                  title={field.comment}
+                                >
+                                  {field.comment}
+                                </td>
+                                <td
+                                  className="field-dimension"
                                   title={
                                     field.dimension_too_many
                                       ? messages.dimTooMany
@@ -652,7 +666,7 @@ export function KnowledgePage({
                                     </span>
                                   ) : null}
                                 </td>
-                                <td>
+                                <td className="field-partition">
                                   {field.partition ? messages.yes : messages.no}
                                 </td>
                               </tr>

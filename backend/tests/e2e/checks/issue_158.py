@@ -96,6 +96,10 @@ def check_admin_page_contract(ctx):
         ".admin-page .card-title",
         "padding-bottom: calc(var(--status-bar-height) + var(--admin-space-24))",
         ".admin-page .knowledge-table-scroll",
+        ".admin-page .knowledge-table-scroll .data-table td.field-name",
+        "min-width: 180px;",
+        "min-width: 130px;",
+        ".form-card > label:not(.ant-checkbox-wrapper)",
         ".admin-page .empty-state",
         "--admin-space-8: 8px;",
         "--admin-space-12: 12px;",
@@ -120,6 +124,18 @@ def check_admin_page_contract(ctx):
         "knowledge-table-scroll" in (ROOT / "web/src/KnowledgePage.tsx").read_text(),
         "knowledge page lost its horizontal table container",
     )
+    knowledge_page = (ROOT / "web/src/KnowledgePage.tsx").read_text()
+    for column in (
+        'className="field-name"',
+        'className="field-type"',
+        'className="field-comment"',
+        'className="field-dimension"',
+        'className="field-partition"',
+    ):
+        ctx.require(
+            column in knowledge_page,
+            f"knowledge field table lost column marker {column}",
+        )
 
     return {
         "tables": len(tables),

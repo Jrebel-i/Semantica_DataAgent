@@ -49,6 +49,24 @@ function table(database: string, name: string): TableRow {
         comment: "日期分区",
         partition: true,
       },
+      {
+        name: "air_segment_income_cny",
+        type: "decimal(18,2)",
+        comment: "航段收入",
+        partition: false,
+      },
+      {
+        name: "manual_markup_cny",
+        type: "decimal(18,2)",
+        comment: "手工加价",
+        partition: false,
+      },
+      {
+        name: "service_shopping_request_count",
+        type: "bigint",
+        comment: "服务购物请求数",
+        partition: false,
+      },
     ],
   };
 }
@@ -354,6 +372,28 @@ test("字段表放在横向滚动容器里", async () => {
   const scroll = container.querySelector(".knowledge-table-scroll");
   expect(scroll).not.toBeNull();
   expect(scroll?.querySelector("table.data-table")).not.toBeNull();
+});
+
+test("长字段名和类型列使用不换行的列标记", async () => {
+  installFetch([table("shop", "orders")]);
+  const { container } = render(
+    <KnowledgePage token="token" messages={getMessages("zh")} />,
+  );
+
+  expect(
+    await screen.findByRole("button", { name: "air_segment_income_cny" }),
+  ).toBeTruthy();
+  expect(
+    screen.getByRole("button", { name: "service_shopping_request_count" }),
+  ).toBeTruthy();
+  const headers = container.querySelectorAll("th.field-name, th.field-type");
+  expect(headers.length).toBe(2);
+  const nameCell = screen
+    .getByRole("button", { name: "air_segment_income_cny" })
+    .closest("td");
+  expect(nameCell?.classList.contains("field-name")).toBe(true);
+  const typeCell = container.querySelector("td.field-type");
+  expect(typeCell?.textContent).toBe("string");
 });
 
 test("搜索仍按表名过滤，并继续使用 summary 视图", async () => {
