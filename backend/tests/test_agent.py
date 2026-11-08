@@ -19,6 +19,8 @@ from semantica_dataagent.agent_runner import (
     ProviderConfig,
     list_agents,
 )
+from semantica_dataagent.claude_runner import ClaudeRunner
+from semantica_dataagent.codex_runner import CodexRunner
 from semantica_dataagent.pi_runner import PiEventParser, PiRunner
 from semantica_dataagent.skill import read_skill
 
@@ -1005,6 +1007,165 @@ print(json.dumps({{"type": "agent_settled"}}), flush=True)
     assert "--thinking" not in arguments
 
 
+EFFORT_CLI_MAPPINGS = [
+    ("low", "low"),
+    ("medium", "medium"),
+    ("high", "high"),
+    ("extra", "xhigh"),
+    ("max", "max"),
+]
+
+
+def _capture_runner_arguments(tmp_path: Path, name: str, output: str):
+    capture = tmp_path / f"{name}-args.json"
+    script = tmp_path / f"fake-{name}.py"
+    script.write_text(
+        f"""#!/usr/bin/env python3
+import json
+import sys
+from pathlib import Path
+
+path = Path({str(capture)!r})
+runs = json.loads(path.read_text(encoding="utf-8")) if path.exists() else []
+runs.append(sys.argv[1:])
+path.write_text(json.dumps(runs), encoding="utf-8")
+{output}
+""",
+        encoding="utf-8",
+    )
+    script.chmod(0o755)
+    return script, capture
+
+
+def _cli_request(tmp_path: Path, agent: str, effort: str | None, provider_type: str):
+    return AgentTurnRequest(
+        conversation_id=f"conv-{agent}",
+        prompt="question",
+        session_id="00000000-0000-4000-8000-000000000001",
+        workspace=tmp_path / f"{agent}-workspace",
+        provider=ProviderConfig(
+            id="provider-one",
+            name="Local",
+            type=provider_type,
+            base_url="http://127.0.0.1:3425",
+            models=["model"],
+        ),
+        model="model",
+        mcp_url="http://127.0.0.1:8000/mcp/",
+        mcp_token="token",
+        effort=effort,
+    )
+
+
+@pytest.mark.parametrize(("effort", "mapped"), EFFORT_CLI_MAPPINGS)
+def test_claude_runner_maps_effort_on_first_and_resume_turns(
+    tmp_path: Path, effort, mapped
+):
+    script, capture = _capture_runner_arguments(
+        tmp_path,
+        "claude",
+        'print(json.dumps({"type": "result", "result": "ok"}), flush=True)',
+    )
+    request = _cli_request(tmp_path, "claude", effort, "anthropic-messages")
+
+    async def collect():
+        return [
+            event
+            async for event in ClaudeRunner(binary=str(script)).run(request)
+        ]
+
+    assert asyncio.run(collect())[-1].type == DONE
+    session_file = (
+        request.workspace
+        / "sessions"
+        / "claude"
+        / "projects"
+        / "project"
+        / f"{request.session_id}.jsonl"
+    )
+    session_file.parent.mkdir(parents=True, exist_ok=True)
+    session_file.write_text("{}\n", encoding="utf-8")
+    assert asyncio.run(collect())[-1].type == DONE
+
+    runs = json.loads(capture.read_text(encoding="utf-8"))
+    assert len(runs) == 2
+    assert "--session-id" in runs[0]
+    assert "--resume" in runs[1]
+    for arguments in runs:
+        assert arguments[arguments.index("--effort") + 1] == mapped
+
+
+def test_claude_runner_omits_effort_when_not_given(tmp_path: Path):
+    script, capture = _capture_runner_arguments(
+        tmp_path,
+        "claude-none",
+        'print(json.dumps({"type": "result", "result": "ok"}), flush=True)',
+    )
+    request = _cli_request(tmp_path, "claude-none", None, "anthropic-messages")
+
+    async def collect():
+        return [
+            event
+            async for event in ClaudeRunner(binary=str(script)).run(request)
+        ]
+
+    assert asyncio.run(collect())[-1].type == DONE
+    arguments = json.loads(capture.read_text(encoding="utf-8"))[0]
+    assert "--effort" not in arguments
+
+
+@pytest.mark.parametrize(("effort", "mapped"), EFFORT_CLI_MAPPINGS)
+def test_codex_runner_maps_effort_on_first_and_resume_turns(
+    tmp_path: Path, effort, mapped
+):
+    script, capture = _capture_runner_arguments(
+        tmp_path,
+        "codex",
+        'print(json.dumps({"type": "thread.started", "thread_id": "thread-one"}), '
+        'flush=True)\n'
+        'print(json.dumps({"type": "item.completed", "item": '
+        '{"type": "agent_message", "text": "ok"}}), flush=True)',
+    )
+    request = _cli_request(tmp_path, "codex", effort, "openai-responses")
+
+    async def collect():
+        return [
+            event async for event in CodexRunner(binary=str(script)).run(request)
+        ]
+
+    assert asyncio.run(collect())[-1].type == DONE
+    assert asyncio.run(collect())[-1].type == DONE
+
+    runs = json.loads(capture.read_text(encoding="utf-8"))
+    assert len(runs) == 2
+    assert "resume" not in runs[0]
+    assert "resume" in runs[1] and "thread-one" in runs[1]
+    for arguments in runs:
+        index = arguments.index("-c")
+        assert arguments[index + 1] == f'model_reasoning_effort="{mapped}"'
+
+
+def test_codex_runner_omits_effort_when_not_given(tmp_path: Path):
+    script, capture = _capture_runner_arguments(
+        tmp_path,
+        "codex-none",
+        'print(json.dumps({"type": "thread.started", "thread_id": "thread-none"}), '
+        'flush=True)\n'
+        'print(json.dumps({"type": "item.completed", "item": '
+        '{"type": "agent_message", "text": "ok"}}), flush=True)',
+    )
+    request = _cli_request(tmp_path, "codex-none", None, "openai-responses")
+
+    async def collect():
+        return [
+            event async for event in CodexRunner(binary=str(script)).run(request)
+        ]
+
+    assert asyncio.run(collect())[-1].type == DONE
+    arguments = json.loads(capture.read_text(encoding="utf-8"))[0]
+    assert "-c" not in arguments
+
+
 def test_pi_config_is_isolated_and_never_writes_secrets(tmp_path: Path):
     workspace = tmp_path / "pi-config-test"
     request = AgentTurnRequest(
@@ -1189,8 +1350,8 @@ def test_agents_advertise_their_supported_effort_levels(client):
     assert response.status_code == 200
     levels = {agent["id"]: agent["effort_levels"] for agent in response.json()}
     assert levels["pi"] == ["low", "medium", "high", "extra", "max"]
-    assert levels["claude"] == []
-    assert levels["codex"] == []
+    assert levels["claude"] == ["low", "medium", "high", "extra", "max"]
+    assert levels["codex"] == ["low", "medium", "high", "extra", "max"]
 
 
 def test_ask_rejects_unknown_or_unavailable_agent_without_creating_history(
@@ -1880,6 +2041,101 @@ def test_ask_rejects_effort_outside_model_and_agent_capabilities(client, monkeyp
     )
     assert no_agent_levels[0] == 422, no_agent_levels[1]
     assert runner.requests == [] and empty_runner.requests == []
+    assert c.get("/api/v1/conversations", headers=headers).json() == []
+
+
+@pytest.mark.parametrize(
+    ("agent", "flag"),
+    [("claude", "--effort"), ("codex", "-c")],
+)
+@pytest.mark.parametrize(("effort", "mapped"), [("extra", "xhigh"), ("max", "max")])
+def test_ask_passes_effort_to_claude_and_codex_cli(
+    client, monkeypatch, tmp_path, agent, flag, effort, mapped
+):
+    from semantica_dataagent import agent_runner
+
+    capture = tmp_path / f"{agent}-api-args.json"
+    binary = tmp_path / f"fake-{agent}-api"
+    if agent == "claude":
+        output = 'print(json.dumps({"type": "result", "result": "ok"}), flush=True)'
+        runner = ClaudeRunner(binary=str(binary))
+    else:
+        output = (
+            'print(json.dumps({"type": "thread.started", "thread_id": "thread-api"}), '
+            'flush=True)\n'
+            'print(json.dumps({"type": "item.completed", "item": '
+            '{"type": "agent_message", "text": "ok"}}), flush=True)'
+        )
+        runner = CodexRunner(binary=str(binary))
+    binary.write_text(
+        f"""#!/usr/bin/env python3
+import json
+import sys
+from pathlib import Path
+
+path = Path({str(capture)!r})
+runs = json.loads(path.read_text(encoding="utf-8")) if path.exists() else []
+runs.append(sys.argv[1:])
+path.write_text(json.dumps(runs), encoding="utf-8")
+{output}
+""",
+        encoding="utf-8",
+    )
+    binary.chmod(0o755)
+    monkeypatch.setitem(agent_runner.RUNNERS, agent, runner)
+
+    c, token = client
+    headers = {"Authorization": f"Bearer {token}"}
+    provider = _create_provider(c, headers, f"{agent}-asking", ["model"])
+    updated = c.put(
+        f"/api/v1/providers/{provider['id']}",
+        headers=headers,
+        json={
+            "model_capabilities": {
+                "model": {"effort_levels": ["low", "medium", "high", "extra", "max"]}
+            }
+        },
+    )
+    assert updated.status_code == 200, updated.text
+
+    status, body = _ask(
+        c,
+        headers,
+        "强度",
+        agent=agent,
+        provider_id=provider["id"],
+        model="model",
+        effort=effort,
+    )
+    assert status == 200, body
+    assert _sse(body)[-1][0] == "done"
+    arguments = json.loads(capture.read_text(encoding="utf-8"))[-1]
+    index = arguments.index(flag)
+    expected = mapped if agent == "claude" else f'model_reasoning_effort="{mapped}"'
+    assert arguments[index + 1] == expected
+
+
+@pytest.mark.parametrize("agent", ["claude", "codex"])
+def test_ask_rejects_unsupported_effort_for_claude_and_codex(client, agent):
+    c, token = client
+    headers = {"Authorization": f"Bearer {token}"}
+    provider = _create_provider(c, headers, f"{agent}-limited", ["model"])
+    updated = c.put(
+        f"/api/v1/providers/{provider['id']}",
+        headers=headers,
+        json={"model_capabilities": {"model": {"effort_levels": ["low"]}}},
+    )
+    assert updated.status_code == 200, updated.text
+    base = {
+        "agent": agent,
+        "provider_id": provider["id"],
+        "model": "model",
+    }
+
+    unsupported = _ask(c, headers, "强度", **base, effort="high")
+    assert unsupported[0] == 422, unsupported[1]
+    unknown = _ask(c, headers, "强度", **base, effort="ultra")
+    assert unknown[0] == 422, unknown[1]
     assert c.get("/api/v1/conversations", headers=headers).json() == []
 
 
