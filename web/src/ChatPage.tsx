@@ -1,6 +1,12 @@
 import { createPortal } from "react-dom";
 import { ColumnLineage } from "./ColumnLineage";
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import type { FormEvent } from "react";
 import { Alert, Button, Input, Modal, Space, Tag } from "antd";
 import type { components, paths } from "./api";
@@ -758,6 +764,74 @@ function CitationList({
   );
 }
 
+function ClarificationOption({
+  option,
+  messages,
+  disabled,
+  onSelect,
+}: {
+  option: NonNullable<Clarification["options"]>[number];
+  messages: Messages;
+  disabled: boolean;
+  onSelect: () => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const [overflowing, setOverflowing] = useState(false);
+  const labelRef = useRef<HTMLSpanElement | null>(null);
+  const source = option.ref ? citationLabel(option.ref) : undefined;
+
+  useLayoutEffect(() => {
+    if (expanded) return;
+    const label = labelRef.current;
+    if (!label) return;
+    const measure = () =>
+      setOverflowing(label.scrollHeight > label.clientHeight + 1);
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(label);
+    return () => observer.disconnect();
+  }, [expanded, option.label]);
+
+  return (
+    <div className="clarification-option-item">
+      <Button
+        className="clarification-option"
+        disabled={disabled}
+        onClick={onSelect}
+      >
+        <span className="clarification-option-content">
+          <span
+            ref={labelRef}
+            className={
+              expanded
+                ? "clarification-option-label is-expanded"
+                : "clarification-option-label"
+            }
+          >
+            {option.label}
+          </span>
+          {source && (
+            <span className="clarification-source" title={source.title}>
+              {citationDisplayName(source)}
+            </span>
+          )}
+        </span>
+      </Button>
+      {overflowing && (
+        <button
+          type="button"
+          className="clarification-option-toggle"
+          aria-expanded={expanded}
+          onClick={() => setExpanded((value) => !value)}
+        >
+          {expanded ? messages.collapseMessage : messages.expandMessage}
+        </button>
+      )}
+    </div>
+  );
+}
+
 function ClarificationList({
   groups,
   messages,
@@ -790,36 +864,20 @@ function ClarificationList({
                 return (
                   <>
                     {usable.length > 0 && (
-                      <Space wrap>
-                        {usable.map((option, optionIndex) => {
-                          const source = option.ref
-                            ? citationLabel(option.ref)
-                            : undefined;
-                          return (
-                            <Button
-                              key={
-                                option.id ??
-                                `${option.label}-${option.ref}-${optionIndex}`
-                              }
-                              disabled={disabled}
-                              onClick={() => onSelect(question, option)}
-                            >
-                              <span>{option.label}</span>
-                              {source && (
-                                <>
-                                  {" "}
-                                  <span
-                                    className="clarification-source"
-                                    title={source.title}
-                                  >
-                                    {citationDisplayName(source)}
-                                  </span>
-                                </>
-                              )}
-                            </Button>
-                          );
-                        })}
-                      </Space>
+                      <div className="clarification-options">
+                        {usable.map((option, optionIndex) => (
+                          <ClarificationOption
+                            key={
+                              option.id ??
+                              `${option.label}-${option.ref}-${optionIndex}`
+                            }
+                            option={option}
+                            messages={messages}
+                            disabled={disabled}
+                            onSelect={() => onSelect(question, option)}
+                          />
+                        ))}
+                      </div>
                     )}
                     {lost && (
                       <p className="muted clarification-options-lost">
