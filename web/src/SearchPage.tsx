@@ -88,7 +88,7 @@ export function SearchPage({
     low: t.confidenceLow,
   };
   return (
-    <section className="stack">
+    <section className="stack admin-page">
       <div className="page-header">
         <div>
           <h1 className="page-title">{t.searchDebug}</h1>

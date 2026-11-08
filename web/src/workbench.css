@@ -2329,6 +2329,18 @@ code {
 }
 
 /* 管理类页面 */
+.admin-page .page-title,
+.admin-page .detail-title {
+  font-family: var(--font-serif);
+}
+.admin-page .card-title,
+.admin-page .detail-section-title,
+.admin-page .ant-card-head-title,
+.admin-page .agent-card-head h3,
+.admin-page label,
+.admin-page .field-label {
+  font-family: var(--font-sans);
+}
 .admin-page .file-picker.ant-upload-wrapper {
   display: block;
   min-height: 0;

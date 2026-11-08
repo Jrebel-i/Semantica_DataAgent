@@ -14,7 +14,7 @@ export function StatusPage({
   onRefresh: () => void;
 }) {
   return (
-    <Card className="section-card" title={messages.statusPage}>
+    <Card className="section-card admin-page" title={messages.statusPage}>
       <div className="page-actions" style={{ marginBottom: 12 }}>
         <Button onClick={onRefresh}>{messages.refresh}</Button>
       </div>

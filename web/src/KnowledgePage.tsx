@@ -522,7 +522,7 @@ export function KnowledgePage({
   return (
     <>
       {error && <Alert type="error" title={messages.error} />}
-      <div className="knowledge-layout">
+      <div className="knowledge-layout admin-page">
         <aside className="knowledge-tree-panel">
           <div className="knowledge-tree-head">
             <Input

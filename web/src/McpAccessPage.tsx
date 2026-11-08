@@ -85,7 +85,7 @@ export function McpAccessPage({
   }
 
   return (
-    <section className="stack">
+    <section className="stack admin-page">
       <div className="page-header">
         <div>
           <h1 className="page-title">{t.mcpAccess}</h1>

@@ -55,7 +55,7 @@ export function PersonalSettingsPage({
     }
   }
   return (
-    <div className="stack">
+    <div className="stack admin-page">
       <div className="page-header">
         <div>
           <h1 className="page-title">{t.personalSettings}</h1>

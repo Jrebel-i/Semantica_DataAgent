@@ -104,7 +104,7 @@ export function BuildPage({
   }
   const selected = builds.find((build) => build.id === selectedId) ?? null;
   return (
-    <section className="stack">
+    <section className="stack admin-page">
       <div className="page-header">
         <div>
           <h1 className="page-title">{t.builds}</h1>
