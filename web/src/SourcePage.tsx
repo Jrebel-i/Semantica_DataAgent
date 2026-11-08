@@ -5,14 +5,8 @@ import type { Messages } from "./i18n";
 import { ProjectSelector, storedProject } from "./ProjectSelector";
 
 type Version = components["schemas"]["SourceHistory"];
-type SourceStatus = {
-  state: "pending" | "building" | "effective" | "failed" | "unknown";
-  due_in_seconds: number | null;
-  last_build_id: number | null;
-  source_commit: string | null;
-  auto_build: boolean;
-  error: string | null;
-};
+type SourceStatus = components["schemas"]["ProjectSourceStatus"];
+type AutoBuildView = components["schemas"]["AutoBuildView"];
 type Tree = { directories: Record<string, Tree>; files: string[] };
 type Category = { name: string };
 type Preview = {
@@ -247,8 +241,7 @@ export function SourcePage({
     let active = true;
     void request(`/api/v1/projects/${encodeURIComponent(project)}/auto-build`)
       .then((value) => {
-        if (active)
-          setAutoBuild(Boolean((value as { enabled: boolean }).enabled));
+        if (active) setAutoBuild(Boolean((value as AutoBuildView).enabled));
       })
       .catch(() => {
         if (active) setAutoBuild(null);
@@ -388,7 +381,7 @@ export function SourcePage({
                         headers: { "Content-Type": "application/json" },
                         body: JSON.stringify({ enabled }),
                       },
-                    )) as { enabled: boolean };
+                    )) as AutoBuildView;
                     setAutoBuild(Boolean(saved.enabled));
                     setStatusRefresh((value) => value + 1);
                   } catch {

@@ -87,11 +87,15 @@ def request_upload_build(project_id: str, requested_by: str) -> bool:
     return True
 
 
-def discard_pending_builds(project_id: str) -> None:
-    with sessions().begin() as db:
-        db.query(ProjectPendingBuild).filter(
-            ProjectPendingBuild.project_id == project_id
-        ).delete(synchronize_session=False)
+def discard_pending_builds(project_id: str, db=None) -> None:
+    """Drop this project's not-yet-due request, optionally in a caller's transaction."""
+    if db is None:
+        with sessions().begin() as own:
+            discard_pending_builds(project_id, own)
+        return
+    db.query(ProjectPendingBuild).filter(
+        ProjectPendingBuild.project_id == project_id
+    ).delete(synchronize_session=False)
 
 
 def process_due_pending_builds(now: datetime | None = None) -> list[str]:
@@ -149,22 +153,22 @@ def source_status(project_id: str) -> dict[str, object]:
     now = datetime.now(UTC)
     with sessions()() as db:
         pending = db.get(ProjectPendingBuild, project_id)
-        builds = (
-            db.query(Build)
-            .filter(func.coalesce(Build.project_id, "default") == project_id)
-            .order_by(Build.id.desc())
-            .all()
+        builds = db.query(Build).filter(
+            func.coalesce(Build.project_id, "default") == project_id
         )
-        latest = builds[0] if builds else None
-        latest_success = next(
-            (row for row in builds if row.status == "succeeded"), None
+        latest = builds.order_by(Build.id.desc()).first()
+        latest_success = (
+            builds.filter(Build.status == "succeeded").order_by(Build.id.desc()).first()
         )
-        running = any(row.status == "running" for row in builds)
-        queued_incremental = any(
-            row.status == "queued" and (row.build_type or "full") == "incremental"
-            for row in builds
+        running = builds.filter(Build.status == "running").first() is not None
+        queued_incremental = (
+            builds.filter(
+                Build.status == "queued",
+                Build.build_type == "incremental",
+            ).first()
+            is not None
         )
-        queued = any(row.status == "queued" for row in builds)
+        queued = builds.filter(Build.status == "queued").first() is not None
         enabled = auto_build_enabled(project_id, db)
         if not enabled:
             pending = None

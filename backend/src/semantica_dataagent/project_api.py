@@ -353,8 +353,8 @@ def set_project_auto_build(
             )
         else:
             row.value = value
-    if not body.enabled:
-        auto_build.discard_pending_builds(scope.project_id)
+        if not body.enabled:
+            auto_build.discard_pending_builds(scope.project_id, db)
     return AutoBuildView(enabled=body.enabled)
 
 
