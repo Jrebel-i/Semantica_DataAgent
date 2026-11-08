@@ -325,8 +325,8 @@ provider 的 base_url 与 api_key 每轮按会话当前设置重新下发给 run
 用户可以在提问时附带图片和任意类型的文件，没有类型白名单。发送前输入区显示文件名、大小，图片显示缩略图，并可逐个删除；超过限制时前端在发送前拦截并给出中文提示。
 
 - 限制：单个文件不超过 20MB，一次最多 10 个，一条消息合计不超过 50MB。上限按“刚好等于通过、超 1 字节拒绝”定义，前后端使用同一组数字。
-- 后端入口：带附件时使用 `POST /api/v1/conversations/ask-with-attachments`（multipart，字段与 JSON `ask` 相同，文件字段名为 `attachments`）；不带附件仍走 `POST /api/v1/conversations/ask`。数量、单个大小和总量超限返回 4xx 与中文原因；请求体在解析前按 `Content-Length` 做一次粗上限检查。
-- 存储：附件写入该对话自己的沙箱工作区 `attachments/` 目录（即 `<agent_root>/<conversation_id>/work/attachments`），不写源目录、不写共享目录。文件名只保留最后一个路径组件，去掉控制字符和 `..`，再按字节长度截断；同名文件用 ` (n)` 后缀分配，以 `O_EXCL` 创建，绝不覆盖已有文件。文件权限为 `0600`，目录为 `0700`。路径必须解析为 `agent_root` 的直接子目录，否则拒绝。
+- 后端入口：带附件时使用 `POST /api/v1/conversations/ask-with-attachments`（multipart，字段与 JSON `ask` 相同，文件字段名为 `attachments`）；不带附件仍走 `POST /api/v1/conversations/ask`。数量、单个大小和总量超限返回 4xx 与中文原因；HTTP 中间件在 multipart 解析前按 `Content-Length` 做一次粗上限检查（`50MB + 1MB`），避免超大请求先被解析。
+- 存储：附件写入该对话自己的沙箱工作区 `attachments/` 目录（即 `<agent_root>/<conversation_id>/work/attachments`），不写源目录、不写共享目录。文件名只保留最后一个路径组件，去掉控制字符和 `..`，再按字节长度截断；同名文件用 ` (n)` 后缀分配，以 `O_EXCL | O_NOFOLLOW` 创建，绝不覆盖已有文件。文件权限为 `0600`，目录为 `0700`。路径必须解析为 `agent_root` 的直接子目录，否则拒绝；对话工作区、`work` 或 `attachments` 是符号链接时拒绝写入，删除会话时只移除符号链接本身，不跟随目标。
 - 生命周期：删除会话、会话过期清理时删除整个对话工作区；附件没有独立于对话的持久化副本。
 - 隔离：每个对话只挂载/使用自己的 `work` 目录；其它对话、其它用户不能通过附件路径或路径穿越文件名读到别的对话的附件。测试至少覆盖“对话 B 用包含对话 A 路径的文件名上传”和两个对话目录互不可见。
 - 图片：只有 `model_capabilities[model].vision === true` 的模型可以使用图片附件；能力缺失、JSON 损坏或未标记都按不支持处理。不支持的模型下前端图片入口置灰并说明原因，后端同样返回 422，不能只靠前端。
