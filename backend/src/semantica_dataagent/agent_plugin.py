@@ -11,11 +11,12 @@ import contextlib
 import json
 import os
 import re
+import stat
 from collections import deque
 from collections.abc import AsyncIterator, Iterable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Self
 
 from .agent_sandbox import register_session, unregister_session
@@ -311,6 +312,61 @@ def build_attachment_prompt(
     return "\n".join(lines)
 
 
+SUPPORTED_IMAGE_MIME_TYPES = frozenset(
+    {"image/gif", "image/jpeg", "image/png", "image/webp"}
+)
+
+
+class AttachmentPathError(ValueError):
+    """An attachment path does not resolve inside this conversation workspace."""
+
+
+def attachment_path(workspace: Path, attachment: AttachmentInput) -> Path:
+    """Resolve one stored attachment without leaving this conversation's work."""
+    relative = PurePosixPath(attachment.path)
+    if (
+        relative.is_absolute()
+        or not relative.parts
+        or any(part in {".", ".."} for part in relative.parts)
+    ):
+        raise AttachmentPathError("附件路径不在当前对话工作区内")
+    root = (Path(workspace) / "work").resolve()
+    candidate = root.joinpath(*relative.parts)
+    resolved = candidate.resolve()
+    if resolved != root and root not in resolved.parents:
+        raise AttachmentPathError("附件路径不在当前对话工作区内")
+    if not resolved.is_file():
+        raise AttachmentPathError(f"附件「{attachment.name}」不存在或不可读")
+    return resolved
+
+
+def read_attachment_bytes(workspace: Path, attachment: AttachmentInput) -> bytes:
+    """Read one attachment without following a swapped-in final symlink."""
+    path = attachment_path(workspace, attachment)
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError as exc:
+        raise AttachmentPathError(f"附件「{attachment.name}」无法读取") from exc
+    try:
+        information = os.fstat(descriptor)
+        if not stat.S_ISREG(information.st_mode):
+            raise AttachmentPathError(f"附件「{attachment.name}」不是普通文件")
+        with os.fdopen(descriptor, "rb", closefd=False) as stream:
+            return stream.read()
+    finally:
+        os.close(descriptor)
+
+
+def supported_image_attachments(
+    request: AgentTurnRequest,
+) -> list[AttachmentInput]:
+    return [
+        attachment
+        for attachment in request.attachments
+        if attachment.is_image and attachment.mime_type in SUPPORTED_IMAGE_MIME_TYPES
+    ]
+
+
 def request_secrets(request: AgentTurnRequest) -> tuple[str, ...]:
     return tuple(
         secret for secret in (request.mcp_token, request.provider.api_key) if secret
@@ -572,6 +628,10 @@ class AgentProcess:
         if self.process.stdin is None:
             raise RuntimeError("agent stdin is not available")
         await self.process.stdin.drain()
+
+    def close_stdin(self) -> None:
+        if self.process.stdin is not None:
+            self.process.stdin.close()
 
     async def readline(self) -> bytes:
         if self.process.stdout is None:

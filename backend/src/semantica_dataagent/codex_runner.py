@@ -10,12 +10,15 @@ from .agent_plugin import (
     KEY_ENV,
     MCP_SERVER,
     TOKEN_ENV,
+    AttachmentPathError,
     EventParser,
     SandboxTurn,
     agent_process,
+    attachment_path,
     available_in_runtime,
     clarification_event,
     default_sandbox_class,
+    error_event,
     is_sandboxed,
     mcp_headers,
     passthrough_environment,
@@ -24,6 +27,7 @@ from .agent_plugin import (
     redact_event,
     request_secrets,
     result_summary,
+    supported_image_attachments,
     write_json,
 )
 from .mcp_context import CONVERSATION_HEADER, TURN_HEADER
@@ -144,6 +148,13 @@ class CodexRunner:
         sandboxed = self._sandboxed()
         work = request.workspace / "work"
         work.mkdir(parents=True, exist_ok=True)
+        try:
+            for attachment in request.attachments:
+                attachment_path(request.workspace, attachment)
+        except (AttachmentPathError, OSError) as exc:
+            yield error_event(f"附件读取失败：{exc}")
+            return
+        images = supported_image_attachments(request)
         turn = SandboxTurn(
             request,
             sandbox_class=default_sandbox_class() if sandboxed else None,
@@ -176,6 +187,8 @@ class CodexRunner:
         if thread:
             command += ["resume", thread]
         command.append(request.prompt)
+        if images:
+            command += ["-i", *(attachment.path for attachment in images)]
         async with turn:
             if sandboxed:
                 command, exec_header = turn.wrap_command(
