@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import func, text
 
+from . import auto_build
 from .api_time import UtcDatetime
 from .auth import Requester, admin, current_requester
 from .db import (
@@ -226,6 +227,28 @@ def admin_project_path_scope(
     return _require_project_admin(scope, requester)
 
 
+ProjectSourceState = Literal["pending", "building", "effective", "failed", "unknown"]
+
+
+class AutoBuildUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool
+
+
+class AutoBuildView(BaseModel):
+    enabled: bool
+
+
+class ProjectSourceStatus(BaseModel):
+    state: ProjectSourceState
+    due_in_seconds: int | None
+    last_build_id: int | None
+    source_commit: str | None
+    auto_build: bool
+    error: str | None
+
+
 class ProjectScheduleUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -293,6 +316,49 @@ def set_project_schedule(
 
     scheduler.configure(body.interval_seconds, project_id=scope.project_id)
     return ProjectScheduleView(interval_seconds=body.interval_seconds)
+
+
+@router.get("/api/v1/projects/{project_id}/auto-build", response_model=AutoBuildView)
+def get_project_auto_build(
+    project_id: str,
+    scope: Annotated[ProjectContext, Depends(admin_project_path_scope)],
+):
+    return AutoBuildView(enabled=auto_build.auto_build_enabled(scope.project_id))
+
+
+@router.put("/api/v1/projects/{project_id}/auto-build", response_model=AutoBuildView)
+def set_project_auto_build(
+    project_id: str,
+    body: AutoBuildUpdate,
+    scope: Annotated[ProjectContext, Depends(admin_project_path_scope)],
+):
+    with sessions().begin() as db:
+        row = db.get(ProjectSetting, (scope.project_id, auto_build.AUTO_BUILD_KEY))
+        value = "true" if body.enabled else "false"
+        if row is None:
+            db.add(
+                ProjectSetting(
+                    project_id=scope.project_id,
+                    key=auto_build.AUTO_BUILD_KEY,
+                    value=value,
+                )
+            )
+        else:
+            row.value = value
+    if not body.enabled:
+        auto_build.discard_pending_builds(scope.project_id)
+    return AutoBuildView(enabled=body.enabled)
+
+
+@router.get(
+    "/api/v1/projects/{project_id}/source-status",
+    response_model=ProjectSourceStatus,
+)
+def get_project_source_status(
+    project_id: str,
+    scope: Annotated[ProjectContext, Depends(project_path_scope)],
+):
+    return ProjectSourceStatus(**auto_build.source_status(scope.project_id))
 
 
 def project_id_candidate(name: str) -> str:

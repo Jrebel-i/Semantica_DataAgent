@@ -72,7 +72,6 @@ def test_migrate_upgrades_from_0016_and_keeps_data(database, capsys):
     assert _kept_rows(database) == (("kept token", "admin"), ("kept value",))
 
 
-
 def test_migrate_creates_pending_builds_table(database):
     assert cli.main(["migrate"]) == 0
     with sqlite3.connect(database) as db:
@@ -83,6 +82,7 @@ def test_migrate_creates_pending_builds_table(database):
             ).fetchall()
         }
     assert columns == {"project_id", "due_at", "requested_by", "requested_at"}
+
 
 def test_migrate_backs_up_before_upgrade_and_is_repeatable(database, capsys):
     _old_database(database)

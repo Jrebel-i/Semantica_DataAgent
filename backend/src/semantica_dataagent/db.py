@@ -46,6 +46,14 @@ class ProjectSetting(Base):
     value: Mapped[str]
 
 
+class ProjectPendingBuild(Base):
+    __tablename__ = "project_pending_builds"
+    project_id: Mapped[str] = mapped_column(primary_key=True)
+    due_at: Mapped[str]
+    requested_by: Mapped[str]
+    requested_at: Mapped[str]
+
+
 class ProjectAudit(Base):
     __tablename__ = "project_audit"
     id: Mapped[int] = mapped_column(primary_key=True)

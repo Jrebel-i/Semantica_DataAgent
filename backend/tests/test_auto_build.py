@@ -52,9 +52,7 @@ def pause_build_queue(monkeypatch):
 
 def pending_rows(project_id=None):
     with sqlite3.connect(os.environ["DATAAGENT_DB_PATH"]) as db:
-        query = (
-            "SELECT project_id, due_at, requested_by FROM project_pending_builds"
-        )
+        query = "SELECT project_id, due_at, requested_by FROM project_pending_builds"
         if project_id is None:
             return db.execute(query).fetchall()
         return db.execute(query + " WHERE project_id = ?", (project_id,)).fetchall()
@@ -69,17 +67,20 @@ def build_rows(project_id="default"):
         ).fetchall()
 
 
-def insert_build(project_id, status, *, build_type="incremental", error=None):
+def insert_build(
+    project_id, status, *, build_type="incremental", triggered_by="upload", error=None
+):
     with sqlite3.connect(os.environ["DATAAGENT_DB_PATH"]) as db:
         cursor = db.execute(
             "INSERT INTO builds "
             "(project_id, status, started_at, counts, build_type, triggered_by, error) "
-            "VALUES (?, ?, ?, '{}', ?, 'upload', ?)",
+            "VALUES (?, ?, ?, '{}', ?, ?, ?)",
             (
                 project_id,
                 status,
                 datetime.now(UTC).isoformat(),
                 build_type,
+                triggered_by,
                 error,
             ),
         )
@@ -162,25 +163,18 @@ def test_auto_build_switch_skips_and_discards_requests(tmp_path, monkeypatch):
             ).status_code
             == 200
         )
-        assert (
-            client.get("/api/v1/projects/default/auto-build").json()
-            == {"enabled": True}
-        )
-        assert (
-            client.put(
-                "/api/v1/projects/default/auto-build", json={"enabled": False}
-            ).json()
-            == {"enabled": False}
-        )
+        assert client.get("/api/v1/projects/default/auto-build").json() == {
+            "enabled": True
+        }
+        assert client.put(
+            "/api/v1/projects/default/auto-build", json={"enabled": False}
+        ).json() == {"enabled": False}
         assert upload(client, auth, "default", "off.md", "off\n").status_code == 200
         assert pending_rows() == []
 
-        assert (
-            client.put(
-                "/api/v1/projects/default/auto-build", json={"enabled": True}
-            ).json()
-            == {"enabled": True}
-        )
+        assert client.put(
+            "/api/v1/projects/default/auto-build", json={"enabled": True}
+        ).json() == {"enabled": True}
         assert upload(client, auth, "default", "on.md", "on\n").status_code == 200
         assert pending_rows("default")
         assert (
@@ -197,7 +191,7 @@ def test_pending_request_survives_sigkill_and_runs_once_after_restart(
 ):
     from semantica_dataagent.app import app
 
-    configure(tmp_path, monkeypatch)
+    token = configure(tmp_path, monkeypatch)
     pause_build_queue(monkeypatch)
     due = (datetime.now(UTC) - timedelta(seconds=1)).isoformat()
     child = os.fork()
@@ -215,7 +209,7 @@ def test_pending_request_survives_sigkill_and_runs_once_after_restart(
     assert os.WIFSIGNALED(status) and os.WTERMSIG(status) == signal.SIGKILL
     assert len(pending_rows("default")) == 1
 
-    with TestClient(app, headers=headers("unused")) as client:
+    with TestClient(app, headers=headers(token)) as client:
         wait_for(
             lambda: len([row for row in build_rows() if row[1] == "queued"]) == 1,
             message="due request was not resumed after restart",
@@ -245,9 +239,9 @@ def test_sigkill_between_deleting_request_and_enqueue_does_not_lose_it(
 
     child = os.fork()
     if child == 0:
-        import semantica_dataagent.auto_build as auto_build
+        from semantica_dataagent import auto_build, project_context
 
-        auto_build.add_queued_build = lambda *args, **kwargs: os.kill(
+        project_context.add_queued_build = lambda *args, **kwargs: os.kill(
             os.getpid(), signal.SIGKILL
         )
         auto_build.process_due_pending_builds()
@@ -300,14 +294,16 @@ def test_running_build_gets_one_followup_and_queued_uploads_merge(
 
         assert upload(client, auth, a["id"], "one.md", "one\n").status_code == 200
         wait_for(
-            lambda: len(
-                [
-                    row
-                    for row in build_rows(a["id"])
-                    if row[1] == "queued" and row[2] == "incremental"
-                ]
-            )
-            == 1,
+            lambda: (
+                len(
+                    [
+                        row
+                        for row in build_rows(a["id"])
+                        if row[1] == "queued" and row[2] == "incremental"
+                    ]
+                )
+                == 1
+            ),
             message="running build did not get a follow-up",
         )
         assert upload(client, auth, a["id"], "two.md", "two\n").status_code == 200
@@ -397,3 +393,23 @@ def test_auto_build_permissions_and_project_isolation(tmp_path, monkeypatch):
             ).status_code
             == 404
         )
+
+
+def test_restart_keeps_queued_upload_builds(tmp_path, monkeypatch):
+    from semantica_dataagent.build_queue import recover_interrupted_builds
+
+    configure(tmp_path, monkeypatch)
+    upload_id = insert_build("default", "queued", triggered_by="upload")
+    scheduler_id = insert_build("default", "queued", triggered_by="scheduler")
+
+    recover_interrupted_builds()
+
+    with sqlite3.connect(os.environ["DATAAGENT_DB_PATH"]) as db:
+        statuses = dict(
+            db.execute(
+                "SELECT id, status FROM builds WHERE id IN (?, ?)",
+                (upload_id, scheduler_id),
+            ).fetchall()
+        )
+    assert statuses[upload_id] == "queued"
+    assert statuses[scheduler_id] == "cancelled"

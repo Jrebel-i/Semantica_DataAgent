@@ -30,7 +30,9 @@ def pause_build_queue(monkeypatch):
     monkeypatch.setattr(build_queue, "stop", lambda timeout=5: None)
 
 
-def insert_build(project_id, status, *, error=None, source_commit=None, build_type="incremental"):
+def insert_build(
+    project_id, status, *, error=None, source_commit=None, build_type="incremental"
+):
     with sqlite3.connect(os.environ["DATAAGENT_DB_PATH"]) as db:
         cursor = db.execute(
             "INSERT INTO builds "
@@ -59,9 +61,7 @@ def insert_pending(project_id="default", seconds=60):
 
 
 def status(client, auth, project="default"):
-    response = client.get(
-        f"/api/v1/projects/{project}/source-status", headers=auth
-    )
+    response = client.get(f"/api/v1/projects/{project}/source-status", headers=auth)
     assert response.status_code == 200, response.text
     return response.json()
 

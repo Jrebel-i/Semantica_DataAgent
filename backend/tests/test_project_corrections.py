@@ -78,6 +78,15 @@ def test_approval_writes_only_the_projects_source_and_build(tmp_path, monkeypatc
     headers = {"Authorization": f"Bearer {token}"}
     proposal_target_evidence(monkeypatch)
     with TestClient(app, headers=headers) as client:
+        for project in (a, b):
+            assert (
+                client.put(
+                    f"/api/v1/projects/{project.id}/auto-build",
+                    headers=headers,
+                    json={"enabled": False},
+                ).status_code
+                == 200
+            )
         upload(client, headers, a.id, f"{a.id}.md", f"before-{a.id}\n")
         upload(client, headers, b.id, f"{b.id}.md", f"before-{b.id}\n")
         before_b = subprocess.check_output(
