@@ -311,6 +311,8 @@ def _partition_issues(tree, tables):
                                 f"{field} = (SELECT MAX({field}) FROM {qualified})；"
                                 f"增量表用 {field} 的范围条件，如 "
                                 f"{field} >= '2025-01-01'。"
+                                "不确定时按快照处理；业务时间范围请加在业务时间列上，"
+                                "不要把快照表的分区列当业务时间。"
                             ),
                         },
                     )

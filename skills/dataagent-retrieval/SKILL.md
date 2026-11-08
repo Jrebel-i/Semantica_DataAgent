@@ -94,10 +94,20 @@ Read `validate_sql` completely:
 - For a `weak` or `unsupported` join, prefer a different relation found with `find_join_path`/`get_lineage` and revalidate. If the questioner's requirement still needs that join, call it out explicitly in the answer and explain the limitation. Never describe it as fully validated.
 - **Partitioned tables must be constrained.** If `describe_tables` marks any field with
   `partition: true`, put a condition on that partition column in `WHERE`.
-  Snapshot/latest partition: `WHERE dt = (SELECT MAX(dt) FROM db.table)`.
-  Incremental partition: a range such as `WHERE dt >= '2025-01-01' AND dt <= '2025-01-31'`.
-  Good: `SELECT COUNT(*) FROM db.orders WHERE dt = (SELECT MAX(dt) FROM db.orders)`.
-  Bad: `SELECT COUNT(*) FROM db.orders` when `dt` is partitioned.
+  Decide whether the table is a snapshot or an incremental table from the table
+  dictionary document, the table comment, or the producing task SQL (`read_task_sql`).
+  An `INSERT OVERWRITE ... PARTITION (...)` task that replaces the whole table is a
+  snapshot; a task that appends each day is incremental. If it is still unclear, treat
+  the table as a snapshot.
+  Snapshot: `WHERE dt = (SELECT MAX(dt) FROM db.table)`.
+  Incremental: a range such as `WHERE dt >= '2025-01-01' AND dt <= '2025-01-31'`.
+  Business time ranges always use a business time column, never the partition column of
+  a snapshot table.
+  Good snapshot: `SELECT * FROM db.table WHERE dt = (SELECT MAX(dt) FROM db.table)
+  AND event_time >= '2025-01-01' AND event_time < '2025-02-01'`.
+  Bad snapshot: `SELECT * FROM db.table WHERE dt >= '2025-01-01' AND dt <= '2025-01-31'`.
+  Good incremental: `SELECT * FROM db.table WHERE dt >= '2025-01-01' AND dt <= '2025-01-31'`.
+  Bad: no partition condition, or a snapshot table's partition column used as business time.
 
 ## Pagination and errors
 
