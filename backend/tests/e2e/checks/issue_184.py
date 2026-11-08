@@ -273,7 +273,8 @@ def check_issue_184_conversation_project_scope(ctx):
         capabilities.get("project", {}).get("id") == project_b_id,
         f"agent 凭据未绑定 B: {capabilities.get('project')}",
     )
-    override, body = _tool_error(bound, "get_capabilities", project="default")
+    overriding = ctx.open_mcp(credential, project="default", headers=credential_headers)
+    override, body = _tool_error(overriding, "get_capabilities")
     ctx.require(
         override and body.get("message") == NOT_FOUND,
         f"agent 凭据不应被项目参数覆盖: {body}",
