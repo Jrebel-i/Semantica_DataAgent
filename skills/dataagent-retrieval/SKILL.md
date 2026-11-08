@@ -26,7 +26,7 @@ Use this skill when a question needs warehouse knowledge or SQL. Retrieve before
      generates the SQL, reads the latest partition from DTB partition metadata
      (falling back to knowledge metadata), and never accepts caller-written
      SQL. It requires the caller's DTB token.
-   - `lookup_dim_values` to resolve a business term to an indexed dimension value; give `table`, `keyword`, and `field` when known.
+   - `lookup_dim_values` to resolve a business term to an indexed dimension value; give `table`, `keyword`, and `field` when known. Use the returned value verbatim, including whitespace: `%20` in a `ref` means a trailing space. Match the original value (`country = 'HK '`) or use `TRIM(country) = 'HK'`; do not manually strip the value. Bad: `country = 'HK'` after the tool returned `'HK '`.
    - `get_lineage` with `direction` `up` or `down` and `depth` 1-3 to understand dependencies. Pass `column` with a field name alongside `table` to inspect field-level dependencies and their task provenance.
    - `find_join_path` for two to four tables when a join is not already supported.
    - `read_task_sql` when the producing task SQL is needed as evidence.
@@ -46,10 +46,24 @@ Use this skill when a question needs warehouse knowledge or SQL. Retrieve before
    definition; do not withhold SQL just because that definition is absent. Skip SQL only
    when no relevant table exists.
 8. **Always** call `validate_sql` with the SQL and dialect. Do not present SQL as final
-   before validation. If validation reports any table, field, or syntax error, rewrite the
-   statement using only confirmed tables and fields and validate the replacement. Never
-   present a statement that failed validation as final.
+   before validation. If validation reports any table, field, syntax, join, or partition
+   problem, rewrite the statement using confirmed tables and fields, then validate the
+   replacement. Never present a statement that failed validation as final.
+   - **Never silently drop a condition.** Every filter in the question (entity, time
+     range, status, dimension value) must appear in the final SQL. Before submitting,
+     self-check: "is each requested condition present?"
+   - If a condition cannot be expressed, do not delete it and submit the rest. Tell the
+     user which condition cannot be applied and why, or call `request_clarification`.
+     Good: keep `WHERE country = 'HK '` and repair the join. Bad: remove the airline
+     filter and submit total sales.
 9. When the question asks for a computed answer, call `propose_query` with the Doris SQL after validation passes. The tool only creates a plan. Stop and wait for the questioner's confirmation; do not claim the query has run. Otherwise answer with the SQL and citations. Attach the exact `ref` values returned by the tools to each material claim. End the final answer with a short `引用：` line listing every ref used; an answer built from tool results must not omit references. Do not invent, shorten, or rewrite reference ids.
+   - **Minimal result set:** return only the metric the question asks for. Default to one
+     row and one column (a single aggregate).
+   - Unless the user explicitly asks to group or compare, do not add month/group
+     breakdowns, total rows, `ROLLUP`/`CUBE`/`GROUPING SETS`, or extra helper or
+     verification columns. Run verification queries separately.
+     Good: "bookings in July-August" -> `SELECT SUM(bookings) ... WHERE month BETWEEN ...`.
+     Bad: total + July + August + grand-total columns when only the total was asked.
 
 ## Evidence and safety
 
@@ -71,11 +85,19 @@ Allowed `dialect` values are `hive`, `spark`, and `doris`. Keep the SQL and dial
 
 Read `validate_sql` completely:
 
-- `status: pass` means syntax, tables, fields, and joins all passed. Only then call the SQL validated.
+- `status: pass` means syntax, tables, fields, joins, and partition conditions all passed. Only then call the SQL validated.
+- `issues` is the actionable detail list. Each item has `kind`, `table`, `field` or
+  `condition`, `message`, and `suggestion`; fix every item and validate again.
 - A syntax, table, or field error must be fixed and validated again.
 - An `ambiguous` table or field needs a fully qualified name or a question to the user; do not choose silently.
 - A join with `supported` has evidence. A `weak` join has only a common-key or other weak indication. An `unsupported` join has no evidence.
 - For a `weak` or `unsupported` join, prefer a different relation found with `find_join_path`/`get_lineage` and revalidate. If the questioner's requirement still needs that join, call it out explicitly in the answer and explain the limitation. Never describe it as fully validated.
+- **Partitioned tables must be constrained.** If `describe_tables` marks any field with
+  `partition: true`, put a condition on that partition column in `WHERE`.
+  Snapshot/latest partition: `WHERE dt = (SELECT MAX(dt) FROM db.table)`.
+  Incremental partition: a range such as `WHERE dt >= '2025-01-01' AND dt <= '2025-01-31'`.
+  Good: `SELECT COUNT(*) FROM db.orders WHERE dt = (SELECT MAX(dt) FROM db.orders)`.
+  Bad: `SELECT COUNT(*) FROM db.orders` when `dt` is partitioned.
 
 ## Pagination and errors
 

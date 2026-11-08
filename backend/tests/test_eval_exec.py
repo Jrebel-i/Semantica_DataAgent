@@ -54,6 +54,18 @@ def test_exec_cli_is_available():
     assert args.max_queries == 40
 
 
+def test_condition_columns_and_missing_condition_detection():
+    from semantica_dataagent.eval_exec import where_columns
+
+    reference = (
+        "SELECT COUNT(*) FROM shop.orders WHERE dt >= '2025-01-01' AND status = 'paid'"
+    )
+    agent = "SELECT COUNT(*) FROM shop.orders WHERE dt >= '2025-01-01'"
+
+    assert where_columns(reference, "hive") == {"dt", "status"}
+    assert where_columns(agent, "hive") == {"dt"}
+
+
 def test_comparison_handles_large_duplicate_multiset():
     result = {"columns": ["x"], "rows": [[1]] * 1100}
     assert evaluation.compare_results(result, result) == "equal"
@@ -186,6 +198,23 @@ def test_fake_agent_direct_clarification_and_query_plan(monkeypatch, tmp_path):
                             ),
                         ]
                     )
+                elif question == "drop":
+                    self._sse(
+                        [
+                            ("conversation", {"conversation_id": "conv-drop"}),
+                            (
+                                "done",
+                                {
+                                    "sql": [
+                                        {
+                                            "sql": "SELECT dropped FROM "
+                                            "shop.orders WHERE dt = '2025-01-01'"
+                                        }
+                                    ]
+                                },
+                            ),
+                        ]
+                    )
                 else:
                     self._sse(
                         [
@@ -265,6 +294,15 @@ def test_fake_agent_direct_clarification_and_query_plan(monkeypatch, tmp_path):
                 "reference_sql": "SELECT bad_reference FROM shop.orders "
                 "WHERE dt = '2025-01-01'",
             },
+            {
+                "id": "r4",
+                "question": "drop",
+                "expected_tables": ["shop.orders"],
+                "expected_fields": ["id"],
+                "caliber": "丢掉状态条件的口径",
+                "reference_sql": "SELECT id FROM shop.orders "
+                "WHERE dt = '2025-01-01' AND status = 'paid'",
+            },
         ]
         path = tmp_path / "questions.yaml"
         path.write_text(yaml.safe_dump(questions), encoding="utf-8")
@@ -294,8 +332,9 @@ def test_fake_agent_direct_clarification_and_query_plan(monkeypatch, tmp_path):
         assert metrics["clarified"] == 1
         assert metrics["via_plan"] == 1
         assert metrics["no_sql"] == 0
-        assert metrics["execution_total"] == 4
-        assert metrics["execution_success"] == 3
+        assert metrics["execution_total"] == 5
+        assert metrics["execution_success"] == 4
+        assert metrics["condition_incomplete"] == 1
         assert entries[0]["clarified"] is False
         assert entries[1]["clarified"] is True
         assert entries[2]["via_plan"] is True
@@ -319,10 +358,19 @@ def test_fake_agent_direct_clarification_and_query_plan(monkeypatch, tmp_path):
         assert entries[3]["detail"] == detail[:200]
         assert entries[3]["reference"]["reason"] == "校验被拒"
         assert entries[3]["reference_detail"] == detail[:200]
+        assert entries[0]["missing_condition_columns"] == []
+        assert entries[0]["agent_column_count"] == 1
+        assert entries[0]["reference_column_count"] == 1
+        assert entries[4]["missing_condition_columns"] == ["status"]
+        assert entries[4]["comparison"] == "equal"
+        assert entries[4]["agent_column_count"] == 1
+        assert entries[4]["reference_column_count"] == 1
         planned = "SELECT planned FROM shop.orders WHERE dt = '2025-01-01'"
         assert planned in executed_sqls
         markdown = (tmp_path / "report.md").read_text()
         assert detail[:200] in markdown
+        assert "缺失条件列" in markdown
+        assert "status" in markdown
         assert "issue-121-secret" not in raw
         assert "issue-121-secret" not in markdown
     finally:

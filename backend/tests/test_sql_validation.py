@@ -36,6 +36,61 @@ def test_valid_sql_dialects(dialect):
     )
 
 
+def test_partition_issue_lists_table_field_message_and_fix():
+    data = snapshot()
+    result = check_sql(
+        "SELECT o.id FROM shop.orders o",
+        "hive",
+        data,
+        partition_tables=data.tables,
+    )
+
+    assert result["status"] == "issues"
+    issue = next(item for item in result["issues"] if item["kind"] == "partition")
+    assert issue["table"] == "shop.orders"
+    assert issue["field"] == "dt"
+    assert "缺少分区条件" in issue["message"]
+    assert "MAX(dt)" in issue["suggestion"]
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        (
+            "SELECT o.id FROM shop.orders o "
+            "WHERE o.dt = (SELECT MAX(dt) FROM shop.orders)"
+        ),
+        (
+            "SELECT o.id FROM shop.orders o "
+            "WHERE o.dt >= '2025-01-01' AND o.dt <= '2025-01-31'"
+        ),
+    ],
+)
+def test_partitioned_sql_passes_with_no_issues(sql):
+    data = snapshot()
+    result = check_sql(sql, "hive", data, partition_tables=data.tables)
+
+    assert result["status"] == "pass", result
+    assert result["issues"] == []
+
+
+def test_existing_problems_are_also_listed_in_issues():
+    data = snapshot()
+    result = check_sql(
+        "SELECT missing FROM shop.ordrs",
+        "hive",
+        data,
+        partition_tables=data.tables,
+    )
+
+    assert result["status"] == "issues"
+    kinds = {item["kind"] for item in result["issues"]}
+    assert {"table", "field"} <= kinds
+    table_issue = next(item for item in result["issues"] if item["kind"] == "table")
+    assert table_issue["table"] == "shop.ordrs"
+    assert table_issue["suggestion"]
+
+
 def test_invalid_and_suggestions():
     assert check_sql("SELECT FROM", "hive", snapshot())["syntax"]["status"] == "error"
     result = check_sql("SELECT missing FROM shop.ordrs", "hive", snapshot())

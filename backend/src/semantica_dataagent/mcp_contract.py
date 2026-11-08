@@ -163,10 +163,21 @@ def install_contract(server):
             KeyError,
             TypeError,
             UnicodeError,
-        ):
+        ) as exc:
+            message = "Invalid tool arguments or cursor"
+            if name == "propose_query":
+                if isinstance(exc, jsonschema.ValidationError):
+                    path = ".".join(str(part) for part in exc.absolute_path)
+                    message = (
+                        "propose_query 参数不合法"
+                        + (f": {path}" if path else "")
+                        + f": {exc.message}"
+                    )
+                else:
+                    message = f"propose_query 参数不合法: {exc}"
             return error(
                 "invalid_input",
-                "Invalid tool arguments or cursor",
+                message,
                 False,
                 "Check the tool schema and cursor",
             )

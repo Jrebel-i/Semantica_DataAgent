@@ -188,7 +188,7 @@ def evidence(a, b, left_key=None, right_key=None, snapshot=None, documents=()):
     return found
 
 
-def check_sql(sql, dialect, snapshot):
+def check_sql(sql, dialect, snapshot, partition_tables=None):
     if dialect not in ("hive", "spark", "doris"):
         raise ValueError("Unsupported dialect")
     result = {
@@ -197,6 +197,7 @@ def check_sql(sql, dialect, snapshot):
         "tables": [],
         "fields": [],
         "joins": [],
+        "issues": [],
     }
     try:
         statements = sqlglot.parse(sql, read=dialect, error_level=ErrorLevel.RAISE)
@@ -211,6 +212,13 @@ def check_sql(sql, dialect, snapshot):
             "line": details.get("line"),
             "column": details.get("col"),
         }
+        result["issues"].append(
+            {
+                "kind": "syntax",
+                "message": str(exc),
+                "suggestion": "修正 SQL 语法后重新调用 validate_sql。",
+            }
+        )
         return result
     resolved = {}
     for table in tree.find_all(exp.Table):
@@ -246,6 +254,23 @@ def check_sql(sql, dialect, snapshot):
                     )
                 )
             result["tables"].append(item)
+            if item["status"] != "pass":
+                result["issues"].append(
+                    {
+                        "kind": "table",
+                        "table": name,
+                        "message": (
+                            f"表名不唯一: {name}"
+                            if item["status"] == "ambiguous"
+                            else f"表不存在: {name}"
+                        ),
+                        "suggestion": (
+                            "使用完整表名: " + ", ".join(item["suggestions"])
+                            if item["suggestions"]
+                            else "使用 describe_tables 确认表名。"
+                        ),
+                    }
+                )
     pending_documents = []
     for scope in traverse_scope(tree):
         sources = {}
@@ -282,6 +307,8 @@ def check_sql(sql, dialect, snapshot):
                 else "error"
             )
             item = {"name": column.sql(dialect=dialect), "status": status}
+            if column.table:
+                item["table"] = column.table
             if status == "error":
                 item["suggestions"] = get_close_matches(
                     column.name.lower(),
@@ -290,6 +317,28 @@ def check_sql(sql, dialect, snapshot):
                     cutoff=0.5,
                 )
             result["fields"].append(item)
+            if status != "pass":
+                suggestions = item.get("suggestions") or []
+                result["issues"].append(
+                    {
+                        "kind": "field",
+                        "table": column.table or None,
+                        "field": column.name,
+                        "condition": column.sql(dialect=dialect),
+                        "message": (
+                            f"字段不唯一: {item['name']}"
+                            if status == "ambiguous"
+                            else f"无法确认字段: {item['name']}"
+                            if status == "unknown"
+                            else f"字段不存在: {item['name']}"
+                        ),
+                        "suggestion": (
+                            "改用已确认字段: " + ", ".join(suggestions)
+                            if suggestions
+                            else "使用 describe_tables 确认字段名。"
+                        ),
+                    }
+                )
         for join in scope.expression.args.get("joins") or []:
             condition = join.args.get("on")
             supports = []
@@ -317,22 +366,21 @@ def check_sql(sql, dialect, snapshot):
                             pending_documents.append(
                                 (len(result["joins"]), a, b, l.name, r.name)
                             )
-            result["joins"].append(
-                {
-                    "condition": condition.sql(dialect=dialect)
-                    if condition
-                    else join.sql(dialect=dialect),
-                    "status": "supported"
-                    if any(p["strength"] == "strong" for p in supports)
-                    else "weak"
-                    if supports
-                    else "unsupported",
-                    "evidence": supports,
-                    "suggestion": None
-                    if any(p["strength"] == "strong" for p in supports)
-                    else "Weak or missing evidence; use find_join_path and verify the join.",
-                }
-            )
+            join_item = {
+                "condition": condition.sql(dialect=dialect)
+                if condition
+                else join.sql(dialect=dialect),
+                "status": "supported"
+                if any(p["strength"] == "strong" for p in supports)
+                else "weak"
+                if supports
+                else "unsupported",
+                "evidence": supports,
+                "suggestion": None
+                if any(p["strength"] == "strong" for p in supports)
+                else "Weak or missing evidence; use find_join_path and verify the join.",
+            }
+            result["joins"].append(join_item)
     candidates = [
         (i, a, b, l, r)
         for i, a, b, l, r in pending_documents
@@ -351,8 +399,30 @@ def check_sql(sql, dialect, snapshot):
             result["joins"][i]["evidence"].extend(proofs)
             result["joins"][i]["status"] = "supported"
             result["joins"][i]["suggestion"] = None
-    if all(x["status"] == "pass" for x in result["tables"] + result["fields"]) and all(
-        x["status"] == "supported" for x in result["joins"]
+    for join_item in result["joins"]:
+        if join_item["status"] != "supported":
+            result["issues"].append(
+                {
+                    "kind": "join",
+                    "table": None,
+                    "condition": join_item["condition"],
+                    "message": (
+                        "JOIN 只有弱证据"
+                        if join_item["status"] == "weak"
+                        else "JOIN 缺少证据"
+                    ),
+                    "suggestion": join_item["suggestion"],
+                }
+            )
+    if partition_tables is not None:
+        from .query_api import _partition_issues
+
+        _, _, problems = _partition_issues(tree, partition_tables)
+        result["issues"].extend(issue for _, issue in problems)
+    if (
+        not result["issues"]
+        and all(x["status"] == "pass" for x in result["tables"] + result["fields"])
+        and all(x["status"] == "supported" for x in result["joins"])
     ):
         result["status"] = "pass"
     return result
@@ -435,7 +505,15 @@ def join_path(tables, snapshot=None):
 
 
 def validate_sql(sql: str, dialect: Literal["hive", "spark", "doris"] = "hive") -> dict:
-    return check_sql(sql, dialect, load_snapshot())
+    """Validate SQL against tables, fields, joins and partition rules.
+
+    Returns the existing status/table/field/join shape plus an ``issues`` list.
+    Each issue names the problem and the fix: ``kind`` is one of syntax, table,
+    field, join, partition or partition_metadata, with ``table``, ``field`` or
+    ``condition`` where applicable, plus ``message`` and ``suggestion``.
+    """
+    snapshot = load_snapshot()
+    return check_sql(sql, dialect, snapshot, partition_tables=snapshot.tables)
 
 
 def find_join_path(tables: list[str]) -> dict:

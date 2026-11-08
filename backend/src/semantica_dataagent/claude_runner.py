@@ -71,7 +71,7 @@ class ClaudeEventParser(EventParser):
                             ident,
                             name,
                             is_error=bool(block.get("is_error")),
-                            summary=result_summary(result),
+                            summary=result_summary(result, name),
                         )
                     )
                     clarification = clarification_event(name, result)

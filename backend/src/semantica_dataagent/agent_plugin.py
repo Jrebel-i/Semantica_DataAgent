@@ -46,6 +46,7 @@ _REF_RE = re.compile(
 _FENCE_RE = re.compile(r"```([A-Za-z0-9_+.-]*)[ \t]*\r?\n(.*?)```", re.DOTALL)
 _SQL_LANGS = {"sql", "hive", "hiveql", "spark", "sparksql", "doris", "mysql"}
 _MISSING = object()
+EVENT_DETAIL_LIMIT = 2000
 
 
 def truncate(value, limit: int = 400) -> str:
@@ -70,7 +71,11 @@ def tool_args_summary(name: str, args) -> str:
     if short == "describe_tables":
         return truncate(f"tables={args.get('names', [])}", 200)
     if short == "validate_sql":
-        return truncate(f"dialect={args.get('dialect', '')}", 200)
+        return truncate(
+            f"dialect={args.get('dialect', '')} sql={args.get('sql', '')}", 400
+        )
+    if short == "propose_query":
+        return truncate(f"sql={args.get('sql', '')}", 400)
     if short == "read_document":
         return truncate(f"doc_id={args.get('doc_id', '')}", 200)
     if short == "read_task_sql":
@@ -109,15 +114,65 @@ def result_text(result) -> str:
     return truncate(result, 600)
 
 
-def result_summary(result) -> str:
+def _result_payload(result):
+    if isinstance(result, dict):
+        structured = result.get("structuredContent")
+        if isinstance(structured, dict):
+            payload = structured
+        elif isinstance(structured, str):
+            try:
+                payload = json.loads(structured)
+            except (TypeError, ValueError):
+                payload = None
+        else:
+            content = result.get("content")
+            text = (
+                "\n".join(
+                    item.get("text", "")
+                    for item in content
+                    if isinstance(item, dict) and item.get("type") == "text"
+                )
+                if isinstance(content, list)
+                else ""
+            )
+            try:
+                payload = json.loads(text) if text else result
+            except (TypeError, ValueError):
+                payload = result
+        if isinstance(payload, dict) and isinstance(payload.get("result"), dict):
+            payload = payload["result"]
+        return payload if isinstance(payload, dict) else None
+    return None
+
+
+def result_summary(result, name: str | None = None) -> str:
+    short = (name or "").split("__")[-1]
+    payload = _result_payload(result)
+    if isinstance(payload, dict):
+        if short == "validate_sql":
+            status = payload.get("status", "unknown")
+            issues = payload.get("issues")
+            if issues:
+                detail = json.dumps(issues, ensure_ascii=False, sort_keys=True)
+                return truncate(f"status={status} issues={detail}", EVENT_DETAIL_LIMIT)
+            return truncate(f"status={status}", EVENT_DETAIL_LIMIT)
+        if short == "propose_query":
+            if payload.get("code"):
+                return truncate(
+                    f"{payload['code']}: {payload.get('message', '')}",
+                    EVENT_DETAIL_LIMIT,
+                )
+            if payload.get("id"):
+                return truncate(f"plan={payload['id']}", EVENT_DETAIL_LIMIT)
+        if "status" in payload:
+            return truncate(f"status={payload['status']}", EVENT_DETAIL_LIMIT)
+        if payload.get("code"):
+            return truncate(
+                f"{payload['code']}: {payload.get('message', '')}",
+                EVENT_DETAIL_LIMIT,
+            )
     text = result_text(result)
-    try:
-        parsed = json.loads(text)
-    except (TypeError, ValueError):
-        return truncate(text, 500)
-    if isinstance(parsed, dict) and "status" in parsed:
-        return truncate(f"status={parsed['status']}", 200)
-    return truncate(text, 500)
+    return truncate(text, EVENT_DETAIL_LIMIT)
 
 
 def extract_refs(text: str) -> list[str]:
@@ -197,6 +252,7 @@ def tool_start_event(ident, name: str, args) -> AgentEvent:
             "id": ident,
             "name": name,
             "summary": tool_args_summary(name, args),
+            "input": truncate(args, EVENT_DETAIL_LIMIT),
             "args": args,
         },
     )

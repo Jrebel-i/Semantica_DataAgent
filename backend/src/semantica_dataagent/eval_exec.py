@@ -6,11 +6,44 @@ import time
 from collections import Counter
 
 import httpx
+import sqlglot
+from sqlglot import exp
 
 from .eval import compare_results, load_questions
 
 DETAIL_LIMIT = 200
 CLARIFY_MESSAGE = "请按以下口径回答并给出 SQL：{caliber}"
+
+
+def where_columns(sql, dialect="hive"):
+    """Column names used by WHERE filters; None when the SQL cannot be parsed."""
+    try:
+        tree = sqlglot.parse_one(sql, read=dialect)
+    except (sqlglot.errors.SqlglotError, ValueError):
+        return None
+    if tree is None:
+        return None
+    return {
+        column.name.lower()
+        for where in tree.find_all(exp.Where)
+        for column in where.find_all(exp.Column)
+        if column.name
+    }
+
+
+def missing_condition_columns(reference_sql, agent_sql, dialect="hive"):
+    """Reference WHERE columns the agent SQL does not mention.
+
+    This is a diagnostic only. It deliberately does not compare values or
+    change result consistency.
+    """
+    if not agent_sql:
+        return None
+    reference = where_columns(reference_sql, dialect)
+    agent = where_columns(agent_sql, dialect)
+    if reference is None or agent is None:
+        return None
+    return sorted(reference - agent)
 
 
 def _failure(status):
@@ -219,6 +252,11 @@ def run_cli(args):
                     "comparison": comparison,
                     "truncated": truncated,
                     "summary": summary,
+                    "missing_condition_columns": missing_condition_columns(
+                        question.reference_sql, sql, question.dialect
+                    ),
+                    "agent_column_count": agent.get("column_count"),
+                    "reference_column_count": reference.get("column_count"),
                 }
             )
     with_sql = sum(e["agent_sql"] for e in entries)
@@ -241,6 +279,9 @@ def run_cli(args):
         "reference_failures": sum(
             e["reference"]["status"] == "failed" for e in entries
         ),
+        "condition_incomplete": sum(
+            bool(e["missing_condition_columns"]) for e in entries
+        ),
     }
     failures = dict(
         Counter(
@@ -261,15 +302,20 @@ def run_cli(args):
         "",
         (
             "| 题号 | 有 SQL | 澄清 | 查询计划 | agent 执行 | 参考执行 | 一致性 | "
-            "agent detail | 参考 detail |"
+            "缺失条件列 | agent 列数 | 参考列数 | agent detail | 参考 detail |"
         ),
-        "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for e in entries:
+        missing = e["missing_condition_columns"]
+        missing_text = "—" if missing is None else ", ".join(missing) or "—"
         lines.append(
             f"| {e['id']} | {e['agent_sql']} | {e['clarified']} | "
             f"{e['via_plan']} | {e['agent']} | {e['reference']} | "
-            f"{e['comparison']} | {_cell(e['detail'])} | "
+            f"{e['comparison']} | {_cell(missing_text)} | "
+            f"{e['agent_column_count'] if e['agent_column_count'] is not None else '—'} | "
+            f"{e['reference_column_count'] if e['reference_column_count'] is not None else '—'} | "
+            f"{_cell(e['detail'])} | "
             f"{_cell(e['reference_detail'])} |"
         )
     args.report.with_suffix(".md").write_text("\n".join(lines) + "\n", encoding="utf-8")

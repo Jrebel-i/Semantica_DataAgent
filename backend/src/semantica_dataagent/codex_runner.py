@@ -65,7 +65,8 @@ class CodexEventParser(EventParser):
                         summary=result_summary(
                             item.get("result")
                             or item.get("aggregated_output")
-                            or item.get("error")
+                            or item.get("error"),
+                            name,
                         ),
                     )
                 ]

@@ -22,7 +22,9 @@ from semantica_dataagent.agent_plugin import (
     read_marker,
     redact_event,
     request_secrets,
+    result_summary,
     text_event,
+    tool_start_event,
     write_json,
 )
 from semantica_dataagent.agent_runner import discover_runners
@@ -173,6 +175,61 @@ def test_redaction_covers_nested_event_data():
     event = text_event("token-value key-value")
     redacted = redact_event(event, ("token-value", "key-value"))
     assert redacted.data == {"text": "[redacted] [redacted]"}
+
+
+def test_tool_start_records_truncated_input_and_redacts_secrets():
+    sql = "SELECT " + "x" * 3000
+    event = tool_start_event(
+        "call-1",
+        "mcp__dataagent__validate_sql",
+        {"sql": sql, "dialect": "hive", "api_key": "secret-value"},
+    )
+
+    assert event.data["summary"].startswith("dialect=hive")
+    assert '"sql": "SELECT x' in event.data["input"]
+    assert len(event.data["input"]) <= 2000
+    redacted = redact_event(event, ("secret-value",))
+    assert "secret-value" not in json.dumps(redacted.data, ensure_ascii=False)
+
+
+def test_validate_tool_end_summary_includes_issue_details():
+    summary = result_summary(
+        {
+            "structuredContent": {
+                "status": "issues",
+                "issues": [
+                    {
+                        "kind": "partition",
+                        "table": "shop.orders",
+                        "field": "dt",
+                        "message": "分区表 shop.orders 缺少分区条件: dt",
+                        "suggestion": "WHERE dt = (SELECT MAX(dt) FROM shop.orders)",
+                    }
+                ],
+            }
+        },
+        name="mcp__dataagent__validate_sql",
+    )
+
+    assert summary.startswith("status=issues")
+    assert "缺少分区条件" in summary
+    assert "MAX(dt)" in summary
+
+
+def test_propose_tool_end_summary_includes_error_code_and_message():
+    summary = result_summary(
+        {
+            "structuredContent": {
+                "code": "invalid_input",
+                "message": "SQL validation did not pass: 缺少分区条件",
+                "retryable": False,
+            }
+        },
+        name="mcp__dataagent__propose_query",
+    )
+
+    assert "invalid_input" in summary
+    assert "缺少分区条件" in summary
 
 
 def test_sandbox_turn_registers_starts_and_always_closes(tmp_path):
