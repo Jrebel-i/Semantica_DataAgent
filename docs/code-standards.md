@@ -33,7 +33,19 @@
 - `GET /api/v1/projects` 需要认证。系统管理员返回全部项目，其它用户只返回自己是成员的项目；每项包含 `id`、`name`、`type`、`status`、`created_at`、`my_role`。系统管理员的 `my_role` 恒为 `admin`。
 - `PATCH /api/v1/projects/{id}` 仅系统管理员可用，只接受 `name`；请求里出现 `type`、`status` 等其它字段返回 422。名称两端空白会被去掉，长度为 1–200。
 - 默认项目 id 固定为 `default`，类型 `warehouse`，显示名默认“业务数据”，可改名但不可删除；删除与归档留给 #190。
-- 新建普通用户令牌时自动写入默认项目的 `member` 成员行；管理员令牌不写成员行。`project_context` 的解析规则仍恒为默认项目（#175 再按项目解析），但名称、类型、状态来自 `projects` 表。
+- 新建普通用户令牌时自动写入默认项目的 `member` 成员行；管理员令牌不写成员行。`project_context` 显式传入项目 id 时解析该项目，未传时解析默认项目；请求、令牌与会话上下文仍恒为默认项目（#177、#184 再接），名称、类型、状态来自 `projects` 表。
+
+## 项目隔离与存储命名
+
+项目之间靠“知识代命名前缀”隔离，不新增 Neo4j 标签或 Milvus 索引。
+
+- 项目 id 只允许 `[a-z][a-z0-9]{0,23}`，不含下划线；`default` 保留给默认项目。代名前缀为 `<项目 id>_`，因此 `a_` 与 `ab_` 不会互相匹配。每个 Neo4j 节点仍按 `generation` 属性过滤，Milvus 每代一个 `sda_<代名>` 集合。
+- `generation_pointer`、`knowledge_generations`、`builds` 都带 `project_id`（旧行回填 `default`）；指针按项目一行，切换、全量发布和增量读取都必须走 `generation_pointer(db, project_id)`，不能再用固定的 `id=1`。
+- 代保留清理和中断清理只处理本项目：先按 `project_id` 圈定代记录，再删除存储数据。跨项目误删是必须被测试守护的缺陷。
+- `project_settings(project_id, key, value)` 只存项目级覆盖；默认项目没有覆盖行，仍读全局 `settings`。`current_project(project_id)` 返回“全局设置 + 本项目覆盖”。
+- 新项目源目录为 `$DATAAGENT_PROJECTS_ROOT/<项目 id>/source`；未设置该环境变量时取数据库文件同目录下的 `projects/<项目 id>/source`。默认项目继续使用全局 `source_directory`。
+- `builds.project_id` 决定工作线程读取哪个项目的代、源目录和检索存储；队列仍全局串行。新项目构建只启用 Markdown 源适配器，插件配置表仍是全局的。
+- REST 的项目参数是可选的 `project`（缺省默认项目）。非默认项目在 #177 之前只有系统管理员可访问，其他用户一律得到 404。
 
 ## 数据库迁移
 
