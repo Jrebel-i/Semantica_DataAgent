@@ -179,16 +179,21 @@ def test_regular_users_only_see_projects_they_belong_to(client):
     assert all(item["my_role"] == "admin" for item in admin_listing.json())
 
     _add_member("secret", user["id"], "admin")
-    updated = {item["id"]: item for item in c.get(
-        "/api/v1/projects", headers=user_headers
-    ).json()}
+    updated = {
+        item["id"]: item
+        for item in c.get("/api/v1/projects", headers=user_headers).json()
+    }
     assert updated["secret"]["my_role"] == "admin"
 
 
 def test_project_managers_still_cannot_rename_projects(client):
     c, admin_token = client
     user = _create_token(c, admin_token, "Bob", "user")
-    _add_member(DEFAULT_PROJECT_ID, user["id"], "admin")
+    _execute(
+        "UPDATE project_members SET role = 'admin' "
+        "WHERE project_id = ? AND token_id = ?",
+        (DEFAULT_PROJECT_ID, user["id"]),
+    )
     response = c.patch(
         f"/api/v1/projects/{DEFAULT_PROJECT_ID}",
         headers=_headers(user["token"]),
