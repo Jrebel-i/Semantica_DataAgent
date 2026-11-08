@@ -187,6 +187,7 @@ def test_rest_time_fields_have_utc_offset(client):
         "conversation": c.get(
             "/api/v1/conversations/conversation", headers=headers
         ).json(),
+        "projects": c.get("/api/v1/projects", headers=headers).json(),
     }
     failures = {
         name: problems

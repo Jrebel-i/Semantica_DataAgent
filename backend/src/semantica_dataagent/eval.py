@@ -760,6 +760,7 @@ def temporary_token() -> tuple[str, str]:
     import secrets
 
     from .db import Token, digest, sessions
+    from .project_api import ensure_default_project_member
 
     plaintext = secrets.token_urlsafe(32)
     with sessions().begin() as db:
@@ -770,6 +771,7 @@ def temporary_token() -> tuple[str, str]:
         )
         db.add(row)
         db.flush()
+        ensure_default_project_member(db, row)
         return plaintext, row.id
 
 

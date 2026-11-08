@@ -26,9 +26,12 @@ from typing import Any
 
 from cryptography.fernet import Fernet
 
-from .db import GenerationPointer, PluginConfig, Setting, sessions
+from .db import GenerationPointer, PluginConfig, Project, Setting, sessions
 
 DEFAULT_PROJECT_ID = "default"
+DEFAULT_PROJECT_NAME = "业务数据"
+DEFAULT_PROJECT_TYPE = "warehouse"
+DEFAULT_PROJECT_STATUS = "active"
 
 GENERATION_KEY = "knowledge_generation"
 SOURCE_DIRECTORY_KEY = "source_directory"
@@ -66,12 +69,11 @@ def neo4j_password(values: Mapping[str, Any]) -> str | None:
     return None
 
 
-def _raw_settings() -> dict[str, str]:
-    with sessions()() as db:
-        values = {row.key: row.value for row in db.query(Setting).all()}
-        pointer = db.get(GenerationPointer, 1)
-        if pointer:
-            values[GENERATION_KEY] = pointer.generation
+def _read_settings(db) -> dict[str, str]:
+    values = {row.key: row.value for row in db.query(Setting).all()}
+    pointer = db.get(GenerationPointer, 1)
+    if pointer:
+        values[GENERATION_KEY] = pointer.generation
     return values
 
 
@@ -138,12 +140,21 @@ class ProjectContext:
 
     project_id: str
     _values: Mapping[str, Any]
+    name: str = DEFAULT_PROJECT_NAME
+    project_type: str = DEFAULT_PROJECT_TYPE
+    status: str = DEFAULT_PROJECT_STATUS
 
     @classmethod
     def from_values(
-        cls, values: Mapping[str, Any], project_id: str = DEFAULT_PROJECT_ID
+        cls,
+        values: Mapping[str, Any],
+        project_id: str = DEFAULT_PROJECT_ID,
+        *,
+        name: str = DEFAULT_PROJECT_NAME,
+        project_type: str = DEFAULT_PROJECT_TYPE,
+        status: str = DEFAULT_PROJECT_STATUS,
     ) -> ProjectContext:
-        return cls(project_id, dict(values))
+        return cls(project_id, dict(values), name, project_type, status)
 
     @property
     def values(self) -> dict[str, Any]:
@@ -254,17 +265,38 @@ def current_project(
     token: Any = None,
     conversation: Any = None,
 ) -> ProjectContext:
-    """Load the resolved project's values from the current settings table."""
+    """Load the resolved project's values and metadata.
+
+    The resolution rule is still the #173 rule (always the default project).
+    Display metadata now comes from the projects table while the project-scoped
+    configuration keeps using the existing settings rows.
+    """
     resolved = resolve_project_id(
         project_id, request=request, token=token, conversation=conversation
     )
-    return ProjectContext(resolved, normalize_values(_raw_settings()))
+    with sessions()() as db:
+        project = db.get(Project, resolved)
+        values = normalize_values(_read_settings(db))
+    if project is None:
+        return ProjectContext(resolved, values)
+    return ProjectContext(resolved, values, project.name, project.type, project.status)
 
 
 def from_values(
-    values: Mapping[str, Any], project_id: str = DEFAULT_PROJECT_ID
+    values: Mapping[str, Any],
+    project_id: str = DEFAULT_PROJECT_ID,
+    *,
+    name: str = DEFAULT_PROJECT_NAME,
+    project_type: str = DEFAULT_PROJECT_TYPE,
+    status: str = DEFAULT_PROJECT_STATUS,
 ) -> ProjectContext:
-    return ProjectContext.from_values(values, project_id)
+    return ProjectContext.from_values(
+        values,
+        project_id,
+        name=name,
+        project_type=project_type,
+        status=status,
+    )
 
 
 def with_generation(values: Mapping[str, Any], generation: str) -> dict[str, Any]:
