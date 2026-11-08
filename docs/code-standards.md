@@ -196,6 +196,10 @@ Docker Desktop / WSL 下，agent 只连接 internal 网络；同一网络中的�
 
 启用 Langfuse 时，用户问题、agent 回答及 SQL 是观测内容，可能包含用户自行输入的信息；界面必须告知用户问题和回答会上报。应用持有的 MCP token、provider API key、Langfuse 密钥、Neo4j 密码、认证与 Cookie 头和会话文件内容不得上报。上报字段采用集中允许列表，并遮盖已知秘密及 Bearer、sk-、password=、api_key=、token= 等凭据形式；不得把会话文件或请求头作为遥测载荷。
 
+## 会话管理接口
+
+`GET /api/v1/conversations` 默认只列出未归档会话；`?archived=true` 列出已归档会话。响应包含 `pinned`、`archived`，置顶会话按置顶时间倒序，其余按更新时间倒序。`PATCH /api/v1/conversations/{id}` 接收 `title`、`pinned`、`archived` 的可选字段；标题去除首尾空白后长度须为 1–200，归档运行中的会话返回 409。归档不会取消置顶，恢复后仍保持原置顶顺序。详情与删除接口同样按所有者授权，删除已归档会话与普通会话一致。
+
 ## Kubernetes 会话沙箱
 
 `DATAAGENT_AGENT_MODE=k8s` 使用独立会话 Pod；本地默认继续使用 Docker。Pod 规格、命名空间 RBAC 和 NetworkPolicy 在 `tests/test_k8s_sandbox_spec.py` 检查，真实双栈默认拒绝及允许目标还须在集群运行 `tests/e2e/checks/issue_26.py` 验证。会话出站实际由 init 容器的 iptables 限制；当前 flannel 不执行 NetworkPolicy。会话 Pod 在独立命名空间使用临时卷，轮次开始和结束时传递该对话的工作目录及会话文件；不得向 agent 容器传入 Kubernetes ServiceAccount token 或能力。运行时 Neo4j Secret 经 `DATAAGENT_NEO4J_AUTH` 注入时只用于匹配用户名的默认凭据，管理员显式保存的设置优先。
