@@ -1230,7 +1230,10 @@ export function ChatPage({
         { headers: { Authorization: `Bearer ${token}` } },
       );
       if (!archivedResponse.ok) throw new Error();
-      setArchivedConversations(await archivedResponse.json());
+      const archivedRows: unknown = await archivedResponse.json();
+      if (!Array.isArray(archivedRows))
+        throw new Error("Invalid archived conversation list");
+      setArchivedConversations(archivedRows);
     } catch {
       setError(t.askError);
     }

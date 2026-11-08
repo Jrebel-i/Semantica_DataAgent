@@ -72,7 +72,8 @@ test("普通用户只能看到问答、知识和个人设置，导航展开状�
       if (
         url === "/api/v1/agents" ||
         url === "/api/v1/providers" ||
-        url === "/api/v1/conversations"
+        url === "/api/v1/conversations" ||
+        url === "/api/v1/conversations?archived=true"
       )
         return Response.json([]);
       return Response.json({});
@@ -109,6 +110,7 @@ test("侧栏会话可从搜索页切换且只加载一次列表", async () => {
     if (url === "/api/v1/me") return Response.json({ role: "user" });
     if (url === "/api/v1/categories") return Response.json([]);
     if (url === "/api/v1/conversations") return Response.json(conversations);
+    if (url === "/api/v1/conversations?archived=true") return Response.json([]);
     if (url.startsWith("/api/v1/conversations/")) {
       const row = conversations.find((item) => url.endsWith(item.id));
       return Response.json({ ...row, turns: [] });
