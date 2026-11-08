@@ -180,6 +180,29 @@ def _color_answer(pixel: tuple[int, int, int]) -> str:
     return ""
 
 
+def _prompt_text(provider_type: str, body: dict) -> str:
+    if provider_type in {"anthropic-messages", "openai-completions"}:
+        content = _content_blocks(body)
+        return "".join(
+            block["text"]
+            for block in content
+            if block.get("type") == "text" and isinstance(block.get("text"), str)
+        )
+    if provider_type == "openai-responses":
+        content = body["input"][0]["content"]
+        return "".join(
+            block["text"]
+            for block in content
+            if block.get("type") == "input_text" and isinstance(block.get("text"), str)
+        )
+    parts = body["contents"][0]["parts"]
+    return "".join(
+        part["text"]
+        for part in parts
+        if isinstance(part.get("text"), str) and part.get("thought") is not True
+    )
+
+
 def _classify(provider_type: str, path: str, body: dict) -> tuple[str, str | None]:
     path = path.split("?", 1)[0]
     if provider_type == "anthropic-messages":
@@ -232,6 +255,7 @@ class FakeGateway:
         discard_image: bool = False,
         vision_text: str = "OK",
         min_vision_size: bool = False,
+        fail_color: str | None = None,
         effort_status: dict[str, int] | None = None,
         delay: float = 0.0,
         drip: float | None = None,
@@ -242,6 +266,7 @@ class FakeGateway:
         self.discard_image = discard_image
         self.vision_text = vision_text
         self.min_vision_size = min_vision_size
+        self.fail_color = fail_color
         self.effort_status = effort_status or {}
         self.delay = delay
         self.drip = drip
@@ -290,6 +315,11 @@ class FakeGateway:
             return 400, "image dimensions must be at least 64x64"
         self.vision_statuses.append(200)
         if self.discard_image:
+            return 200, self.vision_text
+        red, green, blue = pixel
+        if self.fail_color == "red" and red > 200 and green < 50 and blue < 50:
+            return 200, self.vision_text
+        if self.fail_color == "blue" and blue > 200 and red < 50 and green < 50:
             return 200, self.vision_text
         return 200, _color_answer(pixel) or self.vision_text
 
@@ -479,6 +509,9 @@ def test_probe_sends_each_provider_wire_shape_and_accepts_all(
     assert sorted(gateway.vision_sizes) == [(MIN_IMAGE_SIZE, MIN_IMAGE_SIZE)] * 2
     assert sorted(gateway.vision_statuses) == [200, 200]
     assert {pixel for _, _, pixel in image_info} == {(255, 0, 0), (0, 0, 255)}
+    assert [_prompt_text(provider_type, item["body"]) for item in visions] == [
+        "这张图片是什么颜色？只回答一个词"
+    ] * 2
 
     vision = visions[0]
     if provider_type == "anthropic-messages":
@@ -562,6 +595,19 @@ def test_probe_reports_accepted_but_unrecognized_image_as_no(client, vision_text
     assert response.json()["effort"] == {level: "yes" for level in EFFORT_LEVELS}
     assert "请求被接受但模型未能识别图片内容" in response.json()["notes"]
     assert len(gateway.vision_sizes) == 2
+
+
+def test_probe_requires_both_colors_to_be_recognized(client):
+    c, token = client
+    with _gateway("anthropic-messages", fail_color="red") as (_, base_url):
+        provider_id = _create_provider(
+            c, token, provider_type="anthropic-messages", base_url=base_url
+        )
+        response = _probe(c, token, provider_id)
+
+    assert response.status_code == 200, response.text
+    assert response.json()["vision"] == "no"
+    assert "请求被接受但模型未能识别图片内容" in response.json()["notes"]
 
 
 def test_probe_accepts_images_at_least_64_pixels_like_qwen(client):
