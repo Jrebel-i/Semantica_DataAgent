@@ -18,19 +18,31 @@ afterEach(() => {
 test.each(["approve", "edited", "reject"])(
   "review %s uses the correct endpoint and patch",
   async (action) => {
-    const fetcher = vi.fn(async (_url: string, options?: RequestInit) =>
-      options?.method === "POST"
-        ? Response.json({})
-        : Response.json([
-            {
-              id: "p1",
-              target: "document:a",
-              reason: "wrong",
-              diff: "-old\n+new",
-              patch: "new",
-              status: "pending",
-            },
-          ]),
+    const fetcher = vi.fn(
+      async (url: string, options?: RequestInit) =>
+        options?.method === "POST"
+          ? Response.json({})
+          : url === "/api/v1/projects"
+            ? Response.json([
+                {
+                  id: "default",
+                  name: "业务数据",
+                  type: "warehouse",
+                  status: "active",
+                  created_at: "2026-01-01T00:00:00Z",
+                  my_role: "admin",
+                },
+              ])
+            : Response.json([
+                {
+                  id: "p1",
+                  target: "document:a",
+                  reason: "wrong",
+                  diff: "-old\n+new",
+                  patch: "new",
+                  status: "pending",
+                },
+              ]),
     );
     vi.stubGlobal("fetch", fetcher);
     render(<CorrectionsPage token="token" messages={getMessages("en")} />);
@@ -55,7 +67,7 @@ test.each(["approve", "edited", "reject"])(
         fetcher.mock.calls.some(
           ([url, options]) =>
             url ===
-              `/api/v1/corrections/p1/${action === "reject" ? "reject" : "approve"}` &&
+              `/api/v1/corrections/p1/${action === "reject" ? "reject" : "approve"}?project=default` &&
             options?.method === "POST" &&
             (action !== "edited" ||
               options.body === JSON.stringify({ patch: "edited" })),
@@ -66,15 +78,29 @@ test.each(["approve", "edited", "reject"])(
 );
 
 test("knowledge gaps show question and missing information", async () => {
+  const urls: string[] = [];
   vi.stubGlobal(
     "fetch",
-    vi.fn(async () =>
-      Response.json([
+    vi.fn(async (url: string) => {
+      urls.push(url);
+      if (url === "/api/v1/projects")
+        return Response.json([
+          {
+            id: "default",
+            name: "业务数据",
+            type: "warehouse",
+            status: "active",
+            created_at: "2026-01-01T00:00:00Z",
+            my_role: "admin",
+          },
+        ]);
+      return Response.json([
         { id: "g", question: "Which metric?", missing: "Definition" },
-      ]),
-    ),
+      ]);
+    }),
   );
   render(<CorrectionsPage token="token" gaps messages={getMessages("en")} />);
   expect(await screen.findByText("Which metric?")).toBeTruthy();
   expect(screen.getByText("Definition")).toBeTruthy();
+  expect(urls).toContain("/api/v1/knowledge-gaps?project=default");
 });
