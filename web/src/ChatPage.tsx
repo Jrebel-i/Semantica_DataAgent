@@ -1869,6 +1869,12 @@ export function ChatPage({
   const currentConversation = [...conversations, ...archivedConversations].find(
     (conversation) => conversation.id === currentConversationId,
   );
+  const conversationSelectionChanged = Boolean(
+    currentConversationId &&
+    currentConversation &&
+    (providerId !== currentConversation.provider_id ||
+      model !== currentConversation.model),
+  );
   const selectedTable =
     citationDetail?.kind === "table" ? citationDetail.table : null;
   const citationHeading = citationRef
@@ -2280,7 +2286,9 @@ export function ChatPage({
                     <label>
                       <select
                         aria-label={t.askAgent}
-                        title={t.askAgent}
+                        title={
+                          currentConversationId ? t.agentLockedHint : t.askAgent
+                        }
                         value={agentId}
                         disabled={Boolean(currentConversationId)}
                         onChange={(event) => selectAgent(event.target.value)}
@@ -2297,12 +2305,17 @@ export function ChatPage({
                         ))}
                       </select>
                     </label>
+                    {currentConversationId && (
+                      <span className="chat-selector-hint">
+                        {t.agentLockedHint}
+                      </span>
+                    )}
                     <label>
                       <select
                         aria-label={t.askProvider}
                         title={t.askProvider}
                         value={providerId}
-                        disabled={Boolean(currentConversationId)}
+                        disabled={!providers.length}
                         onChange={(event) => selectProvider(event.target.value)}
                       >
                         {providers.length === 0 && (
@@ -2330,9 +2343,7 @@ export function ChatPage({
                           selectionTouched.current = true;
                           setModel(event.target.value);
                         }}
-                        disabled={
-                          !activeProvider || Boolean(currentConversationId)
-                        }
+                        disabled={!activeProvider}
                       >
                         {(activeProvider?.models ?? []).map((item) => (
                           <option key={item} value={item}>
@@ -2353,6 +2364,11 @@ export function ChatPage({
                     <ArrowUpOutlined />
                   </Button>
                 </div>
+                {conversationSelectionChanged && (
+                  <div className="composer-switch-hint" role="status">
+                    {t.nextMessageModel.replace("{model}", model)}
+                  </div>
+                )}
               </form>
               {emptyConversation && (
                 <div className="chat-examples">

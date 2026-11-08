@@ -1734,9 +1734,9 @@ test("新会话发送所选 agent 与模型且仅锁定 agent", async () => {
   expect((screen.getByLabelText("模型") as HTMLSelectElement).disabled).toBe(
     false,
   );
-  expect((screen.getByLabelText("Provider") as HTMLSelectElement).disabled).toBe(
-    false,
-  );
+  expect(
+    (screen.getByLabelText("Provider") as HTMLSelectElement).disabled,
+  ).toBe(false);
 });
 
 test("对话中可切换 provider 与模型并在下一条消息使用", async () => {
@@ -1770,9 +1770,7 @@ test("对话中可切换 provider 与模型并在下一条消息使用", async (
     },
   );
   vi.stubGlobal("fetch", fetcher);
-  render(
-    <ChatPage token="token" role="user" messages={messages} />,
-  );
+  render(<ChatPage token="token" role="user" messages={messages} />);
   await screen.findByRole("button", { name: "订单分析" });
   fireEvent.click(screen.getByRole("button", { name: "订单分析" }));
   await waitFor(() =>

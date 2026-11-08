@@ -309,6 +309,8 @@ const messages = {
     askSubmit: "提问",
     asking: "回答中…",
     askError: "问答失败，请重试",
+    agentLockedHint: "该对话不支持更换 agent，请新建对话",
+    nextMessageModel: "下一条消息将使用 {model}",
     sessionRetention: "会话保留天数",
     sessionExpired: "会话已过期，无法继续追问；历史记录仍可查看",
     conversationList: "历史对话",
@@ -716,6 +718,9 @@ const messages = {
     askSubmit: "Ask",
     asking: "Answering…",
     askError: "Q&A failed. Please try again.",
+    agentLockedHint:
+      "This conversation cannot switch agents. Start a new conversation.",
+    nextMessageModel: "The next message will use {model}",
     sessionRetention: "Session retention days",
     sessionExpired:
       "Session expired; follow-up is unavailable. History remains available.",
