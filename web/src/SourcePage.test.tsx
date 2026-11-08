@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -338,9 +339,9 @@ test("shows pending source status and the auto build switch", async () => {
     if (url.startsWith("/api/v1/categories")) return Response.json([]);
     if (url === "/api/v1/source/files?project=default")
       return Response.json([]);
-    if (url === "/api/v1/projects/default/source-status")
+    if (url.startsWith("/api/v1/projects/default/source-status"))
       return Response.json(pendingStatus);
-    if (url === "/api/v1/projects/default/auto-build")
+    if (url.startsWith("/api/v1/projects/default/auto-build"))
       return Response.json({ enabled: true });
     return Response.json([]);
   });
@@ -361,9 +362,9 @@ test("turning auto build off sends the new setting", async () => {
     if (url.startsWith("/api/v1/categories")) return Response.json([]);
     if (url === "/api/v1/source/files?project=default")
       return Response.json([]);
-    if (url === "/api/v1/projects/default/source-status")
+    if (url.startsWith("/api/v1/projects/default/source-status"))
       return Response.json({ ...pendingStatus, state: "effective" });
-    if (url === "/api/v1/projects/default/auto-build") {
+    if (url.startsWith("/api/v1/projects/default/auto-build")) {
       if (options?.method === "PUT") {
         updates.push({ method: options.method, body: String(options.body) });
         return Response.json({ enabled: false });
@@ -391,18 +392,55 @@ test("shows the failure reason for a failed build", async () => {
       if (url.startsWith("/api/v1/categories")) return Response.json([]);
       if (url === "/api/v1/source/files?project=default")
         return Response.json([]);
-      if (url === "/api/v1/projects/default/source-status")
+      if (url.startsWith("/api/v1/projects/default/source-status"))
         return Response.json({
           ...pendingStatus,
           state: "failed",
           due_in_seconds: null,
           error: "维度值读取失败",
         });
-      if (url === "/api/v1/projects/default/auto-build")
+      if (url.startsWith("/api/v1/projects/default/auto-build"))
         return Response.json({ enabled: true });
       return Response.json([]);
     }),
   );
   render(<SourcePage token="t" messages={getMessages("zh")} />);
   expect(await screen.findByText("构建失败：维度值读取失败")).toBeTruthy();
+});
+
+test("polls pending status every three seconds", async () => {
+  vi.useFakeTimers();
+  try {
+    let statusCalls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url === "/api/v1/projects") return Response.json(projects);
+        if (url.startsWith("/api/v1/categories")) return Response.json([]);
+        if (url === "/api/v1/source/files?project=default")
+          return Response.json([]);
+        if (url.startsWith("/api/v1/projects/default/source-status")) {
+          statusCalls += 1;
+          return Response.json(pendingStatus);
+        }
+        if (url.startsWith("/api/v1/projects/default/auto-build"))
+          return Response.json({ enabled: true });
+        return Response.json([]);
+      }),
+    );
+    render(<SourcePage token="t" messages={getMessages("zh")} />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(statusCalls).toBe(1);
+    await act(async () => {
+      vi.advanceTimersByTime(3000);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(statusCalls).toBe(2);
+  } finally {
+    vi.useRealTimers();
+  }
 });

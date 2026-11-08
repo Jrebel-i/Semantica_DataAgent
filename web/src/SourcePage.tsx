@@ -1,10 +1,18 @@
 import { useCallback, useEffect, useState } from "react";
-import { Alert, Checkbox, Upload } from "antd";
+import { Alert, Checkbox, Switch, Tag, Upload } from "antd";
 import type { components } from "./api";
 import type { Messages } from "./i18n";
 import { ProjectSelector, storedProject } from "./ProjectSelector";
 
 type Version = components["schemas"]["SourceHistory"];
+type SourceStatus = {
+  state: "pending" | "building" | "effective" | "failed" | "unknown";
+  due_in_seconds: number | null;
+  last_build_id: number | null;
+  source_commit: string | null;
+  auto_build: boolean;
+  error: string | null;
+};
 type Tree = { directories: Record<string, Tree>; files: string[] };
 type Category = { name: string };
 type Preview = {
@@ -23,6 +31,32 @@ type Preview = {
   truncated: boolean;
 };
 
+const statusColors: Record<SourceStatus["state"], string> = {
+  pending: "gold",
+  building: "blue",
+  effective: "green",
+  failed: "red",
+  unknown: "default",
+};
+function statusLabel(status: SourceStatus, t: Messages) {
+  const seconds = Math.max(0, Math.ceil(status.due_in_seconds ?? 0));
+  switch (status.state) {
+    case "pending":
+      return status.due_in_seconds === null
+        ? t.sourceStatusPendingNoTime
+        : t.sourceStatusPending.replace("{seconds}", String(seconds));
+    case "building":
+      return t.sourceStatusBuilding;
+    case "effective":
+      return t.sourceStatusEffective;
+    case "failed":
+      return status.error
+        ? t.sourceStatusFailed.replace("{reason}", status.error)
+        : t.sourceStatusFailedNoReason;
+    default:
+      return t.sourceStatusUnknown;
+  }
+}
 function tree(paths: string[]): Tree {
   const root: Tree = { directories: {}, files: [] };
   for (const path of paths) {
@@ -148,6 +182,9 @@ export function SourcePage({
   const [diff, setDiff] = useState("");
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
+  const [status, setStatus] = useState<SourceStatus | null>(null);
+  const [autoBuild, setAutoBuild] = useState<boolean | null>(null);
+  const [statusRefresh, setStatusRefresh] = useState(0);
   const request = useCallback(
     async (url: string, init?: RequestInit) => {
       const separator = url.includes("?") ? "&" : "?";
@@ -181,6 +218,45 @@ export function SourcePage({
   useEffect(() => {
     setPreview(null);
   }, [files, category, newCategory, subfolder, replace, project]);
+  useEffect(() => {
+    let active = true;
+    let timer: number | undefined;
+    async function poll() {
+      try {
+        const next = (await request(
+          `/api/v1/projects/${encodeURIComponent(project)}/source-status`,
+        )) as SourceStatus;
+        if (!active) return;
+        setStatus(next);
+        const wait =
+          next.state === "pending" || next.state === "building" ? 3000 : 30000;
+        timer = window.setTimeout(() => void poll(), wait);
+      } catch {
+        if (!active) return;
+        setStatus(null);
+        timer = window.setTimeout(() => void poll(), 30000);
+      }
+    }
+    void poll();
+    return () => {
+      active = false;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [project, request, statusRefresh]);
+  useEffect(() => {
+    let active = true;
+    void request(`/api/v1/projects/${encodeURIComponent(project)}/auto-build`)
+      .then((value) => {
+        if (active)
+          setAutoBuild(Boolean((value as { enabled: boolean }).enabled));
+      })
+      .catch(() => {
+        if (active) setAutoBuild(null);
+      });
+    return () => {
+      active = false;
+    };
+  }, [project, request, statusRefresh]);
   const selectedCategory = newCategory.trim() || category;
   function chooseFiles(next: File[]) {
     setFiles(next);
@@ -244,6 +320,7 @@ export function SourcePage({
       setSuccess(result.commit);
       setPreview(null);
       await refresh();
+      setStatusRefresh((value) => value + 1);
     } catch {
       setError(t.sourceError);
     } finally {
@@ -287,12 +364,44 @@ export function SourcePage({
           <h1 className="page-title">{t.source}</h1>
           <p className="page-subtitle">{t.sourceHint}</p>
         </div>
-        <ProjectSelector
-          token={token}
-          value={project}
-          onChange={setProject}
-          messages={t}
-        />
+        <div className="page-actions source-status-actions">
+          {status && (
+            <Tag color={statusColors[status.state]}>
+              {statusLabel(status, t)}
+            </Tag>
+          )}
+          {autoBuild !== null && (
+            <label className="source-auto-build">
+              <span className="muted">{t.autoBuild}</span>
+              <Switch
+                aria-label={t.autoBuild}
+                checked={autoBuild}
+                onChange={async (enabled) => {
+                  try {
+                    const saved = (await request(
+                      `/api/v1/projects/${encodeURIComponent(project)}/auto-build`,
+                      {
+                        method: "PUT",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ enabled }),
+                      },
+                    )) as { enabled: boolean };
+                    setAutoBuild(Boolean(saved.enabled));
+                    setStatusRefresh((value) => value + 1);
+                  } catch {
+                    setError(t.sourceError);
+                  }
+                }}
+              />
+            </label>
+          )}
+          <ProjectSelector
+            token={token}
+            value={project}
+            onChange={setProject}
+            messages={t}
+          />
+        </div>
       </div>
       {error && <Alert type="error" title={error} />}
       {success && <Alert type="success" title={`${t.uploaded}: ${success}`} />}
