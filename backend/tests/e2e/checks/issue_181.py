@@ -166,9 +166,7 @@ def _success(path, text="OK"):
                 }
             ],
         }
-    return {
-        "candidates": [{"content": {"role": "model", "parts": [{"text": text}]}}]
-    }
+    return {"candidates": [{"content": {"role": "model", "parts": [{"text": text}]}}]}
 
 
 def _check_png(data):
@@ -637,10 +635,7 @@ def check_provider_probe(ctx):
             f"expected two images per probe, got {len(image_info)} image requests",
         )
         ctx.require(
-            all(
-                width >= 64 and height >= 64
-                for width, height, _ in image_info
-            ),
+            all(width >= 64 and height >= 64 for width, height, _ in image_info),
             f"probe sent an image smaller than 64x64: {image_info}",
         )
         ctx.require(

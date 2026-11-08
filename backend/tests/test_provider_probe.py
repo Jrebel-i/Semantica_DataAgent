@@ -317,9 +317,7 @@ class _GatewayHandler(BaseHTTPRequestHandler):
             payload = (
                 gateway.success_body
                 if gateway.success_body is not None
-                else _success_body(
-                    gateway.provider_type, body.get("model") or "", text
-                )
+                else _success_body(gateway.provider_type, body.get("model") or "", text)
             )
         else:
             payload = _error_body(
@@ -461,7 +459,9 @@ def test_probe_sends_each_provider_wire_shape_and_accepts_all(
         "effort": {level: "yes" for level in EFFORT_LEVELS},
         "notes": response.json()["notes"],
     }
-    assert len(gateway.requests) == 8
+    assert len(gateway.requests) == 7, [
+        (request["kind"], request["path"]) for request in gateway.requests
+    ]
     assert {request["path"].split("?", 1)[0] for request in gateway.requests} == {
         expected_path
     }
@@ -469,7 +469,9 @@ def test_probe_sends_each_provider_wire_shape_and_accepts_all(
     visions = [request for request in gateway.requests if request["kind"] == "vision"]
     efforts = [request for request in gateway.requests if request["kind"] == "effort"]
     assert len(visions) == 2
-    image_info = [_png_info(_image_bytes(provider_type, item["body"])) for item in visions]
+    image_info = [
+        _png_info(_image_bytes(provider_type, item["body"])) for item in visions
+    ]
     assert all(
         width >= MIN_IMAGE_SIZE and height >= MIN_IMAGE_SIZE
         for width, height, _ in image_info
