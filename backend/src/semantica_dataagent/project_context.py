@@ -17,16 +17,25 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
+import uuid
 from collections.abc import Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
-from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
 from cryptography.fernet import Fernet
 
-from .db import GenerationPointer, PluginConfig, Project, Setting, sessions
+from .db import (
+    KnowledgeGeneration,
+    PluginConfig,
+    Project,
+    ProjectSetting,
+    Setting,
+    generation_pointer,
+    sessions,
+)
 
 DEFAULT_PROJECT_ID = "default"
 DEFAULT_PROJECT_NAME = "业务数据"
@@ -38,6 +47,11 @@ SOURCE_DIRECTORY_KEY = "source_directory"
 GENERATION_RETENTION_KEY = "generation_retention"
 SCHEDULE_INTERVAL_KEY = "schedule_interval_seconds"
 DIMENSION_VALUE_LIMIT_KEY = "dimension_value_limit"
+GENERATION_PREFIX_KEY = "generation_prefix"
+
+PROJECTS_ROOT_ENV = "DATAAGENT_PROJECTS_ROOT"
+PROJECT_ID_PATTERN = re.compile(r"[a-z][a-z0-9]{0,23}")
+GENERATION_PREFIX_PATTERN = re.compile(r"[a-z0-9_]{1,25}")
 
 PROJECT_SETTING_KEYS = frozenset(
     {
@@ -51,6 +65,10 @@ PROJECT_SETTING_KEYS = frozenset(
 
 STORAGE_PREFIX = "sda_"
 _GENERATION_PATTERN = re.compile(r"[A-Za-z][A-Za-z0-9_]{0,63}")
+
+
+class ProjectNotFound(LookupError):
+    """Raised when a caller asks for a project that has no record."""
 
 
 def neo4j_password(values: Mapping[str, Any]) -> str | None:
@@ -69,11 +87,21 @@ def neo4j_password(values: Mapping[str, Any]) -> str | None:
     return None
 
 
-def _read_settings(db) -> dict[str, str]:
+def _read_settings(db, project_id: str = DEFAULT_PROJECT_ID) -> dict[str, str]:
     values = {row.key: row.value for row in db.query(Setting).all()}
-    pointer = db.get(GenerationPointer, 1)
+    if project_id != DEFAULT_PROJECT_ID:
+        values.update(
+            {
+                row.key: row.value
+                for row in db.query(ProjectSetting)
+                .filter(ProjectSetting.project_id == project_id)
+                .all()
+            }
+        )
+    pointer = generation_pointer(db, project_id)
     if pointer:
         values[GENERATION_KEY] = pointer.generation
+    values["_project_id"] = project_id
     return values
 
 
@@ -90,29 +118,6 @@ def normalize_values(values: Mapping[str, Any]) -> dict[str, Any]:
     return result
 
 
-def _identity(value: Any) -> str | None:
-    if value is None:
-        return None
-    if isinstance(value, str):
-        return value
-    for attribute in ("project_id", "id"):
-        found = getattr(value, attribute, None)
-        if isinstance(found, str):
-            return found
-    return None
-
-
-@lru_cache(maxsize=256)
-def _resolve_project_id(
-    project_id: str | None,
-    request_id: str | None,
-    token_id: str | None,
-    conversation_id: str | None,
-) -> str:
-    """The #173 resolution rule: every context maps to the default project."""
-    return DEFAULT_PROJECT_ID
-
-
 def resolve_project_id(
     project_id: str | None = None,
     *,
@@ -120,18 +125,13 @@ def resolve_project_id(
     token: Any = None,
     conversation: Any = None,
 ) -> str:
-    """Resolve an explicit id or a request/token/conversation context.
-
-    The resolution result is cached because callers may invoke it on every
-    retrieval.  Project-level values are still loaded from the settings table
-    once per operation, exactly as before this refactor.
-    """
-    return _resolve_project_id(
-        project_id,
-        _identity(request),
-        _identity(token),
-        _identity(conversation),
-    )
+    """Resolve an explicit project id; requests, tokens and conversations stay default."""
+    if project_id is None:
+        return DEFAULT_PROJECT_ID
+    with sessions()() as db:
+        if db.get(Project, project_id) is None:
+            raise ProjectNotFound(project_id)
+    return project_id
 
 
 @dataclass(frozen=True)
@@ -166,7 +166,20 @@ class ProjectContext:
 
     @property
     def generation_prefix(self) -> str:
-        return STORAGE_PREFIX
+        value = self._values.get(GENERATION_PREFIX_KEY)
+        if isinstance(value, str) and value:
+            return value
+        return self.project_id + "_"
+
+    def new_generation(self) -> str:
+        """Create a fresh generation name that keeps the project's prefix."""
+        prefix = self.generation_prefix
+        base = self.generation
+        if self.project_id == DEFAULT_PROJECT_ID:
+            return base[:30] + "_" + uuid.uuid4().hex
+        if not base.startswith(prefix):
+            base = prefix + base
+        return base[:30] + "_" + uuid.uuid4().hex
 
     @property
     def source_directory_value(self) -> str | None:
@@ -223,7 +236,12 @@ class ProjectContext:
         return upsert_plugin_config(db, category, plugin_id, enabled, parameters)
 
     def enqueue_build(self, build_type: str, triggered_by: str, *, notify: bool = True):
-        return enqueue_build(build_type, triggered_by, notify=notify)
+        return enqueue_build(
+            build_type,
+            triggered_by,
+            project_id=self.project_id,
+            notify=notify,
+        )
 
     def add_queued_build(
         self,
@@ -233,7 +251,11 @@ class ProjectContext:
         correction_proposal_id: str | None = None,
     ) -> int:
         return add_queued_build(
-            db, build_type, triggered_by, correction_proposal_id=correction_proposal_id
+            db,
+            build_type,
+            triggered_by,
+            correction_proposal_id=correction_proposal_id,
+            project_id=self.project_id,
         )
 
     def wake_build_queue(self) -> None:
@@ -265,34 +287,30 @@ def current_project(
     token: Any = None,
     conversation: Any = None,
 ) -> ProjectContext:
-    """Load the resolved project's values and metadata.
-
-    The resolution rule is still the #173 rule (always the default project).
-    Display metadata now comes from the projects table while the project-scoped
-    configuration keeps using the existing settings rows.
-    """
+    """Load the resolved project's values and metadata."""
     resolved = resolve_project_id(
         project_id, request=request, token=token, conversation=conversation
     )
     with sessions()() as db:
         project = db.get(Project, resolved)
-        values = normalize_values(_read_settings(db))
-    if project is None:
-        return ProjectContext(resolved, values)
+        if project is None:
+            raise ProjectNotFound(resolved)
+        values = normalize_values(_read_settings(db, resolved))
     return ProjectContext(resolved, values, project.name, project.type, project.status)
 
 
 def from_values(
     values: Mapping[str, Any],
-    project_id: str = DEFAULT_PROJECT_ID,
+    project_id: str | None = None,
     *,
     name: str = DEFAULT_PROJECT_NAME,
     project_type: str = DEFAULT_PROJECT_TYPE,
     status: str = DEFAULT_PROJECT_STATUS,
 ) -> ProjectContext:
+    resolved = project_id or values.get("_project_id") or DEFAULT_PROJECT_ID
     return ProjectContext.from_values(
         values,
-        project_id,
+        resolved,
         name=name,
         project_type=project_type,
         status=status,
@@ -314,10 +332,68 @@ def label(name: str) -> str:
     return ProjectContext.label(name)
 
 
-def source_directory_value() -> str | None:
+def source_directory_value(project_id: str | None = None) -> str | None:
+    resolved = resolve_project_id(project_id)
     with sessions()() as db:
+        if resolved != DEFAULT_PROJECT_ID:
+            row = db.get(ProjectSetting, (resolved, SOURCE_DIRECTORY_KEY))
+            if row is not None and row.value:
+                return row.value
         row = db.get(Setting, SOURCE_DIRECTORY_KEY)
         return row.value if row is not None and row.value else None
+
+
+def projects_root() -> Path:
+    configured = os.environ.get(PROJECTS_ROOT_ENV)
+    if configured:
+        return Path(configured).expanduser().resolve()
+    database = Path(os.environ.get("DATAAGENT_DB_PATH", "data/app.db"))
+    return database.expanduser().resolve().parent / "projects"
+
+
+def project_source_directory(project_id: str) -> Path:
+    return projects_root() / project_id / "source"
+
+
+def generation_is_built(project_id: str, generation: str) -> bool:
+    """True when the generation has been produced by a successful build."""
+    with sessions()() as db:
+        row = db.get(KnowledgeGeneration, generation)
+        return bool(
+            row is not None
+            and row.project_id == project_id
+            and row.build_id is not None
+        )
+
+
+def recover_projects() -> None:
+    """Remove half-created project directories and restore missing source dirs."""
+    root = projects_root()
+    if not root.exists():
+        return
+    with sessions()() as db:
+        known = {row.id for row in db.query(Project).all()}
+    for entry in root.iterdir():
+        if not entry.is_dir() or entry.is_symlink():
+            continue
+        if entry.name.startswith(".creating-"):
+            shutil.rmtree(entry, ignore_errors=True)
+            continue
+        if entry.name not in known:
+            try:
+                entry.rmdir()
+            except OSError:
+                pass
+            continue
+        source = entry / "source"
+        if not source.exists():
+            source.mkdir(parents=True, exist_ok=True)
+    for project_id in known - {DEFAULT_PROJECT_ID}:
+        project_source_directory(project_id).mkdir(parents=True, exist_ok=True)
+    try:
+        root.rmdir()
+    except OSError:
+        pass
 
 
 def plugin_configs() -> dict[tuple[str, str], tuple[bool, dict]]:
@@ -363,18 +439,31 @@ def add_queued_build(
     build_type: str,
     triggered_by: str,
     correction_proposal_id: str | None = None,
+    project_id: str = DEFAULT_PROJECT_ID,
 ) -> int:
     from .build_queue import add_queued_build as _add_queued_build
 
     return _add_queued_build(
-        db, build_type, triggered_by, correction_proposal_id=correction_proposal_id
+        db,
+        build_type,
+        triggered_by,
+        correction_proposal_id=correction_proposal_id,
+        project_id=project_id,
     )
 
 
-def enqueue_build(build_type: str, triggered_by: str, *, notify: bool = True) -> int:
+def enqueue_build(
+    build_type: str,
+    triggered_by: str,
+    *,
+    project_id: str = DEFAULT_PROJECT_ID,
+    notify: bool = True,
+) -> int:
     from .build_queue import enqueue_build as _enqueue_build
 
-    return _enqueue_build(build_type, triggered_by, notify=notify)
+    return _enqueue_build(
+        build_type, triggered_by, project_id=project_id, notify=notify
+    )
 
 
 def wake_build_queue() -> None:

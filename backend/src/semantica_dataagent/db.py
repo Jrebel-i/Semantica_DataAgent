@@ -39,6 +39,13 @@ class ProjectMember(Base):
     role: Mapped[str]
 
 
+class ProjectSetting(Base):
+    __tablename__ = "project_settings"
+    project_id: Mapped[str] = mapped_column(primary_key=True)
+    key: Mapped[str] = mapped_column(primary_key=True)
+    value: Mapped[str]
+
+
 class AgentCredential(Base):
     __tablename__ = "agent_credentials"
     digest: Mapped[str] = mapped_column(primary_key=True)
@@ -75,6 +82,7 @@ def digest(token: str) -> str:
 class Build(Base):
     __tablename__ = "builds"
     id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[str] = mapped_column(default="default", server_default="default")
     status: Mapped[str]
     started_at: Mapped[str]
     finished_at: Mapped[str | None]
@@ -160,6 +168,7 @@ class TurnEvent(Base):
 class KnowledgeGeneration(Base):
     __tablename__ = "knowledge_generations"
     name: Mapped[str] = mapped_column(primary_key=True)
+    project_id: Mapped[str] = mapped_column(default="default", server_default="default")
     build_id: Mapped[int | None]
     created_at: Mapped[str | None]
     deleting: Mapped[bool] = mapped_column(default=False, server_default="0")
@@ -168,7 +177,16 @@ class KnowledgeGeneration(Base):
 class GenerationPointer(Base):
     __tablename__ = "generation_pointer"
     id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[str] = mapped_column(default="default", server_default="default")
     generation: Mapped[str]
+
+
+def generation_pointer(db, project_id: str = "default"):
+    return (
+        db.query(GenerationPointer)
+        .filter(GenerationPointer.project_id == project_id)
+        .first()
+    )
 
 
 class Clarification(Base):

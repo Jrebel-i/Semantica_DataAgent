@@ -7,6 +7,8 @@ from pydantic import BaseModel
 
 from . import knowledge, project_context
 from .auth import current_user
+from .project_api import project_scope
+from .project_context import ProjectContext
 
 router = APIRouter()
 
@@ -33,8 +35,12 @@ class DocumentView(BaseModel):
     generated: bool
 
 
-def list_categories() -> list[dict]:
-    values = knowledge.settings()
+def list_categories(project_id=None) -> list[dict]:
+    values = (
+        knowledge.settings()
+        if project_id in (None, project_context.DEFAULT_PROJECT_ID)
+        else knowledge.settings(project_id)
+    )
     project = project_context.from_values(values)
     rows = knowledge.execute(
         knowledge.read_graph(values),
@@ -70,8 +76,12 @@ def list_categories() -> list[dict]:
     return result
 
 
-def read_document(doc_id: str, section: str | None = None) -> dict:
-    values = knowledge.settings()
+def read_document(doc_id: str, section: str | None = None, project_id=None) -> dict:
+    values = (
+        knowledge.settings()
+        if project_id in (None, project_context.DEFAULT_PROJECT_ID)
+        else knowledge.settings(project_id)
+    )
     project = project_context.from_values(values)
     rows = knowledge.execute(
         knowledge.read_graph(values),
@@ -98,30 +108,40 @@ def read_document(doc_id: str, section: str | None = None) -> dict:
     }
 
 
-def read_category_index(category: str) -> dict:
+def read_category_index(category: str, project_id=None) -> dict:
     from .markdown import doc_ref
 
-    return read_document(doc_ref(category, "index.md"))
+    return read_document(doc_ref(category, "index.md"), project_id=project_id)
 
 
 @router.get("/api/v1/categories", response_model=list[CategoryView])
-def categories_route(_: Annotated[str, Depends(current_user)]):
-    return list_categories()
+def categories_route(
+    _: Annotated[str, Depends(current_user)],
+    scope: Annotated[ProjectContext, Depends(project_scope)],
+):
+    return list_categories(scope.project_id)
 
 
 @router.get("/api/v1/category-index", response_model=DocumentView)
-def index_route(_: Annotated[str, Depends(current_user)], category: str):
+def index_route(
+    _: Annotated[str, Depends(current_user)],
+    scope: Annotated[ProjectContext, Depends(project_scope)],
+    category: str,
+):
     try:
-        return read_category_index(category)
+        return read_category_index(category, scope.project_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.get("/api/v1/document", response_model=DocumentView)
 def document_route(
-    _: Annotated[str, Depends(current_user)], doc_id: str, section: str | None = None
+    _: Annotated[str, Depends(current_user)],
+    scope: Annotated[ProjectContext, Depends(project_scope)],
+    doc_id: str,
+    section: str | None = None,
 ):
     try:
-        return read_document(doc_id, section)
+        return read_document(doc_id, section, scope.project_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

@@ -95,9 +95,16 @@ class BuildQueue:
 build_queue = BuildQueue()
 
 
-def add_queued_build(db, build_type, triggered_by, correction_proposal_id=None):
+def add_queued_build(
+    db,
+    build_type,
+    triggered_by,
+    correction_proposal_id=None,
+    project_id="default",
+):
     now = datetime.now(UTC).isoformat()
     row = Build(
+        project_id=project_id,
         status="queued",
         started_at=now,
         counts="{}",
@@ -120,9 +127,11 @@ def add_queued_build(db, build_type, triggered_by, correction_proposal_id=None):
     return row.id
 
 
-def enqueue_build(build_type, triggered_by, queue=None, *, notify=True):
+def enqueue_build(
+    build_type, triggered_by, queue=None, *, project_id="default", notify=True
+):
     with sessions().begin() as db:
-        build_id = add_queued_build(db, build_type, triggered_by)
+        build_id = add_queued_build(db, build_type, triggered_by, project_id=project_id)
     if notify:
         (queue or build_queue).enqueue()
     return build_id
