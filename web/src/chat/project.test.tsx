@@ -1,6 +1,6 @@
 /// <reference types="node" />
 // @vitest-environment jsdom
-import { expect, test, vi } from "vitest";
+import { beforeEach, expect, test, vi } from "vitest";
 import {
   act,
   fireEvent,
@@ -15,10 +15,18 @@ import { json, provider, setupChatTestEnv, sse } from "./testUtils";
 
 setupChatTestEnv();
 
+beforeEach(() => {
+  localStorage.clear();
+});
+
 const longName =
   "全国线下零售与电商渠道销售分析知识库（含促销、退货、会员与跨境业务口径说明）";
 
-function project(id: string, name: string, role: "admin" | "member" = "member") {
+function project(
+  id: string,
+  name: string,
+  role: "admin" | "member" = "member",
+) {
   return {
     id,
     name,
@@ -115,7 +123,9 @@ function fetcher({
     const match = url.match(/^\/api\/v1\/conversations\/([^/?]+)/);
     if (match) {
       const id = decodeURIComponent(match[1]);
-      const row = [...conversations, ...archived].find((item) => item.id === id);
+      const row = [...conversations, ...archived].find(
+        (item) => item.id === id,
+      );
       if (row) {
         return json({
           ...row,
@@ -175,9 +185,9 @@ test("只有一个项目时显示为只读标签", async () => {
   );
 
   await waitFor(() =>
-    expect(container.querySelector(".composer-project-label")?.textContent).toBe(
-      "唯一的项目",
-    ),
+    expect(
+      container.querySelector(".composer-project-label")?.textContent,
+    ).toBe("唯一的项目"),
   );
   expect(screen.queryByLabelText("项目")).toBeNull();
 });
@@ -208,12 +218,10 @@ test("已有轮次的对话锁定项目并给出换项目提示", async () => {
   fireEvent.click(await screen.findByRole("button", { name: "订单分析" }));
 
   await waitFor(() => expect(selectText("项目")).toBe("电商渠道"));
-  expect(
-    (screen.getByLabelText("项目") as HTMLSelectElement).disabled,
-  ).toBe(true);
-  expect(
-    screen.getByText("对话已绑定项目，换项目请新建对话"),
-  ).toBeTruthy();
+  expect((screen.getByLabelText("项目") as HTMLSelectElement).disabled).toBe(
+    true,
+  );
+  expect(screen.getByText("对话已绑定项目，换项目请新建对话")).toBeTruthy();
 });
 
 test("回复中的新对话沿用当前项目选择", async () => {
@@ -226,9 +234,9 @@ test("回复中的新对话沿用当前项目选择", async () => {
   fireEvent.click(screen.getByRole("button", { name: "新对话" }));
 
   await waitFor(() =>
-    expect(
-      (screen.getByLabelText("项目") as HTMLSelectElement).disabled,
-    ).toBe(false),
+    expect((screen.getByLabelText("项目") as HTMLSelectElement).disabled).toBe(
+      false,
+    ),
   );
   expect(selectText("项目")).toBe("电商渠道");
 });

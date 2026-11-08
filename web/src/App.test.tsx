@@ -6,6 +6,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { App } from "./App";
 import { clearTableDetailCache } from "./tableDetail";
@@ -384,9 +385,10 @@ test("admin opens the projects page from the management menu", async () => {
   fireEvent.click(await screen.findByRole("button", { name: "用户菜单" }));
   fireEvent.click(await screen.findByRole("button", { name: "管理" }));
   fireEvent.click(await screen.findByRole("link", { name: "项目" }));
-  expect(await screen.findByText("Platform Docs")).toBeTruthy();
-  expect(screen.getByText("数仓型")).toBeTruthy();
-  expect(screen.getByText("文档型")).toBeTruthy();
+  const page = within(document.querySelector(".admin-page") as HTMLElement);
+  expect(await page.findByText("Platform Docs")).toBeTruthy();
+  expect(page.getByText("数仓型")).toBeTruthy();
+  expect(page.getByText("文档型")).toBeTruthy();
   history.replaceState(null, "", "/");
 });
 
@@ -431,7 +433,8 @@ test("ordinary project admins get the project management menu entry", async () =
   render(<App />);
   fireEvent.click(await screen.findByRole("button", { name: "用户菜单" }));
   fireEvent.click(await screen.findByRole("link", { name: "项目管理" }));
-  expect(await screen.findByText("Alpha")).toBeTruthy();
+  const page = within(document.querySelector(".admin-page") as HTMLElement);
+  expect(await page.findByText("Alpha")).toBeTruthy();
   expect(screen.queryByRole("button", { name: "创建项目" })).toBeNull();
   history.replaceState(null, "", "/");
 });

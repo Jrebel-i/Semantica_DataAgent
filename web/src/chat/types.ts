@@ -7,6 +7,7 @@ export type ModelCapability = components["schemas"]["ModelCapability"];
 export type EffortLevel = NonNullable<ModelCapability["effort_levels"]>[number];
 export type ProviderProbeResult = components["schemas"]["ProviderProbeView"];
 export type Conversation = components["schemas"]["ConversationView"];
+export type Project = components["schemas"]["ProjectView"];
 export type ConversationDetail = components["schemas"]["ConversationDetail"];
 export type Turn = components["schemas"]["TurnView"];
 export type EventView = components["schemas"]["EventView"];

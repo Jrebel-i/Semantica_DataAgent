@@ -1,5 +1,5 @@
 import { createPortal } from "react-dom";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Alert, Button } from "antd";
 import type { Language, Messages } from "./i18n";
 import { PlusOutlined } from "@ant-design/icons";
@@ -9,7 +9,7 @@ import {
   citationsFromRefs,
   stripCitationRefs,
 } from "./chat/citations";
-import type { ConversationDetail, LiveTurn, Turn } from "./chat/types";
+import type { ConversationDetail, LiveTurn, Project, Turn } from "./chat/types";
 import { copyText } from "./chat/sse";
 import { ResultTable } from "./chat/ResultTable";
 import { ToolList } from "./chat/ToolList";
@@ -24,6 +24,7 @@ import { ContextDrawer } from "./chat/ContextDrawer";
 import { ProviderSettings } from "./chat/ProviderSettings";
 import { useProviders } from "./chat/useProviders";
 import { useConversations } from "./chat/useConversations";
+import { rememberProject, storedProject } from "./ProjectSelector";
 import { useCitations } from "./chat/useCitations";
 import { useAsk } from "./chat/useAsk";
 import { turnFailed } from "./chat/turnEvents";
@@ -62,10 +63,42 @@ export function ChatPage({
   const [live, setLive] = useState<LiveTurn | null>(null);
   const [expiredPlans, setExpiredPlans] = useState<string[]>([]);
   const [currentConversationId, setCurrentConversationId] = useState("");
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [projectId, setProjectId] = useState(storedProject);
+  const [projectFilter, setProjectFilter] = useState("");
   const [resumable, setResumable] = useState(true);
   const [sending, setSending] = useState(false);
   const [loadingConversation, setLoadingConversation] = useState(false);
   const [error, setError] = useState("");
+
+  useEffect(() => {
+    let active = true;
+    void fetch("/api/v1/projects", {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then((response) => (response.ok ? response.json() : []))
+      .then((rows: Project[]) => {
+        if (active && Array.isArray(rows)) setProjects(rows);
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, [token]);
+
+  useEffect(() => {
+    if (!projects.length) return;
+    if (projects.some((project) => project.id === projectId)) return;
+    const fallback =
+      projects.find((project) => project.id === "default") ?? projects[0];
+    setProjectId(fallback.id);
+    rememberProject(fallback.id);
+  }, [projects, projectId]);
+
+  function selectProject(value: string) {
+    setProjectId(value);
+    rememberProject(value);
+  }
 
   const {
     conversations,
@@ -163,6 +196,7 @@ export function ChatPage({
     providerId,
     model,
     effort,
+    projectId,
     currentConversationId,
     setCurrentConversationId,
     sending,
@@ -234,7 +268,9 @@ export function ChatPage({
 
   function applyConversation(detail: ConversationDetail) {
     selectionTouched.current = true;
-    if (detail.id !== currentConversationId) {
+    if (detail.project_id) {
+      setProjectId(detail.project_id);
+      rememberProject(detail.project_id);
     }
     setCurrentConversationId(detail.id);
     setResumable(detail.resumable !== false);
@@ -309,6 +345,7 @@ export function ChatPage({
     ? citationLabel(citationDetail?.ref ?? citationRef)
     : null;
   const emptyConversation = !loadingConversation && turns.length === 0 && !live;
+  const projectLocked = Boolean(currentConversationId) || Boolean(live);
   const liveAnswer = live
     ? stripCitationRefs(live.text)
     : { text: "", refs: [] };
@@ -346,6 +383,9 @@ export function ChatPage({
                 messages={t}
                 conversations={conversations}
                 archivedConversations={archivedConversations}
+                projects={projects}
+                projectFilter={projectFilter}
+                onProjectFilterChange={setProjectFilter}
                 showArchived={showArchived}
                 currentConversationId={currentConversationId}
                 sessionTarget={sessionTarget}
@@ -384,6 +424,9 @@ export function ChatPage({
               messages={t}
               conversations={conversations}
               archivedConversations={archivedConversations}
+              projects={projects}
+              projectFilter={projectFilter}
+              onProjectFilterChange={setProjectFilter}
               showArchived={showArchived}
               currentConversationId={currentConversationId}
               sessionTarget={sessionTarget}
@@ -531,6 +574,10 @@ export function ChatPage({
               currentConversationId={currentConversationId}
               resumable={resumable}
               emptyConversation={emptyConversation}
+              projects={projects}
+              projectId={projectId}
+              selectProject={selectProject}
+              projectLocked={projectLocked}
               agents={agents}
               agentId={agentId}
               selectAgent={selectAgent}
