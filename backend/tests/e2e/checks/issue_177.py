@@ -49,7 +49,9 @@ def _upload(ctx, project_id, category, marker, filename="probe.md"):
             ],
         },
     )
-    ctx.require(response.status_code == 200, f"上传 {project_id} 失败: {response.text[:300]}")
+    ctx.require(
+        response.status_code == 200, f"上传 {project_id} 失败: {response.text[:300]}"
+    )
     return response.json()["commit"]
 
 
@@ -236,11 +238,7 @@ def check_issue_177_isolation_matrix(ctx):
         admin_tokens = ctx.rest.get("/api/v1/tokens").json()
         admin_token = next(row for row in admin_tokens if row["role"] == "admin")
         ctx.require(
-            next(
-                row
-                for row in admin_tokens
-                if row["id"] == pa["id"]
-            )["projects"]
+            next(row for row in admin_tokens if row["id"] == pa["id"])["projects"]
             == [{"project_id": "default", "role": "admin"}],
             "令牌列表没有返回项目与角色",
         )
@@ -265,9 +263,7 @@ def check_issue_177_isolation_matrix(ctx):
 
         # Table-driven read matrix.  Every row is (name, path, params, content).
         a_content = {
-            "tables": lambda body: any(
-                row.get("name") == "orders" for row in body
-            ),
+            "tables": lambda body: any(row.get("name") == "orders" for row in body),
             "table_detail": lambda body: body.get("name") == "orders",
             "search": lambda body: any(
                 str(row.get("ref", "")).startswith(ref_a) for row in body
@@ -280,8 +276,12 @@ def check_issue_177_isolation_matrix(ctx):
                 f"document:{category_a}/"
             ),
             "column_lineage": lambda body: set(body) == {"upstream", "downstream"},
-            "table_lineage": lambda body: set(body) == {"upstream", "downstream", "tasks"},
-            "generations": lambda body: any(row.get("current") for row in body["generations"]),
+            "table_lineage": lambda body: (
+                set(body) == {"upstream", "downstream", "tasks"}
+            ),
+            "generations": lambda body: any(
+                row.get("current") for row in body["generations"]
+            ),
             "builds": lambda body: any(row.get("id") == build_a["id"] for row in body),
             "build_detail": lambda body: body.get("id") == build_a["id"],
         }
@@ -336,7 +336,12 @@ def check_issue_177_isolation_matrix(ctx):
         for name, path, params, validate in a_rows:
             for actor in (pa, ua):
                 response = _request(
-                    ctx, "GET", path, project="default", params=params, token=actor["token"]
+                    ctx,
+                    "GET",
+                    path,
+                    project="default",
+                    params=params,
+                    token=actor["token"],
                 )
                 ctx.require(
                     response.status_code == 200,
@@ -346,7 +351,12 @@ def check_issue_177_isolation_matrix(ctx):
                 ctx.require(validate(response.json()), f"{name} 返回内容不属于 A")
             for actor in (ub, uz, revoked):
                 response = _request(
-                    ctx, "GET", path, project="default", params=params, token=actor["token"]
+                    ctx,
+                    "GET",
+                    path,
+                    project="default",
+                    params=params,
+                    token=actor["token"],
                 )
                 expected = {401} if actor is revoked else DENIED
                 ctx.require(
@@ -362,13 +372,21 @@ def check_issue_177_isolation_matrix(ctx):
             )
 
         # The source endpoints are management-only.
-        source_files = _request(ctx, "GET", "/api/v1/source/files", project="default", token=pa["token"])
+        source_files = _request(
+            ctx, "GET", "/api/v1/source/files", project="default", token=pa["token"]
+        )
         ctx.require(source_files.status_code == 200, source_files.text[:300])
         a_files = source_files.json()
-        a_source_path = next(path for path in a_files if path.endswith("probe.md") and category_a in path)
+        a_source_path = next(
+            path for path in a_files if path.endswith("probe.md") and category_a in path
+        )
         for actor in (ua, ub, uz):
             response = _request(
-                ctx, "GET", "/api/v1/source/files", project="default", token=actor["token"]
+                ctx,
+                "GET",
+                "/api/v1/source/files",
+                project="default",
+                token=actor["token"],
             )
             ctx.require(
                 response.status_code in MANAGE_DENIED,
@@ -400,7 +418,9 @@ def check_issue_177_isolation_matrix(ctx):
                 f"document:{category_b}/"
             ),
             "column_lineage": lambda body: set(body) == {"upstream", "downstream"},
-            "table_lineage": lambda body: set(body) == {"upstream", "downstream", "tasks"},
+            "table_lineage": lambda body: (
+                set(body) == {"upstream", "downstream", "tasks"}
+            ),
             "generations": lambda body: all(
                 not row["name"].startswith("default") for row in body["generations"]
             ),
@@ -456,7 +476,12 @@ def check_issue_177_isolation_matrix(ctx):
             ctx.require(validate(response.json()), f"B 的 {name} 返回了错误内容")
             for actor in (pa, ua, uz):
                 denied = _request(
-                    ctx, "GET", path, project=project_b_id, params=params, token=actor["token"]
+                    ctx,
+                    "GET",
+                    path,
+                    project=project_b_id,
+                    params=params,
+                    token=actor["token"],
                 )
                 ctx.require(
                     denied.status_code in DENIED,
@@ -526,7 +551,9 @@ def check_issue_177_isolation_matrix(ctx):
                 "files": [
                     {
                         "path": "pa-probe.md",
-                        "content_base64": base64.b64encode(b"# pa\n\npa upload\n").decode(),
+                        "content_base64": base64.b64encode(
+                            b"# pa\n\npa upload\n"
+                        ).decode(),
                     }
                 ],
             },
@@ -543,7 +570,9 @@ def check_issue_177_isolation_matrix(ctx):
         )
         ctx.require(pa_build.status_code == 202, pa_build.text[:300])
         pa_build_detail = _wait_build(ctx, "default", pa_build.json()["id"])
-        ctx.require(pa_build_detail["status"] == "succeeded", pa_build_detail.get("error"))
+        ctx.require(
+            pa_build_detail["status"] == "succeeded", pa_build_detail.get("error")
+        )
         current_a = _current_generation(ctx, "default")
         pa_switch = _request(
             ctx,
@@ -562,12 +591,17 @@ def check_issue_177_isolation_matrix(ctx):
         )
         ctx.require(admin_b_build.status_code == 202, admin_b_build.text[:300])
         admin_b_detail = _wait_build(ctx, project_b_id, admin_b_build.json()["id"])
-        ctx.require(admin_b_detail["status"] == "succeeded", admin_b_detail.get("error"))
+        ctx.require(
+            admin_b_detail["status"] == "succeeded", admin_b_detail.get("error")
+        )
 
         # Default project selection without an explicit project parameter.
         pa_default = _request(ctx, "GET", "/api/v1/tables", token=pa["token"])
         ctx.require(pa_default.status_code == 200, pa_default.text[:300])
-        ctx.require(any(row.get("name") == "orders" for row in pa_default.json()), "pa 的缺省项目不是 A")
+        ctx.require(
+            any(row.get("name") == "orders" for row in pa_default.json()),
+            "pa 的缺省项目不是 A",
+        )
         ua_default = _search(ctx, marker_a, token=ua["token"])
         ctx.require(ua_default.status_code == 200, ua_default.text[:300])
         ctx.require(
@@ -589,7 +623,9 @@ def check_issue_177_isolation_matrix(ctx):
         ctx.require(admin_default.status_code == 200, admin_default.text[:300])
 
         # Membership rules.
-        members = _request(ctx, "GET", "/api/v1/projects/default/members", token=pa["token"])
+        members = _request(
+            ctx, "GET", "/api/v1/projects/default/members", token=pa["token"]
+        )
         ctx.require(members.status_code == 200, members.text[:300])
         ctx.require(
             {row["id"] for row in members.json()} >= {pa["id"], ua["id"]},
@@ -635,7 +671,9 @@ def check_issue_177_isolation_matrix(ctx):
             json={"role": "member"},
             token=pa["token"],
         )
-        ctx.require(global_admin_member.status_code == 422, global_admin_member.text[:300])
+        ctx.require(
+            global_admin_member.status_code == 422, global_admin_member.text[:300]
+        )
 
         audit = _request(
             ctx, "GET", "/api/v1/projects/default/audit", token=pa["token"]
@@ -650,9 +688,7 @@ def check_issue_177_isolation_matrix(ctx):
             token=ub["token"],
         )
         ctx.require(audit_b.status_code in MANAGE_DENIED, audit_b.text[:200])
-        audit_b_admin = _request(
-            ctx, "GET", f"/api/v1/projects/{project_b_id}/audit"
-        )
+        audit_b_admin = _request(ctx, "GET", f"/api/v1/projects/{project_b_id}/audit")
         ctx.require(audit_b_admin.status_code == 200, audit_b_admin.text[:300])
         ctx.require(
             "project.create" in {row["action"] for row in audit_b_admin.json()},
@@ -665,7 +701,9 @@ def check_issue_177_isolation_matrix(ctx):
         )
         ctx.require(revoked_access.status_code == 401, revoked_access.status_code)
         revoked_listed = next(
-            row for row in ctx.rest.get("/api/v1/tokens").json() if row["id"] == revoked["id"]
+            row
+            for row in ctx.rest.get("/api/v1/tokens").json()
+            if row["id"] == revoked["id"]
         )
         ctx.require(
             revoked_listed["projects"] == [{"project_id": "default", "role": "member"}],
@@ -689,8 +727,8 @@ def check_issue_177_isolation_matrix(ctx):
         for token in issued:
             try:
                 ctx.rest.delete(f"/api/v1/tokens/{token['id']}")
-            except Exception:  # noqa: BLE001 - cleanup is best effort
-                pass
+            except Exception as exc:  # noqa: BLE001 - cleanup is best effort
+                ctx.logger.line(f"issue177 token cleanup failed: {exc}")
         if project_b is not None:
             cleanup = _cleanup(ctx, project_b["id"])
             ctx.logger.line(f"issue177 cleanup: {cleanup}")

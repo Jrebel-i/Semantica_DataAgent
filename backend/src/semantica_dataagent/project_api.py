@@ -1,7 +1,8 @@
-"""Project listing, membership, and system-admin metadata updates."""
+"""Project listing, membership, audit, and system-admin metadata updates."""
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -18,11 +19,13 @@ from .db import (
     GenerationPointer,
     KnowledgeGeneration,
     Project,
+    ProjectAudit,
     ProjectMember,
     ProjectSetting,
     Token,
     sessions,
 )
+from .project_audit import actor_name, record_project_audit
 from .project_context import (
     DEFAULT_PROJECT_ID,
     GENERATION_PREFIX_KEY,
@@ -39,6 +42,7 @@ router = APIRouter()
 ProjectType = Literal["warehouse", "document"]
 ProjectStatus = Literal["active", "archived"]
 ProjectRole = Literal["admin", "member"]
+TokenRole = Literal["user", "admin"]
 
 
 class ProjectUpdate(BaseModel):
@@ -63,6 +67,34 @@ class ProjectView(BaseModel):
     status: ProjectStatus
     created_at: UtcDatetime
     my_role: ProjectRole
+
+
+class ProjectMemberView(BaseModel):
+    id: str
+    name: str
+    role: ProjectRole
+
+
+class ProjectMemberUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    role: ProjectRole
+
+
+class ProjectUserView(BaseModel):
+    id: str
+    name: str
+    role: TokenRole
+
+
+class ProjectAuditView(BaseModel):
+    id: int
+    project_id: str
+    actor_id: str
+    actor_name: str
+    action: str
+    detail: dict
+    created_at: UtcDatetime
 
 
 def ensure_default_project_member(db, token: Token) -> None:
@@ -99,30 +131,97 @@ class ProjectNameTaken(ValueError):
     """A project with the requested display name already exists."""
 
 
+def _accessible_project_ids(db, requester: Requester) -> list[str]:
+    if requester.role == "admin":
+        return [
+            row.id
+            for row in db.query(Project.id).order_by(Project.created_at, Project.id)
+        ]
+    return [
+        row.project_id
+        for row in db.query(ProjectMember.project_id)
+        .join(Project, Project.id == ProjectMember.project_id)
+        .filter(ProjectMember.token_id == requester.id)
+        .order_by(Project.created_at, Project.id)
+        .all()
+    ]
+
+
+def _resolve_project_context(
+    project_id: str | None, requester: Requester
+) -> ProjectContext:
+    with sessions()() as db:
+        if project_id is not None:
+            if db.get(Project, project_id) is None:
+                raise HTTPException(status_code=404, detail="Project not found")
+            if (
+                requester.role != "admin"
+                and db.get(ProjectMember, (project_id, requester.id)) is None
+            ):
+                raise HTTPException(status_code=404, detail="Project not found")
+            resolved = project_id
+        else:
+            accessible = _accessible_project_ids(db, requester)
+            if DEFAULT_PROJECT_ID in accessible:
+                resolved = DEFAULT_PROJECT_ID
+            elif len(accessible) == 1:
+                resolved = accessible[0]
+            elif accessible:
+                raise HTTPException(status_code=422, detail="请指定项目")
+            else:
+                raise HTTPException(status_code=422, detail="请指定项目")
+    try:
+        return current_project(resolved)
+    except ProjectNotFound as exc:
+        raise HTTPException(status_code=404, detail="Project not found") from exc
+
+
+def _require_project_admin(
+    scope: ProjectContext, requester: Requester
+) -> ProjectContext:
+    if requester.role == "admin":
+        return scope
+    with sessions()() as db:
+        member = db.get(ProjectMember, (scope.project_id, requester.id))
+        if member is not None and member.role == "admin":
+            return scope
+    raise HTTPException(status_code=403, detail="Project admin required")
+
+
 def project_scope(
     requester: Annotated[Requester, Depends(current_requester)],
     project: Annotated[str | None, Query()] = None,
 ) -> ProjectContext:
-    """Resolve the requested project and apply the transitional permission rule."""
-    try:
-        context = current_project(project)
-    except ProjectNotFound as exc:
-        raise HTTPException(status_code=404, detail="Project not found") from exc
-    if context.project_id != DEFAULT_PROJECT_ID and requester.role != "admin":
-        raise HTTPException(status_code=404, detail="Project not found")
-    return context
+    """Resolve the requested project and apply the membership read rule.
+
+    An explicit ``project`` must exist and the caller must be a system
+    administrator or a member of it.  Without an explicit project the default
+    project is used when accessible; otherwise a caller with exactly one
+    accessible project gets that project, and everyone else must specify one.
+    """
+    return _resolve_project_context(project, requester)
 
 
 def admin_project_scope(
     scope: Annotated[ProjectContext, Depends(project_scope)],
-    _: Annotated[str, Depends(admin)],
+    requester: Annotated[Requester, Depends(current_requester)],
 ) -> ProjectContext:
-    """Require an administrator after resolving the project.
+    """Require a system administrator or a project administrator."""
+    return _require_project_admin(scope, requester)
 
-    Resolving first keeps non-default projects invisible (404) to regular
-    users instead of leaking their existence with a 403.
-    """
-    return scope
+
+def project_path_scope(
+    project_id: str,
+    requester: Annotated[Requester, Depends(current_requester)],
+) -> ProjectContext:
+    return _resolve_project_context(project_id, requester)
+
+
+def admin_project_path_scope(
+    scope: Annotated[ProjectContext, Depends(project_path_scope)],
+    requester: Annotated[Requester, Depends(current_requester)],
+) -> ProjectContext:
+    return _require_project_admin(scope, requester)
 
 
 def project_id_candidate(name: str) -> str:
@@ -153,7 +252,13 @@ def _remove_empty_root(root) -> None:
         pass
 
 
-def create_project_record(name: str, project_type: ProjectType) -> Project:
+def create_project_record(
+    name: str,
+    project_type: ProjectType,
+    *,
+    actor_id: str | None = None,
+    actor_name: str | None = None,
+) -> Project:
     """Create a project, its settings, initial generation and source directory."""
     name = name.strip()
     if not name:
@@ -201,6 +306,15 @@ def create_project_record(name: str, project_type: ProjectType) -> Project:
             generation = project_id + "_initial"
             db.add(KnowledgeGeneration(name=generation, project_id=project_id))
             db.add(GenerationPointer(project_id=project_id, generation=generation))
+            if actor_id is not None:
+                record_project_audit(
+                    db,
+                    project_id=project_id,
+                    actor_id=actor_id,
+                    actor_name=actor_name or actor_id,
+                    action="project.create",
+                    detail={"name": name, "type": project_type},
+                )
         except Exception:
             shutil.rmtree(staging, ignore_errors=True)
             _remove_empty_root(root)
@@ -210,6 +324,9 @@ def create_project_record(name: str, project_type: ProjectType) -> Project:
     except Exception:
         shutil.rmtree(staging, ignore_errors=True)
         with sessions().begin() as db:
+            db.query(ProjectAudit).filter(
+                ProjectAudit.project_id == project_id
+            ).delete()
             db.query(ProjectSetting).filter(
                 ProjectSetting.project_id == project_id
             ).delete()
@@ -251,10 +368,18 @@ def list_projects(
 @router.post("/api/v1/projects", response_model=ProjectView, status_code=201)
 def create_project(
     body: ProjectCreate,
+    requester: Annotated[Requester, Depends(current_requester)],
     _: Annotated[str, Depends(admin)],
 ):
     try:
-        project = create_project_record(body.name, body.type)
+        with sessions()() as db:
+            name = actor_name(db, requester)
+        project = create_project_record(
+            body.name,
+            body.type,
+            actor_id=requester.id,
+            actor_name=name,
+        )
     except ProjectNameTaken as exc:
         raise HTTPException(
             status_code=409, detail="Project name already exists"
@@ -268,12 +393,228 @@ def create_project(
 def rename_project(
     project_id: str,
     body: ProjectUpdate,
+    requester: Annotated[Requester, Depends(current_requester)],
     _: Annotated[str, Depends(admin)],
 ):
     with sessions().begin() as db:
         project = db.get(Project, project_id)
         if project is None:
             raise HTTPException(status_code=404, detail="Project not found")
+        previous = project.name
         project.name = body.name
         db.flush()
+        if body.name != previous:
+            record_project_audit(
+                db,
+                project_id=project_id,
+                actor_id=requester.id,
+                actor_name=actor_name(db, requester),
+                action="project.rename",
+                detail={"from": previous, "to": body.name},
+            )
         return _view(project, "admin")
+
+
+def _member_admin_count(db, project_id: str) -> int:
+    return (
+        db.query(ProjectMember)
+        .filter(ProjectMember.project_id == project_id, ProjectMember.role == "admin")
+        .count()
+    )
+
+
+@router.get(
+    "/api/v1/projects/{project_id}/members",
+    response_model=list[ProjectMemberView],
+)
+def list_project_members(
+    project_id: str,
+    scope: Annotated[ProjectContext, Depends(admin_project_path_scope)],
+):
+    with sessions()() as db:
+        rows = (
+            db.query(Token)
+            .join(ProjectMember, ProjectMember.token_id == Token.id)
+            .filter(
+                ProjectMember.project_id == scope.project_id,
+                Token.revoked.is_(False),
+            )
+            .order_by(Token.name, Token.id)
+            .all()
+        )
+        roles = {
+            member.token_id: member.role
+            for member in db.query(ProjectMember)
+            .filter(ProjectMember.project_id == scope.project_id)
+            .all()
+        }
+        return [
+            ProjectMemberView(id=row.id, name=row.name, role=roles[row.id])
+            for row in rows
+        ]
+
+
+@router.put(
+    "/api/v1/projects/{project_id}/members/{token_id}",
+    response_model=ProjectMemberView,
+)
+def put_project_member(
+    project_id: str,
+    token_id: str,
+    body: ProjectMemberUpdate,
+    scope: Annotated[ProjectContext, Depends(admin_project_path_scope)],
+    requester: Annotated[Requester, Depends(current_requester)],
+):
+    with sessions().begin() as db:
+        token = (
+            db.query(Token)
+            .filter(Token.id == token_id, Token.revoked.is_(False))
+            .first()
+        )
+        if token is None:
+            raise HTTPException(status_code=404, detail="Token not found")
+        if token.role == "admin":
+            raise HTTPException(
+                status_code=422,
+                detail="System administrator tokens cannot be project members",
+            )
+        member = db.get(ProjectMember, (scope.project_id, token_id))
+        previous = member.role if member is not None else None
+        if (
+            previous == "admin"
+            and body.role != "admin"
+            and _member_admin_count(db, scope.project_id) <= 1
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="Cannot remove or demote the last project administrator",
+            )
+        if member is None:
+            member = ProjectMember(
+                project_id=scope.project_id, token_id=token_id, role=body.role
+            )
+            db.add(member)
+            action = "member.add"
+        else:
+            member.role = body.role
+            action = "member.update"
+        db.flush()
+        record_project_audit(
+            db,
+            project_id=scope.project_id,
+            actor_id=requester.id,
+            actor_name=actor_name(db, requester),
+            action=action,
+            detail={
+                "token_id": token_id,
+                "token_name": token.name,
+                "from": previous,
+                "to": body.role,
+            },
+        )
+        return ProjectMemberView(id=token.id, name=token.name, role=body.role)
+
+
+@router.delete(
+    "/api/v1/projects/{project_id}/members/{token_id}",
+    status_code=204,
+)
+def delete_project_member(
+    project_id: str,
+    token_id: str,
+    scope: Annotated[ProjectContext, Depends(admin_project_path_scope)],
+    requester: Annotated[Requester, Depends(current_requester)],
+):
+    with sessions().begin() as db:
+        token = (
+            db.query(Token)
+            .filter(Token.id == token_id, Token.revoked.is_(False))
+            .first()
+        )
+        if token is None:
+            raise HTTPException(status_code=404, detail="Token not found")
+        member = db.get(ProjectMember, (scope.project_id, token_id))
+        if member is None:
+            raise HTTPException(status_code=404, detail="Membership not found")
+        if member.role == "admin" and _member_admin_count(db, scope.project_id) <= 1:
+            raise HTTPException(
+                status_code=409,
+                detail="Cannot remove or demote the last project administrator",
+            )
+        db.delete(member)
+        db.flush()
+        record_project_audit(
+            db,
+            project_id=scope.project_id,
+            actor_id=requester.id,
+            actor_name=actor_name(db, requester),
+            action="member.remove",
+            detail={
+                "token_id": token_id,
+                "token_name": token.name,
+                "from": member.role,
+                "to": None,
+            },
+        )
+
+
+@router.get("/api/v1/users", response_model=list[ProjectUserView])
+def list_users(requester: Annotated[Requester, Depends(current_requester)]):
+    with sessions()() as db:
+        if requester.role != "admin":
+            manages = (
+                db.query(ProjectMember)
+                .filter(
+                    ProjectMember.token_id == requester.id,
+                    ProjectMember.role == "admin",
+                )
+                .first()
+            )
+            if manages is None:
+                raise HTTPException(status_code=403, detail="Project admin required")
+        return [
+            ProjectUserView(id=row.id, name=row.name, role=row.role)
+            for row in db.query(Token)
+            .filter(Token.revoked.is_(False))
+            .order_by(Token.name, Token.id)
+            .all()
+        ]
+
+
+@router.get(
+    "/api/v1/projects/{project_id}/audit",
+    response_model=list[ProjectAuditView],
+)
+def list_project_audit(
+    project_id: str,
+    scope: Annotated[ProjectContext, Depends(admin_project_path_scope)],
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
+):
+    with sessions()() as db:
+        rows = (
+            db.query(ProjectAudit)
+            .filter(ProjectAudit.project_id == scope.project_id)
+            .order_by(ProjectAudit.created_at.desc(), ProjectAudit.id.desc())
+            .offset(offset)
+            .limit(limit)
+            .all()
+        )
+        result = []
+        for row in rows:
+            try:
+                detail = json.loads(row.detail)
+            except (TypeError, json.JSONDecodeError):
+                detail = {}
+            result.append(
+                ProjectAuditView(
+                    id=row.id,
+                    project_id=row.project_id,
+                    actor_id=row.actor_id,
+                    actor_name=row.actor_name,
+                    action=row.action,
+                    detail=detail if isinstance(detail, dict) else {},
+                    created_at=row.created_at,
+                )
+            )
+        return result
