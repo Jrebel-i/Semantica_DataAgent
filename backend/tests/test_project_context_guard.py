@@ -51,6 +51,10 @@ def _violations(path: Path, source: str) -> list[str]:
                 found.append(
                     f"{path.name}:{node.lineno}: direct storage prefix {value!r}"
                 )
+            if value == "SDA":
+                found.append(
+                    f"{path.name}:{node.lineno}: direct label prefix {value!r}"
+                )
         if isinstance(node, ast.Name) and node.id == "PluginConfig":
             found.append(f"{path.name}:{node.lineno}: direct PluginConfig access")
         if isinstance(node, ast.Attribute) and node.attr == "PluginConfig":
@@ -102,6 +106,7 @@ def test_project_level_reads_only_use_the_context_entry():
         'value = values["source_directory"]\n',
         'collection = "sda_" + generation\n',
         'path = Path("sda_knowledge")\n',
+        'label = f"SDA{kind}"\n',
         "row = db.query(PluginConfig).all()\n",
         "from .build_queue import enqueue_build\n",
         "build_queue.enqueue()\n",
