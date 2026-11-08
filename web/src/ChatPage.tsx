@@ -60,6 +60,7 @@ import { PROVIDER_TYPES } from "./chat/types";
 import { copyText, readSse } from "./chat/sse";
 import { ResultTable } from "./chat/ResultTable";
 import { ToolList } from "./chat/ToolList";
+import { SqlList } from "./chat/SqlList";
 import {
   applyToolEnd,
   applyToolStart,
@@ -80,40 +81,6 @@ export {
   stripCitationRefs,
 } from "./chat/citations";
 export type { CitationGroup, CitationLabel } from "./chat/types";
-
-function SqlList({
-  blocks,
-  messages,
-  copied,
-  onCopy,
-}: {
-  blocks: SqlBlock[];
-  messages: Messages;
-  copied: string;
-  onCopy: (sql: string) => void;
-}) {
-  if (blocks.length === 0) return null;
-  return (
-    <section aria-label={messages.sqlBlocks}>
-      {blocks.map((block, index) => (
-        <div className="sql-block" key={`${index}-${block.sql.slice(0, 40)}`}>
-          <div className="sql-block-head">
-            <span>{block.dialect || messages.sqlBlocks}</span>
-            <Button type="text" onClick={() => onCopy(block.sql)}>
-              {copied === block.sql ? messages.sqlCopied : messages.copySql}
-            </Button>
-          </div>
-          <pre aria-label={messages.sqlBlocks}>
-            <code>
-              <HighlightedSql sql={block.sql} />
-            </code>
-          </pre>
-          <span className="sr-only">{block.sql}</span>
-        </div>
-      ))}
-    </section>
-  );
-}
 
 function CitationList({
   citations,
