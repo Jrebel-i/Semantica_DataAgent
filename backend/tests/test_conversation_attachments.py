@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -75,6 +76,8 @@ def _ask_files(
     provider: dict,
     files: list[tuple[str, bytes, str]],
     question: str = "看看附件",
+    conversation_id: str | None = None,
+    token: str | None = None,
 ) -> tuple[int, str]:
     data = {
         "question": question,
@@ -82,9 +85,11 @@ def _ask_files(
         "provider_id": provider["id"],
         "model": "model",
     }
+    if conversation_id:
+        data["conversation_id"] = conversation_id
     response = c.post(
         "/api/v1/conversations/ask-with-attachments",
-        headers=_headers(admin),
+        headers=_headers(token or admin),
         data=data,
         files=[("attachments", item) for item in files],
     )
@@ -282,6 +287,85 @@ def test_conversation_b_cannot_escape_into_conversation_a(client, monkeypatch):
     directory_b = _attachments(conversation_b)
     assert sorted(path.name for path in directory_b.iterdir()) == ["secret.txt"]
     assert (directory_b / "secret.txt").read_bytes() == b"B-secret"
+
+
+def test_attachment_files_and_directories_are_private(client, monkeypatch):
+    c, admin = client
+    _install_runner(monkeypatch)
+    provider = _provider(c, admin)
+    status, body = _ask_files(
+        c, admin, provider, [("private.txt", b"secret", "text/plain")]
+    )
+    assert status == 200, body
+    conversation_id = _conversation_id(body)
+    directory = _attachments(conversation_id)
+    stored = directory / "private.txt"
+    assert stored.read_bytes() == b"secret"
+    assert os.stat(directory).st_mode & 0o777 == 0o700
+    assert os.stat(stored).st_mode & 0o777 == 0o600
+
+
+def test_other_user_cannot_use_or_delete_another_users_attachments(client, monkeypatch):
+    c, admin = client
+    _install_runner(monkeypatch)
+    provider = _provider(c, admin)
+    status, body = _ask_files(
+        c, admin, provider, [("owner.txt", b"owner-secret", "text/plain")]
+    )
+    assert status == 200, body
+    conversation_id = _conversation_id(body)
+    attachment = _attachments(conversation_id) / "owner.txt"
+    other = c.post(
+        "/api/v1/tokens",
+        headers=_headers(admin),
+        json={"name": "attachment-other", "role": "user"},
+    ).json()["token"]
+
+    status, body = _ask_files(
+        c,
+        admin,
+        provider,
+        [("intruder.txt", b"intruder", "text/plain")],
+        conversation_id=conversation_id,
+        token=other,
+    )
+    assert status == 404, body
+    assert attachment.read_bytes() == b"owner-secret"
+    assert not (_attachments(conversation_id) / "intruder.txt").exists()
+
+    deleted = c.delete(
+        f"/api/v1/conversations/{conversation_id}", headers=_headers(other)
+    )
+    assert deleted.status_code == 404, deleted.text
+    assert conversation_id in {
+        row["id"]
+        for row in c.get("/api/v1/conversations", headers=_headers(admin)).json()
+    }
+
+
+def test_expired_conversation_removes_attachment_workspace(client, monkeypatch):
+    from semantica_dataagent.conversation_api import cleanup_expired_sessions
+    from semantica_dataagent.db import Conversation, sessions
+
+    c, admin = client
+    _install_runner(monkeypatch)
+    provider = _provider(c, admin)
+    status, body = _ask_files(
+        c, admin, provider, [("expired.txt", b"old", "text/plain")]
+    )
+    assert status == 200, body
+    conversation_id = _conversation_id(body)
+    workspace = _attachments(conversation_id).parent.parent
+    assert _attachments(conversation_id).is_dir()
+    with sessions().begin() as db:
+        conversation = db.get(Conversation, conversation_id)
+        conversation.updated_at = datetime.now(UTC) - timedelta(days=60)
+
+    cleanup_expired_sessions()
+
+    with sessions()() as db:
+        assert db.get(Conversation, conversation_id).resumable is False
+    assert not workspace.exists()
 
 
 def test_image_attachments_require_a_vision_model(client, monkeypatch):
