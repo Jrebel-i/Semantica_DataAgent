@@ -313,9 +313,9 @@ def test_project_migration_preserves_existing_data(database):
     assert _schema_version(database) == "0027"
     assert {table: _table_rows(database, table) for table in OLD_TABLES} == before
     with sqlite3.connect(database) as db:
-        assert db.execute(
-            "SELECT id, name, type, status FROM projects"
-        ).fetchall() == [("default", "业务数据", "warehouse", "active")]
+        assert db.execute("SELECT id, name, type, status FROM projects").fetchall() == [
+            ("default", "业务数据", "warehouse", "active")
+        ]
         assert db.execute(
             "SELECT project_id, token_id, role FROM project_members ORDER BY token_id"
         ).fetchall() == [
