@@ -2128,10 +2128,18 @@ function conversationFetcher(
       return json([{ id: "pi", name: "pi", available: true }]);
     if (url === "/api/v1/providers") return json([provider]);
     if (url === "/api/v1/conversations") return json(rows);
+    if (url === "/api/v1/conversations?archived=true") return json([]);
     const match = url.match(/^\/api\/v1\/conversations\/([^/]+)$/);
     if (match) {
       const id = decodeURIComponent(match[1]);
-      if (init?.method === "DELETE") return onDelete(id);
+      if (init?.method === "DELETE") {
+        const response = onDelete(id);
+        if (response.ok) {
+          const index = rows.findIndex((row) => row.id === id);
+          if (index >= 0) rows.splice(index, 1);
+        }
+        return response;
+      }
       const row = rows.find((item) => item.id === id);
       if (row) return json({ ...row, turns: [] });
     }
@@ -2139,7 +2147,7 @@ function conversationFetcher(
   });
 }
 
-test("会话项悬停或聚焦时显示删除按钮", async () => {
+test("会话项悬停或聚焦时显示菜单按钮", async () => {
   const messages = getMessages("zh");
   const rows = [conversationRow("conv-1", "订单分析")];
   vi.stubGlobal(
@@ -2150,7 +2158,7 @@ test("会话项悬停或聚焦时显示删除按钮", async () => {
     <ChatPage token="token" role="user" messages={messages} />,
   );
   const deleteButton = await screen.findByRole("button", {
-    name: messages.deleteConversation,
+    name: messages.conversationMenu,
   });
   const item = container.querySelector(".session-item") as HTMLElement;
   expect(deleteButton.className).not.toContain("visible");
@@ -2164,7 +2172,7 @@ test("会话项悬停或聚焦时显示删除按钮", async () => {
   expect(deleteButton.className).not.toContain("visible");
 });
 
-test("删除会话需要就地二次确认，取消不发送请求", async () => {
+test("删除会话需要弹窗确认，取消不发送请求", async () => {
   const messages = getMessages("zh");
   const rows = [conversationRow("conv-1", "订单分析")];
   const onDelete = vi.fn(() => new Response(null, { status: 204 }));
@@ -2172,29 +2180,22 @@ test("删除会话需要就地二次确认，取消不发送请求", async () =>
   render(<ChatPage token="token" role="user" messages={messages} />);
 
   fireEvent.click(
-    await screen.findByRole("button", { name: messages.deleteConversation }),
+    await screen.findByRole("button", { name: messages.conversationMenu }),
   );
+  fireEvent.click(screen.getByRole("button", { name: messages.deleteAction }));
   expect(
     screen.getByRole("button", { name: messages.confirmDeleteConversation }),
   ).toBeTruthy();
-  expect(
-    screen.getByRole("button", { name: messages.cancelDeleteConversation }),
-  ).toBeTruthy();
+  expect(screen.getByRole("button", { name: /取\s*消/ })).toBeTruthy();
+  expect(onDelete).not.toHaveBeenCalled();
+
+  fireEvent.click(screen.getByRole("button", { name: /取\s*消/ }));
   expect(onDelete).not.toHaveBeenCalled();
 
   fireEvent.click(
-    screen.getByRole("button", { name: messages.cancelDeleteConversation }),
+    screen.getByRole("button", { name: messages.conversationMenu }),
   );
-  expect(
-    screen.queryByRole("button", {
-      name: messages.confirmDeleteConversation,
-    }),
-  ).toBeNull();
-  expect(onDelete).not.toHaveBeenCalled();
-
-  fireEvent.click(
-    screen.getByRole("button", { name: messages.deleteConversation }),
-  );
+  fireEvent.click(screen.getByRole("button", { name: messages.deleteAction }));
   fireEvent.click(
     screen.getByRole("button", { name: messages.confirmDeleteConversation }),
   );
@@ -2222,8 +2223,9 @@ test("删除当前会话后从列表移除并回到新对话空状态", async ()
   );
 
   fireEvent.click(
-    screen.getAllByRole("button", { name: messages.deleteConversation })[0],
+    screen.getAllByRole("button", { name: messages.conversationMenu })[0],
   );
+  fireEvent.click(screen.getByRole("button", { name: messages.deleteAction }));
   fireEvent.click(
     screen.getByRole("button", { name: messages.confirmDeleteConversation }),
   );
@@ -2261,8 +2263,9 @@ test("删除运行中的会话提示稍后再试且列表不变", async () => {
   );
 
   fireEvent.click(
-    screen.getByRole("button", { name: messages.deleteConversation }),
+    screen.getByRole("button", { name: messages.conversationMenu }),
   );
+  fireEvent.click(screen.getByRole("button", { name: messages.deleteAction }));
   fireEvent.click(
     screen.getByRole("button", { name: messages.confirmDeleteConversation }),
   );
@@ -2299,8 +2302,9 @@ test("删除他人会话返回 404 时提示失败且列表不变", async () => 
   );
 
   fireEvent.click(
-    screen.getByRole("button", { name: messages.deleteConversation }),
+    screen.getByRole("button", { name: messages.conversationMenu }),
   );
+  fireEvent.click(screen.getByRole("button", { name: messages.deleteAction }));
   fireEvent.click(
     screen.getByRole("button", { name: messages.confirmDeleteConversation }),
   );
