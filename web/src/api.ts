@@ -1085,6 +1085,8 @@ export interface components {
             effort?: ("low" | "medium" | "high" | "extra" | "max") | null;
             /** Model */
             model?: string | null;
+            /** Project */
+            project?: string | null;
             /** Provider Id */
             provider_id?: string | null;
             /** Question */
@@ -1194,6 +1196,10 @@ export interface components {
             model: string;
             /** Pinned */
             pinned: boolean;
+            /** Project Id */
+            project_id: string;
+            /** Project Name */
+            project_name: string;
             /** Provider Id */
             provider_id: string;
             /** Resumable */
@@ -1236,6 +1242,10 @@ export interface components {
             model: string;
             /** Pinned */
             pinned: boolean;
+            /** Project Id */
+            project_id: string;
+            /** Project Name */
+            project_name: string;
             /** Provider Id */
             provider_id: string;
             /** Resumable */
@@ -2335,6 +2345,7 @@ export interface operations {
         parameters: {
             query?: {
                 archived?: boolean;
+                project?: string | null;
             };
             header?: never;
             path?: never;
