@@ -875,7 +875,7 @@ legend {
 .session-item.active .session-open {
   color: var(--white);
 }
-.session-delete {
+.session-menu-toggle {
   flex: none;
   display: grid;
   place-items: center;
@@ -896,43 +896,16 @@ legend {
     color 0.12s ease,
     background 0.12s ease;
 }
-.session-item:hover .session-delete,
-.session-item:focus-within .session-delete,
-.session-delete.visible {
+.session-item:hover .session-menu-toggle,
+.session-item:focus-within .session-menu-toggle,
+.session-menu-toggle.visible {
   opacity: 1;
   pointer-events: auto;
 }
-.session-delete:hover,
-.session-delete:focus-visible {
+.session-menu-toggle:hover,
+.session-menu-toggle:focus-visible {
   background: var(--surface);
-  color: var(--red);
-}
-.session-delete-actions {
-  flex: none;
-  display: flex;
-  gap: 4px;
-}
-.session-delete-confirm,
-.session-delete-cancel {
-  padding: 1px 6px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: var(--surface);
-  color: var(--ink-2);
-  font-size: 11px;
-  line-height: 1.5;
-  white-space: nowrap;
-  cursor: pointer;
-}
-.session-delete-confirm {
-  border-color: var(--danger-border);
-  color: var(--red);
-}
-.session-delete-confirm:hover {
-  background: var(--mint-soft);
-}
-.session-delete-cancel:hover {
-  background: var(--nav-2);
+  color: var(--ink);
 }
 .session-delete-error {
   padding: 2px 12px 6px;
@@ -940,7 +913,7 @@ legend {
   font-size: 12px;
 }
 @media (hover: none), (pointer: coarse) {
-  .session-delete {
+  .session-menu-toggle {
     opacity: 1;
     pointer-events: auto;
   }

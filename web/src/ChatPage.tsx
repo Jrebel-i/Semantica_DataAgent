@@ -1987,7 +1987,7 @@ export function ChatPage({
                                 <div className="session-menu-wrap">
                                   <button
                                     type="button"
-                                    className={`session-delete${revealed ? " visible" : ""}`}
+                                    className={`session-menu-toggle${revealed ? " visible" : ""}`}
                                     aria-label={t.conversationMenu}
                                     onClick={() =>
                                       setMenuId(
