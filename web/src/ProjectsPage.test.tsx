@@ -197,6 +197,7 @@ test("lists members, adds a user, changes roles and confirms removal", async () 
         body: options?.body as string | undefined,
       });
       if (url === "/api/v1/projects") return Response.json([projectRow()]);
+      if (url === "/api/v1/projects/default/adapters") return Response.json([]);
       if (url === "/api/v1/projects/default/members") {
         return Response.json(members);
       }
@@ -269,6 +270,7 @@ test("disables demoting or removing the last project admin", async () => {
     "fetch",
     vi.fn(async (url: string) => {
       if (url === "/api/v1/projects") return Response.json([projectRow()]);
+      if (url === "/api/v1/projects/default/adapters") return Response.json([]);
       if (url === "/api/v1/projects/default/members")
         return Response.json([{ id: "pa", name: "Pa", role: "admin" }]);
       if (url === "/api/v1/users") return Response.json([]);
@@ -404,4 +406,174 @@ test("requires the exact project name before permanent deletion", async () => {
     body: JSON.stringify({ name: "旧项目" }),
   });
   await waitFor(() => expect(screen.queryByText("旧项目")).toBeNull());
+function adapterRows() {
+  return [
+    {
+      id: "markdown",
+      name: "Markdown",
+      project_types: ["warehouse", "document"],
+      enabled: true,
+      parameters: {},
+      parameters_schema: {
+        type: "object",
+        properties: { path: { type: "string", default: "knowledge" } },
+      },
+      compatible: true,
+      reason: null,
+      pull: null,
+    },
+    {
+      id: "dtb",
+      name: "DTB export",
+      project_types: ["warehouse"],
+      enabled: false,
+      parameters: {},
+      parameters_schema: { type: "object", properties: {} },
+      compatible: true,
+      reason: null,
+      pull: {
+        enabled: false,
+        parameters: {},
+        parameters_schema: {
+          type: "object",
+          properties: {
+            url: { type: "string" },
+            token: { type: "string", format: "password" },
+            interval_seconds: { type: "integer" },
+          },
+        },
+        token_configured: false,
+      },
+    },
+  ];
+}
+
+test("shows incompatible adapters disabled with a reason", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) => {
+      if (url === "/api/v1/projects")
+        return Response.json([
+          projectRow({ id: "docs", name: "Platform Docs", type: "document" }),
+        ]);
+      if (url === "/api/v1/projects/docs/adapters") {
+        return Response.json([
+          {
+            ...adapterRows()[0],
+            project_types: ["warehouse", "document"],
+          },
+          {
+            ...adapterRows()[1],
+            compatible: false,
+            reason: "该适配器仅支持数仓型项目，不能用于文档型项目",
+          },
+        ]);
+      }
+      if (url === "/api/v1/projects/docs/members") return Response.json([]);
+      if (url === "/api/v1/users") return Response.json([]);
+      return Response.json({});
+    }),
+  );
+  render(<ProjectsPage token="admin" messages={getMessages("zh")} />);
+  fireEvent.click(await screen.findByRole("button", { name: "项目成员" }));
+
+  expect(await screen.findByText("来源适配器")).toBeTruthy();
+  expect(
+    await screen.findByText("该适配器仅支持数仓型项目，不能用于文档型项目"),
+  ).toBeTruthy();
+  const dtb = screen.getByRole("checkbox", { name: "DTB export" });
+  expect((dtb as HTMLInputElement).disabled).toBe(true);
+  expect(
+    (screen.getByRole("checkbox", { name: "Markdown" }) as HTMLInputElement)
+      .disabled,
+  ).toBe(false);
+});
+
+test("saves enabled adapters and DTB pull configuration", async () => {
+  let rows = adapterRows();
+  const calls: Array<{ url: string; method?: string; body?: string }> = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string, options?: RequestInit) => {
+      calls.push({
+        url,
+        method: options?.method,
+        body: options?.body as string | undefined,
+      });
+      if (url === "/api/v1/projects") return Response.json([projectRow()]);
+      if (url === "/api/v1/projects/default/adapters") {
+        if (options?.method === "PUT") {
+          const body = JSON.parse(String(options.body)) as {
+            adapters: Array<{ id: string; enabled: boolean }>;
+          };
+          rows = rows.map((row) => ({
+            ...row,
+            enabled:
+              body.adapters.find((item) => item.id === row.id)?.enabled ??
+              row.enabled,
+          }));
+        }
+        return Response.json(rows);
+      }
+      if (url === "/api/v1/projects/default/members") return Response.json([]);
+      if (url === "/api/v1/users") return Response.json([]);
+      return Response.json({});
+    }),
+  );
+  render(<ProjectsPage token="admin" messages={getMessages("zh")} />);
+  fireEvent.click(await screen.findByRole("button", { name: "项目成员" }));
+
+  fireEvent.click(await screen.findByRole("checkbox", { name: "DTB export" }));
+  fireEvent.change(await screen.findByLabelText("url"), {
+    target: { value: "https://dtb.example" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "保存适配器配置" }));
+
+  await waitFor(() => {
+    const put = calls.find(
+      (call) =>
+        call.url === "/api/v1/projects/default/adapters" &&
+        call.method === "PUT",
+    );
+    expect(put).toBeTruthy();
+    const body = JSON.parse(put?.body ?? "{}") as {
+      adapters: Array<Record<string, unknown>>;
+    };
+    const dtb = body.adapters.find((row) => row.id === "dtb");
+    expect(dtb?.enabled).toBe(true);
+    expect(dtb?.pull).toEqual({
+      enabled: false,
+      parameters: { url: "https://dtb.example" },
+    });
+  });
+});
+
+test("renders adapters read-only for project members", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) => {
+      if (url === "/api/v1/projects")
+        return Response.json([
+          projectRow({ id: "default", name: "业务数据", my_role: "member" }),
+        ]);
+      if (url === "/api/v1/projects/default/adapters")
+        return Response.json(adapterRows());
+      if (url === "/api/v1/projects/default/members") return Response.json([]);
+      if (url === "/api/v1/users") return Response.json([]);
+      return Response.json({});
+    }),
+  );
+  render(
+    <ProjectsPage
+      token="user"
+      messages={getMessages("zh")}
+      canCreate={false}
+      includeMemberProjects
+    />,
+  );
+  fireEvent.click(await screen.findByRole("button", { name: "项目成员" }));
+
+  const markdown = await screen.findByRole("checkbox", { name: "Markdown" });
+  expect((markdown as HTMLInputElement).disabled).toBe(true);
+  expect(screen.queryByRole("button", { name: "保存适配器配置" })).toBeNull();
 });
