@@ -106,7 +106,7 @@ def _mime_type(filename: str, content_type: str | None) -> str:
     return guessed or "application/octet-stream"
 
 
-def workspace_directory(root: Path, conversation_id: str) -> Path:
+def _workspace_candidate(root: Path, conversation_id: str) -> Path:
     if (
         not conversation_id
         or conversation_id in {".", ".."}
@@ -116,27 +116,47 @@ def workspace_directory(root: Path, conversation_id: str) -> Path:
         or Path(conversation_id).name != conversation_id
     ):
         raise AttachmentStorageError("invalid conversation id")
-    root = Path(root).resolve()
-    workspace = (root / conversation_id).resolve()
-    if workspace.parent != root:
+    return Path(root).resolve() / conversation_id
+
+
+def workspace_directory(root: Path, conversation_id: str) -> Path:
+    root_path = Path(root).resolve()
+    candidate = _workspace_candidate(root_path, conversation_id)
+    if candidate.is_symlink():
+        raise AttachmentStorageError("conversation workspace is a symlink")
+    workspace = candidate.resolve()
+    if workspace.parent != root_path:
         raise AttachmentStorageError("conversation workspace escapes agent root")
     return workspace
 
 
 def attachment_directory(root: Path, conversation_id: str) -> Path:
-    directory = workspace_directory(root, conversation_id) / "work" / "attachments"
+    workspace = workspace_directory(root, conversation_id)
+    work = workspace / "work"
+    if work.is_symlink():
+        raise AttachmentStorageError("conversation work directory is a symlink")
+    directory = work / "attachments"
+    if directory.is_symlink():
+        raise AttachmentStorageError("attachment directory is a symlink")
     directory.mkdir(parents=True, exist_ok=True)
+    if directory.is_symlink():
+        raise AttachmentStorageError("attachment directory is a symlink")
     os.chmod(directory, 0o700)
     return directory
 
 
 def remove_conversation_workspace(root: Path, conversation_id: str) -> None:
     try:
-        workspace = workspace_directory(root, conversation_id)
+        candidate = _workspace_candidate(root, conversation_id)
     except AttachmentStorageError:
         return
-    if workspace.exists():
-        shutil.rmtree(workspace)
+    if candidate.is_symlink():
+        candidate.unlink(missing_ok=True)
+        return
+    if candidate.is_dir():
+        shutil.rmtree(candidate)
+    elif candidate.exists():
+        candidate.unlink()
 
 
 def _temp_directory() -> Path:

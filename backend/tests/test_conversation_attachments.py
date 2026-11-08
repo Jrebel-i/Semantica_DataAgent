@@ -396,6 +396,32 @@ def test_symlinked_attachment_directory_is_not_followed(
     assert not (outside / "escape.txt").exists()
 
 
+def test_symlinked_filename_does_not_block_upload_or_follow_target(
+    client, monkeypatch, tmp_path: Path
+):
+    c, admin = client
+    _install_runner(monkeypatch)
+    provider = _provider(c, admin)
+    status, body = _ask_files(c, admin, provider, [("seed.txt", b"seed", "text/plain")])
+    assert status == 200, body
+    conversation_id = _conversation_id(body)
+    directory = _attachments(conversation_id)
+    outside = tmp_path / "outside.txt"
+    outside.write_bytes(b"outside")
+    os.symlink(outside, directory / "evil.txt")
+
+    status, body = _ask_files(
+        c,
+        admin,
+        provider,
+        [("evil.txt", b"payload", "text/plain")],
+        conversation_id=conversation_id,
+    )
+    assert status == 200, body
+    assert outside.read_bytes() == b"outside"
+    assert (directory / "evil (1).txt").read_bytes() == b"payload"
+
+
 def test_deleting_conversation_does_not_follow_symlinked_workspace(client, monkeypatch):
     c, admin = client
     _install_runner(monkeypatch)

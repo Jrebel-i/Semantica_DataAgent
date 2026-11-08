@@ -27,7 +27,6 @@ from .agent_plugin import build_attachment_prompt
 from .agent_runner import DONE, ERROR, AgentEvent, AgentTurnRequest, get_runner
 from .api_time import UtcDatetime
 from .attachments import (
-    MAX_REQUEST_BYTES,
     AttachmentLimitError,
     AttachmentStorageError,
     remove_conversation_workspace,
@@ -728,14 +727,6 @@ async def ask_with_attachments(
     conversation_id: Annotated[str | None, Form()] = None,
     project: Annotated[str | None, Form()] = None,
 ):
-    length = request.headers.get("content-length")
-    if length:
-        try:
-            too_large = int(length) > MAX_REQUEST_BYTES
-        except ValueError:
-            too_large = False
-        if too_large:
-            raise HTTPException(413, "一条消息的附件总大小不能超过 50MB")
     try:
         body = AskRequest(
             question=question,
