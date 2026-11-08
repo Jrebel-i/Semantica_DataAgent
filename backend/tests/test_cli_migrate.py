@@ -335,6 +335,18 @@ def test_project_migration_preserves_existing_data(database):
             ("default", "user-1", "member"),
             ("default", "user-2", "member"),
         ]
+        assert db.execute("SELECT DISTINCT project_id FROM builds").fetchall() == [
+            ("default",)
+        ]
+        assert db.execute(
+            "SELECT DISTINCT project_id FROM knowledge_generations"
+        ).fetchall() == [("default",)]
+        assert db.execute(
+            "SELECT DISTINCT project_id FROM generation_pointer"
+        ).fetchall() == [("default",)]
+        assert (
+            db.execute("SELECT project_id, key FROM project_settings").fetchall() == []
+        )
 
     backups = _backups(database)
     assert len(backups) == 1
