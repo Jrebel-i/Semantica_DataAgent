@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -366,6 +367,74 @@ def test_expired_conversation_removes_attachment_workspace(client, monkeypatch):
     with sessions()() as db:
         assert db.get(Conversation, conversation_id).resumable is False
     assert not workspace.exists()
+
+
+def test_symlinked_attachment_directory_is_not_followed(
+    client, monkeypatch, tmp_path: Path
+):
+    c, admin = client
+    _install_runner(monkeypatch)
+    provider = _provider(c, admin)
+    status, body = _ask_files(c, admin, provider, [("seed.txt", b"seed", "text/plain")])
+    assert status == 200, body
+    conversation_id = _conversation_id(body)
+    directory = _attachments(conversation_id)
+    shutil.rmtree(directory)
+    outside = tmp_path / "outside-attachments"
+    outside.mkdir()
+    os.symlink(outside, directory)
+
+    status, body = _ask_files(
+        c,
+        admin,
+        provider,
+        [("escape.txt", b"escape", "text/plain")],
+        conversation_id=conversation_id,
+    )
+    assert status >= 500, body
+    assert "附件保存失败" in body
+    assert not (outside / "escape.txt").exists()
+
+
+def test_deleting_conversation_does_not_follow_symlinked_workspace(client, monkeypatch):
+    c, admin = client
+    _install_runner(monkeypatch)
+    provider = _provider(c, admin)
+    _, body_a = _ask_files(c, admin, provider, [("a.txt", b"a-secret", "text/plain")])
+    conversation_a = _conversation_id(body_a)
+    _, body_b = _ask_files(c, admin, provider, [("b.txt", b"b-secret", "text/plain")])
+    conversation_b = _conversation_id(body_b)
+    root = Path(os.environ["DATAAGENT_AGENT_ROOT"])
+    workspace_a = root / conversation_a
+    workspace_b = root / conversation_b
+    shutil.rmtree(workspace_a)
+    os.symlink(workspace_b, workspace_a)
+
+    response = c.delete(
+        f"/api/v1/conversations/{conversation_a}", headers=_headers(admin)
+    )
+    assert response.status_code == 204, response.text
+
+    assert workspace_b.is_dir()
+    assert (workspace_b / "work" / "attachments" / "b.txt").read_bytes() == b"b-secret"
+
+
+def test_oversized_request_is_rejected_before_multipart_parsing(client, monkeypatch):
+    c, admin = client
+    _install_runner(monkeypatch)
+    _provider(c, admin)
+    oversized = b"x" * (MAX_TOTAL + MEGABYTE + 1)
+    response = c.post(
+        "/api/v1/conversations/ask-with-attachments",
+        headers={
+            **_headers(admin),
+            "content-type": "multipart/form-data; boundary=oversized",
+            "content-length": str(len(oversized)),
+        },
+        content=oversized,
+    )
+    assert response.status_code == 413, response.text
+    assert "50MB" in response.text
 
 
 def test_image_attachments_require_a_vision_model(client, monkeypatch):
