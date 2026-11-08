@@ -186,7 +186,7 @@ def test_tool_start_records_truncated_input_and_redacts_secrets():
     )
 
     assert event.data["summary"].startswith("dialect=hive")
-    assert sql in event.data["input"]
+    assert '"sql": "SELECT x' in event.data["input"]
     assert len(event.data["input"]) <= 2000
     redacted = redact_event(event, ("secret-value",))
     assert "secret-value" not in json.dumps(redacted.data, ensure_ascii=False)

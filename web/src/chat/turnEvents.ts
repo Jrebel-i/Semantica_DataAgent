@@ -38,7 +38,7 @@ export function applyToolStart(
       name: String(data.name ?? "tool"),
       summary: String(data.summary ?? ""),
       status: "running",
-      input: String(data.summary ?? ""),
+      input: String(data.input ?? data.summary ?? ""),
     },
   ];
 }

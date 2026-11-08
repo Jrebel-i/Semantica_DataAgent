@@ -96,7 +96,7 @@ class PiEventParser(EventParser):
                     record.get("toolCallId"),
                     name,
                     is_error=bool(record.get("isError")),
-                    summary=result_summary(result),
+                    summary=result_summary(result, name),
                     duration_ms=record.get("durationMs"),
                 )
             ]
