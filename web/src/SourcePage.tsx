@@ -180,7 +180,7 @@ export function SourcePage({
   }, [loadCategories]);
   useEffect(() => {
     setPreview(null);
-  }, [files, category, newCategory, subfolder, replace]);
+  }, [files, category, newCategory, subfolder, replace, project]);
   const selectedCategory = newCategory.trim() || category;
   function chooseFiles(next: File[]) {
     setFiles(next);
