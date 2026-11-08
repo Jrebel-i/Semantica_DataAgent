@@ -51,6 +51,8 @@ def test_partition_issue_lists_table_field_message_and_fix():
     assert issue["field"] == "dt"
     assert "缺少分区条件" in issue["message"]
     assert "MAX(dt)" in issue["suggestion"]
+    assert "不确定时按快照" in issue["suggestion"]
+    assert "业务时间" in issue["suggestion"]
 
 
 @pytest.mark.parametrize(

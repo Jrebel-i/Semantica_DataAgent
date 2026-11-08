@@ -11,6 +11,7 @@ from typing import ClassVar
 import pytest
 
 from semantica_dataagent.agent_plugin import (
+    EVENT_DETAIL_LIMIT,
     EventParser,
     SandboxTurn,
     agent_process,
@@ -230,6 +231,82 @@ def test_propose_tool_end_summary_includes_error_code_and_message():
 
     assert "invalid_input" in summary
     assert "缺少分区条件" in summary
+
+
+FIXTURES = Path(__file__).parent / "fixtures" / "issue_165"
+
+
+def _real_runner_tool_ends(agent: str):
+    if agent == "pi":
+        from semantica_dataagent.pi_runner import PiEventParser
+
+        parser = PiEventParser()
+    elif agent == "claude":
+        from semantica_dataagent.claude_runner import ClaudeEventParser
+
+        parser = ClaudeEventParser()
+    else:
+        from semantica_dataagent.codex_runner import CodexEventParser
+
+        parser = CodexEventParser()
+    events = []
+    for line in (FIXTURES / f"{agent}.jsonl").read_text().splitlines():
+        events.extend(parser.feed(json.loads(line)))
+    return events
+
+
+@pytest.mark.parametrize("agent", ["pi", "claude", "codex"])
+def test_real_runner_validate_sql_event_summary_keeps_status_and_issues(agent):
+    ends = [
+        event
+        for event in _real_runner_tool_ends(agent)
+        if event.type == "tool_end" and event.data["name"].endswith("validate_sql")
+    ]
+    assert len(ends) == 1
+    summary = ends[0].data["summary"]
+    assert summary.startswith("status=issues")
+    assert "缺少分区条件" in summary
+    assert "MAX(dt)" in summary
+    assert "unknown" not in summary
+
+
+@pytest.mark.parametrize("agent", ["pi", "claude", "codex"])
+def test_real_runner_propose_query_event_summary_keeps_error_code(agent):
+    ends = [
+        event
+        for event in _real_runner_tool_ends(agent)
+        if event.type == "tool_end" and event.data["name"].endswith("propose_query")
+    ]
+    assert len(ends) == 1
+    summary = ends[0].data["summary"]
+    assert summary.startswith("invalid_input:")
+    assert "SQL validation did not pass" in summary
+
+
+def test_unparseable_validate_sql_result_falls_back_to_truncated_raw_text():
+    truncated = (
+        '{"status": "issues", "issues": [{"kind": "partition", '
+        '"message": "分区表 shop.orders 缺少分区条件: dt'
+    )
+    summary = result_summary(
+        {"content": [{"type": "text", "text": truncated}]},
+        name="mcp__dataagent__validate_sql",
+    )
+
+    assert "unknown" not in summary
+    assert truncated in summary
+
+
+def test_long_unparseable_result_is_truncated_to_the_event_limit():
+    raw = "x" * (EVENT_DETAIL_LIMIT + 500)
+    summary = result_summary(
+        {"content": [{"type": "text", "text": raw}]},
+        name="mcp__dataagent__validate_sql",
+    )
+
+    assert "unknown" not in summary
+    assert len(summary) <= EVENT_DETAIL_LIMIT
+    assert summary.startswith("x")
 
 
 def test_sandbox_turn_registers_starts_and_always_closes(tmp_path):

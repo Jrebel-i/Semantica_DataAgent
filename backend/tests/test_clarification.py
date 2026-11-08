@@ -38,6 +38,22 @@ SYNTHETIC_QUESTIONS = [
     }
 ]
 
+FIELD_QUESTIONS = [
+    {
+        "question": "“操作系统”指哪个字段？",
+        "options": [
+            {
+                "label": "os_type（操作系统代码）",
+                "ref": "field:shop.channels.os_type",
+            },
+            {
+                "label": "os_name（操作系统名称）",
+                "ref": "field:shop.channels.os_name",
+            },
+        ],
+    }
+]
+
 
 @contextmanager
 def bound(requester: Requester, conversation_id: str | None = None):
@@ -191,6 +207,35 @@ def test_mcp_middleware_binds_the_caller_and_conversation_header(client):
     assert seen["conversation_id"] == "conversation-middleware"
 
 
+def test_existing_refs_accepts_field_refs_in_the_current_generation(
+    client, monkeypatch
+):
+    from semantica_dataagent import knowledge
+    from semantica_dataagent.db import (
+        GenerationPointer,
+        KnowledgeGeneration,
+        Setting,
+    )
+
+    with sessions().begin() as db:
+        db.add(KnowledgeGeneration(name="field_generation"))
+        db.add(Setting(key="knowledge_generation", value="field_generation"))
+        db.add(GenerationPointer(id=1, generation="field_generation"))
+    field_ref = "field:shop.channels.os_type"
+    monkeypatch.setattr(knowledge, "read_graph", lambda values: object())
+    monkeypatch.setattr(
+        knowledge,
+        "execute",
+        lambda store, query, parameters: [
+            {"ref": ref} for ref in parameters["refs"] if ref == field_ref
+        ],
+    )
+
+    assert knowledge.existing_refs([field_ref, "field:shop.channels.os_missing"]) == {
+        field_ref
+    }
+
+
 def test_request_clarification_records_caller_and_returns_structured_questions(
     client, monkeypatch
 ):
@@ -247,6 +292,67 @@ def test_request_clarification_rejects_a_ref_outside_the_current_generation(
         create_mcp(),
         "request_clarification",
         {"questions": SYNTHETIC_QUESTIONS},
+        requester,
+    )
+
+    assert result.isError
+    assert result.structuredContent["code"] == "invalid_input"
+    assert result.structuredContent["retryable"] is False
+    with sessions()() as db:
+        assert db.query(Clarification).count() == 0
+
+
+def test_request_clarification_accepts_field_refs_from_retrieval(client, monkeypatch):
+    from semantica_dataagent import knowledge
+    from semantica_dataagent.app import create_mcp
+
+    monkeypatch.setattr(knowledge, "existing_refs", lambda refs: set(refs))
+    requester = _requester(token="clarification-field-token")
+    result = call(
+        create_mcp(),
+        "request_clarification",
+        {"questions": FIELD_QUESTIONS},
+        requester,
+    )
+
+    assert not result.isError, result.structuredContent
+    body = result.structuredContent
+    refs = [option["ref"] for option in body["questions"][0]["options"]]
+    assert refs == [
+        "field:shop.channels.os_type",
+        "field:shop.channels.os_name",
+    ]
+    with sessions()() as db:
+        row = db.get(Clarification, body["clarification_id"])
+        assert row is not None
+        stored = json.loads(row.questions)
+        assert [option["ref"] for option in stored[0]["options"]] == refs
+
+
+def test_request_clarification_rejects_a_fabricated_field_ref(client, monkeypatch):
+    from semantica_dataagent import knowledge
+    from semantica_dataagent.app import create_mcp
+
+    existing = "field:shop.channels.os_type"
+    monkeypatch.setattr(knowledge, "existing_refs", lambda refs: set(refs) & {existing})
+    requester = _requester(token="clarification-field-reject-token")
+    result = call(
+        create_mcp(),
+        "request_clarification",
+        {
+            "questions": [
+                {
+                    "question": "“操作系统”指哪个字段？",
+                    "options": [
+                        {"label": "os_type（操作系统代码）", "ref": existing},
+                        {
+                            "label": "os_name（操作系统名称）",
+                            "ref": "field:shop.channels.os_missing",
+                        },
+                    ],
+                }
+            ]
+        },
         requester,
     )
 

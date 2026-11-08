@@ -94,10 +94,20 @@ Read `validate_sql` completely:
 - For a `weak` or `unsupported` join, prefer a different relation found with `find_join_path`/`get_lineage` and revalidate. If the questioner's requirement still needs that join, call it out explicitly in the answer and explain the limitation. Never describe it as fully validated.
 - **Partitioned tables must be constrained.** If `describe_tables` marks any field with
   `partition: true`, put a condition on that partition column in `WHERE`.
-  Snapshot/latest partition: `WHERE dt = (SELECT MAX(dt) FROM db.table)`.
-  Incremental partition: a range such as `WHERE dt >= '2025-01-01' AND dt <= '2025-01-31'`.
-  Good: `SELECT COUNT(*) FROM db.orders WHERE dt = (SELECT MAX(dt) FROM db.orders)`.
-  Bad: `SELECT COUNT(*) FROM db.orders` when `dt` is partitioned.
+  Decide whether the table is a snapshot or an incremental table from the table
+  dictionary document, the table comment, or the producing task SQL (`read_task_sql`).
+  An `INSERT OVERWRITE ... PARTITION (...)` task that replaces the whole table is a
+  snapshot; a task that appends each day is incremental. If it is still unclear, treat
+  the table as a snapshot.
+  Snapshot: `WHERE dt = (SELECT MAX(dt) FROM db.table)`.
+  Incremental: a range such as `WHERE dt >= '2025-01-01' AND dt <= '2025-01-31'`.
+  Business time ranges always use a business time column, never the partition column of
+  a snapshot table.
+  Good snapshot: `SELECT * FROM db.table WHERE dt = (SELECT MAX(dt) FROM db.table)
+  AND event_time >= '2025-01-01' AND event_time < '2025-02-01'`.
+  Bad snapshot: `SELECT * FROM db.table WHERE dt >= '2025-01-01' AND dt <= '2025-01-31'`.
+  Good incremental: `SELECT * FROM db.table WHERE dt >= '2025-01-01' AND dt <= '2025-01-31'`.
+  Bad: no partition condition, or a snapshot table's partition column used as business time.
 
 ## Pagination and errors
 
@@ -131,6 +141,23 @@ strength, or two documents define the same metric differently, stop and call
   the answer to this one question.
 - A clarification choice only applies to the current question. Do not turn it into a global
   rule or assume it for another conversation.
+
+**Field-level ambiguity.** Treat a business word in the question (an entity, dimension, or
+measure name) as ambiguous when it can map to two or more fields in the same table or
+related tables whose comments have different meanings. This includes fields that all
+contain the word and parallel fields such as `xxx_a` and `xxx_b`. If the retrieved metric
+definitions, business rules, and dictionary documents do not explicitly say which field to
+use, stop and call `request_clarification` with one option per candidate field. Set each
+option's `label` to the field name plus its comment meaning, and make the difference
+explicit. Copy each option's `ref` exactly from a field ref returned by retrieval
+(`field:db.table.column`); never invent, normalize, or drop it. For field-level ambiguity,
+ask about at most one ambiguous word per turn, and do not write SQL or call `propose_query`
+in that turn.
+Good: `label: "xxx_a (definition A)"`, `ref: field:db.table.xxx_a`.
+Bad: inventing `field:db.table.xxx` or silently choosing one field.
+Do not clarify when a retrieved document or metric definition already names the field, when
+only one candidate field exists, when the question itself names the field, or when the
+candidates are only different representations of the same field.
 
 ## Answer shape
 

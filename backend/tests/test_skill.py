@@ -100,3 +100,16 @@ def test_skill_source_is_a_valid_agent_skill():
         assert tool in text
     assert "Every option must contain" in text
     assert "Do not pick a definition" in text
+    normalized = " ".join(text.split())
+    assert "INSERT OVERWRITE" in text
+    assert "treat the table as a snapshot" in normalized
+    assert "never the partition column of a snapshot table" in normalized
+    assert "business time column" in normalized
+    assert "Field-level ambiguity" in normalized
+    assert "two or more fields" in normalized
+    assert "field:db.table.column" in normalized
+    assert "one option per candidate field" in normalized
+    assert "at most one ambiguous word per turn" in normalized
+    assert "do not write SQL or call `propose_query` in that turn" in normalized
+    assert "different representations of the same field" in normalized
+    assert "Do not clarify when" in normalized
