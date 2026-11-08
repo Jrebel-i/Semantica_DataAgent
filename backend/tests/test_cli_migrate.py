@@ -208,3 +208,34 @@ def test_turn_switch_columns_migrate_without_rewriting_history(database):
     with sqlite3.connect(database) as db:
         columns = {row[1] for row in db.execute("PRAGMA table_info(turns)").fetchall()}
         assert "provider_id" not in columns and "model" not in columns
+
+def test_migrate_adds_empty_model_capabilities_for_existing_providers(database):
+    command.upgrade(_config(database), "0025")
+    with sqlite3.connect(database) as db:
+        db.execute(
+            "INSERT INTO providers "
+            "(id, name, type, base_url, api_key, models, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                "legacy",
+                "Legacy",
+                "anthropic-messages",
+                "https://legacy.example.test",
+                None,
+                '["legacy-model"]',
+                "2026-01-01",
+                "2026-01-01",
+            ),
+        )
+
+    assert cli.main(["migrate"]) == 0
+
+    assert _schema_version(database) == "0026"
+    with sqlite3.connect(database) as db:
+        columns = {
+            row[1] for row in db.execute("PRAGMA table_info(providers)").fetchall()
+        }
+        assert "model_capabilities" in columns
+        assert db.execute(
+            "SELECT model_capabilities FROM providers WHERE id = 'legacy'"
+        ).fetchone() == (None,)

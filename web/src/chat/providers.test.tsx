@@ -131,3 +131,159 @@ test.each(["claude", "codex"])(
     );
   },
 );
+
+test("admins edit per-model capabilities and save them", async () => {
+  const configured = {
+    ...provider,
+    models: ["model-a", "model-b"],
+    model_capabilities: {
+      "model-a": {
+        description: "带截图问答",
+        vision: true,
+        effort_levels: ["low", "high"],
+      },
+      "model-b": {
+        description: "",
+        vision: false,
+        effort_levels: [],
+      },
+    },
+  };
+  const fetcher = vi.fn(
+    async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/v1/agents")
+        return json([{ id: "pi", name: "pi", available: true }]);
+      if (url === "/api/v1/providers") return json([configured]);
+      if (url === "/api/v1/conversations") return json([]);
+      if (url === `/api/v1/providers/${configured.id}` && init?.method === "PUT")
+        return json(configured);
+      return new Response("", { status: 404 });
+    },
+  );
+  vi.stubGlobal("fetch", fetcher);
+  render(
+    <ChatPage
+      token="personal-token"
+      role="admin"
+      settingsOnly
+      messages={getMessages("zh")}
+    />,
+  );
+
+  fireEvent.click(await screen.findByRole("button", { name: "编辑" }));
+  expect(
+    (await screen.findByLabelText("model-a 说明") as HTMLInputElement).value,
+  ).toBe("带截图问答");
+  expect(
+    (screen.getByLabelText("model-a 支持图片") as HTMLInputElement).checked,
+  ).toBe(true);
+  expect(
+    (screen.getByLabelText("model-a 低") as HTMLInputElement).checked,
+  ).toBe(true);
+  expect(
+    (screen.getByLabelText("model-a 高") as HTMLInputElement).checked,
+  ).toBe(true);
+  expect(
+    (screen.getByLabelText("model-a 超高") as HTMLInputElement).checked,
+  ).toBe(false);
+
+  fireEvent.change(screen.getByLabelText("model-b 说明"), {
+    target: { value: "纯文本模型" },
+  });
+  fireEvent.click(screen.getByLabelText("model-b 支持图片"));
+  fireEvent.click(screen.getByLabelText("model-b 中（推荐）"));
+  fireEvent.click(screen.getByRole("button", { name: "保存" }));
+
+  await waitFor(() => {
+    const call = fetcher.mock.calls.find(
+      ([input, init]) =>
+        String(input) === `/api/v1/providers/${configured.id}` &&
+        init?.method === "PUT",
+    );
+    expect(call).toBeTruthy();
+    expect(JSON.parse(String(call?.[1]?.body))).toMatchObject({
+      models: ["model-a", "model-b"],
+      model_capabilities: {
+        "model-a": {
+          description: "带截图问答",
+          vision: true,
+          effort_levels: ["low", "high"],
+        },
+        "model-b": {
+          description: "纯文本模型",
+          vision: true,
+          effort_levels: ["medium"],
+        },
+      },
+    });
+  });
+});
+
+test("new model rows show and save the documented defaults", async () => {
+  const fetcher = vi.fn(
+    async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/v1/agents")
+        return json([{ id: "pi", name: "pi", available: true }]);
+      if (url === "/api/v1/providers" && init?.method === "POST")
+        return json({ ...provider, models: ["model-a", "model-b"] });
+      if (url === "/api/v1/providers") return json([]);
+      if (url === "/api/v1/conversations") return json([]);
+      return new Response("", { status: 404 });
+    },
+  );
+  vi.stubGlobal("fetch", fetcher);
+  render(
+    <ChatPage
+      token="personal-token"
+      role="admin"
+      settingsOnly
+      messages={getMessages("zh")}
+    />,
+  );
+
+  fireEvent.change(screen.getByLabelText("名称"), {
+    target: { value: "Company gateway" },
+  });
+  fireEvent.change(screen.getByLabelText("Base URL"), {
+    target: { value: "https://gateway.example.test" },
+  });
+  fireEvent.change(screen.getByLabelText("模型列表（逗号分隔）"), {
+    target: { value: "model-a, model-b" },
+  });
+
+  expect(
+    (screen.getByLabelText("model-a 说明") as HTMLInputElement).value,
+  ).toBe("");
+  expect(
+    (screen.getByLabelText("model-a 支持图片") as HTMLInputElement).checked,
+  ).toBe(false);
+  expect(
+    (screen.getByLabelText("model-a 低") as HTMLInputElement).checked,
+  ).toBe(false);
+
+  fireEvent.click(screen.getByRole("button", { name: /添加\s*provider/ }));
+
+  await waitFor(() => {
+    const call = fetcher.mock.calls.find(
+      ([input, init]) =>
+        String(input) === "/api/v1/providers" && init?.method === "POST",
+    );
+    expect(call).toBeTruthy();
+    expect(JSON.parse(String(call?.[1]?.body))).toMatchObject({
+      model_capabilities: {
+        "model-a": {
+          description: "",
+          vision: false,
+          effort_levels: [],
+        },
+        "model-b": {
+          description: "",
+          vision: false,
+          effort_levels: [],
+        },
+      },
+    });
+  });
+});
