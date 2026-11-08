@@ -1,41 +1,25 @@
 import { createPortal } from "react-dom";
 import { ColumnLineage } from "./ColumnLineage";
-import {
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useRef,
-  useState,
-} from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
-import { Alert, Button, Input, Modal, Space, Tag } from "antd";
+import { Alert, Button, Input, Tag } from "antd";
 import type { Language, Messages } from "./i18n";
 import { TaskLineage } from "./TaskLineage";
 import {
   ArrowUpOutlined,
-  EditOutlined,
-  PushpinOutlined,
-  InboxOutlined,
-  DeleteOutlined,
   CloseOutlined,
-  MoreOutlined,
-  PushpinFilled,
   PlusOutlined,
 } from "@ant-design/icons";
 import { parseAgentProfiles, type AgentProfiles } from "./agentProfiles";
-import { HighlightedSql, Markdown } from "./Markdown";
+import { Markdown } from "./Markdown";
 import { safeDecodePath } from "./paths";
 import { loadTableDetail, tablePartsFromRef } from "./tableDetail";
 import {
-  citationDisplayName,
   citationLabel,
   citationsFromRefs,
   citationsOf,
-  mergeCitations,
-  normalizeSql,
   sqlBlocks,
   stripCitationRefs,
-  stripMatchingSql,
 } from "./chat/citations";
 import type {
   Agent,
@@ -65,6 +49,7 @@ import { CitationList } from "./chat/CitationList";
 import { ClarificationList } from "./chat/ClarificationList";
 import { QuestionText } from "./chat/QuestionText";
 import { TurnBlock } from "./chat/TurnBlock";
+import { ConversationSidebar } from "./chat/ConversationSidebar";
 import {
   applyToolEnd,
   applyToolStart,
@@ -879,16 +864,6 @@ export function ChatPage({
   const citationHeading = citationRef
     ? citationLabel(citationDetail?.ref ?? citationRef)
     : null;
-  const shortTime = (value: string) => {
-    const date = new Date(value);
-    if (Number.isNaN(date.getTime())) return "—";
-    return date.toLocaleString(undefined, {
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-  };
   const closeCitation = () => {
     citationSequence.current += 1;
     setCitationRef("");
@@ -927,231 +902,82 @@ export function ChatPage({
               </Button>,
               newTarget,
             )}
-          {(() => {
-            const sessions = (
-              <aside className="chat-sessions">
-                <div className="session-head">
-                  <h1 className="session-title">
-                    {showArchived
-                      ? t.archived
-                      : sessionTarget
-                        ? t.conversationHistory
-                        : t.chat}
-                  </h1>
-                  {!sessionTarget && (
-                    <Button
-                      size="small"
-                      type="primary"
-                      onClick={newConversation}
-                      disabled={sending}
-                    >
-                      {t.newConversation}
-                    </Button>
-                  )}
-                </div>
-                {sessionError && (
-                  <div className="session-delete-error" role="alert">
-                    {sessionError}
-                  </div>
-                )}
-                <div className="session-list">
-                  {(showArchived ? archivedConversations : conversations)
-                    .length === 0 && (
-                    <div className="session-empty">{t.noConversations}</div>
-                  )}
-                  {(showArchived ? archivedConversations : conversations).map(
-                    (conversation, index, list) => {
-                      const active = conversation.id === currentConversationId;
-                      const revealed =
-                        hoveredConversationId === conversation.id ||
-                        focusedConversationId === conversation.id;
-                      const group = conversation.pinned
-                        ? t.pin
-                        : t.conversationHistory;
-                      return (
-                        <div key={conversation.id}>
-                          {!showArchived &&
-                            conversations.some((row) => row.pinned) &&
-                            (index === 0 ||
-                              list[index - 1].pinned !==
-                                conversation.pinned) && (
-                              <div className="session-group">{group}</div>
-                            )}
-                          <div
-                            className={`session-item${active ? " active" : ""}`}
-                            onMouseEnter={() =>
-                              setHoveredConversationId(conversation.id)
-                            }
-                            onMouseLeave={() => setHoveredConversationId("")}
-                            onFocus={() =>
-                              setFocusedConversationId(conversation.id)
-                            }
-                            onBlur={() => setFocusedConversationId("")}
-                          >
-                            <div className="session-row">
-                              {editingId === conversation.id ? (
-                                <input
-                                  autoFocus
-                                  value={draftTitle}
-                                  maxLength={200}
-                                  onChange={(e) =>
-                                    setDraftTitle(e.target.value)
-                                  }
-                                  onBlur={() => saveTitle(conversation.id)}
-                                  onKeyDown={(e) => {
-                                    if (e.key === "Enter")
-                                      saveTitle(conversation.id);
-                                    if (e.key === "Escape") setEditingId("");
-                                  }}
-                                />
-                              ) : (
-                                <button
-                                  type="button"
-                                  className="session-open"
-                                  title={conversation.title}
-                                  onClick={() => {
-                                    onNavigateChat?.();
-                                    void openConversation(conversation.id);
-                                  }}
-                                  disabled={sending}
-                                >
-                                  {conversation.pinned && (
-                                    <PushpinFilled aria-hidden="true" />
-                                  )}{" "}
-                                  {conversation.title}
-                                  {conversation.resumable === false &&
-                                    ` (${t.sessionExpired})`}
-                                </button>
-                              )}
-                              {showArchived ? (
-                                <>
-                                  <button
-                                    type="button"
-                                    className="session-archive-action"
-                                    onClick={() =>
-                                      void patchConversation(conversation.id, {
-                                        archived: false,
-                                      })
-                                    }
-                                  >
-                                    {t.restore}
-                                  </button>
-                                  <button
-                                    type="button"
-                                    className="session-archive-action"
-                                    onClick={() =>
-                                      setConfirmingDeleteId(conversation.id)
-                                    }
-                                  >
-                                    {t.deleteAction}
-                                  </button>
-                                </>
-                              ) : (
-                                <div className="session-menu-wrap">
-                                  <button
-                                    type="button"
-                                    className={`session-menu-toggle${revealed ? " visible" : ""}`}
-                                    aria-label={t.conversationMenu}
-                                    onClick={() =>
-                                      setMenuId(
-                                        menuId === conversation.id
-                                          ? ""
-                                          : conversation.id,
-                                      )
-                                    }
-                                  >
-                                    <MoreOutlined />
-                                  </button>
-                                  {menuId === conversation.id && (
-                                    <div className="session-menu">
-                                      <button
-                                        type="button"
-                                        onClick={() => {
-                                          setMenuId("");
-                                          setDraftTitle(conversation.title);
-                                          setEditingId(conversation.id);
-                                        }}
-                                      >
-                                        <EditOutlined aria-hidden="true" />{" "}
-                                        {t.rename}
-                                      </button>
-                                      <button
-                                        type="button"
-                                        onClick={() => {
-                                          setMenuId("");
-                                          void patchConversation(
-                                            conversation.id,
-                                            { pinned: !conversation.pinned },
-                                          );
-                                        }}
-                                      >
-                                        <PushpinOutlined aria-hidden="true" />{" "}
-                                        {conversation.pinned ? t.unpin : t.pin}
-                                      </button>
-                                      <button
-                                        type="button"
-                                        onClick={() => {
-                                          setMenuId("");
-                                          void patchConversation(
-                                            conversation.id,
-                                            { archived: true },
-                                          );
-                                        }}
-                                      >
-                                        <InboxOutlined aria-hidden="true" />{" "}
-                                        {t.archive}
-                                      </button>
-                                      <button
-                                        type="button"
-                                        className="danger"
-                                        onClick={() => {
-                                          setMenuId("");
-                                          setConfirmingDeleteId(
-                                            conversation.id,
-                                          );
-                                        }}
-                                      >
-                                        <DeleteOutlined aria-hidden="true" />{" "}
-                                        {t.deleteAction}
-                                      </button>
-                                    </div>
-                                  )}
-                                </div>
-                              )}
-                            </div>
-                            <span className="session-meta">
-                              {shortTime(conversation.updated_at)}
-                            </span>
-                          </div>
-                        </div>
-                      );
-                    },
-                  )}
-                  <button
-                    type="button"
-                    className="session-archive-link"
-                    onClick={() => setShowArchived(!showArchived)}
-                  >
-                    {showArchived
-                      ? t.back
-                      : `${t.archived} (${archivedConversations.length})`}
-                  </button>
-                  <Modal
-                    open={Boolean(confirmingDeleteId)}
-                    title={t.deleteConversation}
-                    okText={t.confirmDeleteConversation}
-                    cancelText={t.cancelDeleteConversation}
-                    confirmLoading={Boolean(deletingConversationId)}
-                    onCancel={() => setConfirmingDeleteId("")}
-                    onOk={() => void deleteConversation(confirmingDeleteId)}
-                  />
-                </div>
-              </aside>
-            );
-            return sessionTarget
-              ? createPortal(sessions, sessionTarget)
-              : sessions;
-          })()}
+          {sessionTarget ? (
+            createPortal(
+              <ConversationSidebar
+                messages={t}
+                conversations={conversations}
+                archivedConversations={archivedConversations}
+                showArchived={showArchived}
+                currentConversationId={currentConversationId}
+                sessionTarget={sessionTarget}
+                sessionError={sessionError}
+                sending={sending}
+                menuId={menuId}
+                setMenuId={setMenuId}
+                editingId={editingId}
+                setEditingId={setEditingId}
+                draftTitle={draftTitle}
+                setDraftTitle={setDraftTitle}
+                hoveredConversationId={hoveredConversationId}
+                setHoveredConversationId={setHoveredConversationId}
+                focusedConversationId={focusedConversationId}
+                setFocusedConversationId={setFocusedConversationId}
+                confirmingDeleteId={confirmingDeleteId}
+                setConfirmingDeleteId={setConfirmingDeleteId}
+                deletingConversationId={deletingConversationId}
+                onNewConversation={newConversation}
+                onOpenConversation={(id) => {
+                  onNavigateChat?.();
+                  void openConversation(id);
+                }}
+                onPatchConversation={(id, patch) =>
+                  void patchConversation(id, patch)
+                }
+                onSaveTitle={saveTitle}
+                onDeleteConversation={(id) => void deleteConversation(id)}
+                onToggleArchived={() => setShowArchived(!showArchived)}
+                onNavigateChat={onNavigateChat}
+              />,
+              sessionTarget,
+            )
+          ) : (
+            <ConversationSidebar
+              messages={t}
+              conversations={conversations}
+              archivedConversations={archivedConversations}
+              showArchived={showArchived}
+              currentConversationId={currentConversationId}
+              sessionTarget={sessionTarget}
+              sessionError={sessionError}
+              sending={sending}
+              menuId={menuId}
+              setMenuId={setMenuId}
+              editingId={editingId}
+              setEditingId={setEditingId}
+              draftTitle={draftTitle}
+              setDraftTitle={setDraftTitle}
+              hoveredConversationId={hoveredConversationId}
+              setHoveredConversationId={setHoveredConversationId}
+              focusedConversationId={focusedConversationId}
+              setFocusedConversationId={setFocusedConversationId}
+              confirmingDeleteId={confirmingDeleteId}
+              setConfirmingDeleteId={setConfirmingDeleteId}
+              deletingConversationId={deletingConversationId}
+              onNewConversation={newConversation}
+              onOpenConversation={(id) => {
+                onNavigateChat?.();
+                void openConversation(id);
+              }}
+              onPatchConversation={(id, patch) =>
+                void patchConversation(id, patch)
+              }
+              onSaveTitle={saveTitle}
+              onDeleteConversation={(id) => void deleteConversation(id)}
+              onToggleArchived={() => setShowArchived(!showArchived)}
+              onNavigateChat={onNavigateChat}
+            />
+          )}
           <div className="chat-conversation">
             <header className="chat-header">
               <div className="chat-header-title">
