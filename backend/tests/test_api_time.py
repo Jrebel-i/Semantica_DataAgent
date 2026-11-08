@@ -77,6 +77,7 @@ def test_rest_time_fields_have_utc_offset(client):
         GenerationPointer,
         KnowledgeGap,
         KnowledgeGeneration,
+        ProjectAudit,
         Provider,
         Token,
         Turn,
@@ -126,6 +127,14 @@ def test_rest_time_fields_have_utc_offset(client):
                     owner_id=owner.id,
                     question="question",
                     missing="missing",
+                    created_at=datetime(2026, 1, 1),
+                ),
+                ProjectAudit(
+                    project_id="default",
+                    actor_id=owner.id,
+                    actor_name="time",
+                    action="project.create",
+                    detail="{}",
                     created_at=datetime(2026, 1, 1),
                 ),
                 KnowledgeGeneration(name="naive", created_at="2026-01-01T00:00:00"),
@@ -188,6 +197,9 @@ def test_rest_time_fields_have_utc_offset(client):
             "/api/v1/conversations/conversation", headers=headers
         ).json(),
         "projects": c.get("/api/v1/projects", headers=headers).json(),
+        "project_audit": c.get(
+            "/api/v1/projects/default/audit", headers=headers
+        ).json(),
     }
     failures = {
         name: problems
