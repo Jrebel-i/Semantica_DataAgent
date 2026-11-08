@@ -84,7 +84,7 @@ export function PlatformSettings({
     }
   }
   return (
-    <section className="config-section">
+    <section className="config-section admin-page">
       <div className="page-header">
         <div>
           <h1 className="page-title">{t.platformSettings}</h1>

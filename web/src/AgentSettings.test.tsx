@@ -56,6 +56,9 @@ test("没有 provider 时显示空提示且不重复页面标题", async () => {
   );
   render(<AgentSettings token="token" messages={getMessages("zh")} />);
   expect(await screen.findByText("尚未配置 provider")).toBeTruthy();
+  expect(
+    screen.getByText("尚未配置 provider").closest(".empty-state"),
+  ).not.toBeNull();
   expect(screen.getAllByRole("heading", { name: "Agent 配置" })).toHaveLength(
     1,
   );

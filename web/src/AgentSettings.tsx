@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Alert, Button, Input } from "antd";
+import { Alert, Button, Checkbox, Input } from "antd";
 import type { Messages } from "./i18n";
 import type { components } from "./api";
 import { parseAgentProfiles, type AgentProfiles } from "./agentProfiles";
@@ -108,7 +108,7 @@ export function AgentSettings({
     providers.find((provider) => provider.id === values.assistant_provider_id)
       ?.models ?? [];
   return (
-    <section className="config-section">
+    <section className="config-section admin-page">
       <div className="page-header">
         <div>
           <h1 className="page-title">{t.agentSettings}</h1>
@@ -205,41 +205,36 @@ export function AgentSettings({
               <span className="field-label">{t.allowedProviders}</span>
               <div className="provider-grid">
                 {providers.length === 0 && (
-                  <p className="muted">{t.noProviders}</p>
+                  <div className="empty-state">{t.noProviders}</div>
                 )}
                 {providers.map((provider) => {
                   const checked = profile.providers.includes(provider.id);
                   return (
-                    <label
+                    <Checkbox
                       className={`provider-option${checked ? " selected" : ""}`}
                       key={provider.id}
+                      checked={checked}
+                      onChange={(event) => {
+                        const ids = event.target.checked
+                          ? [...profile.providers, provider.id]
+                          : profile.providers.filter(
+                              (id) => id !== provider.id,
+                            );
+                        update({
+                          providers: ids,
+                          default_provider: ids.includes(
+                            profile.default_provider,
+                          )
+                            ? profile.default_provider
+                            : "",
+                          default_model: ids.includes(profile.default_provider)
+                            ? profile.default_model
+                            : "",
+                        });
+                      }}
                     >
-                      <input
-                        type="checkbox"
-                        checked={checked}
-                        onChange={(event) => {
-                          const ids = event.target.checked
-                            ? [...profile.providers, provider.id]
-                            : profile.providers.filter(
-                                (id) => id !== provider.id,
-                              );
-                          update({
-                            providers: ids,
-                            default_provider: ids.includes(
-                              profile.default_provider,
-                            )
-                              ? profile.default_provider
-                              : "",
-                            default_model: ids.includes(
-                              profile.default_provider,
-                            )
-                              ? profile.default_model
-                              : "",
-                          });
-                        }}
-                      />
-                      <span>{provider.name}</span>
-                    </label>
+                      {provider.name}
+                    </Checkbox>
                   );
                 })}
               </div>

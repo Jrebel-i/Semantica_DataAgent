@@ -346,7 +346,7 @@ button {
   font-size: 14px;
   font-weight: 600;
 }
-.form-card > label {
+.form-card > label:not(.ant-checkbox-wrapper):not(.ant-radio-wrapper) {
   display: grid;
   grid-template-columns: 180px minmax(0, 1fr);
   align-items: center;
@@ -2328,6 +2328,7 @@ code {
   font-family: var(--font-mono);
 }
 
+
 /* Shared conversation navigation */
 .chat-page-host {
   flex: 1 1 auto;
@@ -2896,4 +2897,227 @@ code {
 .session-row input {
   min-width: 0;
   width: 100%;
+}
+/* 管理类页面 */
+:root {
+  --admin-space-8: 8px;
+  --admin-space-12: 12px;
+  --admin-space-16: 16px;
+  --admin-space-24: 24px;
+  --status-bar-height: 32px;
+}
+.workspace-content:has(> .status-bar) > .page-content:not(.page-content--chat) {
+  padding-bottom: calc(var(--status-bar-height) + var(--admin-space-24));
+}
+.admin-page .knowledge-table-scroll {
+  width: 100%;
+  overflow-x: auto;
+}
+.admin-page .knowledge-table-scroll .data-table {
+  min-width: 760px;
+}
+.admin-page .knowledge-table-scroll .data-table th.field-name,
+.admin-page .knowledge-table-scroll .data-table td.field-name {
+  min-width: 180px;
+  white-space: nowrap;
+}
+.admin-page .knowledge-table-scroll .data-table th.field-type,
+.admin-page .knowledge-table-scroll .data-table td.field-type {
+  min-width: 130px;
+  white-space: nowrap;
+}
+.admin-page .knowledge-table-scroll .data-table td.field-name button {
+  white-space: nowrap;
+}
+.admin-page .knowledge-table-scroll .data-table td.field-comment,
+.admin-page .knowledge-table-scroll .data-table td.field-dimension {
+  overflow-wrap: anywhere;
+}
+.admin-page.stack {
+  gap: var(--admin-space-16);
+}
+.admin-page.stack > .card,
+.admin-page.stack > .section-card,
+.admin-page.stack > .form-card {
+  margin-bottom: 0;
+}
+.admin-page .section-card {
+  padding: var(--admin-space-16) var(--admin-space-24);
+  margin-bottom: var(--admin-space-16);
+}
+.admin-page .form-card {
+  gap: var(--admin-space-16);
+  padding: var(--admin-space-16) var(--admin-space-24);
+  margin-bottom: var(--admin-space-16);
+}
+.admin-page .build-stack > .section-card,
+.admin-page .source-stack > .section-card,
+.admin-page .agent-card {
+  margin-bottom: 0;
+}
+.admin-page .agent-card,
+.admin-page .build-detail {
+  padding: var(--admin-space-16) var(--admin-space-24);
+}
+.admin-page .page-header {
+  margin-bottom: var(--admin-space-24);
+}
+.admin-page .card-title-row {
+  gap: var(--admin-space-12);
+  margin-bottom: var(--admin-space-16);
+}
+.admin-page .grid-2,
+.admin-page .grid-3 {
+  gap: var(--admin-space-16);
+}
+.admin-page .field {
+  gap: var(--admin-space-8);
+}
+.admin-page .field-row {
+  gap: var(--admin-space-16);
+}
+.admin-page .save-bar {
+  gap: var(--admin-space-12);
+  margin-top: var(--admin-space-16);
+  padding-top: var(--admin-space-16);
+}
+.admin-page .section-card > .stack {
+  gap: var(--admin-space-16);
+}
+.admin-page .empty-state,
+.admin-page .ant-empty {
+  gap: var(--admin-space-8);
+  min-height: 120px;
+  margin: 0;
+  padding: var(--admin-space-24);
+  border: 1px dashed var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+  color: var(--ink-3);
+}
+.admin-page .ant-table-placeholder .ant-table-cell {
+  padding: 0;
+}
+.admin-page .ant-empty-description {
+  color: var(--ink-3);
+  font-size: 13px;
+}
+.admin-page .provider-grid,
+.admin-page .correction-list {
+  gap: var(--admin-space-8);
+}
+.admin-page .search-form {
+  gap: var(--admin-space-12);
+  padding: var(--admin-space-16) var(--admin-space-24);
+}
+.admin-page .search-result,
+.admin-page .gap-card {
+  padding: var(--admin-space-12) var(--admin-space-16);
+}
+.admin-page .page-title,
+.admin-page .detail-title {
+  font-family: var(--font-serif);
+}
+.admin-page .card-title,
+.admin-page .detail-section-title,
+.admin-page .ant-card-head-title,
+.admin-page .agent-card-head h3,
+.admin-page .search-result h3,
+.admin-page .gap-card h3,
+.admin-page .plugin-card h3,
+.admin-page label,
+.admin-page .field-label {
+  font-family: var(--font-sans);
+}
+.admin-page .card-title,
+.admin-page .detail-section-title,
+.admin-page .agent-card-head h3,
+.admin-page .search-result h3,
+.admin-page .gap-card h3,
+.admin-page .plugin-card h3 {
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+.admin-page .ant-card-head-title {
+  font-size: 15px;
+  font-weight: 600;
+}
+.page-content:has(> .config-section.admin-page) .card-title,
+.page-content:has(> .config-section.admin-page) .ant-card-head-title,
+.page-content:has(> .config-section.admin-page) label,
+.page-content:has(> .config-section.admin-page) .field-label {
+  font-family: var(--font-sans);
+}
+.page-content:has(> .config-section.admin-page) .card-title {
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+.admin-page .file-picker.ant-upload-wrapper {
+  display: block;
+  min-height: 0;
+  overflow: visible;
+  border: 0;
+  background: transparent;
+  cursor: default;
+}
+.admin-page .file-picker.ant-upload-wrapper:hover {
+  border-color: transparent;
+}
+.admin-page .file-picker .ant-upload {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-height: 36px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--white);
+  cursor: pointer;
+  transition:
+    border-color 0.14s ease,
+    box-shadow 0.14s ease;
+}
+.admin-page .file-picker .ant-upload:hover {
+  border-color: var(--teal);
+}
+.admin-page .file-picker .ant-upload:focus-within {
+  border-color: var(--teal);
+  box-shadow: 0 0 0 2px var(--focus-ring);
+}
+.admin-page .file-picker .file-picker-value {
+  flex: 1 1 auto;
+}
+.admin-page .ant-checkbox-wrapper {
+  align-items: center;
+  color: var(--ink);
+  font-size: 13px;
+}
+.admin-page .ant-checkbox + span {
+  padding-inline: 8px 0;
+}
+.admin-page .plugin-enable {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ink);
+}
+.admin-page .plugin-param {
+  display: grid;
+  grid-template-columns: 180px minmax(0, 1fr);
+  align-items: center;
+  gap: 16px;
+}
+.admin-page .plugin-param > span:last-of-type {
+  min-width: 0;
+}
+.admin-page .plugin-param > span:last-of-type > * {
+  max-width: 100%;
+}
+.admin-page .plugin-param .ant-checkbox-wrapper {
+  justify-self: start;
+}
+.admin-page .form-card > .ant-checkbox-wrapper {
+  align-self: flex-start;
 }

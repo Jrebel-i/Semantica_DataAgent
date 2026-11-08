@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Alert } from "antd";
+import { Alert, Checkbox, Upload } from "antd";
 import type { components } from "./api";
 import type { Messages } from "./i18n";
 
@@ -64,21 +64,25 @@ function FilePicker({
   directory?: boolean;
   onChange: (files: File[]) => void;
 }) {
+  const id = directory ? "source-folder-picker" : "source-file-picker";
   const value = files.length
     ? files.length === 1
       ? files[0].name
       : `${files.length} ${countLabel}`
     : emptyLabel;
   return (
-    <label className="file-picker">
-      <input
-        className="file-picker-input"
-        aria-label={label}
-        type="file"
-        multiple
-        {...(directory ? ({ webkitdirectory: "" } as object) : {})}
-        onChange={(event) => onChange(Array.from(event.target.files ?? []))}
-      />
+    <Upload
+      id={id}
+      className="file-picker"
+      aria-label={label}
+      multiple
+      directory={directory}
+      showUploadList={false}
+      beforeUpload={(_file, selected) => {
+        onChange(selected);
+        return false;
+      }}
+    >
       <span className="file-picker-button">{chooseLabel}</span>
       <span
         className={`file-picker-value${files.length ? "" : " is-empty"}`}
@@ -90,7 +94,7 @@ function FilePicker({
       >
         {value}
       </span>
-    </label>
+    </Upload>
   );
 }
 function encoded(file: File): Promise<string> {
@@ -198,7 +202,7 @@ export function SourcePage({
     }
   }
   return (
-    <section className="stack">
+    <section className="stack admin-page">
       <div className="page-header">
         <div>
           <h1 className="page-title">{t.source}</h1>
@@ -245,14 +249,13 @@ export function SourcePage({
                   onChange={(next) => setFiles(next)}
                 />
               </div>
-              <label className="plugin-enable">
-                <input
-                  type="checkbox"
-                  checked={replace}
-                  onChange={(e) => setReplace(e.target.checked)}
-                />
+              <Checkbox
+                className="plugin-enable"
+                checked={replace}
+                onChange={(e) => setReplace(e.target.checked)}
+              >
                 {t.sourceReplace}
-              </label>
+              </Checkbox>
               <div className="save-bar" style={{ marginTop: 0 }}>
                 <button type="button" onClick={() => void send()}>
                   {t.sourceUpload}
