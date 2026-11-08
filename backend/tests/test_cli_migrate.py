@@ -254,9 +254,19 @@ OLD_TABLES = (
 )
 
 
-def _table_rows(path: Path, table: str) -> list[tuple]:
+def _table_columns(path: Path, table: str) -> list[str]:
     with sqlite3.connect(path) as db:
-        return sorted(db.execute(f"SELECT * FROM {table}").fetchall(), key=repr)
+        return [row[1] for row in db.execute(f"PRAGMA table_info({table})")]
+
+
+def _table_rows(
+    path: Path, table: str, columns: list[str] | None = None
+) -> list[tuple]:
+    with sqlite3.connect(path) as db:
+        if columns is None:
+            return sorted(db.execute(f"SELECT * FROM {table}").fetchall(), key=repr)
+        names = ", ".join(columns)
+        return sorted(db.execute(f"SELECT {names} FROM {table}").fetchall(), key=repr)
 
 
 def _previous_release_database(path: Path) -> None:
@@ -307,11 +317,14 @@ def _previous_release_database(path: Path) -> None:
 def test_project_migration_preserves_existing_data(database):
     _previous_release_database(database)
     before = {table: _table_rows(database, table) for table in OLD_TABLES}
+    old_columns = {table: _table_columns(database, table) for table in OLD_TABLES}
 
     assert cli.main(["migrate"]) == 0
 
     assert _schema_version(database) == "0028"
-    assert {table: _table_rows(database, table) for table in OLD_TABLES} == before
+    assert {
+        table: _table_rows(database, table, old_columns[table]) for table in OLD_TABLES
+    } == before
     with sqlite3.connect(database) as db:
         assert db.execute("SELECT id, name, type, status FROM projects").fetchall() == [
             ("default", "业务数据", "warehouse", "active")
