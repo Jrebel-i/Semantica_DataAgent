@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import signal
 import subprocess
+from types import SimpleNamespace
 
 import pytest
 from cryptography.fernet import Fernet
@@ -296,9 +297,8 @@ def test_interrupted_project_approval_recovers_only_that_project(
             corrections._finalize = finalize_then_die
         corrections.approve(
             proposal,
-            "admin",
+            SimpleNamespace(project_id=a.id),
             reviewer,
-            project_id=a.id,
         )
         os._exit(2)
     _, status = os.waitpid(pid, 0)

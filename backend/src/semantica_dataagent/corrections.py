@@ -354,13 +354,8 @@ def approve(
     scope: Annotated[project_context.ProjectContext, Depends(admin_project_scope)],
     requester: Annotated[object, Depends(rest_requester)],
     body: Approval | None = None,
-    project_id: str | None = None,
 ):
-    project_id = (
-        project_id
-        or getattr(scope, "project_id", None)
-        or project_context.DEFAULT_PROJECT_ID
-    )
+    project_id = scope.project_id
     with sessions().begin() as db:
         db.execute(text("BEGIN IMMEDIATE"))
         row = _pending(db, proposal_id, project_id)

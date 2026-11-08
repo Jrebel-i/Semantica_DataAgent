@@ -2547,7 +2547,6 @@ export interface operations {
     approve_api_v1_corrections__proposal_id__approve_post: {
         parameters: {
             query?: {
-                project_id?: string | null;
                 project?: string | null;
             };
             header?: never;
