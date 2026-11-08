@@ -189,6 +189,65 @@ def test_pull_intervals_are_collected_per_project(tmp_path, monkeypatch):
     assert intervals() == {project_id: 7}
 
 
+def test_project_puller_interval_is_saved_and_restored(tmp_path, monkeypatch):
+    from semantica_dataagent.app import app
+    from semantica_dataagent.cli import initialize
+    from semantica_dataagent.scheduler import pull_scheduler
+
+    monkeypatch.setenv("DATAAGENT_DB_PATH", str(tmp_path / "project-pull.db"))
+    monkeypatch.setenv("DATAAGENT_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    token = initialize()
+    headers = {"Authorization": f"Bearer {token}"}
+    configured = []
+    original_configure = pull_scheduler.configure
+
+    def observe_configure(interval, project_id="default"):
+        configured.append((project_id, interval))
+        original_configure(interval, project_id=project_id)
+
+    monkeypatch.setattr(pull_scheduler, "configure", observe_configure)
+    with TestClient(app, headers=headers) as client:
+        created = client.post(
+            "/api/v1/projects", json={"name": "Scheduled Pull", "type": "warehouse"}
+        )
+        assert created.status_code == 201, created.text
+        project_id = created.json()["id"]
+        saved = client.put(
+            f"/api/v1/projects/{project_id}/adapters",
+            json={
+                "adapters": [
+                    {
+                        "id": "dtb",
+                        "enabled": True,
+                        "parameters": {},
+                        "pull": {
+                            "enabled": True,
+                            "parameters": {
+                                "url": "https://dtb.example",
+                                "interval_seconds": 9,
+                            },
+                        },
+                    }
+                ]
+            },
+        )
+        assert saved.status_code == 200, saved.text
+
+    assert (project_id, 9) in configured
+
+    starts = []
+    original_start = pull_scheduler.start
+
+    def observe_start(interval, project_id="default"):
+        starts.append((project_id, interval))
+        original_start(interval, project_id=project_id)
+
+    monkeypatch.setattr(pull_scheduler, "start", observe_start)
+    with TestClient(app):
+        pass
+    assert (project_id, 9) in starts
+
+
 def test_each_project_has_its_own_schedule_clock():
     from semantica_dataagent.scheduler import Scheduler
 
