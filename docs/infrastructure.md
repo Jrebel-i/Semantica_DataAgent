@@ -119,7 +119,7 @@ The script performs Cypher, creates and deletes a uniquely named Milvus collecti
 
 ## 项目隔离与目录
 
-项目共享同一套 Neo4j、Milvus 与 embedding 服务，但知识代名前缀为 `<项目 id>_`，Milvus 每代一个 `sda_<代名>` 集合；每代的 Neo4j 节点仍以 `generation` 属性隔离。项目 id 由系统生成（名称转小写英文数字，冲突加后缀），只含小写字母和数字，最长 24 字符。清理任务只处理本项目的代。
+项目共享同一套 Neo4j、Milvus 与 embedding 服务，但知识代名前缀为 `<项目 id>_`，Milvus 每代一个 `sda_<代名>` 集合；每代的 Neo4j 节点仍以 `generation` 属性隔离。项目 id 由系统生成（名称转小写英文数字；没有 ASCII 字母数字时回退为 `project`、`project2`……；冲突加后缀），只含小写字母和数字，最长 24 字符。清理任务只处理本项目的代。
 
 普通项目的源目录由 `DATAAGENT_PROJECTS_ROOT` 决定：设置时取 `$DATAAGENT_PROJECTS_ROOT/<项目 id>/source`，未设置时取 `DATAAGENT_DB_PATH` 所在目录下的 `projects/<项目 id>/source`。集群内数据库在 `/data/dataagent.db`，因此默认落在 `/data/projects/<项目 id>/source`（同一数据卷）；默认项目仍使用设置里的 `/data/source`。创建项目时会建好源目录，git 仓库在第一次上传时按现有逻辑初始化。构建队列仍只有一个工作线程，项目之间串行。
 
