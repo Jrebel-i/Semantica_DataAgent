@@ -412,3 +412,6 @@ print(json.dumps({{"type": "agent_settled"}}), flush=True)
     assert len(payload["images"]) == 1
     assert payload["images"][0]["mimeType"] == "image/png"
     assert base64.b64decode(payload["images"][0]["data"]) == PNG
+    models = json.loads((workspace / "config" / "models.json").read_text())
+    model_entry = models["providers"]["dataagent"]["models"][0]
+    assert model_entry["input"] == ["text", "image"]

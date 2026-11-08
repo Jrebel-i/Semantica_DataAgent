@@ -164,19 +164,20 @@ class PiRunner:
         work = request.workspace / "work"
         for directory in (config, sessions, work):
             directory.mkdir(parents=True, exist_ok=True)
+        model_entry = {
+            "id": request.model,
+            "name": request.model,
+            "contextWindow": 128000,
+            "maxTokens": 8192,
+        }
+        if any(attachment.is_image for attachment in request.attachments):
+            model_entry["input"] = ["text", "image"]
         provider = {
             "name": request.provider.name,
             "baseUrl": model_url or request.provider.base_url,
             "api": request.provider.type,
             "apiKey": f"${KEY_ENV}" if request.provider.api_key else "unused",
-            "models": [
-                {
-                    "id": request.model,
-                    "name": request.model,
-                    "contextWindow": 128000,
-                    "maxTokens": 8192,
-                }
-            ],
+            "models": [model_entry],
         }
         models = {"providers": {PROVIDER_KEY: provider}}
         mcp = {
