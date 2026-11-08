@@ -857,12 +857,42 @@ class MCPAuthentication:
                     headers=exc.headers,
                 )(scope, receive, send)
                 return
-            from .mcp_context import CONVERSATION_HEADER, TURN_HEADER, bind_mcp_context
+            from .mcp_context import (
+                CONVERSATION_HEADER,
+                PROJECT_HEADER,
+                PROJECT_QUERY,
+                TURN_HEADER,
+                bind_mcp_context,
+            )
+            from .mcp_contract import ToolInvalidInput
+            from .mcp_project import resolve_mcp_project
+
+            query_project = request.query_params.get(PROJECT_QUERY)
+            header_project = request.headers.get(PROJECT_HEADER)
+            if (
+                query_project is not None
+                and header_project is not None
+                and query_project != header_project
+            ):
+                project_id, project_error = None, "请只提供一种项目选择"
+            else:
+                requested = (
+                    query_project if query_project is not None else header_project
+                )
+                try:
+                    project_id = resolve_mcp_project(
+                        requester, requester.project_id, requested
+                    )
+                    project_error = None
+                except ToolInvalidInput as exc:
+                    project_id, project_error = None, str(exc)
 
             with bind_mcp_context(
                 requester,
                 request.headers.get(CONVERSATION_HEADER),
                 request.headers.get(TURN_HEADER),
+                project_id=project_id,
+                project_error=project_error,
             ):
                 await self.inner.state.mcp_app(scope, receive, send)
             return
