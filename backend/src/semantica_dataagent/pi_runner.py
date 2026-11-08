@@ -1,5 +1,6 @@
 """pi CLI adapter using RPC mode with a per-conversation config directory."""
 
+import base64
 import json
 import os
 from dataclasses import dataclass
@@ -272,15 +273,25 @@ class PiRunner:
             ) as process:
                 parser = PiEventParser()
                 secrets = request_secrets(request)
-                process.write(
-                    (
-                        json.dumps(
-                            {"id": "turn", "type": "prompt", "message": request.prompt},
-                            ensure_ascii=False,
-                        )
-                        + "\n"
-                    ).encode()
-                )
+                payload = {
+                    "id": "turn",
+                    "type": "prompt",
+                    "message": request.prompt,
+                }
+                images = [
+                    {
+                        "type": "image",
+                        "data": base64.b64encode(
+                            (request.workspace / "work" / attachment.path).read_bytes()
+                        ).decode("ascii"),
+                        "mimeType": attachment.mime_type,
+                    }
+                    for attachment in request.attachments
+                    if attachment.is_image
+                ]
+                if images:
+                    payload["images"] = images
+                process.write((json.dumps(payload, ensure_ascii=False) + "\n").encode())
                 await process.drain()
                 while True:
                     line = await process.readline()

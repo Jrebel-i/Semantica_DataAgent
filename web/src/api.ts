@@ -158,6 +158,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/conversations/ask-with-attachments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Ask With Attachments */
+        post: operations["ask_with_attachments_api_v1_conversations_ask_with_attachments_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/conversations/{conversation_id}": {
         parameters: {
             query?: never;
@@ -1101,6 +1118,25 @@ export interface components {
         AutoBuildView: {
             /** Enabled */
             enabled: boolean;
+        };
+        /** Body_ask_with_attachments_api_v1_conversations_ask_with_attachments_post */
+        Body_ask_with_attachments_api_v1_conversations_ask_with_attachments_post: {
+            /** Agent */
+            agent?: string | null;
+            /** Attachments */
+            attachments?: string[] | null;
+            /** Conversation Id */
+            conversation_id?: string | null;
+            /** Effort */
+            effort?: string | null;
+            /** Model */
+            model?: string | null;
+            /** Project */
+            project?: string | null;
+            /** Provider Id */
+            provider_id?: string | null;
+            /** Question */
+            question: string;
         };
         /** BuildLog */
         BuildLog: {
@@ -2383,6 +2419,39 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["AskRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    ask_with_attachments_api_v1_conversations_ask_with_attachments_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_ask_with_attachments_api_v1_conversations_ask_with_attachments_post"];
             };
         };
         responses: {

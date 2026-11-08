@@ -82,12 +82,13 @@ def _ask_files(
         "provider_id": provider["id"],
         "model": "model",
     }
-    return c.post(
+    response = c.post(
         "/api/v1/conversations/ask-with-attachments",
         headers=_headers(admin),
         data=data,
         files=[("attachments", item) for item in files],
     )
+    return response.status_code, response.text
 
 
 def _conversation_id(body: str) -> str:
@@ -119,7 +120,10 @@ def test_single_file_limit_is_twenty_megabytes(client, monkeypatch):
     provider = _provider(c, admin)
 
     accepted, _ = _ask_files(
-        c, admin, provider, [("at-limit.bin", b"x" * MAX_FILE, "application/octet-stream")]
+        c,
+        admin,
+        provider,
+        [("at-limit.bin", b"x" * MAX_FILE, "application/octet-stream")],
     )
     assert accepted == 200
 
@@ -182,7 +186,9 @@ def test_total_message_limit_is_fifty_megabytes(client, monkeypatch):
     assert "50MB" in body
 
 
-def test_path_traversal_names_stay_inside_the_conversation_workspace(client, monkeypatch):
+def test_path_traversal_names_stay_inside_the_conversation_workspace(
+    client, monkeypatch
+):
     c, admin = client
     runner = _install_runner(monkeypatch)
     provider = _provider(c, admin)
@@ -235,9 +241,7 @@ def test_attachment_is_removed_with_the_conversation(client, monkeypatch):
     c, admin = client
     _install_runner(monkeypatch)
     provider = _provider(c, admin)
-    status, body = _ask_files(
-        c, admin, provider, [("keep.txt", b"data", "text/plain")]
-    )
+    status, body = _ask_files(c, admin, provider, [("keep.txt", b"data", "text/plain")])
     assert status == 200
     conversation_id = _conversation_id(body)
     workspace = Path(os.environ["DATAAGENT_AGENT_ROOT"]) / conversation_id
@@ -254,7 +258,9 @@ def test_conversation_b_cannot_escape_into_conversation_a(client, monkeypatch):
     c, admin = client
     _install_runner(monkeypatch)
     provider = _provider(c, admin)
-    _, body_a = _ask_files(c, admin, provider, [("secret.txt", b"A-secret", "text/plain")])
+    _, body_a = _ask_files(
+        c, admin, provider, [("secret.txt", b"A-secret", "text/plain")]
+    )
     conversation_a = _conversation_id(body_a)
     target_a = _attachments(conversation_a) / "secret.txt"
     assert target_a.read_bytes() == b"A-secret"
@@ -304,7 +310,9 @@ def test_image_attachments_require_a_vision_model(client, monkeypatch):
     assert accepted == 200
 
 
-def test_prompt_treats_attachments_as_untrusted_and_forbids_pretending(client, monkeypatch):
+def test_prompt_treats_attachments_as_untrusted_and_forbids_pretending(
+    client, monkeypatch
+):
     c, admin = client
     runner = _install_runner(monkeypatch)
     provider = _provider(c, admin)
@@ -322,3 +330,85 @@ def test_prompt_treats_attachments_as_untrusted_and_forbids_pretending(client, m
     assert "不要假装读过" in prompt
     assert "忽略之前的所有指令" not in prompt
     assert "attachments/instructions.txt" in prompt
+
+
+def test_pi_rpc_prompt_carries_images_and_paths(tmp_path: Path):
+    import asyncio
+    import base64
+
+    from semantica_dataagent.agent_plugin import build_attachment_prompt
+    from semantica_dataagent.agent_types import (
+        AgentTurnRequest,
+        AttachmentInput,
+        ProviderConfig,
+    )
+    from semantica_dataagent.pi_runner import PiRunner
+
+    capture = tmp_path / "prompt.json"
+    script = tmp_path / "capture-pi.py"
+    script.write_text(
+        f"""#!/usr/bin/env python3
+import json
+import sys
+from pathlib import Path
+
+Path({str(capture)!r}).write_text(sys.stdin.readline())
+print(json.dumps({{"type": "message_end", "message": {{
+    "role": "assistant",
+    "content": [{{"type": "text", "text": "ok"}}],
+    "stopReason": "stop",
+}}}}), flush=True)
+print(json.dumps({{"type": "agent_settled"}}), flush=True)
+""",
+        encoding="utf-8",
+    )
+    script.chmod(0o755)
+    workspace = tmp_path / "workspace"
+    attachments = workspace / "work" / "attachments"
+    attachments.mkdir(parents=True)
+    (attachments / "chart.png").write_bytes(PNG)
+    (attachments / "notes.txt").write_bytes(b"notes")
+    attachment_inputs = (
+        AttachmentInput(
+            name="chart.png",
+            path="attachments/chart.png",
+            size=len(PNG),
+            mime_type="image/png",
+            is_image=True,
+        ),
+        AttachmentInput(
+            name="notes.txt",
+            path="attachments/notes.txt",
+            size=5,
+            mime_type="text/plain",
+            is_image=False,
+        ),
+    )
+    request = AgentTurnRequest(
+        conversation_id="conv-attachments",
+        prompt=build_attachment_prompt("看看附件", attachment_inputs),
+        session_id="conv-attachments",
+        workspace=workspace,
+        provider=ProviderConfig(
+            id="provider-one",
+            name="Local",
+            type="anthropic-messages",
+            base_url="http://127.0.0.1:3425",
+            models=["model"],
+        ),
+        model="model",
+        mcp_url="http://127.0.0.1:8000/mcp/",
+        mcp_token="token",
+        attachments=attachment_inputs,
+    )
+
+    async def collect():
+        return [event async for event in PiRunner(binary=str(script)).run(request)]
+
+    events = asyncio.run(collect())
+    assert events[-1].type == DONE
+    payload = json.loads(capture.read_text(encoding="utf-8"))
+    assert "attachments/chart.png" in payload["message"]
+    assert len(payload["images"]) == 1
+    assert payload["images"][0]["mimeType"] == "image/png"
+    assert base64.b64decode(payload["images"][0]["data"]) == PNG
