@@ -143,6 +143,8 @@ def _classify(provider_type: str, path: str, body: dict) -> tuple[str, str | Non
         content = []
         if isinstance(items, list) and items:
             content = items[0].get("content") or []
+        if not isinstance(content, list):
+            content = []
         if any(block.get("type") == "input_image" for block in content):
             return "vision", None
         effort = (body.get("reasoning") or {}).get("effort")

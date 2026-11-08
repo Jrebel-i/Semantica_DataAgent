@@ -505,6 +505,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/providers/{provider_id}/probe": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Probe Provider */
+        post: operations["probe_provider_api_v1_providers__provider_id__probe_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/pulls": {
         parameters: {
             query?: never;
@@ -1286,6 +1303,34 @@ export interface components {
             /** Version */
             version: string;
         };
+        /** ProbeEffortResult */
+        ProbeEffortResult: {
+            /**
+             * Extra
+             * @enum {string}
+             */
+            extra: "yes" | "no" | "unknown";
+            /**
+             * High
+             * @enum {string}
+             */
+            high: "yes" | "no" | "unknown";
+            /**
+             * Low
+             * @enum {string}
+             */
+            low: "yes" | "no" | "unknown";
+            /**
+             * Max
+             * @enum {string}
+             */
+            max: "yes" | "no" | "unknown";
+            /**
+             * Medium
+             * @enum {string}
+             */
+            medium: "yes" | "no" | "unknown";
+        };
         /** ProjectUpdate */
         ProjectUpdate: {
             /** Name */
@@ -1380,6 +1425,24 @@ export interface components {
              * @default anthropic-messages
              */
             type: string;
+        };
+        /** ProviderProbeRequest */
+        ProviderProbeRequest: {
+            /** Model */
+            model: string;
+        };
+        /** ProviderProbeView */
+        ProviderProbeView: {
+            effort: components["schemas"]["ProbeEffortResult"];
+            /** Model */
+            model: string;
+            /** Notes */
+            notes: string;
+            /**
+             * Vision
+             * @enum {string}
+             */
+            vision: "yes" | "no" | "unknown";
         };
         /** ProviderUpdate */
         ProviderUpdate: {
@@ -2751,6 +2814,41 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    probe_provider_api_v1_providers__provider_id__probe_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                provider_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProviderProbeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProviderProbeView"];
+                };
             };
             /** @description Validation Error */
             422: {

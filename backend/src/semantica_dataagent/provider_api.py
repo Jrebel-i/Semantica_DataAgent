@@ -14,6 +14,12 @@ from .api_time import UtcDatetime
 from .auth import admin, current_user
 from .crypto import decrypt, encrypt
 from .db import Provider, sessions
+from .provider_probe import (
+    EFFORT_LEVELS,
+    begin_probe,
+    end_probe,
+    probe_model,
+)
 
 router = APIRouter()
 PROVIDER_TYPES = {
@@ -22,9 +28,9 @@ PROVIDER_TYPES = {
     "openai-responses",
     "google-generative-ai",
 }
-EFFORT_LEVELS = ("low", "medium", "high", "extra", "max")
 EffortLevel = Literal["low", "medium", "high", "extra", "max"]
 DESCRIPTION_LIMIT = 200
+ProbeOutcome = Literal["yes", "no", "unknown"]
 
 
 class ModelCapability(BaseModel):
@@ -67,6 +73,25 @@ class ProviderView(BaseModel):
     has_api_key: bool
     created_at: UtcDatetime
     updated_at: UtcDatetime
+
+
+class ProviderProbeRequest(BaseModel):
+    model: str = Field(min_length=1, max_length=200)
+
+
+class ProbeEffortResult(BaseModel):
+    low: ProbeOutcome
+    medium: ProbeOutcome
+    high: ProbeOutcome
+    extra: ProbeOutcome
+    max: ProbeOutcome
+
+
+class ProviderProbeView(BaseModel):
+    model: str
+    vision: ProbeOutcome
+    effort: ProbeEffortResult
+    notes: str
 
 
 def _validate_address(value: str) -> str:
@@ -184,6 +209,34 @@ def providers(_: Annotated[str, Depends(current_user)]):
         return [
             view(row) for row in db.query(Provider).order_by(Provider.name, Provider.id)
         ]
+
+
+@router.post("/api/v1/providers/{provider_id}/probe", response_model=ProviderProbeView)
+def probe_provider(
+    provider_id: str,
+    body: ProviderProbeRequest,
+    _: Annotated[str, Depends(admin)],
+):
+    with sessions()() as db:
+        row = db.get(Provider, provider_id)
+        if row is None:
+            raise HTTPException(404, "Provider not found")
+        provider = provider_config(row)
+    model = body.model.strip()
+    if model not in provider.models:
+        raise HTTPException(422, "Model is not in provider models")
+    if not begin_probe(provider_id):
+        raise HTTPException(409, "A probe is already running for this provider")
+    try:
+        result = probe_model(provider, model)
+    finally:
+        end_probe(provider_id)
+    return ProviderProbeView(
+        model=result.model,
+        vision=result.vision,
+        effort=ProbeEffortResult(**result.effort),
+        notes=result.notes,
+    )
 
 
 @router.post("/api/v1/providers", response_model=ProviderView, status_code=201)
