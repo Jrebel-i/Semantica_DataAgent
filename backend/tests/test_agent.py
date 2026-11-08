@@ -2124,8 +2124,10 @@ def test_ask_rejects_unsupported_effort_for_claude_and_codex(client, agent):
 
     unsupported = _ask(c, headers, "强度", **base, effort="high")
     assert unsupported[0] == 422, unsupported[1]
+    assert "Effort level" in json.loads(unsupported[1])["detail"]
     unknown = _ask(c, headers, "强度", **base, effort="ultra")
     assert unknown[0] == 422, unknown[1]
+    assert "Input should be" in json.dumps(json.loads(unknown[1])["detail"])
     assert c.get("/api/v1/conversations", headers=headers).json() == []
 
 
