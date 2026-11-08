@@ -96,8 +96,8 @@ def check_effort_validation_persistence_and_pi_thinking(ctx):
     ctx.require(agents.status_code == 200, agents.text)
     levels = {row["id"]: row["effort_levels"] for row in agents.json()}
     ctx.require(levels.get("pi") == ALL_EFFORTS, f"pi effort levels: {levels}")
-    ctx.require(levels.get("claude") == [], f"claude effort levels: {levels}")
-    ctx.require(levels.get("codex") == [], f"codex effort levels: {levels}")
+    ctx.require(levels.get("claude") == ALL_EFFORTS, f"claude effort levels: {levels}")
+    ctx.require(levels.get("codex") == ALL_EFFORTS, f"codex effort levels: {levels}")
 
     provider_id = _create_provider(
         ctx,
@@ -182,19 +182,6 @@ def check_effort_validation_persistence_and_pi_thinking(ctx):
     ctx.require(
         no_model_levels.status_code == 422,
         f"effort on a model without levels: {no_model_levels.status_code}",
-    )
-    no_agent_levels = ctx.rest.post(
-        "/api/v1/conversations/ask",
-        json={
-            "question": "agent has no levels",
-            **base,
-            "agent": "claude",
-            "effort": "low",
-        },
-    )
-    ctx.require(
-        no_agent_levels.status_code == 422,
-        f"effort on an agent without levels: {no_agent_levels.status_code}",
     )
     after = len(ctx.rest.get("/api/v1/conversations").json())
     ctx.require(before == after, "rejected effort requests created conversations")
