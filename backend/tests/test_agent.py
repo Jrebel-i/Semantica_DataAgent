@@ -896,6 +896,105 @@ print(json.dumps({"type": "agent_settled"}), flush=True)
     assert "[redacted]" in dumped
 
 
+@pytest.mark.parametrize(
+    ("effort", "thinking"),
+    [
+        ("low", "low"),
+        ("medium", "medium"),
+        ("high", "high"),
+        ("extra", "xhigh"),
+        ("max", "max"),
+    ],
+)
+def test_pi_runner_maps_effort_to_thinking(tmp_path: Path, effort, thinking):
+    capture = tmp_path / f"pi-args-{effort}.json"
+    script = tmp_path / "capture-pi.py"
+    script.write_text(
+        f"""#!/usr/bin/env python3
+import json
+import sys
+from pathlib import Path
+
+Path({str(capture)!r}).write_text(json.dumps(sys.argv[1:]))
+sys.stdin.readline()
+print(json.dumps({{"type": "message_end", "message": {{
+    "role": "assistant",
+    "content": [{{"type": "text", "text": "ok"}}],
+    "stopReason": "stop",
+}}}}), flush=True)
+print(json.dumps({{"type": "agent_settled"}}), flush=True)
+""",
+        encoding="utf-8",
+    )
+    script.chmod(0o755)
+    request = AgentTurnRequest(
+        conversation_id=f"conv-{effort}",
+        prompt="question",
+        session_id=f"conv-{effort}",
+        workspace=tmp_path / f"workspace-{effort}",
+        provider=ProviderConfig(
+            id="provider-one",
+            name="Local",
+            type="anthropic-messages",
+            base_url="http://127.0.0.1:3425",
+            models=["model"],
+        ),
+        model="model",
+        mcp_url="http://127.0.0.1:8000/mcp/",
+        mcp_token="token",
+        effort=effort,
+    )
+
+    async def collect():
+        return [event async for event in PiRunner(binary=str(script)).run(request)]
+
+    events = asyncio.run(collect())
+    assert events[-1].type == DONE
+    arguments = json.loads(capture.read_text(encoding="utf-8"))
+    assert arguments[arguments.index("--thinking") + 1] == thinking
+
+
+def test_pi_runner_omits_thinking_when_effort_is_not_given(tmp_path: Path):
+    capture = tmp_path / "pi-args-none.json"
+    script = tmp_path / "capture-pi-none.py"
+    script.write_text(
+        f"""#!/usr/bin/env python3
+import json
+import sys
+from pathlib import Path
+
+Path({str(capture)!r}).write_text(json.dumps(sys.argv[1:]))
+sys.stdin.readline()
+print(json.dumps({{"type": "agent_settled"}}), flush=True)
+""",
+        encoding="utf-8",
+    )
+    script.chmod(0o755)
+    request = AgentTurnRequest(
+        conversation_id="conv-none",
+        prompt="question",
+        session_id="conv-none",
+        workspace=tmp_path / "workspace-none",
+        provider=ProviderConfig(
+            id="provider-one",
+            name="Local",
+            type="anthropic-messages",
+            base_url="http://127.0.0.1:3425",
+            models=["model"],
+        ),
+        model="model",
+        mcp_url="http://127.0.0.1:8000/mcp/",
+        mcp_token="token",
+    )
+
+    async def collect():
+        return [event async for event in PiRunner(binary=str(script)).run(request)]
+
+    asyncio.run(collect())
+    arguments = json.loads(capture.read_text(encoding="utf-8"))
+    assert "--thinking" not in arguments
+
+
 def test_pi_config_is_isolated_and_never_writes_secrets(tmp_path: Path):
     workspace = tmp_path / "pi-config-test"
     request = AgentTurnRequest(
@@ -1069,6 +1168,19 @@ def test_agents_endpoint_lists_the_registered_runners(client):
     )
     assert response.status_code == 200
     assert response.json() == list_agents()
+
+
+def test_agents_advertise_their_supported_effort_levels(client):
+    c, admin_token = client
+    response = c.get(
+        "/api/v1/agents", headers={"Authorization": f"Bearer {admin_token}"}
+    )
+
+    assert response.status_code == 200
+    levels = {agent["id"]: agent["effort_levels"] for agent in response.json()}
+    assert levels["pi"] == ["low", "medium", "high", "extra", "max"]
+    assert levels["claude"] == []
+    assert levels["codex"] == []
 
 
 def test_ask_rejects_unknown_or_unavailable_agent_without_creating_history(
@@ -1575,6 +1687,7 @@ def test_mcp_turn_header_selects_owned_turn_and_rejects_forgery(client, monkeypa
 
 class SwitchRunner:
     agent_id = "pi"
+    effort_levels = ("low", "medium", "high", "extra", "max")
 
     def __init__(self):
         self.requests: list[AgentTurnRequest] = []
@@ -1653,6 +1766,111 @@ def test_conversation_switches_model_and_records_each_turn(client, monkeypatch):
         (provider["id"], "model-a"),
         (provider["id"], "model-b"),
     ]
+
+
+def test_conversation_records_each_turn_effort_and_allows_switching(
+    client, monkeypatch
+):
+    from semantica_dataagent import agent_runner
+
+    runner = SwitchRunner()
+    monkeypatch.setitem(agent_runner.RUNNERS, "pi", runner)
+    c, token = client
+    headers = {"Authorization": f"Bearer {token}"}
+    provider = _create_provider(c, headers, "effort-model", ["model-a", "model-b"])
+    capabilities = {
+        "model-a": {"effort_levels": ["low", "medium", "high"]},
+        "model-b": {"effort_levels": ["low", "medium", "extra", "max"]},
+    }
+    updated = c.put(
+        f"/api/v1/providers/{provider['id']}",
+        headers=headers,
+        json={"model_capabilities": capabilities},
+    )
+    assert updated.status_code == 200, updated.text
+
+    status, body = _ask(
+        c,
+        headers,
+        "first",
+        agent="pi",
+        provider_id=provider["id"],
+        model="model-a",
+        effort="medium",
+    )
+    assert status == 200, body
+    conversation_id = _sse(body)[0][1]["conversation_id"]
+    status, body = _ask(
+        c,
+        headers,
+        "second",
+        conversation_id=conversation_id,
+        model="model-b",
+        effort="extra",
+    )
+    assert status == 200, body
+    assert [request.effort for request in runner.requests] == ["medium", "extra"]
+    detail = c.get(f"/api/v1/conversations/{conversation_id}", headers=headers).json()
+    assert [turn["effort"] for turn in detail["turns"]] == ["medium", "extra"]
+
+
+def test_ask_rejects_effort_outside_model_and_agent_capabilities(client, monkeypatch):
+    from semantica_dataagent import agent_runner
+
+    class EmptyEffortRunner:
+        agent_id = "claude"
+        effort_levels = ()
+
+        def __init__(self):
+            self.requests = []
+
+        def available(self):
+            return True
+
+        async def run(self, request):
+            self.requests.append(request)
+            yield AgentEvent(DONE, {"text": "unused", "sql": [], "citations": []})
+
+    runner = SwitchRunner()
+    monkeypatch.setitem(agent_runner.RUNNERS, "pi", runner)
+    empty_runner = EmptyEffortRunner()
+    monkeypatch.setitem(agent_runner.RUNNERS, "claude", empty_runner)
+    c, token = client
+    headers = {"Authorization": f"Bearer {token}"}
+    provider = _create_provider(c, headers, "effort-validation", ["model-a", "plain"])
+    updated = c.put(
+        f"/api/v1/providers/{provider['id']}",
+        headers=headers,
+        json={"model_capabilities": {"model-a": {"effort_levels": ["low"]}}},
+    )
+    assert updated.status_code == 200, updated.text
+    base = {
+        "question": "强度",
+        "provider_id": provider["id"],
+        "model": "model-a",
+    }
+
+    invalid = _ask(c, headers, **base, effort="ultra")
+    assert invalid[0] == 422, invalid[1]
+    unsupported = _ask(c, headers, **base, effort="high")
+    assert unsupported[0] == 422, unsupported[1]
+    no_model_levels = _ask(
+        c,
+        headers,
+        **{**base, "model": "plain"},
+        effort="medium",
+    )
+    assert no_model_levels[0] == 422, no_model_levels[1]
+    no_agent_levels = _ask(
+        c,
+        headers,
+        **base,
+        agent="claude",
+        effort="low",
+    )
+    assert no_agent_levels[0] == 422, no_agent_levels[1]
+    assert runner.requests == [] and empty_runner.requests == []
+    assert c.get("/api/v1/conversations", headers=headers).json() == []
 
 
 def test_conversation_switches_provider_with_new_credentials(client, monkeypatch):

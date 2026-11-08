@@ -27,6 +27,179 @@ import {
 
 setupChatTestEnv();
 
+const longDescription =
+  "面向超长上下文与复杂取数的推理模型，支持多轮澄清、SQL 校验、结果解释和表格归纳；" +
+  "在高峰期可能比普通模型更慢，建议只在复杂问题上选择这个模型，普通问数继续使用默认模型即可。";
+
+const effortProvider = {
+  ...provider,
+  models: ["model-full", "model-partial", "model-none"],
+  model_capabilities: {
+    "model-full": {
+      description: longDescription,
+      vision: false,
+      effort_levels: ["low", "medium", "high", "extra", "max"],
+    },
+    "model-partial": {
+      description: "只支持部分强度",
+      vision: false,
+      effort_levels: ["low", "high"],
+    },
+    "model-none": {
+      description: "",
+      vision: false,
+      effort_levels: [],
+    },
+  },
+};
+
+const effortAgents = [
+  {
+    id: "pi",
+    name: "pi",
+    available: true,
+    effort_levels: ["low", "medium", "high", "extra", "max"],
+  },
+  {
+    id: "claude",
+    name: "Claude",
+    available: true,
+    effort_levels: [],
+  },
+];
+
+function effortFetcher(onAsk?: (body: Record<string, unknown>) => void) {
+  return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url === "/api/v1/agents") return json(effortAgents);
+    if (url === "/api/v1/providers") return json([effortProvider]);
+    if (url === "/api/v1/conversations") return json([]);
+    if (url === "/api/v1/assistant-defaults")
+      return json({
+        assistant_agent: "pi",
+        assistant_provider_id: effortProvider.id,
+        assistant_model: "model-full",
+      });
+    if (url === "/api/v1/conversations/ask" && init?.method === "POST") {
+      onAsk?.(JSON.parse(String(init.body)) as Record<string, unknown>);
+      return new Response(sse, {
+        headers: { "Content-Type": "text/event-stream" },
+      });
+    }
+    return new Response("", { status: 404 });
+  });
+}
+
+async function openComposerSelect(label: string) {
+  fireEvent.mouseDown(screen.getByLabelText(label));
+  await screen.findByRole("listbox");
+}
+
+function composerSelectText(label: string) {
+  const input = screen.getByLabelText(label);
+  return (
+    input
+      .closest(".ant-select")
+      ?.querySelector(".ant-select-selection-item")
+      ?.textContent?.trim() ?? ""
+  );
+}
+
+function optionDisabled(text: string) {
+  const option = screen.getByRole("option", { name: new RegExp(text) });
+  return (
+    option.getAttribute("aria-disabled") === "true" ||
+    option.classList.contains("ant-select-item-option-disabled")
+  );
+}
+
+test("思考强度默认中并在提问请求里携带", async () => {
+  let askBody: Record<string, unknown> = {};
+  vi.stubGlobal("fetch", effortFetcher((body) => (askBody = body)));
+  render(
+    <ChatPage
+      token="token"
+      role="user"
+      messages={getMessages("zh")}
+    />,
+  );
+
+  await screen.findByLabelText("思考强度");
+  expect(composerSelectText("思考强度")).toBe("中（推荐）");
+
+  fireEvent.change(screen.getByLabelText("问题"), {
+    target: { value: "订单在哪里？" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: /提\s*问/ }));
+  await waitFor(() => expect(askBody.question).toBe("订单在哪里？"));
+  expect(askBody.effort).toBe("medium");
+});
+
+test("模型没有档位时不显示思考强度，有档位时置灰不支持的档位", async () => {
+  vi.stubGlobal("fetch", effortFetcher());
+  render(<ChatPage token="token" role="user" messages={getMessages("zh")} />);
+
+  await screen.findByLabelText("思考强度");
+  await openComposerSelect("模型");
+  fireEvent.click(screen.getByRole("option", { name: "model-none" }));
+  await waitFor(() => expect(screen.queryByLabelText("思考强度")).toBeNull());
+
+  await openComposerSelect("模型");
+  fireEvent.click(screen.getByRole("option", { name: "model-partial" }));
+  await screen.findByLabelText("思考强度");
+  expect(composerSelectText("思考强度")).toBe("默认");
+  await openComposerSelect("思考强度");
+  expect(optionDisabled("中（推荐）")).toBe(true);
+  expect(optionDisabled("超高")).toBe(true);
+  expect(optionDisabled("低")).toBe(false);
+  expect(optionDisabled("高")).toBe(false);
+});
+
+test("切换 agent 后不支持的档位一起置灰", async () => {
+  vi.stubGlobal("fetch", effortFetcher());
+  render(<ChatPage token="token" role="user" messages={getMessages("zh")} />);
+
+  await screen.findByLabelText("思考强度");
+  fireEvent.change(screen.getByLabelText("Agent"), {
+    target: { value: "claude" },
+  });
+  await openComposerSelect("思考强度");
+  for (const label of ["低", "中（推荐）", "高", "超高", "最高"]) {
+    expect(optionDisabled(label)).toBe(true);
+  }
+});
+
+test("最高档在下拉里提示用量更大，长模型说明可悬停看全文", async () => {
+  vi.stubGlobal("fetch", effortFetcher());
+  render(<ChatPage token="token" role="user" messages={getMessages("zh")} />);
+
+  await screen.findByLabelText("思考强度");
+  await openComposerSelect("思考强度");
+  expect(screen.getByText("用量更大")).toBeTruthy();
+
+  await openComposerSelect("模型");
+  const descriptions = screen.getAllByText(longDescription);
+  expect(descriptions[0].getAttribute("title")).toBe(longDescription);
+  expect(descriptions[0].className).toContain("model-option-description");
+});
+
+test("切换模型和强度后提问使用新的强度", async () => {
+  let askBody: Record<string, unknown> = {};
+  vi.stubGlobal("fetch", effortFetcher((body) => (askBody = body)));
+  render(<ChatPage token="token" role="user" messages={getMessages("zh")} />);
+
+  await screen.findByLabelText("思考强度");
+  await openComposerSelect("思考强度");
+  fireEvent.click(screen.getByRole("option", { name: "高" }));
+  expect(composerSelectText("思考强度")).toBe("高");
+  fireEvent.change(screen.getByLabelText("问题"), {
+    target: { value: "继续追问" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: /提\s*问/ }));
+  await waitFor(() => expect(askBody.question).toBe("继续追问"));
+  expect(askBody.effort).toBe("high");
+});
+
 test("新会话发送所选 agent 与模型且仅锁定 agent", async () => {
   const fetcher = vi.fn(
     async (input: RequestInfo | URL, init?: RequestInit) => {
