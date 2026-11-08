@@ -76,30 +76,31 @@ def discover():
     return found
 
 
-def configured(project_id=None):
+def configured(project_id=None, project_type=None):
+    """Return plugins for one project, excluding incompatible source adapters."""
+    from .project_types import supports_project_type
+
     plugins = discover()
-    if project_id not in (None, project_context.DEFAULT_PROJECT_ID):
-        return [
-            (category, plugin, category == "source" and plugin.id == "markdown", {})
-            for (category, _), plugin in plugins.items()
-            if category in {"source", "parser"}
-        ]
+    project_type = project_type or project_context.project_type(project_id)
     saved = project_context.plugin_configs()
-    return [
-        (
-            category,
-            plugin,
-            *saved.get(
-                (category, plugin.id),
-                (
-                    (category == "source" and plugin.id in {"canonical", "markdown"})
-                    or (category == "parser" and plugin.id == "sql"),
-                    {},
-                ),
+    result = []
+    for (category, _), plugin in plugins.items():
+        if project_id not in (None, project_context.DEFAULT_PROJECT_ID) and (
+            category not in {"source", "parser"}
+        ):
+            continue
+        if category == "source" and not supports_project_type(plugin, project_type):
+            continue
+        enabled, parameters = saved.get(
+            (category, plugin.id),
+            (
+                (category == "source" and plugin.id in {"canonical", "markdown"})
+                or (category == "parser" and plugin.id == "sql"),
+                {},
             ),
         )
-        for (category, _), plugin in plugins.items()
-    ]
+        result.append((category, plugin, enabled, parameters))
+    return result
 
 
 def parse_task(task, parameters_by_id=None, *, schema=None):

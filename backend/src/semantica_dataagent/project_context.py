@@ -300,6 +300,18 @@ def current_project(
     return ProjectContext(resolved, values, project.name, project.type, project.status)
 
 
+def project_type(project_id: str | None = None) -> str:
+    """Return a project's immutable type, defaulting the default project."""
+    resolved = resolve_project_id(project_id)
+    if resolved == DEFAULT_PROJECT_ID:
+        return DEFAULT_PROJECT_TYPE
+    with sessions()() as db:
+        project = db.get(Project, resolved)
+        if project is None:
+            raise ProjectNotFound(resolved)
+        return project.type
+
+
 def from_values(
     values: Mapping[str, Any],
     project_id: str | None = None,

@@ -509,8 +509,13 @@ def read_sources(values, plugins):
     try:
         fcntl.flock(lock, fcntl.LOCK_SH)
         records, hashes, adapter_stats = [], {}, {}
+        from .project_types import supports_project_type
+
+        project_type = values.get("_project_type") or "warehouse"
         for category, plugin, enabled, parameters in plugins:
             if category != "source" or not enabled:
+                continue
+            if not supports_project_type(plugin, project_type):
                 continue
             result = plugin.read(directory, parameters)
             adapter_stats.update(
@@ -649,10 +654,9 @@ def run_build(build_id):
             values = project_context.with_generation(values, generation)
             project = project_context.from_values(values)
             new_values = values.copy()
-        plugins = (
-            configured()
-            if project.project_id == project_context.DEFAULT_PROJECT_ID
-            else configured(project.project_id)
+        plugins = configured(
+            project.project_id,
+            project_type=project_type,
         )
         filters = get_filters()
         config = {

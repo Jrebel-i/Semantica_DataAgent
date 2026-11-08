@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 from cryptography.fernet import Fernet
@@ -70,7 +71,7 @@ def test_document_project_selects_only_compatible_source_adapters(monkeypatch):
 
     class Adapter:
         version = "1"
-        parameters_schema = {"type": "object"}
+        parameters_schema: ClassVar[dict] = {"type": "object"}
 
         def __init__(self, plugin_id, project_types):
             self.id = plugin_id
@@ -133,9 +134,10 @@ def test_plugin_listing_reports_supported_project_types(client):
     c, admin = client
     response = c.get("/api/v1/plugins", headers={"Authorization": f"Bearer {admin}"})
     assert response.status_code == 200, response.text
-    by_id = {row["id"]: row for row in response.json()}
-    assert by_id["markdown"]["project_types"] == ["warehouse", "document"]
-    assert by_id["dtb"]["project_types"] == ["warehouse"]
+    source = {row["id"]: row for row in response.json() if row["category"] == "source"}
+    assert source["markdown"]["project_types"] == ["warehouse", "document"]
+    assert source["dtb"]["project_types"] == ["warehouse"]
+    assert source["canonical"]["project_types"] == ["warehouse"]
 
 
 def test_adapter_compatibility_validation():

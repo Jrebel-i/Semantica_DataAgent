@@ -994,11 +994,22 @@ def create_mcp():
             projects = accessible_projects(current_requester())
         except Exception:  # noqa: BLE001 - metadata must not break capabilities
             projects = []
+        from .mcp_context import current_project_type
+        from .project_types import tools_for_project_type
+
+        try:
+            allowed = tools_for_project_type(current_project_type())
+        except Exception:  # noqa: BLE001 - capabilities still answer metadata
+            allowed = {tool.name for tool in server._tool_manager.list_tools()}
         return {
             "application_version": version("semantica-dataagent"),
             "schema_version": "v1",
             "ranking_version": knowledge.RANKING_VERSION,
-            "tools": sorted(t.name for t in server._tool_manager.list_tools()),
+            "tools": sorted(
+                tool.name
+                for tool in server._tool_manager.list_tools()
+                if tool.name in allowed
+            ),
             "prompts": sorted(
                 prompt.name for prompt in server._prompt_manager.list_prompts()
             ),
@@ -1099,6 +1110,7 @@ class PluginView(BaseModel):
     parameters_schema: dict
     enabled: bool
     parameters: dict
+    project_types: list[str] | None = None
 
 
 class PluginUpdate(BaseModel):
@@ -1116,6 +1128,7 @@ class FilterRules(BaseModel):
 @app.get("/api/v1/plugins", response_model=list[PluginView])
 def list_plugins(_: Annotated[str, Depends(admin)]):
     from .plugins import configured
+    from .project_types import source_project_types
 
     return [
         PluginView(
@@ -1126,6 +1139,9 @@ def list_plugins(_: Annotated[str, Depends(admin)]):
             parameters_schema=plugin.parameters_schema,
             enabled=enabled,
             parameters=parameters,
+            project_types=(
+                list(source_project_types(plugin)) if category == "source" else None
+            ),
         )
         for category, plugin, enabled, parameters in configured()
     ]

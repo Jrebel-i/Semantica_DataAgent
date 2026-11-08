@@ -61,11 +61,13 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         yield test_client, token
 
 
-def _project(c: TestClient, admin: str, name: str) -> dict:
+def _project(
+    c: TestClient, admin: str, name: str, project_type: str = "document"
+) -> dict:
     response = c.post(
         "/api/v1/projects",
         headers={"Authorization": f"Bearer {admin}"},
-        json={"name": name, "type": "document"},
+        json={"name": name, "type": project_type},
     )
     assert response.status_code == 201, response.text
     return response.json()
@@ -93,7 +95,7 @@ def test_every_registered_tool_reads_the_bound_project(client, monkeypatch):
     from semantica_dataagent.mcp_context import bind_mcp_context
 
     c, admin = client
-    project_b = _project(c, admin, "Scope B")
+    project_b = _project(c, admin, "Scope B", project_type="warehouse")
     seen: list[str | None] = []
 
     def fake_settings(project_id=None):

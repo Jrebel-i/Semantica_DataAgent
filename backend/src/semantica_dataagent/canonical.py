@@ -45,6 +45,7 @@ class CanonicalAdapter:
     id = "canonical"
     version = "1.0.0"
     display_name = "Canonical"
+    project_types = ("warehouse",)
     parameters_schema: ClassVar[dict] = {
         "type": "object",
         "additionalProperties": False,

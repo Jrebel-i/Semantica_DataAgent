@@ -7,7 +7,7 @@ import json
 import httpx
 import jsonschema
 from mcp.server.fastmcp.exceptions import ToolError
-from mcp.types import CallToolResult, TextContent
+from mcp.types import CallToolResult, ListToolsRequest, TextContent
 from neo4j.exceptions import DatabaseUnavailable, ServiceUnavailable, SessionExpired
 from pymilvus.exceptions import (
     ConnectError,
@@ -127,10 +127,29 @@ def classify_error(exc):
 
 
 def install_contract(server):
+    from .mcp_context import current_project_type
+    from .project_types import (
+        ensure_tool_supported,
+        tools_for_project_type,
+    )
+
     tools = {tool.name: tool for tool in server._tool_manager.list_tools()}
     for tool in tools.values():
         tool.parameters["additionalProperties"] = False
         tool.parameters.setdefault("properties", {})["cursor"] = {"type": "string"}
+
+    original_list_tools = server._mcp_server.request_handlers[ListToolsRequest]
+
+    async def list_tools(request):
+        result = await original_list_tools(request)
+        try:
+            allowed = tools_for_project_type(current_project_type())
+        except Exception:  # noqa: BLE001 - an unresolved project still lists tools
+            return result
+        result.root.tools = [tool for tool in result.root.tools if tool.name in allowed]
+        return result
+
+    server._mcp_server.request_handlers[ListToolsRequest] = list_tools
 
     async def call_impl(name, arguments):
         tool = tools.get(name)
@@ -138,6 +157,10 @@ def install_contract(server):
             return error(
                 "invalid_input", "Unknown tool", False, "Check available tools"
             )
+        try:
+            ensure_tool_supported(current_project_type(), name)
+        except (ToolInvalidInput, LookupError, ValueError) as exc:
+            return classify_error(exc)
         try:
             jsonschema.validate(arguments, tool.parameters)
             args = dict(arguments)
