@@ -31,6 +31,8 @@ from .db import (
     Build,
     GenerationPointer,
     KnowledgeGeneration,
+    Project,
+    ProjectMember,
     Setting,
     Token,
     digest,
@@ -199,9 +201,22 @@ class Status(BaseModel):
     elapsed_ms: float
 
 
+class TokenProject(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    project_id: str
+    role: Literal["admin", "member"]
+
+
 class TokenCreate(BaseModel):
     name: str = Field(min_length=1, max_length=200, pattern=r"\S")
     role: Literal["user", "admin"]
+    projects: list[TokenProject] | None = None
+
+
+class TokenProjectView(BaseModel):
+    project_id: str
+    role: Literal["admin", "member"]
 
 
 class TokenInfo(BaseModel):
@@ -211,12 +226,32 @@ class TokenInfo(BaseModel):
     created_at: UtcDatetime
     last_used_at: UtcDatetime | None
     revoked: bool
+    projects: list[TokenProjectView]
 
     model_config = {"from_attributes": True}
 
 
 class TokenIssued(TokenInfo):
     token: str
+
+
+def token_view(db, row: Token) -> TokenInfo:
+    projects = [
+        TokenProjectView(project_id=member.project_id, role=member.role)
+        for member in db.query(ProjectMember)
+        .filter(ProjectMember.token_id == row.id)
+        .order_by(ProjectMember.project_id)
+        .all()
+    ]
+    return TokenInfo(
+        id=row.id,
+        name=row.name,
+        role=row.role,
+        created_at=row.created_at,
+        last_used_at=row.last_used_at,
+        revoked=row.revoked,
+        projects=projects,
+    )
 
 
 @app.post("/api/v1/tokens", response_model=TokenIssued, status_code=201)
@@ -226,17 +261,38 @@ def create_token(body: TokenCreate, _: Annotated[str, Depends(admin)]):
         row = Token(digest=digest(plaintext), name=body.name, role=body.role)
         db.add(row)
         db.flush()
-        ensure_default_project_member(db, row)
-        return TokenIssued(
-            **TokenInfo.model_validate(row).model_dump(), token=plaintext
-        )
+        if body.role == "user":
+            if body.projects is None:
+                ensure_default_project_member(db, row)
+            else:
+                requested: set[str] = set()
+                for item in body.projects:
+                    if item.project_id in requested:
+                        raise HTTPException(
+                            status_code=422,
+                            detail="Duplicate project in token membership",
+                        )
+                    requested.add(item.project_id)
+                    if db.get(Project, item.project_id) is None:
+                        raise HTTPException(
+                            status_code=422,
+                            detail=f"Project not found: {item.project_id}",
+                        )
+                    db.add(
+                        ProjectMember(
+                            project_id=item.project_id,
+                            token_id=row.id,
+                            role=item.role,
+                        )
+                    )
+        return TokenIssued(**token_view(db, row).model_dump(), token=plaintext)
 
 
 @app.get("/api/v1/tokens", response_model=list[TokenInfo])
 def list_tokens(_: Annotated[str, Depends(admin)]):
     with sessions()() as db:
         return [
-            TokenInfo.model_validate(row)
+            token_view(db, row)
             for row in db.query(Token).order_by(Token.created_at, Token.id).all()
         ]
 

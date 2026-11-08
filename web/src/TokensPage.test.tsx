@@ -25,6 +25,14 @@ function tokenRow(overrides: Record<string, unknown> = {}) {
 }
 
 beforeEach(() => {
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  );
   Object.defineProperty(window, "matchMedia", {
     configurable: true,
     value: () => ({
@@ -119,4 +127,113 @@ test("revokes a token through the antd confirmation modal", async () => {
   fireEvent.click(screen.getByRole("button", { name: "确认吊销" }));
   expect(await screen.findByText("已吊销")).toBeTruthy();
   expect(screen.queryByRole("button", { name: "吊销" })).toBeNull();
+});
+
+test("shows each token's projects and their roles", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) => {
+      if (url === "/api/v1/projects") {
+        return Response.json([
+          {
+            id: "a",
+            name: "Alpha",
+            type: "document",
+            status: "active",
+            created_at: created,
+            my_role: "admin",
+          },
+        ]);
+      }
+      return Response.json([
+        tokenRow({
+          projects: [
+            { project_id: "a", role: "admin" },
+            { project_id: "missing", role: "member" },
+          ],
+        }),
+      ]);
+    }),
+  );
+  render(<TokensPage token="admin" messages={getMessages("zh")} />);
+
+  expect(await screen.findByText("Alpha · 项目管理员")).toBeTruthy();
+  expect(screen.getByText("missing · 成员")).toBeTruthy();
+});
+
+test("creates a token with selected projects and per-project roles", async () => {
+  let posted: Record<string, unknown> | undefined;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string, options?: RequestInit) => {
+      if (url === "/api/v1/projects") {
+        return Response.json([
+          {
+            id: "a",
+            name: "Alpha",
+            type: "document",
+            status: "active",
+            created_at: created,
+            my_role: "admin",
+          },
+          {
+            id: "b",
+            name: "Beta",
+            type: "document",
+            status: "active",
+            created_at: created,
+            my_role: "admin",
+          },
+        ]);
+      }
+      if (url === "/api/v1/tokens" && options?.method === "POST") {
+        posted = JSON.parse(options.body as string);
+        return Response.json(
+          { ...tokenRow(), token: "one-time-secret" },
+          { status: 201 },
+        );
+      }
+      return Response.json([]);
+    }),
+  );
+  render(<TokensPage token="admin" messages={getMessages("zh")} />);
+
+  fireEvent.click(await screen.findByRole("button", { name: "发放令牌" }));
+  fireEvent.change(screen.getByLabelText("名称"), {
+    target: { value: "Bob" },
+  });
+  fireEvent.mouseDown(screen.getByLabelText("选择项目"));
+  fireEvent.click(
+    await waitFor(() => {
+      const option = document.querySelector(
+        '.ant-select-item-option[title="Alpha"]',
+      );
+      if (!option) throw new Error("missing Alpha option");
+      return option;
+    }),
+  );
+  fireEvent.click(
+    document.querySelector('.ant-select-item-option[title="Beta"]')!,
+  );
+  fireEvent.mouseDown(screen.getByLabelText("项目角色: Alpha"));
+  fireEvent.click(
+    await waitFor(() => {
+      const option = document.querySelector(
+        '.ant-select-item-option[title="项目管理员"]',
+      );
+      if (!option) throw new Error("missing admin option");
+      return option;
+    }),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "创建" }));
+
+  await waitFor(() => expect(posted).toBeTruthy());
+  expect(posted).toEqual({
+    name: "Bob",
+    role: "user",
+    projects: [
+      { project_id: "a", role: "admin" },
+      { project_id: "b", role: "member" },
+    ],
+  });
 });

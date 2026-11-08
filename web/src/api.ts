@@ -470,6 +470,58 @@ export interface paths {
         patch: operations["rename_project_api_v1_projects__project_id__patch"];
         trace?: never;
     };
+    "/api/v1/projects/{project_id}/audit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Project Audit */
+        get: operations["list_project_audit_api_v1_projects__project_id__audit_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/members": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Project Members */
+        get: operations["list_project_members_api_v1_projects__project_id__members_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/members/{token_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Put Project Member */
+        put: operations["put_project_member_api_v1_projects__project_id__members__token_id__put"];
+        post?: never;
+        /** Delete Project Member */
+        delete: operations["delete_project_member_api_v1_projects__project_id__members__token_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/providers": {
         parameters: {
             query?: never;
@@ -894,6 +946,23 @@ export interface paths {
         post?: never;
         /** Revoke Token */
         delete: operations["revoke_token_api_v1_tokens__token_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Users */
+        get: operations["list_users_api_v1_users_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -1338,6 +1407,28 @@ export interface components {
              */
             medium: "yes" | "no" | "unknown";
         };
+        /** ProjectAuditView */
+        ProjectAuditView: {
+            /** Action */
+            action: string;
+            /** Actor Id */
+            actor_id: string;
+            /** Actor Name */
+            actor_name: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Detail */
+            detail: {
+                [key: string]: unknown;
+            };
+            /** Id */
+            id: number;
+            /** Project Id */
+            project_id: string;
+        };
         /** ProjectCreate */
         ProjectCreate: {
             /** Name */
@@ -1348,10 +1439,42 @@ export interface components {
              */
             type: "warehouse" | "document";
         };
+        /** ProjectMemberUpdate */
+        ProjectMemberUpdate: {
+            /**
+             * Role
+             * @enum {string}
+             */
+            role: "admin" | "member";
+        };
+        /** ProjectMemberView */
+        ProjectMemberView: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /**
+             * Role
+             * @enum {string}
+             */
+            role: "admin" | "member";
+        };
         /** ProjectUpdate */
         ProjectUpdate: {
             /** Name */
             name: string;
+        };
+        /** ProjectUserView */
+        ProjectUserView: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /**
+             * Role
+             * @enum {string}
+             */
+            role: "user" | "admin";
         };
         /** ProjectView */
         ProjectView: {
@@ -1692,6 +1815,8 @@ export interface components {
         TokenCreate: {
             /** Name */
             name: string;
+            /** Projects */
+            projects?: components["schemas"]["TokenProject"][] | null;
             /**
              * Role
              * @enum {string}
@@ -1711,6 +1836,8 @@ export interface components {
             last_used_at: string | null;
             /** Name */
             name: string;
+            /** Projects */
+            projects: components["schemas"]["TokenProjectView"][];
             /** Revoked */
             revoked: boolean;
             /**
@@ -1732,6 +1859,8 @@ export interface components {
             last_used_at: string | null;
             /** Name */
             name: string;
+            /** Projects */
+            projects: components["schemas"]["TokenProjectView"][];
             /** Revoked */
             revoked: boolean;
             /**
@@ -1741,6 +1870,26 @@ export interface components {
             role: "user" | "admin";
             /** Token */
             token: string;
+        };
+        /** TokenProject */
+        TokenProject: {
+            /** Project Id */
+            project_id: string;
+            /**
+             * Role
+             * @enum {string}
+             */
+            role: "admin" | "member";
+        };
+        /** TokenProjectView */
+        TokenProjectView: {
+            /** Project Id */
+            project_id: string;
+            /**
+             * Role
+             * @enum {string}
+             */
+            role: "admin" | "member";
         };
         /** TurnView */
         TurnView: {
@@ -2803,6 +2952,137 @@ export interface operations {
             };
         };
     };
+    list_project_audit_api_v1_projects__project_id__audit_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectAuditView"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_project_members_api_v1_projects__project_id__members_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectMemberView"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    put_project_member_api_v1_projects__project_id__members__token_id__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                token_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProjectMemberUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectMemberView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_project_member_api_v1_projects__project_id__members__token_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                token_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     providers_api_v1_providers_get: {
         parameters: {
             query?: never;
@@ -3666,6 +3946,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_users_api_v1_users_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectUserView"][];
                 };
             };
         };

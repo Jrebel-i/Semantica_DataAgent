@@ -46,6 +46,17 @@ class ProjectSetting(Base):
     value: Mapped[str]
 
 
+class ProjectAudit(Base):
+    __tablename__ = "project_audit"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[str] = mapped_column(index=True)
+    actor_id: Mapped[str]
+    actor_name: Mapped[str]
+    action: Mapped[str]
+    detail: Mapped[str]
+    created_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC))
+
+
 class AgentCredential(Base):
     __tablename__ = "agent_credentials"
     digest: Mapped[str] = mapped_column(primary_key=True)

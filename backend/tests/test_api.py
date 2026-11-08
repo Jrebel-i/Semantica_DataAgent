@@ -63,7 +63,15 @@ def test_token_lifecycle(client):
     listing = c.get("/api/v1/tokens", headers=headers)
     assert token not in listing.text
     row = next(item for item in listing.json() if item["id"] == issued["id"])
-    assert set(row) == {"id", "name", "role", "created_at", "last_used_at", "revoked"}
+    assert set(row) == {
+        "id",
+        "name",
+        "role",
+        "created_at",
+        "last_used_at",
+        "revoked",
+        "projects",
+    }
     assert row["name"] == "Alice" and row["role"] == "user"
     assert row["created_at"] and row["last_used_at"] is None
     user_headers = {"Authorization": f"Bearer {token}"}
@@ -158,11 +166,14 @@ def test_existing_tokens_survive_upgrade(tmp_path, monkeypatch):
 
 
 def test_user_cannot_read_or_write_settings(client):
-    from semantica_dataagent.db import Token, digest, sessions
+    from semantica_dataagent.db import ProjectMember, Token, digest, sessions
 
     c, _ = client
     with sessions().begin() as db:
-        db.add(Token(digest=digest("user-token"), name="user", role="user"))
+        user = Token(digest=digest("user-token"), name="user", role="user")
+        db.add(user)
+        db.flush()
+        db.add(ProjectMember(project_id="default", token_id=user.id, role="member"))
     headers = {"Authorization": "Bearer user-token"}
     assert c.get("/api/v1/me", headers=headers).json()["role"] == "user"
     assert c.get("/api/v1/settings", headers=headers).status_code == 403
