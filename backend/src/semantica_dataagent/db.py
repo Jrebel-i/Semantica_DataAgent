@@ -149,6 +149,7 @@ class Conversation(Base):
     __tablename__ = "conversations"
     id: Mapped[str] = mapped_column(primary_key=True, default=lambda: uuid.uuid4().hex)
     owner_id: Mapped[str]
+    project_id: Mapped[str] = mapped_column(default="default", server_default="default")
     title: Mapped[str]
     agent: Mapped[str]
     provider_id: Mapped[str]

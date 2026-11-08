@@ -49,9 +49,12 @@ def test_exec_cli_is_available():
             "p",
             "--model",
             "m",
+            "--project",
+            "docs",
         ]
     )
     assert args.max_queries == 40
+    assert args.project == "docs"
 
 
 def test_condition_columns_and_missing_condition_detection():
@@ -320,6 +323,7 @@ def test_fake_agent_direct_clarification_and_query_plan(monkeypatch, tmp_path):
                 "agent": "pi",
                 "provider_id": "fake",
                 "model": "fake",
+                "project": "docs",
             },
         )()
         monkeypatch.setenv("EVAL_EXEC_TOKEN", "issue-121-secret")
@@ -346,6 +350,12 @@ def test_fake_agent_direct_clarification_and_query_plan(monkeypatch, tmp_path):
             if path == "/api/v1/conversations/ask" and body.get("conversation_id")
         )
         assert follow_up["conversation_id"] == "conv-clarify"
+        assert report["project"] == "docs"
+        assert all(
+            body.get("project") == "docs"
+            for path, body in requests
+            if path == "/api/v1/conversations/ask"
+        )
         assert "请按以下口径回答并给出 SQL" in follow_up["question"]
         assert "按业务审定口径" in follow_up["question"]
         assert not any(

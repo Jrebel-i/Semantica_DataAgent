@@ -112,6 +112,17 @@
             ],
             "title": "Model"
           },
+          "project": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project"
+          },
           "provider_id": {
             "anyOf": [
               {
@@ -391,6 +402,14 @@
             "title": "Pinned",
             "type": "boolean"
           },
+          "project_id": {
+            "title": "Project Id",
+            "type": "string"
+          },
+          "project_name": {
+            "title": "Project Name",
+            "type": "string"
+          },
           "provider_id": {
             "title": "Provider Id",
             "type": "string"
@@ -422,6 +441,8 @@
         },
         "required": [
           "id",
+          "project_id",
+          "project_name",
           "title",
           "agent",
           "provider_id",
@@ -503,6 +524,14 @@
             "title": "Pinned",
             "type": "boolean"
           },
+          "project_id": {
+            "title": "Project Id",
+            "type": "string"
+          },
+          "project_name": {
+            "title": "Project Name",
+            "type": "string"
+          },
           "provider_id": {
             "title": "Provider Id",
             "type": "string"
@@ -527,6 +556,8 @@
         },
         "required": [
           "id",
+          "project_id",
+          "project_name",
           "title",
           "agent",
           "provider_id",
@@ -3311,6 +3342,22 @@
               "default": false,
               "title": "Archived",
               "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "project",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Project"
             }
           }
         ],

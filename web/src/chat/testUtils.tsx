@@ -139,6 +139,8 @@ export async function chooseComposerOption(label: string, option: RegExp) {
 export function conversationRow(id: string, title: string) {
   return {
     id,
+    project_id: "default",
+    project_name: "业务数据",
     title,
     agent: "pi",
     provider_id: provider.id,
@@ -147,6 +149,8 @@ export function conversationRow(id: string, title: string) {
     updated_at: "2026-11-05T00:00:00Z",
     turn_count: 0,
     resumable: true,
+    pinned: false,
+    archived: false,
   };
 }
 

@@ -21,6 +21,7 @@ export function useAsk({
   providerId,
   model,
   effort,
+  projectId,
   currentConversationId,
   setCurrentConversationId,
   sending,
@@ -44,6 +45,7 @@ export function useAsk({
   providerId: string;
   model: string;
   effort: EffortLevel | "";
+  projectId: string;
   currentConversationId: string;
   setCurrentConversationId: Dispatch<SetStateAction<string>>;
   sending: boolean;
@@ -183,6 +185,7 @@ export function useAsk({
           agent: agentId,
           provider_id: providerId,
           model,
+          ...(projectId ? { project: projectId } : {}),
           ...(effort ? { effort } : {}),
           ...(currentConversationId
             ? { conversation_id: currentConversationId }

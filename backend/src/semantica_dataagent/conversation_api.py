@@ -22,6 +22,7 @@ from .auth import Requester, current_requester, issue_agent_credential
 from .db import (
     AgentCredential,
     Conversation,
+    Project,
     Provider,
     QueryExecution,
     Setting,
@@ -29,6 +30,7 @@ from .db import (
     TurnEvent,
     sessions,
 )
+from .project_api import accessible_projects, resolve_project_scope
 from .provider_api import EFFORT_LEVELS, EffortLevel, provider_config
 
 router = APIRouter()
@@ -42,6 +44,7 @@ class AskRequest(BaseModel):
     model: str | None = None
     effort: EffortLevel | None = None
     conversation_id: str | None = None
+    project: str | None = None
 
 
 class EventView(BaseModel):
@@ -69,6 +72,8 @@ class TurnView(BaseModel):
 
 class ConversationView(BaseModel):
     id: str
+    project_id: str
+    project_name: str
     title: str
     agent: str
     provider_id: str
@@ -206,9 +211,26 @@ def _turn(
     )
 
 
-def _view(row: Conversation, turn_count: int) -> ConversationView:
+def _project_names(db, project_ids: list[str]) -> dict[str, str]:
+    if not project_ids:
+        return {}
+    rows = (
+        db.query(Project.id, Project.name)
+        .filter(Project.id.in_(set(project_ids)))
+        .all()
+    )
+    return {row.id: row.name for row in rows}
+
+
+def _project_name(db, project_id: str) -> str:
+    return _project_names(db, [project_id]).get(project_id, project_id)
+
+
+def _view(row: Conversation, turn_count: int, project_name: str) -> ConversationView:
     return ConversationView(
         id=row.id,
+        project_id=row.project_id,
+        project_name=project_name,
         title=row.title,
         agent=row.agent,
         provider_id=row.provider_id,
@@ -271,14 +293,23 @@ def _finish_turn(turn_id: int, status: str, event: AgentEvent | None, error=None
 
 @router.get("/api/v1/conversations", response_model=list[ConversationView])
 def conversations(
-    requester: Annotated[Requester, Depends(current_requester)], archived: bool = False
+    requester: Annotated[Requester, Depends(current_requester)],
+    archived: bool = False,
+    project: str | None = None,
 ):
     cleanup_expired_sessions()
+    if project is not None:
+        allowed = [resolve_project_scope(project, requester).project_id]
+    else:
+        allowed = [row.id for row in accessible_projects(requester)]
+    if not allowed:
+        return []
     with sessions()() as db:
         rows = (
             db.query(Conversation)
             .filter(
                 Conversation.owner_id == requester.id,
+                Conversation.project_id.in_(allowed),
                 Conversation.archived_at.is_not(None)
                 if archived
                 else Conversation.archived_at.is_(None),
@@ -300,7 +331,11 @@ def conversations(
             if rows
             else {}
         )
-        return [_view(row, counts.get(row.id, 0)) for row in rows]
+        names = _project_names(db, [row.project_id for row in rows])
+        return [
+            _view(row, counts.get(row.id, 0), names.get(row.project_id, row.project_id))
+            for row in rows
+        ]
 
 
 @router.get(
@@ -334,7 +369,7 @@ def conversation_detail(
         for event in events:
             by_turn[event.turn_id].append(event)
         return ConversationDetail(
-            **_view(row, len(turns)).model_dump(),
+            **_view(row, len(turns), _project_name(db, row.project_id)).model_dump(),
             turns=[
                 _turn(turn, by_turn[turn.id], row.provider_id, row.model)
                 for turn in turns
@@ -395,7 +430,7 @@ def patch_conversation(
             .filter_by(conversation_id=conversation_id)
             .scalar()
         )
-        return _view(row, count)
+        return _view(row, count, _project_name(db, row.project_id))
 
 
 @router.delete("/api/v1/conversations/{conversation_id}", status_code=204)
@@ -505,6 +540,23 @@ async def ask(
 ):
     now = datetime.now(UTC)
     cleanup_expired_sessions()
+    if body.conversation_id:
+        with sessions()() as db:
+            existing = db.get(Conversation, body.conversation_id)
+            if existing is None or existing.owner_id != requester.id:
+                raise HTTPException(404, "Conversation not found")
+            if not existing.resumable:
+                raise HTTPException(
+                    409, "Conversation session expired and cannot be resumed"
+                )
+            if body.agent is not None and body.agent != existing.agent:
+                raise HTTPException(409, "Start a new conversation to change agent")
+            bound_project = existing.project_id
+        if body.project is not None and body.project != bound_project:
+            raise HTTPException(409, "对话已绑定其它项目，请新建对话")
+        project_id = resolve_project_scope(bound_project, requester).project_id
+    else:
+        project_id = resolve_project_scope(body.project, requester).project_id
     with sessions().begin() as db:
         db.execute(text("BEGIN IMMEDIATE"))
         if body.conversation_id:
@@ -515,6 +567,8 @@ async def ask(
                 raise HTTPException(
                     409, "Conversation session expired and cannot be resumed"
                 )
+            if conversation.project_id != project_id:
+                raise HTTPException(409, "对话已绑定其它项目，请新建对话")
             if body.agent is not None and body.agent != conversation.agent:
                 raise HTTPException(409, "Start a new conversation to change agent")
             agent_id = conversation.agent
@@ -535,6 +589,7 @@ async def ask(
             conversation = Conversation(
                 id=uuid.uuid4().hex,
                 owner_id=requester.id,
+                project_id=project_id,
                 title=body.question.strip()[:100],
                 agent=agent_id,
                 provider_id=provider_id,
@@ -584,7 +639,9 @@ async def ask(
         provider=provider_settings,
         model=model,
         mcp_url=public_base_url() + "/mcp/",
-        mcp_token=issue_agent_credential(requester.id, conversation_id, turn_id),
+        mcp_token=issue_agent_credential(
+            requester.id, conversation_id, turn_id, project_id=project_id
+        ),
         turn_id=turn_id,
         effort=body.effort,
     )
@@ -635,6 +692,7 @@ async def confirm_query(
         provider_settings = provider_config(provider)
         model = turn.model or conversation.model
         effort = turn.effort
+        conversation_project_id = conversation.project_id
         seq = (
             db.query(func.max(TurnEvent.seq)).filter_by(turn_id=turn_id).scalar() or 0
         ) + 1
@@ -676,7 +734,12 @@ async def confirm_query(
         provider=provider_settings,
         model=model,
         mcp_url=public_base_url() + "/mcp/",
-        mcp_token=issue_agent_credential(requester.id, conversation_id, turn_id),
+        mcp_token=issue_agent_credential(
+            requester.id,
+            conversation_id,
+            turn_id,
+            project_id=conversation_project_id,
+        ),
         turn_id=turn_id,
         effort=effort,
     )

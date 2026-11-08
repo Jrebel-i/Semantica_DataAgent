@@ -4,7 +4,13 @@ import { ArrowUpOutlined } from "@ant-design/icons";
 import type { AgentProfiles } from "../agentProfiles";
 import type { Messages } from "../i18n";
 import { EFFORT_LEVELS } from "./effort";
-import type { Agent, Conversation, EffortLevel, Provider } from "./types";
+import type {
+  Agent,
+  Conversation,
+  EffortLevel,
+  Project,
+  Provider,
+} from "./types";
 
 export function Composer({
   messages,
@@ -15,6 +21,10 @@ export function Composer({
   currentConversationId,
   resumable,
   emptyConversation,
+  projects,
+  projectId,
+  selectProject,
+  projectLocked,
   agents,
   agentId,
   selectAgent,
@@ -40,6 +50,10 @@ export function Composer({
   currentConversationId: string;
   resumable: boolean;
   emptyConversation: boolean;
+  projects: Project[];
+  projectId: string;
+  selectProject: (value: string) => void;
+  projectLocked: boolean;
   agents: Agent[];
   agentId: string;
   selectAgent: (value: string) => void;
@@ -92,6 +106,31 @@ export function Composer({
         />
         <div className="composer-controls">
           <div className="chat-selectors">
+            {projects.length === 1 && (
+              <span className="composer-project-label" title={projects[0].name}>
+                {projects[0].name}
+              </span>
+            )}
+            {projects.length > 1 && (
+              <label>
+                <select
+                  aria-label={t.projects}
+                  title={projectLocked ? t.projectLockedHint : t.projects}
+                  value={projectId}
+                  disabled={projectLocked}
+                  onChange={(event) => selectProject(event.target.value)}
+                >
+                  {projects.map((project) => (
+                    <option key={project.id} value={project.id}>
+                      {project.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+            {projectLocked && projects.length > 1 && (
+              <span className="chat-selector-hint">{t.projectLockedHint}</span>
+            )}
             <label>
               <select
                 aria-label={t.askAgent}
