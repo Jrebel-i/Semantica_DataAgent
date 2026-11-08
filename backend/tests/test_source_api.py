@@ -257,6 +257,65 @@ def test_failed_git_commit_restores_category(source_client):
     assert (root / "knowledge/cat/b.md").read_text() == "keep"
 
 
+def test_failed_git_commit_restores_whole_category_for_subfolder_replace(
+    source_client,
+):
+    c, h, root = source_client
+    assert (
+        upload(
+            c,
+            h,
+            "knowledge/cat",
+            {"a.md": "original", "sub/old.md": "old", "other/b.md": "b"},
+            replace=True,
+        ).status_code
+        == 200
+    )
+    (root / ".git/index.lock").write_text("locked")
+    response = c.post(
+        "/api/v1/source/upload",
+        headers=h,
+        json={
+            "category": "cat",
+            "subfolder": "sub",
+            "files": [{"path": "a.md", "content_base64": payload("changed")}],
+            "replace": True,
+        },
+    )
+    assert response.status_code == 422
+    assert (root / "knowledge/cat/a.md").read_text() == "original"
+    assert (root / "knowledge/cat/sub/old.md").read_text() == "old"
+    assert (root / "knowledge/cat/other/b.md").read_text() == "b"
+
+
+def test_replace_with_subfolder_deletes_unlisted_category_files(source_client):
+    c, h, root = source_client
+    assert (
+        upload(
+            c,
+            h,
+            "knowledge/cat",
+            {"sub/old.md": "old", "other/b.md": "b"},
+            replace=True,
+        ).status_code
+        == 200
+    )
+    response = c.post(
+        "/api/v1/source/upload",
+        headers=h,
+        json={
+            "category": "cat",
+            "subfolder": "sub",
+            "files": [{"path": "new.md", "content_base64": payload("new")}],
+            "replace": True,
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert (root / "knowledge/cat/sub/new.md").read_text() == "new"
+    assert not (root / "knowledge/cat/sub/old.md").exists()
+    assert not (root / "knowledge/cat/other/b.md").exists()
+
+
 def test_unreadable_directory_is_not_an_empty_tree(source_client):
     c, h, root = source_client
     assert upload(c, h, "knowledge/cat", {"a.md": "content"}).status_code == 200
