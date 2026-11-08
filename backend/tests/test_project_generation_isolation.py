@@ -18,12 +18,18 @@ def _seed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     initialize()
 
 
-def _project(project_id: str, name: str, generation: str) -> None:
+def _project(
+    project_id: str, name: str, generation: str, pointer_id: int | None = None
+) -> None:
     from semantica_dataagent.db import GenerationPointer, Project, sessions
 
     with sessions().begin() as db:
         db.add(Project(id=project_id, name=name, type="document", status="active"))
-        db.add(GenerationPointer(project_id=project_id, generation=generation))
+        db.add(
+            GenerationPointer(
+                id=pointer_id, project_id=project_id, generation=generation
+            )
+        )
 
 
 def _fetch(sql: str, params: tuple = ()) -> list[tuple]:
@@ -79,16 +85,26 @@ def test_pruning_one_project_never_touches_another(tmp_path, monkeypatch):
     ) == [("beta_gen2",)]
 
 
-def test_interrupted_cleanup_keeps_another_projects_current_generation(
+def test_interrupted_cleanup_keeps_another_projects_generations(
     tmp_path, monkeypatch
 ):
     from semantica_dataagent import knowledge, project_context
-    from semantica_dataagent.db import Build, sessions
+    from semantica_dataagent.db import Build, KnowledgeGeneration, sessions
 
     _seed(tmp_path, monkeypatch)
-    _project("alpha", "Alpha", "alpha_current")
-    _project("beta", "Beta", "beta_current")
+    _project("alpha", "Alpha", "alpha_gen2", pointer_id=1)
+    _project("beta", "Beta", "beta_current", pointer_id=2)
+    start = datetime(2026, 1, 1, tzinfo=UTC)
     with sessions().begin() as db:
+        for project_id in ("alpha", "beta"):
+            for index in range(3):
+                db.add(
+                    KnowledgeGeneration(
+                        name=f"{project_id}_gen{index}",
+                        project_id=project_id,
+                        created_at=(start + timedelta(days=index)).isoformat(),
+                    )
+                )
         db.add_all(
             [
                 Build(
@@ -121,8 +137,15 @@ def test_interrupted_cleanup_keeps_another_projects_current_generation(
     knowledge.cleanup_interrupted_generations()
     assert deleted == ["alpha_orphan"]
     assert _fetch(
+        "SELECT name FROM knowledge_generations "
+        "WHERE project_id = 'beta' ORDER BY name"
+    ) == [("beta_gen0",), ("beta_gen1",), ("beta_gen2",)]
+    assert _fetch(
         "SELECT generation FROM generation_pointer WHERE project_id = 'beta'"
     ) == [("beta_current",)]
+    assert _fetch(
+        "SELECT generation FROM generation_pointer WHERE project_id = 'alpha'"
+    ) == [("alpha_gen2",)]
 
 
 def test_generation_names_and_collections_do_not_collide_between_projects():
