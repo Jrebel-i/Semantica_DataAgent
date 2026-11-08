@@ -5,11 +5,20 @@ import re
 from . import knowledge, project_context
 
 
-def lookup_dim_values(table: str, keyword: str, field: str | None = None) -> list[dict]:
+def lookup_dim_values(
+    table: str,
+    keyword: str,
+    field: str | None = None,
+    project_id: str | None = None,
+) -> list[dict]:
     keyword = keyword.strip()
     if not table or not keyword:
         raise ValueError("table and keyword are required")
-    values = knowledge.settings()
+    values = (
+        knowledge.settings()
+        if project_id in (None, project_context.DEFAULT_PROJECT_ID)
+        else knowledge.settings(project_id)
+    )
     project = project_context.from_values(values)
     store = knowledge.read_graph(values)
     params = {

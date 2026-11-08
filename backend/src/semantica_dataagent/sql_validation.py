@@ -71,27 +71,37 @@ class Snapshot:
 _snapshot_cache = None
 
 
-def _build_version():
+def _build_version(project_id):
     with sessions()() as db:
         latest = db.execute(
-            select(Build.id, Build.status).order_by(Build.id.desc()).limit(1)
+            select(Build.id, Build.status)
+            .where(Build.project_id == project_id)
+            .order_by(Build.id.desc())
+            .limit(1)
         ).first()
         success = db.scalar(
-            select(func.max(Build.id)).where(Build.status == "succeeded")
+            select(func.max(Build.id)).where(
+                Build.status == "succeeded", Build.project_id == project_id
+            )
         )
     return (success, tuple(latest) if latest else None)
 
 
-def load_snapshot():
+def load_snapshot(project_id: str | None = None):
     global _snapshot_cache
-    values = knowledge.settings()
+    values = (
+        knowledge.settings()
+        if project_id in (None, project_context.DEFAULT_PROJECT_ID)
+        else knowledge.settings(project_id)
+    )
     project = project_context.from_values(values)
-    version = _build_version()
+    version = _build_version(project.project_id)
     key = (
         os.environ["DATAAGENT_DB_PATH"],
         values["neo4j_uri"],
         values["neo4j_user"],
         values["neo4j_password"],
+        project.project_id,
         project.generation,
         version,
     )
@@ -505,7 +515,11 @@ def join_path(tables, snapshot=None):
     }
 
 
-def validate_sql(sql: str, dialect: Literal["hive", "spark", "doris"] = "hive") -> dict:
+def validate_sql(
+    sql: str,
+    dialect: Literal["hive", "spark", "doris"] = "hive",
+    project_id: str | None = None,
+) -> dict:
     """Validate SQL against tables, fields, joins and partition rules.
 
     Returns the existing status/table/field/join shape plus an ``issues`` list.
@@ -513,9 +527,20 @@ def validate_sql(sql: str, dialect: Literal["hive", "spark", "doris"] = "hive") 
     field, join, partition or partition_metadata, with ``table``, ``field`` or
     ``condition`` where applicable, plus ``message`` and ``suggestion``.
     """
-    snapshot = load_snapshot()
+    snapshot = (
+        load_snapshot()
+        if project_id in (None, project_context.DEFAULT_PROJECT_ID)
+        else load_snapshot(project_id)
+    )
     return check_sql(sql, dialect, snapshot, partition_tables=snapshot.tables)
 
 
-def find_join_path(tables: list[str]) -> dict:
-    return join_path(tables)
+def find_join_path(tables: list[str], project_id: str | None = None) -> dict:
+    if not 2 <= len(tables) <= 4:
+        raise ValueError("Provide two to four tables")
+    snapshot = (
+        load_snapshot()
+        if project_id in (None, project_context.DEFAULT_PROJECT_ID)
+        else load_snapshot(project_id)
+    )
+    return join_path(tables, snapshot)

@@ -98,6 +98,11 @@ def _tool_error(result: dict) -> dict:
     return result["structuredContent"]
 
 
+def _value(result: dict) -> dict:
+    assert result.get("isError") is not True, result
+    return result["structuredContent"]
+
+
 def _credential(owner_id: str, conversation_id: str, turn_id: int) -> str:
     from semantica_dataagent.auth import issue_agent_credential
 
@@ -145,9 +150,8 @@ def test_single_project_token_uses_its_only_project_without_selection(client):
         c, admin, "only-b", [{"project_id": project_b["id"], "role": "member"}]
     )
 
-    capabilities = _rpc(c, only_b["token"], "get_capabilities")
+    capabilities = _value(_rpc(c, only_b["token"], "get_capabilities"))
 
-    assert capabilities.get("isError") is not True, capabilities
     assert capabilities["project"]["id"] == project_b["id"]
     assert [row["id"] for row in capabilities["projects"]] == [project_b["id"]]
 
@@ -188,12 +192,16 @@ def test_project_can_be_selected_by_query_or_header(client):
         ],
     )
 
-    by_query = _rpc(c, both["token"], "get_capabilities", project=project_b["id"])
-    by_header = _rpc(
-        c,
-        both["token"],
-        "get_capabilities",
-        project_header=project_b["id"],
+    by_query = _value(
+        _rpc(c, both["token"], "get_capabilities", project=project_b["id"])
+    )
+    by_header = _value(
+        _rpc(
+            c,
+            both["token"],
+            "get_capabilities",
+            project_header=project_b["id"],
+        )
     )
 
     assert by_query["project"]["id"] == project_b["id"]
@@ -230,11 +238,13 @@ def test_agent_credential_project_cannot_be_overridden(client):
         "X-Dataagent-Turn-Id": str(turn_id),
     }
 
-    bound = _rpc(
-        c,
-        credential,
-        "get_capabilities",
-        extra_headers=credential_headers,
+    bound = _value(
+        _rpc(
+            c,
+            credential,
+            "get_capabilities",
+            extra_headers=credential_headers,
+        )
     )
     assert bound["project"]["id"] == DEFAULT
 
@@ -273,14 +283,14 @@ def test_mcp_tools_do_not_accept_a_project_argument_bypass(client):
     )
 
     assert error["code"] == "invalid_input"
-    assert "project_id" in error["message"] or "schema" in error["message"]
+    assert "Invalid tool arguments" in error["message"]
 
 
 def test_get_capabilities_lists_projects_for_a_system_administrator(client):
     c, admin = client
     project_b = _create_project(c, admin, "Issue 178 Admin B")
 
-    capabilities = _rpc(c, admin, "get_capabilities")
+    capabilities = _value(_rpc(c, admin, "get_capabilities"))
 
     assert capabilities["project"]["id"] == DEFAULT
     listed = {row["id"]: row for row in capabilities["projects"]}

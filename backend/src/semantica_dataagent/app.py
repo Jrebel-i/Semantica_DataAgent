@@ -729,15 +729,21 @@ def build_detail(
         return build_view(row)
 
 
-from .dimension_api import lookup_dim_values
+from .dimension_api import lookup_dim_values as _lookup_dim_values
 from .personal_settings import router as personal_settings_router
-from .query_api import execute_query, propose_query
+from .query_api import execute_query as _execute_query
+from .query_api import propose_query as _propose_query
 from .query_api import router as query_router
-from .sample_api import sample_table_data
-from .sql_validation import find_join_path, validate_sql
-from .table_api import describe_tables, search_knowledge
+from .sample_api import DEFAULT_LIMIT as _SAMPLE_DEFAULT_LIMIT
+from .sample_api import MAX_LIMIT as _SAMPLE_MAX_LIMIT
+from .sample_api import sample_table_data as _sample_table_data
+from .sql_validation import find_join_path as _find_join_path
+from .sql_validation import validate_sql as _validate_sql
+from .table_api import describe_tables as _describe_tables
 from .table_api import router as table_router
-from .task_api import get_lineage, read_task_sql
+from .table_api import search_knowledge as _search_knowledge
+from .task_api import get_lineage as _get_lineage
+from .task_api import read_task_sql as _read_task_sql
 from .task_api import router as task_router
 
 app.include_router(query_router)
@@ -745,7 +751,9 @@ app.include_router(personal_settings_router)
 app.include_router(table_router)
 app.include_router(task_router)
 
-from .document_api import list_categories, read_category_index, read_document
+from .document_api import list_categories as _list_categories
+from .document_api import read_category_index as _read_category_index
+from .document_api import read_document as _read_document
 from .document_api import router as document_router
 
 app.include_router(document_router)
@@ -762,13 +770,16 @@ from .conversation_api import router as conversation_router
 
 app.include_router(conversation_router)
 
-from .ask_api import ask_dataagent
-from .clarification import request_clarification
-from .corrections import propose_correction
+from .ask_api import ask_dataagent as _ask_dataagent
+from .clarification import Questions
+from .clarification import request_clarification as _request_clarification
+from .corrections import Text as CorrectionText
+from .corrections import propose_correction as _propose_correction
 from .corrections import router as corrections_router
 
 app.include_router(corrections_router)
-from .gaps import report_knowledge_gap
+from .gaps import Text as GapText
+from .gaps import report_knowledge_gap as _report_knowledge_gap
 from .gaps import router as gaps_router
 
 app.include_router(gaps_router)
@@ -776,6 +787,140 @@ app.include_router(gaps_router)
 from .project_api import router as projects_router
 
 app.include_router(projects_router)
+
+
+def _mcp_project_id() -> str:
+    """Project bound to this MCP request by the transport middleware."""
+    from .mcp_context import current_project_id
+
+    return current_project_id()
+
+
+def _mcp_project_arg() -> str | None:
+    """Project argument that preserves the historical default-project calls."""
+    project_id = _mcp_project_id()
+    return None if project_id == project_context.DEFAULT_PROJECT_ID else project_id
+
+
+def describe_tables(names: list[str]) -> list[dict]:
+    """Describe tables in the caller's project, including fields and documents."""
+    return _describe_tables(names, project_id=_mcp_project_arg())
+
+
+def search_knowledge(
+    query: str,
+    scope: Literal["tables", "fields", "docs", "tasks", "all"],
+    top_k: int = 5,
+    category: str | None = None,
+) -> list[dict]:
+    """Search one project's tables, fields, tasks and knowledge documents."""
+    return _search_knowledge(
+        query,
+        scope,
+        top_k,
+        category,
+        project_id=_mcp_project_arg(),
+    )
+
+
+def lookup_dim_values(table: str, keyword: str, field: str | None = None) -> list[dict]:
+    """Look up indexed dimension values in the caller's project."""
+    return _lookup_dim_values(table, keyword, field, project_id=_mcp_project_arg())
+
+
+def list_categories() -> list[dict]:
+    """List knowledge categories in the caller's project."""
+    return _list_categories(project_id=_mcp_project_arg())
+
+
+def read_category_index(category: str) -> dict:
+    """Read one knowledge category's index document."""
+    return _read_category_index(category, project_id=_mcp_project_arg())
+
+
+def read_document(doc_id: str, section: str | None = None) -> dict:
+    """Read a knowledge document from the caller's project."""
+    return _read_document(doc_id, section, project_id=_mcp_project_arg())
+
+
+def get_lineage(
+    table: str,
+    direction: Literal["up", "down"] = "up",
+    depth: int = 1,
+    column: str | None = None,
+) -> list[dict]:
+    """Find table or field lineage in the caller's project."""
+    return _get_lineage(
+        table,
+        direction,
+        depth,
+        column,
+        project_id=_mcp_project_arg(),
+    )
+
+
+def read_task_sql(task_id: str) -> dict:
+    """Read a task's SQL from the caller's project."""
+    return _read_task_sql(task_id, project_id=_mcp_project_arg())
+
+
+def validate_sql(sql: str, dialect: Literal["hive", "spark", "doris"] = "hive") -> dict:
+    """Validate SQL against the caller's project metadata."""
+    return _validate_sql(sql, dialect, project_id=_mcp_project_arg())
+
+
+def find_join_path(tables: list[str]) -> dict:
+    """Find a join path between tables in the caller's project."""
+    return _find_join_path(tables, project_id=_mcp_project_arg())
+
+
+def request_clarification(questions: Questions) -> dict:
+    """Ask the questioner to pick an evidence-backed interpretation."""
+    return _request_clarification(questions, project_id=_mcp_project_arg())
+
+
+def report_knowledge_gap(question: GapText, missing: GapText) -> dict:
+    """Record missing knowledge in the caller's project."""
+    return _report_knowledge_gap(question, missing, project_id=_mcp_project_id())
+
+
+def propose_correction(
+    target: CorrectionText, patch: CorrectionText, reason: CorrectionText
+) -> dict:
+    """Propose a correction in the caller's project."""
+    return _propose_correction(target, patch, reason, project_id=_mcp_project_id())
+
+
+async def ask_dataagent(question: str, conversation_id: str | None = None) -> dict:
+    """Ask the configured online agent; only the default project is supported."""
+    return await _ask_dataagent(
+        question, conversation_id, project_id=_mcp_project_arg()
+    )
+
+
+async def sample_table_data(
+    table: Annotated[str, Field(min_length=1)],
+    columns: Annotated[list[str] | None, Field(default=None)] = None,
+    limit: Annotated[
+        int, Field(default=_SAMPLE_DEFAULT_LIMIT, ge=1, le=_SAMPLE_MAX_LIMIT)
+    ] = _SAMPLE_DEFAULT_LIMIT,
+) -> dict:
+    """Return a few real rows from one table in the caller's project."""
+    return await _sample_table_data(
+        table, columns, limit, project_id=_mcp_project_arg()
+    )
+
+
+async def propose_query(sql: str) -> dict:
+    """Propose a validated Doris SQL query for the questioner to confirm."""
+    return await _propose_query(sql, project_id=_mcp_project_arg())
+
+
+async def execute_query(
+    sql: str | None = None, confirmation_id: str | None = None
+) -> dict:
+    """Plan SQL, then execute only after the user explicitly confirms the plan."""
+    return await _execute_query(sql, confirmation_id, project_id=_mcp_project_arg())
 
 
 def create_mcp():
@@ -811,6 +956,28 @@ def create_mcp():
     def get_capabilities() -> dict:
         from importlib.metadata import version
 
+        from .mcp_context import current_requester
+        from .project_api import accessible_projects
+
+        project_id = _mcp_project_id()
+        values = (
+            knowledge.settings()
+            if project_id == project_context.DEFAULT_PROJECT_ID
+            else knowledge.settings(project_id)
+        )
+        project = project_context.from_values(values, project_id)
+        name, project_type = project.name, project.project_type
+        try:
+            with sessions()() as db:
+                row = db.get(Project, project_id)
+                if row is not None:
+                    name, project_type = row.name, row.type
+        except Exception:  # noqa: BLE001, S110 - metadata is advisory
+            pass
+        try:
+            projects = accessible_projects(current_requester())
+        except Exception:  # noqa: BLE001 - metadata must not break capabilities
+            projects = []
         return {
             "application_version": version("semantica-dataagent"),
             "schema_version": "v1",
@@ -819,9 +986,15 @@ def create_mcp():
             "prompts": sorted(
                 prompt.name for prompt in server._prompt_manager.list_prompts()
             ),
-            "current_generation": project_context.from_values(
-                knowledge.settings()
-            ).generation,
+            "current_generation": project.generation,
+            "project": {
+                "id": project.project_id,
+                "name": name,
+                "type": project_type,
+            },
+            "projects": [
+                {"id": row.id, "name": row.name, "type": row.type} for row in projects
+            ],
         }
 
     server.tool()(get_capabilities)

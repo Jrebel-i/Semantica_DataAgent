@@ -101,13 +101,9 @@ def test_credential_project_wins_and_cannot_be_overridden(client):
 
     c, admin = client
     project_b = _project(c, admin, "Context B")
-    admin_requester = _requester(
-        {"id": "admin", "role": "admin", "token": admin}
-    )
+    admin_requester = _requester({"id": "admin", "role": "admin", "token": admin})
 
-    assert (
-        resolve_mcp_project(admin_requester, DEFAULT, None) == DEFAULT
-    )
+    assert resolve_mcp_project(admin_requester, DEFAULT, None) == DEFAULT
     assert _error(resolve_mcp_project, admin_requester, DEFAULT, project_b["id"]) == (
         "项目不存在"
     )

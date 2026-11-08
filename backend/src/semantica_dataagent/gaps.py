@@ -16,15 +16,18 @@ router = APIRouter()
 Text = Annotated[str, Field(min_length=1, max_length=20000, pattern=r"\S")]
 
 
-def report_knowledge_gap(question: Text, missing: Text) -> dict:
+def report_knowledge_gap(
+    question: Text, missing: Text, project_id: str = "default"
+) -> dict:
     """Record missing knowledge that prevents answering a question."""
     requester = current_requester()
+    project_id = project_id or "default"
     gap_id = uuid.uuid4().hex
     with sessions().begin() as db:
         db.add(
             KnowledgeGap(
                 id=gap_id,
-                project_id="default",
+                project_id=project_id,
                 owner_id=requester.id,
                 question=question,
                 missing=missing,
