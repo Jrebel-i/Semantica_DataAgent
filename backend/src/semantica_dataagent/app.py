@@ -26,7 +26,7 @@ from sqlalchemy import text, update
 from . import knowledge, project_context
 from .api_time import UtcDatetime
 from .auth import admin, authenticate_mcp, bearer, current_user
-from .build_queue import build_queue
+from .build_queue import build_queue, recover_interrupted_builds
 from .db import (
     Build,
     GenerationPointer,
@@ -93,25 +93,7 @@ async def lifespan(application):
 
     cleanup_task = asyncio.create_task(cleanup_loop())
 
-    with sessions().begin() as db:
-        db.execute(
-            update(Build)
-            .where(Build.status == "running")
-            .values(
-                status="failed",
-                error="Build interrupted by application shutdown",
-                finished_at=datetime.now(UTC).isoformat(),
-            )
-        )
-        db.execute(
-            update(Build)
-            .where(Build.status == "queued", Build.correction_proposal_id.is_(None))
-            .values(
-                status="cancelled",
-                error="Build cancelled because the application restarted before it started",
-                finished_at=datetime.now(UTC).isoformat(),
-            )
-        )
+    await asyncio.to_thread(recover_interrupted_builds)
     await asyncio.to_thread(knowledge.cleanup_interrupted_generations)
     from .corrections import recover_applying
 
@@ -179,6 +161,7 @@ KEYS = {
     "embedding_retries",
     "embedding_backoff_seconds",
     "embedding_cache_max_mb",
+    "build_concurrency",
     "assistant_agent",
     "assistant_provider_id",
     "assistant_model",
@@ -396,6 +379,13 @@ def put_settings(
         or not 0 <= int(interval) <= 604800
     ):
         raise HTTPException(status_code=422, detail="Invalid schedule interval")
+    concurrency = body.values.get("build_concurrency")
+    if concurrency not in (None, "") and (
+        not concurrency.isascii()
+        or not concurrency.isdigit()
+        or not 1 <= int(concurrency) <= 16
+    ):
+        raise HTTPException(status_code=422, detail="Invalid build concurrency")
     cache_mb = body.values.get("embedding_cache_max_mb")
     if cache_mb not in (None, ""):
         try:

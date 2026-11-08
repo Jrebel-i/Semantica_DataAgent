@@ -1,7 +1,7 @@
 """Write table and field knowledge for one generation."""
 
 
-def apply_overrides(records):
+def apply_overrides(records, project_id="default"):
     """Overlay approved comments on imported records without changing the source."""
     from dataclasses import replace
 
@@ -10,7 +10,10 @@ def apply_overrides(records):
 
     with sessions()() as db:
         overrides = {
-            row.target: row.comment for row in db.query(MetadataOverride).all()
+            row.target: row.comment
+            for row in db.query(MetadataOverride)
+            .filter(MetadataOverride.project_id == project_id)
+            .all()
         }
     result = []
     for record in records:

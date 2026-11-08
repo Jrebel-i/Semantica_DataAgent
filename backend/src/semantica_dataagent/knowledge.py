@@ -302,19 +302,36 @@ def collection_name(values):
     return project_context.from_values(values).collection_name()
 
 
+_milvus_connection_lock = Lock()
+_milvus_users = 0
+
+
 def milvus(values):
+    global _milvus_users
     uri = urlsplit(values["milvus_uri"])
     store = MilvusStore(
         host=uri.hostname, port=uri.port or (443 if uri.scheme == "https" else 19530)
     )
-    try:
-        store.connect(secure=uri.scheme == "https")
-    except Exception as exc:
-        _close_quietly(getattr(store, "client", None))
-        if not _unavailable(exc):
-            raise
-        raise StorageUnavailable("Milvus storage is unavailable") from exc
+    with _milvus_connection_lock:
+        try:
+            store.connect(secure=uri.scheme == "https")
+        except Exception as exc:
+            _close_quietly(getattr(store, "client", None))
+            if not _unavailable(exc):
+                raise
+            raise StorageUnavailable("Milvus storage is unavailable") from exc
+        _milvus_users += 1
     return store
+
+
+def release_milvus(store):
+    """Disconnect the shared default Milvus alias only after the last build."""
+    global _milvus_users
+    with _milvus_connection_lock:
+        _milvus_users = max(0, _milvus_users - 1)
+        if _milvus_users:
+            return
+        _close_quietly(getattr(store, "client", None))
 
 
 def reference(kind, data, counts=None):
@@ -448,7 +465,7 @@ def build_storage(values, embedding_stats=None):
             )
             vector_store.collection.load()
         finally:
-            vector_store.client.disconnect()
+            release_milvus(vector_store)
     finally:
         graph_store.close()
 
@@ -480,7 +497,7 @@ def incremental_storage(values, embedding_stats=None):
             )
             vector_store.collection.load()
         finally:
-            vector_store.client.disconnect()
+            release_milvus(vector_store)
     finally:
         graph_store.close()
 
@@ -663,7 +680,7 @@ def run_build(build_id):
         records, filtered = filter_records(records, filters)
         from .table_stage import apply_overrides
 
-        records = apply_overrides(records)
+        records = apply_overrides(records, project.project_id)
         validate_records(records)
         _record_log(
             build_id,

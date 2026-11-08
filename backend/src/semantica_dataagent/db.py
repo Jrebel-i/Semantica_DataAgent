@@ -78,7 +78,9 @@ _factory_lock = Lock()
 def _sessions_for_path(path: str):
     with _factory_lock:
         if path not in _factories:
-            _factories[path] = sessionmaker(create_engine(f"sqlite:///{path}"))
+            _factories[path] = sessionmaker(
+                create_engine(f"sqlite:///{path}", connect_args={"timeout": 30})
+            )
         return _factories[path]
 
 
@@ -213,6 +215,7 @@ class Clarification(Base):
 class KnowledgeGap(Base):
     __tablename__ = "knowledge_gaps"
     id: Mapped[str] = mapped_column(primary_key=True, default=lambda: uuid.uuid4().hex)
+    project_id: Mapped[str] = mapped_column(default="default", server_default="default")
     owner_id: Mapped[str]
     question: Mapped[str]
     missing: Mapped[str]
@@ -222,6 +225,7 @@ class KnowledgeGap(Base):
 class CorrectionProposal(Base):
     __tablename__ = "correction_proposals"
     id: Mapped[str] = mapped_column(primary_key=True, default=lambda: uuid.uuid4().hex)
+    project_id: Mapped[str] = mapped_column(default="default", server_default="default")
     owner_id: Mapped[str]
     conversation_id: Mapped[str | None]
     target: Mapped[str]
@@ -242,6 +246,9 @@ class CorrectionProposal(Base):
 
 class MetadataOverride(Base):
     __tablename__ = "metadata_overrides"
+    project_id: Mapped[str] = mapped_column(
+        primary_key=True, default="default", server_default="default"
+    )
     target: Mapped[str] = mapped_column(primary_key=True)
     comment: Mapped[str]
 

@@ -22,6 +22,7 @@ from .db import (
     ProjectAudit,
     ProjectMember,
     ProjectSetting,
+    Setting,
     Token,
     sessions,
 )
@@ -29,6 +30,7 @@ from .project_audit import actor_name, record_project_audit
 from .project_context import (
     DEFAULT_PROJECT_ID,
     GENERATION_PREFIX_KEY,
+    SCHEDULE_INTERVAL_KEY,
     SOURCE_DIRECTORY_KEY,
     ProjectContext,
     ProjectNotFound,
@@ -224,6 +226,93 @@ def admin_project_path_scope(
     return _require_project_admin(scope, requester)
 
 
+def project_scope_by_path(
+    project_id: str,
+    requester: Annotated[Requester, Depends(current_requester)],
+) -> ProjectContext:
+    """Resolve a project named in the URL through the shared read dependency."""
+    return project_scope(requester, project=project_id)
+
+
+def admin_project_scope_by_path(
+    project_id: str,
+    requester: Annotated[Requester, Depends(current_requester)],
+) -> ProjectContext:
+    """Resolve a URL project and apply the same admin rules as the query form."""
+    scope = project_scope(requester, project=project_id)
+    admin(requester.role)
+    return admin_project_scope(scope, requester.role)
+
+
+class ProjectScheduleUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    interval_seconds: int = Field(ge=0, le=604800)
+
+
+class ProjectScheduleView(BaseModel):
+    interval_seconds: int
+
+
+def _schedule_interval(db, project_id: str) -> int:
+    if project_id == DEFAULT_PROJECT_ID:
+        row = db.get(Setting, SCHEDULE_INTERVAL_KEY)
+    else:
+        row = db.get(ProjectSetting, (project_id, SCHEDULE_INTERVAL_KEY))
+    return int(row.value) if row is not None and row.value else 0
+
+
+def _save_schedule_interval(db, project_id: str, interval: int) -> None:
+    value = str(interval)
+    if project_id == DEFAULT_PROJECT_ID:
+        row = db.get(Setting, SCHEDULE_INTERVAL_KEY)
+        if row is None:
+            db.add(Setting(key=SCHEDULE_INTERVAL_KEY, value=value))
+        else:
+            row.value = value
+    else:
+        row = db.get(ProjectSetting, (project_id, SCHEDULE_INTERVAL_KEY))
+        if row is None:
+            db.add(
+                ProjectSetting(
+                    project_id=project_id,
+                    key=SCHEDULE_INTERVAL_KEY,
+                    value=value,
+                )
+            )
+        else:
+            row.value = value
+
+
+@router.get(
+    "/api/v1/projects/{project_id}/schedule", response_model=ProjectScheduleView
+)
+def get_project_schedule(
+    project_id: str,
+    scope: Annotated[ProjectContext, Depends(admin_project_scope_by_path)],
+):
+    with sessions()() as db:
+        return ProjectScheduleView(
+            interval_seconds=_schedule_interval(db, scope.project_id)
+        )
+
+
+@router.put(
+    "/api/v1/projects/{project_id}/schedule", response_model=ProjectScheduleView
+)
+def set_project_schedule(
+    project_id: str,
+    body: ProjectScheduleUpdate,
+    scope: Annotated[ProjectContext, Depends(admin_project_scope_by_path)],
+):
+    with sessions().begin() as db:
+        _save_schedule_interval(db, scope.project_id, body.interval_seconds)
+    from .scheduler import scheduler
+
+    scheduler.configure(body.interval_seconds, project_id=scope.project_id)
+    return ProjectScheduleView(interval_seconds=body.interval_seconds)
+
+
 def project_id_candidate(name: str) -> str:
     """Build a storage-safe id from an ASCII view of the project name."""
     base = re.sub(r"[^a-z0-9]+", "", name.lower())[:24]
@@ -386,6 +475,9 @@ def create_project(
         ) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    from .scheduler import scheduler
+
+    scheduler.configure(0, project_id=project.id)
     return _view(project, "admin")
 
 
