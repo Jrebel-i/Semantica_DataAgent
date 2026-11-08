@@ -77,11 +77,6 @@ def _read_settings(db) -> dict[str, str]:
     return values
 
 
-def _raw_settings() -> dict[str, str]:
-    with sessions()() as db:
-        return _read_settings(db)
-
-
 def normalize_values(values: Mapping[str, Any]) -> dict[str, Any]:
     """Apply the defaults and secret handling previously done by settings()."""
     result = dict(values)
