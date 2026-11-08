@@ -68,6 +68,15 @@ MCP 请求必须解析出**一个**项目，所有读知识库的工具都只经
 
 项目类型也决定检索 skill：数仓型使用 `skills/dataagent-retrieval`，文档型使用 `skills/dataagent-document-retrieval`。`GET /api/v1/skill` 接受可选的 `project`（缺省按项目选择规则），返回对应类型的 Markdown 和文件名；runner 把 skill 写进沙箱时读取 `AgentTurnRequest.project_type`（默认 `warehouse`），#184 绑定对话项目后由调用方传入。MCP prompt 目前仍只注册数仓版，直连 MCP prompt 的客户端不在本票范围。
 
+### 按项目配置来源适配器
+
+`plugin_config` 的主键是 `(project_id, category, plugin_id)`，迁移 `0035` 把旧行原样归到默认项目。默认项目继续接受旧的 `GET/PUT /api/v1/plugins` 接口，行为与迁移前一致；新接口按项目读写：
+
+- `GET /api/v1/projects/{id}/adapters` 使用 `project_path_scope`，成员可读。返回每个已注册源适配器的 `id`、名称、支持的项目类型、是否启用、参数 schema、参数、兼容性；不兼容时 `compatible=false` 并给出 `reason`。DTB 额外返回 `pull`（拉取器启用状态、非凭据参数、`token_configured`），凭据只报告是否已保存，不回显明文。
+- `PUT /api/v1/projects/{id}/adapters` 使用 `admin_project_path_scope`，项目管理员或系统管理员可改。请求体为 `{"adapters":[{"id","enabled","parameters","pull"}]}`；按给出的适配器逐项更新，未给出者保持不变。服务端用适配器自己的 JSON Schema 校验参数，并在启用时校验项目类型兼容性：文档型启用 DTB 源或 DTB 拉取配置返回 422，数仓型允许。
+- DTB 拉取凭据按项目保存在项目级加密设置中；默认项目读取时先看项目级值，再回退到旧的全局 `puller.dtb.token`，所以迁移不会丢已有配置。拉取入队使用该项目的源目录与构建队列。
+- 默认启用集合仍是 `canonical` + `markdown`（按类型过滤后）；启用 canonical/DTB 的仓库型项目才能读到对应来源。前端项目管理页的“来源适配器”区沿用现有管理页样式：不兼容项灰显并显示原因，管理员可改，成员只读。
+
 ## 项目隔离与存储命名
 
 项目之间靠“知识代命名前缀”隔离，不新增 Neo4j 标签或 Milvus 索引。
@@ -77,7 +86,7 @@ MCP 请求必须解析出**一个**项目，所有读知识库的工具都只经
 - 代保留清理和中断清理只处理本项目：先按 `project_id` 圈定代记录，再删除存储数据。跨项目误删是必须被测试守护的缺陷。
 - `project_settings(project_id, key, value)` 只存项目级覆盖；默认项目没有覆盖行，仍读全局 `settings`。`current_project(project_id)` 返回“全局设置 + 本项目覆盖”。
 - 新项目源目录为 `$DATAAGENT_PROJECTS_ROOT/<项目 id>/source`；未设置该环境变量时取数据库文件同目录下的 `projects/<项目 id>/source`。默认项目继续使用全局 `source_directory`。
-- `builds.project_id` 决定工作线程读取哪个项目的代、源目录和检索存储。构建队列按项目并行：同一项目任一时刻最多一个构建，后续构建排队；不同项目可同时运行，并发上限取全局设置 `build_concurrency`（默认 2）。一个项目失败或卡住不阻塞其它项目，排队与运行状态用 `GET /api/v1/builds?project=<id>` 查看。新项目构建使用全局插件配置，但只运行与项目类型兼容的源适配器：文档型项目运行 Markdown 及以后声明支持 `document` 的适配器，数仓型项目可运行全局启用的 canonical/DTB 等适配器。
+- `builds.project_id` 决定工作线程读取哪个项目的代、源目录和检索存储。构建队列按项目并行：同一项目任一时刻最多一个构建，后续构建排队；不同项目可同时运行，并发上限取全局设置 `build_concurrency`（默认 2）。一个项目失败或卡住不阻塞其它项目，排队与运行状态用 `GET /api/v1/builds?project=<id>` 查看。构建在开始时读取该项目自己的源适配器配置并固定为本次快照，因此修改配置只影响下一次构建；运行中的构建不受影响。只运行与项目类型兼容的源适配器：文档型项目运行 Markdown 及以后声明支持 `document` 的适配器，数仓型项目可运行 canonical/DTB 等已启用的适配器。
 - REST 的项目参数是可选的 `project`。缺省解析规则见“项目接口”；解析结果决定源目录、知识代和检索存储，不能退回固定的默认项目。
 
 ## 数据库迁移
