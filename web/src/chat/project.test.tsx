@@ -171,8 +171,10 @@ test("上次使用的项目失效时回退默认项目", async () => {
   );
   render(<ChatPage token="token" role="user" messages={getMessages("zh")} />);
 
-  await waitFor(() => expect(selectText("项目")).toBe("业务数据"));
-  expect(localStorage.getItem(PROJECT_STORAGE_KEY)).toBe("default");
+  await waitFor(() =>
+    expect(localStorage.getItem(PROJECT_STORAGE_KEY)).toBe("default"),
+  );
+  expect(selectText("项目")).toBe("业务数据");
 });
 
 test("只有一个项目时显示为只读标签", async () => {
