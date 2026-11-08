@@ -38,9 +38,8 @@ def _headers(token: str) -> dict[str, str]:
 
 
 class CapturingRunner:
-    agent_id = "pi"
-
-    def __init__(self):
+    def __init__(self, agent_id="pi"):
+        self.agent_id = agent_id
         self.requests = []
 
     def available(self):
@@ -79,10 +78,11 @@ def _ask_files(
     question: str = "看看附件",
     conversation_id: str | None = None,
     token: str | None = None,
+    agent: str = "pi",
 ) -> tuple[int, str]:
     data = {
         "question": question,
-        "agent": "pi",
+        "agent": agent,
         "provider_id": provider["id"],
         "model": "model",
     }
@@ -107,11 +107,11 @@ def _conversation_id(body: str) -> str:
     raise AssertionError(f"no conversation event in {body[:200]!r}")
 
 
-def _install_runner(monkeypatch) -> CapturingRunner:
+def _install_runner(monkeypatch, agent: str = "pi") -> CapturingRunner:
     from semantica_dataagent import agent_runner
 
-    runner = CapturingRunner()
-    monkeypatch.setitem(agent_runner.RUNNERS, "pi", runner)
+    runner = CapturingRunner(agent)
+    monkeypatch.setitem(agent_runner.RUNNERS, agent, runner)
     return runner
 
 
@@ -260,12 +260,15 @@ def test_attachment_is_removed_with_the_conversation(client, monkeypatch):
     assert not workspace.exists()
 
 
-def test_conversation_b_cannot_escape_into_conversation_a(client, monkeypatch):
+@pytest.mark.parametrize("agent", ["pi", "claude", "codex"])
+def test_conversation_b_cannot_escape_into_conversation_a(
+    client, monkeypatch, agent
+):
     c, admin = client
-    _install_runner(monkeypatch)
+    _install_runner(monkeypatch, agent)
     provider = _provider(c, admin)
     _, body_a = _ask_files(
-        c, admin, provider, [("secret.txt", b"A-secret", "text/plain")]
+        c, admin, provider, [("secret.txt", b"A-secret", "text/plain")], agent=agent
     )
     conversation_a = _conversation_id(body_a)
     target_a = _attachments(conversation_a) / "secret.txt"
@@ -282,6 +285,7 @@ def test_conversation_b_cannot_escape_into_conversation_a(client, monkeypatch):
                 "text/plain",
             )
         ],
+        agent=agent,
     )
     conversation_b = _conversation_id(body_b)
     assert target_a.read_bytes() == b"A-secret"
@@ -463,20 +467,29 @@ def test_oversized_request_is_rejected_before_multipart_parsing(client, monkeypa
     assert "50MB" in response.text
 
 
-def test_image_attachments_require_a_vision_model(client, monkeypatch):
+@pytest.mark.parametrize("agent", ["pi", "claude", "codex"])
+def test_image_attachments_require_a_vision_model(client, monkeypatch, agent):
     c, admin = client
-    runner = _install_runner(monkeypatch)
+    runner = _install_runner(monkeypatch, agent)
     text_provider = _provider(c, admin, vision=False)
     rejected, body = _ask_files(
-        c, admin, text_provider, [("chart.png", PNG, "image/png")]
+        c,
+        admin,
+        text_provider,
+        [("chart.png", PNG, "image/png")],
+        agent=agent,
     )
-    assert 400 <= rejected < 500
+    assert rejected == 422, body
     assert "图片" in body
     assert not runner.requests
 
     vision_provider = _provider(c, admin, vision=True)
     accepted, body = _ask_files(
-        c, admin, vision_provider, [("chart.png", PNG, "image/png")]
+        c,
+        admin,
+        vision_provider,
+        [("chart.png", PNG, "image/png")],
+        agent=agent,
     )
     assert accepted == 200, body
     attachment = runner.requests[-1].attachments[0]
@@ -484,7 +497,11 @@ def test_image_attachments_require_a_vision_model(client, monkeypatch):
     assert attachment.mime_type == "image/png"
 
     accepted, _ = _ask_files(
-        c, admin, text_provider, [("notes.txt", b"plain", "text/plain")]
+        c,
+        admin,
+        text_provider,
+        [("notes.txt", b"plain", "text/plain")],
+        agent=agent,
     )
     assert accepted == 200
 
