@@ -109,6 +109,8 @@ class Conversation(Base):
     created_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC))
     updated_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC))
     resumable: Mapped[bool] = mapped_column(default=True, server_default="1")
+    pinned_at: Mapped[datetime | None]
+    archived_at: Mapped[datetime | None]
 
 
 class Turn(Base):

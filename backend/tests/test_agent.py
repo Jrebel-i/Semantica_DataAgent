@@ -1236,6 +1236,13 @@ def test_ask_streams_events_persists_history_and_reuses_session(client, monkeypa
     assert listing.json()[0]["id"] == conversation_id
     assert listing.json()[0]["turn_count"] == 1
 
+    renamed = c.patch(
+        f"/api/v1/conversations/{conversation_id}",
+        headers=headers,
+        json={"title": "  手工标题  "},
+    )
+    assert renamed.json()["title"] == "手工标题"
+
     with c.stream(
         "POST",
         "/api/v1/conversations/ask",
@@ -1248,6 +1255,7 @@ def test_ask_streams_events_persists_history_and_reuses_session(client, monkeypa
     assert runner.requests[1].workspace == runner.requests[0].workspace
     detail = c.get(f"/api/v1/conversations/{conversation_id}", headers=headers).json()
     assert [turn["sequence"] for turn in detail["turns"]] == [1, 2]
+    assert detail["title"] == "手工标题"
     assert detail["turn_count"] == 2
 
 
@@ -1593,3 +1601,128 @@ def test_existing_conversation_rejects_changed_agent_or_model(client):
             json={"conversation_id": "fixed-settings", "question": "继续", **override},
         )
         assert response.status_code == 409, response.text
+
+
+def test_conversation_can_be_renamed_and_archived(client):
+    from semantica_dataagent.db import Conversation, Token, sessions
+
+    c, token = client
+    headers = {"Authorization": f"Bearer {token}"}
+    with sessions().begin() as db:
+        owner = db.query(Token).first()
+        db.add(
+            Conversation(
+                id="menu-test",
+                owner_id=owner.id,
+                title="original",
+                agent="pi",
+                provider_id="p",
+                model="m",
+            )
+        )
+    response = c.patch(
+        "/api/v1/conversations/menu-test",
+        headers=headers,
+        json={"title": "  renamed  ", "pinned": True, "archived": True},
+    )
+    assert response.status_code == 200
+    assert response.json()["title"] == "renamed"
+    assert c.get("/api/v1/conversations", headers=headers).json() == []
+    archived = c.get("/api/v1/conversations?archived=true", headers=headers).json()
+    assert archived[0]["pinned"] is True
+    assert archived[0]["archived"] is True
+
+
+def test_conversation_management_sorting_validation_and_ownership(client):
+    from datetime import UTC, datetime, timedelta
+
+    from semantica_dataagent.db import Conversation, Token, Turn, sessions
+
+    c, token = client
+    headers = {"Authorization": f"Bearer {token}"}
+    now = datetime.now(UTC)
+    with sessions().begin() as db:
+        owner = db.query(Token).first()
+        for i in range(3):
+            db.add(
+                Conversation(
+                    id=f"sort-{i}",
+                    owner_id=owner.id,
+                    title=str(i),
+                    agent="pi",
+                    provider_id="p",
+                    model="m",
+                    updated_at=now + timedelta(seconds=i),
+                )
+            )
+    for cid in ("sort-0", "sort-1"):
+        assert (
+            c.patch(
+                f"/api/v1/conversations/{cid}", headers=headers, json={"pinned": True}
+            ).status_code
+            == 200
+        )
+    assert [
+        x["id"] for x in c.get("/api/v1/conversations", headers=headers).json()
+    ] == ["sort-1", "sort-0", "sort-2"]
+    for title in (" ", "x" * 201):
+        assert (
+            c.patch(
+                "/api/v1/conversations/sort-0", headers=headers, json={"title": title}
+            ).status_code
+            == 422
+        )
+    assert (
+        c.patch(
+            "/api/v1/conversations/missing", headers=headers, json={"pinned": True}
+        ).status_code
+        == 404
+    )
+    other = c.post(
+        "/api/v1/tokens", headers=headers, json={"name": "other", "role": "user"}
+    ).json()["token"]
+    assert (
+        c.patch(
+            "/api/v1/conversations/sort-0",
+            headers={"Authorization": f"Bearer {other}"},
+            json={"title": "stolen"},
+        ).status_code
+        == 404
+    )
+    with sessions().begin() as db:
+        db.add(
+            Turn(
+                conversation_id="sort-1",
+                sequence=1,
+                question="q",
+                status="running",
+                answer="",
+                sql="[]",
+                citations="[]",
+            )
+        )
+    response = c.patch(
+        "/api/v1/conversations/sort-1", headers=headers, json={"archived": True}
+    )
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Conversation is running"
+    assert (
+        c.patch(
+            "/api/v1/conversations/sort-0", headers=headers, json={"archived": True}
+        ).json()["pinned"]
+        is True
+    )
+    assert [
+        x["id"]
+        for x in c.get("/api/v1/conversations?archived=true", headers=headers).json()
+    ] == ["sort-0"]
+    restored = c.patch(
+        "/api/v1/conversations/sort-0", headers=headers, json={"archived": False}
+    ).json()
+    assert restored["pinned"] and not restored["archived"]
+    assert (
+        c.patch(
+            "/api/v1/conversations/sort-0", headers=headers, json={"pinned": False}
+        ).json()["pinned"]
+        is False
+    )

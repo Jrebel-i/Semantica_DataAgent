@@ -875,7 +875,7 @@ legend {
 .session-item.active .session-open {
   color: var(--white);
 }
-.session-delete {
+.session-menu-toggle {
   flex: none;
   display: grid;
   place-items: center;
@@ -896,43 +896,16 @@ legend {
     color 0.12s ease,
     background 0.12s ease;
 }
-.session-item:hover .session-delete,
-.session-item:focus-within .session-delete,
-.session-delete.visible {
+.session-item:hover .session-menu-toggle,
+.session-item:focus-within .session-menu-toggle,
+.session-menu-toggle.visible {
   opacity: 1;
   pointer-events: auto;
 }
-.session-delete:hover,
-.session-delete:focus-visible {
+.session-menu-toggle:hover,
+.session-menu-toggle:focus-visible {
   background: var(--surface);
-  color: var(--red);
-}
-.session-delete-actions {
-  flex: none;
-  display: flex;
-  gap: 4px;
-}
-.session-delete-confirm,
-.session-delete-cancel {
-  padding: 1px 6px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: var(--surface);
-  color: var(--ink-2);
-  font-size: 11px;
-  line-height: 1.5;
-  white-space: nowrap;
-  cursor: pointer;
-}
-.session-delete-confirm {
-  border-color: var(--danger-border);
-  color: var(--red);
-}
-.session-delete-confirm:hover {
-  background: var(--mint-soft);
-}
-.session-delete-cancel:hover {
-  background: var(--nav-2);
+  color: var(--ink);
 }
 .session-delete-error {
   padding: 2px 12px 6px;
@@ -940,7 +913,7 @@ legend {
   font-size: 12px;
 }
 @media (hover: none), (pointer: coarse) {
-  .session-delete {
+  .session-menu-toggle {
     opacity: 1;
     pointer-events: auto;
   }
@@ -2768,4 +2741,72 @@ code {
 }
 .doc-content .markdown {
   color: var(--ink);
+}
+
+.session-menu-wrap {
+  position: relative;
+}
+.session-menu {
+  position: absolute;
+  right: 0;
+  z-index: 10;
+  min-width: 130px;
+  background: white;
+  border: 1px solid #e5e5e5;
+  border-radius: 8px;
+  padding: 4px;
+  box-shadow: 0 4px 12px #0002;
+}
+.session-menu button {
+  display: block;
+  border: 0;
+  background: transparent;
+  width: 100%;
+  text-align: left;
+  padding: 7px;
+  cursor: pointer;
+}
+.session-menu button:hover {
+  background: #f5f5f5;
+}
+.session-menu button.danger:not(.ant-btn) {
+  color: var(--red);
+}
+.session-group {
+  color: #888;
+  padding: 10px 8px 4px;
+  font-size: 12px;
+}
+.archive-banner {
+  padding: 10px 20px;
+  background: #f5f5f5;
+}
+
+.session-menu button .anticon {
+  color: var(--ink-3);
+  margin-right: 7px;
+}
+.session-menu button.danger .anticon {
+  color: var(--red);
+}
+.session-row .session-archive-action {
+  flex: none;
+  padding: 2px 4px;
+  border: 0;
+  background: transparent;
+  color: var(--ink-2);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.session-list .session-archive-link {
+  margin-top: auto;
+  padding: 8px 10px;
+  border: 0;
+  background: transparent;
+  color: var(--ink-2);
+  text-align: left;
+}
+.session-row input {
+  min-width: 0;
+  width: 100%;
 }

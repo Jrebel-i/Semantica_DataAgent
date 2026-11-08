@@ -67,8 +67,8 @@ def test_migrate_upgrades_from_0016_and_keeps_data(database, capsys):
     assert cli.main(["migrate"]) == 0
 
     output = capsys.readouterr().out
-    assert "0016" in output and "0020" in output
-    assert _schema_version(database) == "0020"
+    assert "0016" in output and "0024" in output
+    assert _schema_version(database) == "0024"
     assert _kept_rows(database) == (("kept token", "admin"), ("kept value",))
 
 
@@ -83,7 +83,7 @@ def test_migrate_backs_up_before_upgrade_and_is_repeatable(database, capsys):
 
     capsys.readouterr()
     assert cli.main(["migrate"]) == 0
-    assert "0020" in capsys.readouterr().out
+    assert "0024" in capsys.readouterr().out
     assert len(_backups(database)) == 1
 
 
@@ -108,14 +108,14 @@ def test_serve_migrates_before_starting(database, capsys, monkeypatch):
 
     assert cli.main(["serve"]) == 0
     assert started == [True]
-    assert _schema_version(database) == "0020"
+    assert _schema_version(database) == "0024"
     assert _kept_rows(database) == (("kept token", "admin"), ("kept value",))
     assert len(_backups(database)) == 1
 
     assert cli.main(["serve"]) == 0
     assert started == [True, True]
     assert len(_backups(database)) == 1
-    assert "0020" in capsys.readouterr().out
+    assert "0024" in capsys.readouterr().out
 
 
 def test_serve_does_not_start_when_migration_fails(database, capsys, monkeypatch):
@@ -136,7 +136,41 @@ def test_init_still_initializes_an_empty_database(database):
     token = cli.initialize()
 
     assert token
-    assert _schema_version(database) == "0020"
+    assert _schema_version(database) == "0024"
     with sqlite3.connect(database) as db:
         row = db.execute("SELECT name, role FROM tokens").fetchone()
     assert row == ("initial admin", "admin")
+
+
+def test_serve_upgrades_0023_conversations_and_backs_up(database, monkeypatch):
+    command.upgrade(_config(database), "0023")
+    with sqlite3.connect(database) as db:
+        db.execute(
+            "INSERT INTO conversations (id, owner_id, title, agent, provider_id, model, created_at, updated_at, resumable) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                "old",
+                "owner",
+                "旧会话",
+                "pi",
+                "provider",
+                "model",
+                "2026-01-01",
+                "2026-01-01",
+                1,
+            ),
+        )
+    monkeypatch.setattr(cli, "_serve", lambda: None)
+    assert cli.main(["serve"]) == 0
+    assert _schema_version(database) == "0024"
+    with sqlite3.connect(database) as db:
+        assert db.execute(
+            "SELECT title, pinned_at, archived_at FROM conversations WHERE id='old'"
+        ).fetchone() == ("旧会话", None, None)
+    backups = _backups(database)
+    assert len(backups) == 1
+    assert _schema_version(backups[0]) == "0023"
+    command.downgrade(_config(database), "0023")
+    with sqlite3.connect(database) as db:
+        assert db.execute(
+            "SELECT title FROM conversations WHERE id='old'"
+        ).fetchone() == ("旧会话",)

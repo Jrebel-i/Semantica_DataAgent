@@ -305,6 +305,10 @@
             "title": "Agent",
             "type": "string"
           },
+          "archived": {
+            "title": "Archived",
+            "type": "boolean"
+          },
           "created_at": {
             "format": "date-time",
             "title": "Created At",
@@ -317,6 +321,10 @@
           "model": {
             "title": "Model",
             "type": "string"
+          },
+          "pinned": {
+            "title": "Pinned",
+            "type": "boolean"
           },
           "provider_id": {
             "title": "Provider Id",
@@ -357,9 +365,50 @@
           "updated_at",
           "turn_count",
           "resumable",
+          "pinned",
+          "archived",
           "turns"
         ],
         "title": "ConversationDetail",
+        "type": "object"
+      },
+      "ConversationPatch": {
+        "properties": {
+          "archived": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Archived"
+          },
+          "pinned": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pinned"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          }
+        },
+        "title": "ConversationPatch",
         "type": "object"
       },
       "ConversationView": {
@@ -367,6 +416,10 @@
           "agent": {
             "title": "Agent",
             "type": "string"
+          },
+          "archived": {
+            "title": "Archived",
+            "type": "boolean"
           },
           "created_at": {
             "format": "date-time",
@@ -380,6 +433,10 @@
           "model": {
             "title": "Model",
             "type": "string"
+          },
+          "pinned": {
+            "title": "Pinned",
+            "type": "boolean"
           },
           "provider_id": {
             "title": "Provider Id",
@@ -412,7 +469,9 @@
           "created_at",
           "updated_at",
           "turn_count",
-          "resumable"
+          "resumable",
+          "pinned",
+          "archived"
         ],
         "title": "ConversationView",
         "type": "object"
@@ -2349,6 +2408,18 @@
     "/api/v1/conversations": {
       "get": {
         "operationId": "conversations_api_v1_conversations_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "archived",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Archived",
+              "type": "boolean"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -2363,6 +2434,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
           }
         },
         "security": [
@@ -2491,6 +2572,58 @@
           }
         ],
         "summary": "Conversation Detail"
+      },
+      "patch": {
+        "operationId": "patch_conversation_api_v1_conversations__conversation_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConversationPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConversationView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Patch Conversation"
       }
     },
     "/api/v1/conversations/{conversation_id}/end": {

@@ -2,14 +2,19 @@ import { createPortal } from "react-dom";
 import { ColumnLineage } from "./ColumnLineage";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
-import { Alert, Button, Input, Space, Tag } from "antd";
+import { Alert, Button, Input, Modal, Space, Tag } from "antd";
 import type { components, paths } from "./api";
 import type { Language, Messages } from "./i18n";
 import { TaskLineage } from "./TaskLineage";
 import {
   ArrowUpOutlined,
-  CloseOutlined,
+  EditOutlined,
+  PushpinOutlined,
+  InboxOutlined,
   DeleteOutlined,
+  CloseOutlined,
+  MoreOutlined,
+  PushpinFilled,
   PlusOutlined,
 } from "@ant-design/icons";
 import { parseAgentProfiles, type AgentProfiles } from "./agentProfiles";
@@ -1056,6 +1061,13 @@ export function ChatPage({
   });
   const [providers, setProviders] = useState<Provider[]>([]);
   const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [archivedConversations, setArchivedConversations] = useState<
+    Conversation[]
+  >([]);
+  const [showArchived, setShowArchived] = useState(false);
+  const [menuId, setMenuId] = useState("");
+  const [editingId, setEditingId] = useState("");
+  const [draftTitle, setDraftTitle] = useState("");
   const [hoveredConversationId, setHoveredConversationId] = useState("");
   const [focusedConversationId, setFocusedConversationId] = useState("");
   const [confirmingDeleteId, setConfirmingDeleteId] = useState("");
@@ -1213,6 +1225,15 @@ export function ChatPage({
       const rows = (await response.json()) as Conversation[];
       if (!Array.isArray(rows)) throw new Error("Invalid conversation list");
       setConversations(rows);
+      const archivedResponse = await fetch(
+        "/api/v1/conversations?archived=true",
+        { headers: { Authorization: `Bearer ${token}` } },
+      );
+      if (!archivedResponse.ok) throw new Error();
+      const archivedRows: unknown = await archivedResponse.json();
+      if (!Array.isArray(archivedRows))
+        throw new Error("Invalid archived conversation list");
+      setArchivedConversations(archivedRows);
     } catch {
       setError(t.askError);
     }
@@ -1359,7 +1380,15 @@ export function ChatPage({
 
   async function submitPrompt(prompt: string) {
     const trimmed = prompt.trim();
-    if (!trimmed || !providerId || !model || sending) return;
+    if (
+      !trimmed ||
+      !providerId ||
+      !model ||
+      sending ||
+      !resumable ||
+      archivedConversations.some((row) => row.id === currentConversationId)
+    )
+      return;
     selectionTouched.current = true;
     const sequence = ++askSequence.current;
     let conversationId = currentConversationId;
@@ -1718,26 +1747,68 @@ export function ChatPage({
         return;
       }
       if (!response.ok) {
-        setSessionError(t.deleteConversationFailed);
+        setSessionError(t.operationFailed);
         return;
       }
       setConversations((current) =>
         current.filter((conversation) => conversation.id !== id),
       );
       if (id === currentConversationId) newConversation();
+      await refreshConversations();
     } catch {
-      setSessionError(t.deleteConversationFailed);
+      setSessionError(t.operationFailed);
     } finally {
       setDeletingConversationId("");
       setConfirmingDeleteId("");
     }
   }
 
+  async function patchConversation(
+    id: string,
+    patch: { title?: string; pinned?: boolean; archived?: boolean },
+  ) {
+    setSessionError("");
+    try {
+      const response = await fetch(
+        `/api/v1/conversations/${encodeURIComponent(id)}`,
+        {
+          method: "PATCH",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(patch),
+        },
+      );
+      if (response.status === 409) {
+        setSessionError(t.deleteConversationRunning);
+        return;
+      }
+      if (!response.ok) throw new Error();
+      if (patch.archived && id === currentConversationId) newConversation();
+      if (patch.archived === false) setShowArchived(false);
+      await refreshConversations();
+    } catch {
+      setSessionError(t.operationFailed);
+    }
+  }
+
+  function saveTitle(id: string) {
+    if (editingId !== id) return;
+    setEditingId("");
+    void patchConversation(id, { title: draftTitle });
+  }
+
   const canAsk = Boolean(
-    question.trim() && providerId && model && !sending && resumable,
+    question.trim() &&
+    providerId &&
+    model &&
+    !sending &&
+    resumable &&
+    !archivedConversations.some((row) => row.id === currentConversationId),
   );
 
-  const currentConversation = conversations.find(
+  const currentConversation = [...conversations, ...archivedConversations].find(
     (conversation) => conversation.id === currentConversationId,
   );
   const selectedTable =
@@ -1798,7 +1869,11 @@ export function ChatPage({
               <aside className="chat-sessions">
                 <div className="session-head">
                   <h1 className="session-title">
-                    {sessionTarget ? t.conversationHistory : t.chat}
+                    {showArchived
+                      ? t.archived
+                      : sessionTarget
+                        ? t.conversationHistory
+                        : t.chat}
                   </h1>
                   {!sessionTarget && (
                     <Button
@@ -1817,54 +1892,56 @@ export function ChatPage({
                   </div>
                 )}
                 <div className="session-list">
-                  {conversations.length === 0 ? (
+                  {(showArchived ? archivedConversations : conversations)
+                    .length === 0 && (
                     <div className="session-empty">{t.noConversations}</div>
-                  ) : (
-                    conversations.map((conversation) => {
+                  )}
+                  {(showArchived ? archivedConversations : conversations).map(
+                    (conversation, index, list) => {
                       const active = conversation.id === currentConversationId;
                       const revealed =
                         hoveredConversationId === conversation.id ||
                         focusedConversationId === conversation.id;
-                      const confirming = confirmingDeleteId === conversation.id;
-                      const deleting =
-                        deletingConversationId === conversation.id;
+                      const group = conversation.pinned
+                        ? t.pin
+                        : t.conversationHistory;
                       return (
-                        <div
-                          className={`session-item${active ? " active" : ""}`}
-                          key={conversation.id}
-                          onMouseEnter={() =>
-                            setHoveredConversationId(conversation.id)
-                          }
-                          onMouseLeave={() => setHoveredConversationId("")}
-                          onFocus={() =>
-                            setFocusedConversationId(conversation.id)
-                          }
-                          onBlur={() => setFocusedConversationId("")}
-                        >
-                          <div className="session-row">
-                            {confirming ? (
-                              <span className="session-delete-actions">
-                                <button
-                                  type="button"
-                                  className="session-delete-confirm"
-                                  onClick={() =>
-                                    void deleteConversation(conversation.id)
+                        <div key={conversation.id}>
+                          {!showArchived &&
+                            conversations.some((row) => row.pinned) &&
+                            (index === 0 ||
+                              list[index - 1].pinned !==
+                                conversation.pinned) && (
+                              <div className="session-group">{group}</div>
+                            )}
+                          <div
+                            className={`session-item${active ? " active" : ""}`}
+                            onMouseEnter={() =>
+                              setHoveredConversationId(conversation.id)
+                            }
+                            onMouseLeave={() => setHoveredConversationId("")}
+                            onFocus={() =>
+                              setFocusedConversationId(conversation.id)
+                            }
+                            onBlur={() => setFocusedConversationId("")}
+                          >
+                            <div className="session-row">
+                              {editingId === conversation.id ? (
+                                <input
+                                  autoFocus
+                                  value={draftTitle}
+                                  maxLength={200}
+                                  onChange={(e) =>
+                                    setDraftTitle(e.target.value)
                                   }
-                                  disabled={deleting}
-                                >
-                                  {t.confirmDeleteConversation}
-                                </button>
-                                <button
-                                  type="button"
-                                  className="session-delete-cancel"
-                                  onClick={() => setConfirmingDeleteId("")}
-                                  disabled={deleting}
-                                >
-                                  {t.cancelDeleteConversation}
-                                </button>
-                              </span>
-                            ) : (
-                              <>
+                                  onBlur={() => saveTitle(conversation.id)}
+                                  onKeyDown={(e) => {
+                                    if (e.key === "Enter")
+                                      saveTitle(conversation.id);
+                                    if (e.key === "Escape") setEditingId("");
+                                  }}
+                                />
+                              ) : (
                                 <button
                                   type="button"
                                   className="session-open"
@@ -1875,33 +1952,136 @@ export function ChatPage({
                                   }}
                                   disabled={sending}
                                 >
+                                  {conversation.pinned && (
+                                    <PushpinFilled aria-hidden="true" />
+                                  )}{" "}
                                   {conversation.title}
                                   {conversation.resumable === false &&
                                     ` (${t.sessionExpired})`}
                                 </button>
-                                <button
-                                  type="button"
-                                  className={`session-delete${revealed ? " visible" : ""}`}
-                                  aria-label={t.deleteConversation}
-                                  title={t.deleteConversation}
-                                  onClick={() => {
-                                    setSessionError("");
-                                    setConfirmingDeleteId(conversation.id);
-                                  }}
-                                  disabled={sending && active}
-                                >
-                                  <DeleteOutlined />
-                                </button>
-                              </>
-                            )}
+                              )}
+                              {showArchived ? (
+                                <>
+                                  <button
+                                    type="button"
+                                    className="session-archive-action"
+                                    onClick={() =>
+                                      void patchConversation(conversation.id, {
+                                        archived: false,
+                                      })
+                                    }
+                                  >
+                                    {t.restore}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="session-archive-action"
+                                    onClick={() =>
+                                      setConfirmingDeleteId(conversation.id)
+                                    }
+                                  >
+                                    {t.deleteAction}
+                                  </button>
+                                </>
+                              ) : (
+                                <div className="session-menu-wrap">
+                                  <button
+                                    type="button"
+                                    className={`session-menu-toggle${revealed ? " visible" : ""}`}
+                                    aria-label={t.conversationMenu}
+                                    onClick={() =>
+                                      setMenuId(
+                                        menuId === conversation.id
+                                          ? ""
+                                          : conversation.id,
+                                      )
+                                    }
+                                  >
+                                    <MoreOutlined />
+                                  </button>
+                                  {menuId === conversation.id && (
+                                    <div className="session-menu">
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setMenuId("");
+                                          setDraftTitle(conversation.title);
+                                          setEditingId(conversation.id);
+                                        }}
+                                      >
+                                        <EditOutlined aria-hidden="true" />{" "}
+                                        {t.rename}
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setMenuId("");
+                                          void patchConversation(
+                                            conversation.id,
+                                            { pinned: !conversation.pinned },
+                                          );
+                                        }}
+                                      >
+                                        <PushpinOutlined aria-hidden="true" />{" "}
+                                        {conversation.pinned ? t.unpin : t.pin}
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setMenuId("");
+                                          void patchConversation(
+                                            conversation.id,
+                                            { archived: true },
+                                          );
+                                        }}
+                                      >
+                                        <InboxOutlined aria-hidden="true" />{" "}
+                                        {t.archive}
+                                      </button>
+                                      <button
+                                        type="button"
+                                        className="danger"
+                                        onClick={() => {
+                                          setMenuId("");
+                                          setConfirmingDeleteId(
+                                            conversation.id,
+                                          );
+                                        }}
+                                      >
+                                        <DeleteOutlined aria-hidden="true" />{" "}
+                                        {t.deleteAction}
+                                      </button>
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                            <span className="session-meta">
+                              {shortTime(conversation.updated_at)}
+                            </span>
                           </div>
-                          <span className="session-meta">
-                            <span>{shortTime(conversation.updated_at)}</span>
-                          </span>
                         </div>
                       );
-                    })
+                    },
                   )}
+                  <button
+                    type="button"
+                    className="session-archive-link"
+                    onClick={() => setShowArchived(!showArchived)}
+                  >
+                    {showArchived
+                      ? t.back
+                      : `${t.archived} (${archivedConversations.length})`}
+                  </button>
+                  <Modal
+                    open={Boolean(confirmingDeleteId)}
+                    title={t.deleteConversation}
+                    okText={t.confirmDeleteConversation}
+                    cancelText={t.cancelDeleteConversation}
+                    confirmLoading={Boolean(deletingConversationId)}
+                    onCancel={() => setConfirmingDeleteId("")}
+                    onOk={() => void deleteConversation(confirmingDeleteId)}
+                  />
                 </div>
               </aside>
             );
@@ -1921,6 +2101,21 @@ export function ChatPage({
                 </span>
               </div>
             </header>
+            {currentConversation?.archived && (
+              <div className="archive-banner">
+                {t.archived} ·{" "}
+                <button
+                  type="button"
+                  onClick={() =>
+                    void patchConversation(currentConversation.id, {
+                      archived: false,
+                    })
+                  }
+                >
+                  {t.restore}
+                </button>
+              </div>
+            )}
             <div className="chat-scroll">
               {error && <Alert type="error" title={error} />}
               {!resumable && <Alert type="info" title={t.sessionExpired} />}
@@ -2011,10 +2206,16 @@ export function ChatPage({
                 <Input.TextArea
                   aria-label={t.askQuestion}
                   value={question}
-                  placeholder={t.askPlaceholder}
+                  placeholder={
+                    currentConversation?.archived
+                      ? t.restoreFirst
+                      : t.askPlaceholder
+                  }
                   autoSize={{ minRows: 1, maxRows: 5 }}
                   onChange={(event) => setQuestion(event.target.value)}
-                  disabled={!resumable}
+                  disabled={
+                    !resumable || Boolean(currentConversation?.archived)
+                  }
                 />
                 <div className="composer-controls">
                   <div className="chat-selectors">
@@ -2102,6 +2303,9 @@ export function ChatPage({
                     {t.examples.slice(0, 3).map((example) => (
                       <Button
                         key={example}
+                        disabled={
+                          !resumable || Boolean(currentConversation?.archived)
+                        }
                         onClick={() => setQuestion(example)}
                       >
                         {example}
