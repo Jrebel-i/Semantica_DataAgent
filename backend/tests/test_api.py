@@ -1063,6 +1063,20 @@ def test_interrupted_project_pull_recovers_build_in_its_project(client, tmp_path
         assert build.project_id == project_id
 
 
+def test_pull_locks_are_per_project(client):
+    from semantica_dataagent import pull_service
+
+    lock = pull_service._lock_for("alpha")
+    assert lock.acquire(blocking=False)
+    try:
+        with pytest.raises(ValueError, match="already running"):
+            pull_service.run_pull("alpha")
+        record = pull_service.run_pull("beta")
+        assert record.status == "failed"
+    finally:
+        lock.release()
+
+
 def test_failed_recovery_does_not_prevent_startup_and_can_retry(tmp_path, monkeypatch):
     from datetime import UTC, datetime
 
