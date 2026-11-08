@@ -52,9 +52,9 @@ MCP 请求必须解析出**一个**项目，所有读知识库的工具都只经
 项目不存在与无权限统一当作“项目不存在”，不泄露是否存在。解析复用 `project_api.py` 的 `resolve_project_scope` / `_resolve_project_context`，MCP 层不再写第二份成员判断。解析结果绑定在 `mcp_context` 的 ContextVar 中，`bind_mcp_context` 在 `finally` 中复位，异常路径也不能泄漏到下一个请求。
 
 - `describe_tables`、`search_knowledge`、`lookup_dim_values`、类别与文档、血缘、任务 SQL、`validate_sql`、`find_join_path`、取样、查询计划与取数等读取工具都必须把解析到的项目传给底层知识访问；`propose_correction` 与 `report_knowledge_gap` 写入该项目。
-- `ask_dataagent` 本票仍只支持默认项目；非默认项目返回 `invalid_input` “项目问答将在对话绑定项目后支持”（#184 再接对话项目）。
+- `ask_dataagent` 用 MCP 解析出的项目创建对话并绑定；续写时解析出的项目必须与对话绑定项目一致，否则返回 `invalid_input` “对话已绑定其它项目，请新建对话”。
 - `get_capabilities` 返回当前解析出的 `project: {id, name, type}` 和请求者可访问的 `projects: [{id, name, type}]`。
-- `agent_credentials` 增加 `project_id`（迁移 `0032`，旧行回填 `default`）；`issue_agent_credential(..., project_id="default")` 写入对话所属项目。本票对话一律是默认项目。
+- `agent_credentials` 增加 `project_id`（迁移 `0032`，旧行回填 `default`）；`issue_agent_credential(..., project_id="default")` 写入对话所属项目。每轮签发都传 `conversations.project_id`，agent 只能经该项目访问知识。
 - 兼容：工具 JSON Schema 不新增必填参数；只有单项目（或系统管理员）的令牌与现有 MCP 客户端不传项目时行为不变。新增 MCP 工具必须经过项目上下文，`test_mcp_project_scope.py` 的守护测试会拦住绕过项目作用域的新工具。
 
 ### 按项目类型限制工具与 skill
@@ -296,7 +296,11 @@ provider 的 base_url 与 api_key 每轮按会话当前设置重新下发给 run
 
 ## 会话管理接口
 
-`GET /api/v1/conversations` 默认只列出未归档会话；`?archived=true` 列出已归档会话。响应包含 `pinned`、`archived`，置顶会话按置顶时间倒序，其余按更新时间倒序。`PATCH /api/v1/conversations/{id}` 接收 `title`、`pinned`、`archived` 的可选字段；标题去除首尾空白后长度须为 1–200，归档运行中的会话返回 409。归档不会取消置顶，恢复后仍保持原置顶顺序。详情与删除接口同样按所有者授权，删除已归档会话与普通会话一致。
+`GET /api/v1/conversations` 默认只列出未归档会话；`?archived=true` 列出已归档会话。响应包含 `project_id`、`project_name`、`pinned`、`archived`，置顶会话按置顶时间倒序，其余按更新时间倒序。列表只返回请求者当前仍有权限的项目的会话；已失去项目权限的会话不出现在列表里，但所有者直接读取详情仍可成功。`?project=<id>` 只返回该项目的会话，显式项目按 `project_scope` 校验（不存在与无权限统一 404）。`conversations.project_id` 在迁移 `0033` 增加并回填 `default`。
+
+`POST /api/v1/conversations/ask` 新建对话时可带 `project`；显式项目走 `project_scope`，缺省时按“项目接口”的缺省规则解析，解析结果写入对话并锁定。续写时请求带其它项目返回 409（`对话已绑定其它项目，请新建对话`），不带则沿用原项目；续写仍校验请求者当前对该项目有权限。agent 凭据按对话项目签发，每轮重新签发时也沿用该值。
+
+`PATCH /api/v1/conversations/{id}` 接收 `title`、`pinned`、`archived` 的可选字段；标题去除首尾空白后长度须为 1–200，归档运行中的会话返回 409。归档不会取消置顶，恢复后仍保持原置顶顺序。详情与删除接口同样按所有者授权，删除已归档会话与普通会话一致。
 
 `POST /api/v1/conversations/ask` 带 `conversation_id` 时可以改用同一 agent 允许范围内的其他 provider / model；改 agent 仍返回 409，要求新建对话。provider 不在该 agent 的 `assistant_agent_profiles.providers` 允许列表时返回 422（列表为空或未配置表示不限制），model 不在 provider 的 `models` 中同样返回 422。切换后本轮及之后的轮次使用新值，会话行的 `provider_id` / `model` 更新为最近一次使用；每轮在 `turns.provider_id` / `turns.model` 记录自己使用的值，旧数据的空值按会话值展示。切换 provider 时按该轮 provider 重新下发凭据，旧 provider 的 key 不沿用。
 
