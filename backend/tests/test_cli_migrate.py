@@ -528,3 +528,38 @@ def test_migrated_builds_index_is_unique_per_project_and_status(database):
         db.execute(insert, ("other", "2026-01-01T00:00:00+00:00"))
         with pytest.raises(sqlite3.IntegrityError):
             db.execute(insert, ("default", "2026-01-01T00:00:01+00:00"))
+
+
+def test_conversations_gain_the_default_project_when_upgrading(database):
+    command.upgrade(_config(database), "0032")
+    with sqlite3.connect(database) as db:
+        db.execute(
+            "INSERT INTO conversations (id, owner_id, title, agent, provider_id, model, created_at, updated_at, resumable) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                "old",
+                "owner",
+                "旧会话",
+                "pi",
+                "provider",
+                "model",
+                "2026-01-01",
+                "2026-01-01",
+                1,
+            ),
+        )
+        before = db.execute(
+            "SELECT id, owner_id, title, agent, provider_id, model, resumable "
+            "FROM conversations WHERE id='old'"
+        ).fetchone()
+
+    command.upgrade(_config(database), "head")
+
+    with sqlite3.connect(database) as db:
+        after = db.execute(
+            "SELECT id, owner_id, title, agent, provider_id, model, resumable, project_id "
+            "FROM conversations WHERE id='old'"
+        ).fetchone()
+        assert db.execute("SELECT version_num FROM alembic_version").fetchone() == (
+            "0033",
+        )
+    assert after == before + ("default",)
