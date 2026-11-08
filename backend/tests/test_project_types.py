@@ -360,3 +360,54 @@ def test_document_project_build_never_runs_dtb_even_when_globally_enabled(
     warehouse_hashes = run_build_for(warehouse["id"])
     assert calls == [{}]
     assert "dtb/sentinel.md" in warehouse_hashes
+
+
+def test_read_sources_derives_the_project_type_from_the_project_id(
+    tmp_path, monkeypatch
+):
+    from semantica_dataagent import knowledge, project_context
+    from semantica_dataagent.canonical import ReadResult
+
+    calls = []
+
+    class Adapter:
+        id = "dtb"
+        version = "1"
+        project_types = ("warehouse",)
+
+        def read(self, directory, parameters):
+            calls.append("dtb")
+            return ReadResult([], {})
+
+    monkeypatch.setattr(project_context, "project_type", lambda project_id: "document")
+    values = {
+        "source_directory": str(tmp_path),
+        "_project_id": "docs",
+        "knowledge_generation": "docs_initial",
+    }
+    assert knowledge.read_sources(values, [("source", Adapter(), True, {})])[:2] == (
+        [],
+        {},
+    )
+    assert calls == []
+
+
+def test_build_for_unknown_project_fails_closed(client):
+    from semantica_dataagent import knowledge
+    from semantica_dataagent.db import Build, sessions
+
+    with sessions().begin() as db:
+        row = Build(
+            status="running",
+            started_at="now",
+            project_id="missing",
+            counts="{}",
+        )
+        db.add(row)
+        db.flush()
+        build_id = row.id
+    knowledge.run_build(build_id)
+    with sessions()() as db:
+        row = db.get(Build, build_id)
+    assert row.status == "failed"
+    assert "not found" in (row.error or "").lower()

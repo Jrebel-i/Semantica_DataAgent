@@ -995,12 +995,12 @@ def create_mcp():
         except Exception:  # noqa: BLE001 - metadata must not break capabilities
             projects = []
         from .mcp_context import current_project_type
-        from .project_types import tools_for_project_type
+        from .project_types import supports_tool
 
         try:
-            allowed = tools_for_project_type(current_project_type())
+            project_type = current_project_type()
         except Exception:  # noqa: BLE001 - the capability guard fails closed
-            allowed = set()
+            project_type = None
         return {
             "application_version": version("semantica-dataagent"),
             "schema_version": "v1",
@@ -1008,7 +1008,7 @@ def create_mcp():
             "tools": sorted(
                 tool.name
                 for tool in server._tool_manager.list_tools()
-                if tool.name in allowed
+                if project_type is not None and supports_tool(project_type, tool.name)
             ),
             "prompts": sorted(
                 prompt.name for prompt in server._prompt_manager.list_prompts()

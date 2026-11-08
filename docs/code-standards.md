@@ -72,7 +72,7 @@ MCP 请求必须解析出**一个**项目，所有读知识库的工具都只经
 - 代保留清理和中断清理只处理本项目：先按 `project_id` 圈定代记录，再删除存储数据。跨项目误删是必须被测试守护的缺陷。
 - `project_settings(project_id, key, value)` 只存项目级覆盖；默认项目没有覆盖行，仍读全局 `settings`。`current_project(project_id)` 返回“全局设置 + 本项目覆盖”。
 - 新项目源目录为 `$DATAAGENT_PROJECTS_ROOT/<项目 id>/source`；未设置该环境变量时取数据库文件同目录下的 `projects/<项目 id>/source`。默认项目继续使用全局 `source_directory`。
-- `builds.project_id` 决定工作线程读取哪个项目的代、源目录和检索存储。构建队列按项目并行：同一项目任一时刻最多一个构建，后续构建排队；不同项目可同时运行，并发上限取全局设置 `build_concurrency`（默认 2）。一个项目失败或卡住不阻塞其它项目，排队与运行状态用 `GET /api/v1/builds?project=<id>` 查看。新项目构建只启用 Markdown 源适配器，插件配置表仍是全局的。
+- `builds.project_id` 决定工作线程读取哪个项目的代、源目录和检索存储。构建队列按项目并行：同一项目任一时刻最多一个构建，后续构建排队；不同项目可同时运行，并发上限取全局设置 `build_concurrency`（默认 2）。一个项目失败或卡住不阻塞其它项目，排队与运行状态用 `GET /api/v1/builds?project=<id>` 查看。新项目构建使用全局插件配置，但只运行与项目类型兼容的源适配器：文档型项目运行 Markdown 及以后声明支持 `document` 的适配器，数仓型项目可运行全局启用的 canonical/DTB 等适配器。
 - REST 的项目参数是可选的 `project`。缺省解析规则见“项目接口”；解析结果决定源目录、知识代和检索存储，不能退回固定的默认项目。
 
 ## 数据库迁移

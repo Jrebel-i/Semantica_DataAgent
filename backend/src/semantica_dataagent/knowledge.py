@@ -511,7 +511,9 @@ def read_sources(values, plugins):
         records, hashes, adapter_stats = [], {}, {}
         from .project_types import supports_project_type
 
-        project_type = values.get("_project_type") or "warehouse"
+        project_type = values.get("_project_type") or project_context.project_type(
+            values.get("_project_id")
+        )
         for category, plugin, enabled, parameters in plugins:
             if category != "source" or not enabled:
                 continue
@@ -627,7 +629,9 @@ def run_build(build_id):
             row = db.get(Build, build_id)
             project_id = (row.project_id if row is not None else None) or "default"
             project_row = db.get(Project, project_id)
-            project_type = project_row.type if project_row is not None else "warehouse"
+            if project_row is None:
+                raise ValueError(f"Project {project_id} not found")
+            project_type = project_row.type
         values = (
             settings()
             if project_id == project_context.DEFAULT_PROJECT_ID

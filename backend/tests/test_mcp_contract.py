@@ -625,3 +625,21 @@ def test_search_argument_errors_remain_invalid_input():
     assert result.isError
     assert result.structuredContent["code"] == "invalid_input"
     assert result.structuredContent["retryable"] is False
+
+
+def test_unclassified_tools_are_listed_and_callable_on_generic_servers():
+    async def run():
+        server = FastMCP("test")
+
+        @server.tool()
+        def dynamic_probe() -> str:
+            return "ok"
+
+        install_contract(server)
+        async with create_connected_server_and_client_session(server) as client:
+            names = {tool.name for tool in (await client.list_tools()).tools}
+            result = await client.call_tool("dynamic_probe", {})
+        assert "dynamic_probe" in names
+        assert not result.isError
+
+    asyncio.run(run())

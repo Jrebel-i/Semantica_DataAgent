@@ -128,10 +128,7 @@ def classify_error(exc):
 
 def install_contract(server):
     from .mcp_context import current_project_type
-    from .project_types import (
-        ensure_tool_supported,
-        tools_for_project_type,
-    )
+    from .project_types import ensure_tool_supported, supports_tool
 
     tools = {tool.name: tool for tool in server._tool_manager.list_tools()}
     for tool in tools.values():
@@ -143,10 +140,18 @@ def install_contract(server):
     async def list_tools(request):
         result = await original_list_tools(request)
         try:
-            allowed = tools_for_project_type(current_project_type())
+            project_type = current_project_type()
         except Exception:  # noqa: BLE001 - the capability guard fails closed
-            allowed = set()
-        result.root.tools = [tool for tool in result.root.tools if tool.name in allowed]
+            project_type = None
+        result.root.tools = (
+            []
+            if project_type is None
+            else [
+                tool
+                for tool in result.root.tools
+                if supports_tool(project_type, tool.name)
+            ]
+        )
         return result
 
     server._mcp_server.request_handlers[ListToolsRequest] = list_tools
