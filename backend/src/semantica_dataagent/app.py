@@ -992,7 +992,9 @@ class SourceFileUpload(BaseModel):
 
 
 class SourceUpload(BaseModel):
-    target: str
+    target: str | None = None
+    category: str | None = None
+    subfolder: str | None = None
     files: list[SourceFileUpload] = []
     archive_base64: str | None = None
     replace: bool = False
@@ -1000,6 +1002,17 @@ class SourceUpload(BaseModel):
 
 class SourceCommit(BaseModel):
     commit: str
+
+
+class SourcePreview(BaseModel):
+    category: str
+    target: str
+    added: list[str]
+    overwritten: list[str]
+    unchanged: list[str]
+    deleted: list[str]
+    counts: dict[str, int]
+    truncated: bool
 
 
 class SourceContent(BaseModel):
@@ -1037,12 +1050,43 @@ def source_repository(project_id=None):
         raise HTTPException(422, str(exc)) from exc
 
 
-@app.post("/api/v1/source/upload", response_model=SourceCommit)
-def upload_sources(
-    body: SourceUpload,
-    scope: Annotated[ProjectContext, Depends(admin_project_scope)],
-    credentials: Annotated[HTTPAuthorizationCredentials, Depends(bearer)],
-):
+def source_category_root(scope):
+    config = (
+        project_context.plugin_config("source", "markdown")
+        if scope.project_id == project_context.DEFAULT_PROJECT_ID
+        else None
+    )
+    return config[1].get("path", "knowledge") if config else "knowledge"
+
+
+def source_upload_target(body, category_root):
+    from . import source_directory as source
+
+    if body.target is not None and (
+        body.category is not None or body.subfolder is not None
+    ):
+        raise HTTPException(422, "Choose target or category, not both")
+    if body.subfolder is not None and body.category is None:
+        raise HTTPException(422, "Knowledge category is required")
+    if body.target is not None:
+        try:
+            return source.relative(body.target), None
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+    if body.category is None:
+        raise HTTPException(422, "Knowledge category is required")
+    try:
+        root = source.relative(category_root)
+        category = source.category_path(body.category)
+        target = root / category
+        if body.subfolder is not None:
+            target = target / source.subfolder_path(body.subfolder)
+        return target, root / category
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+def source_upload_files(body, target):
     from . import source_directory as source
 
     if body.archive_base64 is not None and body.files:
@@ -1050,12 +1094,11 @@ def upload_sources(
     try:
         if body.archive_base64 is not None:
             files = source.unpack_archive(source.decode(body.archive_base64))
-            target = source.relative(body.target)
-            prefix = target.name + "/"
+            prefix = (body.category or target.name) + "/"
             if (
-                body.replace
-                and files
+                files
                 and all(name.startswith(prefix) for name in files)
+                and (body.replace or body.category is not None)
             ):
                 files = {name[len(prefix) :]: data for name, data in files.items()}
         else:
@@ -1070,21 +1113,64 @@ def upload_sources(
                 raise ValueError("Duplicate path")
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
+    return files
+
+
+@app.post("/api/v1/source/upload", response_model=SourceCommit)
+def upload_sources(
+    body: SourceUpload,
+    scope: Annotated[ProjectContext, Depends(admin_project_scope)],
+    credentials: Annotated[HTTPAuthorizationCredentials, Depends(bearer)],
+):
+    from . import source_directory as source
+
+    category_root = source_category_root(scope)
+    target, delete_root = source_upload_target(body, category_root)
+    files = source_upload_files(body, target)
     with sessions()() as db:
         user = db.get(Token, digest(credentials.credentials))
         author = user.name
-        config = (
-            project_context.plugin_config("source", "markdown")
-            if scope.project_id == project_context.DEFAULT_PROJECT_ID
-            else None
-        )
-        category_root = config[1].get("path", "knowledge") if config else "knowledge"
     with source_repository(scope.project_id) as root:
         return SourceCommit(
             commit=source.upload(
-                root, body.target, files, body.replace, author, category_root
+                root,
+                target.as_posix(),
+                files,
+                body.replace,
+                author,
+                category_root,
+                delete_root.as_posix() if delete_root else None,
             )
         )
+
+
+@app.post("/api/v1/source/upload/preview", response_model=SourcePreview)
+def preview_sources(
+    body: SourceUpload,
+    scope: Annotated[ProjectContext, Depends(admin_project_scope)],
+):
+    from . import source_directory as source
+
+    category_root = source_category_root(scope)
+    target, delete_root = source_upload_target(body, category_root)
+    files = source_upload_files(body, target)
+    try:
+        with source.preview_repository(source_path(scope.project_id)) as root:
+            result = source.preview(
+                root,
+                target.as_posix(),
+                files,
+                body.replace,
+                category_root,
+                delete_root.as_posix() if delete_root else None,
+            )
+    except (ValueError, OSError) as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return SourcePreview(
+        category=body.category if body.category is not None else target.name,
+        target=target.as_posix(),
+        **result,
+    )
 
 
 @app.get("/api/v1/source/files", response_model=list[str])

@@ -3,6 +3,7 @@
 import base64
 import binascii
 import fcntl
+import hashlib
 import io
 import json
 import os
@@ -19,6 +20,7 @@ from pathlib import Path, PurePosixPath
 
 MAX_BYTES = 20 * 1024 * 1024
 MAX_FILES = 1000
+MAX_PREVIEW_PATHS = 200
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 
@@ -29,6 +31,29 @@ def relative(value):
     if p.is_absolute() or any(x in ("", ".", "..", ".git") for x in value.split("/")):
         raise ValueError("Invalid path")
     return p
+
+
+def safe_name(value):
+    """Validate a user-supplied category or subfolder path segment."""
+    if not isinstance(value, str) or not value:
+        raise ValueError("Invalid path")
+    if any(ord(char) < 32 or 127 <= ord(char) <= 159 for char in value):
+        raise ValueError("Invalid path")
+    path = relative(value)
+    if any(part.startswith(".") for part in path.parts):
+        raise ValueError("Hidden directories are not allowed")
+    return path
+
+
+def category_path(value):
+    path = safe_name(value)
+    if len(path.parts) != 1:
+        raise ValueError("Knowledge category must be a single directory name")
+    return path
+
+
+def subfolder_path(value):
+    return safe_name(value)
 
 
 def decode(value):
@@ -146,6 +171,26 @@ def repository(directory):
         os.close(lock)
 
 
+@contextmanager
+def preview_repository(directory):
+    """Lock an existing source directory without initializing or repairing it."""
+    root = Path(directory).expanduser().resolve()
+    if root == PROJECT_ROOT or root.is_relative_to(PROJECT_ROOT):
+        raise ValueError("Source directory must be outside the project repository")
+    if not root.exists():
+        yield root
+        return
+    if not root.is_dir():
+        raise ValueError("Source directory is not a directory")
+    lock = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        yield root
+    finally:
+        fcntl.flock(lock, fcntl.LOCK_UN)
+        os.close(lock)
+
+
 def safe(root, path):
     current = root
     for part in path.parts:
@@ -155,16 +200,7 @@ def safe(root, path):
     return current
 
 
-def upload(root, target, files, replace, author, category_root="knowledge"):
-    target = relative(target)
-    if (
-        any(c in author for c in "<>\n\r\x00")
-        or not author.strip()
-        or author != author.strip()
-    ):
-        raise ValueError("Token name cannot be represented as a git author")
-    if replace and target.parent != relative(category_root):
-        raise ValueError("Replacement requires a knowledge category")
+def _upload_paths(files):
     if not files or len(files) > MAX_FILES or sum(map(len, files.values())) > MAX_BYTES:
         raise ValueError("Invalid upload size or file count")
     paths = {relative(name): data for name, data in files.items()}
@@ -173,16 +209,130 @@ def upload(root, target, files, replace, author, category_root="knowledge"):
     for path in paths:
         if any(parent in paths for parent in path.parents):
             raise ValueError("Conflicting paths")
+    return paths
+
+
+def _classify(root, target, paths, delete_target):
+    uploaded = {(target / path).as_posix() for path in paths}
+    added, overwritten, unchanged = [], [], []
+    for path, data in paths.items():
+        existing = safe(root, target / path)
+        if not existing.exists():
+            added.append((target / path).as_posix())
+            continue
+        if not existing.is_file() or existing.is_symlink():
+            raise ValueError("Conflicting path in source directory")
+        try:
+            current = existing.read_bytes()
+        except OSError as exc:
+            raise ValueError("Cannot read source file") from exc
+        if hashlib.sha256(current).digest() == hashlib.sha256(data).digest():
+            unchanged.append((target / path).as_posix())
+        else:
+            overwritten.append((target / path).as_posix())
+    deleted = []
+    if delete_target is not None:
+        destination = safe(root, delete_target)
+        if destination.exists() and not destination.is_dir():
+            raise ValueError("Target is not a directory")
+        if destination.exists():
+            for name in list_files(destination):
+                path = (delete_target / name).as_posix()
+                if path not in uploaded:
+                    deleted.append(path)
+    return sorted(added), sorted(overwritten), sorted(unchanged), sorted(deleted)
+
+
+def preview(
+    root,
+    target,
+    files,
+    replace,
+    category_root="knowledge",
+    delete_root=None,
+):
+    """Compare an upload with the source directory without modifying anything."""
+    target = relative(target)
+    delete_target = relative(delete_root) if delete_root else target
+    if replace and delete_target.parent != relative(category_root):
+        raise ValueError("Replacement requires a knowledge category")
+    paths = _upload_paths(files)
+    for path in paths:
+        safe(root, target / path)
+    if replace:
+        replacement = safe(root, delete_target)
+        if replacement.exists():
+            if not replacement.is_dir():
+                raise ValueError("Target is not a directory")
+            if any(path.is_symlink() for path in replacement.rglob("*")):
+                raise ValueError("Unsafe replacement directory")
+    added, overwritten, unchanged, deleted = _classify(
+        root,
+        target,
+        paths,
+        delete_target if replace else None,
+    )
+    result = {
+        "added": added,
+        "overwritten": overwritten,
+        "unchanged": unchanged,
+        "deleted": deleted,
+        "truncated": any(
+            len(items) > MAX_PREVIEW_PATHS
+            for items in (added, overwritten, unchanged, deleted)
+        ),
+    }
+    result["counts"] = {
+        "added": len(added),
+        "overwritten": len(overwritten),
+        "unchanged": len(unchanged),
+        "deleted": len(deleted),
+    }
+    for key in ("added", "overwritten", "unchanged", "deleted"):
+        result[key] = result[key][:MAX_PREVIEW_PATHS]
+    return result
+
+
+def upload(
+    root,
+    target,
+    files,
+    replace,
+    author,
+    category_root="knowledge",
+    delete_root=None,
+):
+    target = relative(target)
+    delete_target = relative(delete_root) if delete_root else target
+    if (
+        any(c in author for c in "<>\n\r\x00")
+        or not author.strip()
+        or author != author.strip()
+    ):
+        raise ValueError("Token name cannot be represented as a git author")
+    if replace and delete_target.parent != relative(category_root):
+        raise ValueError("Replacement requires a knowledge category")
+    paths = _upload_paths(files)
+    for path in paths:
         safe(root, target / path)
     destination = safe(root, target)
     if destination.exists() and not destination.is_dir():
         raise ValueError("Target is not a directory")
+    replacement = safe(root, delete_target)
+    if replacement.exists() and not replacement.is_dir():
+        raise ValueError("Target is not a directory")
     if (
         replace
-        and destination.exists()
-        and any(p.is_symlink() for p in destination.rglob("*"))
+        and replacement.exists()
+        and any(p.is_symlink() for p in replacement.rglob("*"))
     ):
         raise ValueError("Unsafe replacement directory")
+    added, overwritten, _, deleted = _classify(
+        root,
+        target,
+        paths,
+        delete_target if replace else None,
+    )
     if git(root, "diff", "--cached", "--name-only"):
         raise ValueError("Source repository has staged changes")
     try:
@@ -192,12 +342,12 @@ def upload(root, target, files, replace, author, category_root="knowledge"):
         has_head = False
     with tempfile.TemporaryDirectory() as scratch:
         backup = Path(scratch) / "backup"
-        existed = destination.exists()
+        existed = replacement.exists()
         if existed:
-            shutil.copytree(destination, backup, symlinks=True)
+            shutil.copytree(replacement, backup, symlinks=True)
         try:
             if replace and existed:
-                shutil.rmtree(destination)
+                shutil.rmtree(replacement)
             for path, data in paths.items():
                 dest = safe(root, target / path)
                 dest.parent.mkdir(parents=True, exist_ok=True)
@@ -210,7 +360,7 @@ def upload(root, target, files, replace, author, category_root="knowledge"):
                         Path(temp.name).unlink(missing_ok=True)
             staged_paths = (
                 (
-                    [target.as_posix()]
+                    [delete_target.as_posix()]
                     if replace
                     else [(target / path).as_posix() for path in paths]
                 )
@@ -224,21 +374,40 @@ def upload(root, target, files, replace, author, category_root="knowledge"):
                 "--quiet",
                 "--allow-empty",
                 "-m",
-                "Upload sources",
+                _commit_message(
+                    target,
+                    category_root,
+                    replace,
+                    len(added),
+                    len(overwritten),
+                    len(deleted),
+                ),
                 author=author,
             )
         except Exception:
-            if destination.exists():
-                shutil.rmtree(destination)
+            if replacement.exists():
+                shutil.rmtree(replacement)
             if existed:
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copytree(backup, destination, symlinks=True)
+                replacement.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copytree(backup, replacement, symlinks=True)
             if has_head:
-                git(root, "reset", "--quiet", "HEAD", "--", target.as_posix())
+                git(root, "reset", "--quiet", "HEAD", "--", delete_target.as_posix())
             else:
                 git(root, "rm", "-r", "-f", "--cached", "--ignore-unmatch", "--", ".")
             raise
     return git(root, "rev-parse", "HEAD").decode().strip()
+
+
+def _commit_message(target, category_root, replace, added, overwritten, deleted):
+    try:
+        suffix = target.relative_to(relative(category_root))
+        category = suffix.parts[0] if suffix.parts else target.name
+    except ValueError:
+        category = target.name
+    message = f"上传知识类 {category}：新增 {added} 个，覆盖 {overwritten} 个"
+    if replace:
+        message += f"，删除 {deleted} 个"
+    return message
 
 
 def list_files(root):

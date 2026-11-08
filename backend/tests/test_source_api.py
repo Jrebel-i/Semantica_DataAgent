@@ -452,10 +452,10 @@ def test_supplement_upload_keeps_files_and_overwrites_with_git_history(source_cl
     assert second.status_code == 200, second.text
     assert (root / "knowledge/cat/a.md").read_text() == "new\n"
     assert (root / "knowledge/cat/keep.md").read_text() == "keep\n"
-    assert (
-        c.get("/api/v1/source/files", headers=h).json()
-        == ["knowledge/cat/a.md", "knowledge/cat/keep.md"]
-    )
+    assert c.get("/api/v1/source/files", headers=h).json() == [
+        "knowledge/cat/a.md",
+        "knowledge/cat/keep.md",
+    ]
     message = subprocess.check_output(
         ["git", "-C", str(root), "log", "-1", "--format=%s"], text=True
     ).strip()
@@ -506,9 +506,7 @@ def test_category_upload_targets_category_and_subfolder(source_client):
     assert preview_response.status_code == 200, preview_response.text
     assert preview_response.json()["target"] == "knowledge/知识 类/子 目录"
     assert preview_response.json()["added"] == ["knowledge/知识 类/子 目录/b.md"]
-    assert preview_response.json()["unchanged"] == [
-        "knowledge/知识 类/子 目录/a.md"
-    ]
+    assert preview_response.json()["unchanged"] == ["knowledge/知识 类/子 目录/a.md"]
 
 
 def test_category_and_target_are_mutually_exclusive(source_client):
