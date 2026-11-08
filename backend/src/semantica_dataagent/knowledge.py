@@ -316,7 +316,8 @@ def milvus(values):
         try:
             store.connect(secure=uri.scheme == "https")
         except Exception as exc:
-            _close_quietly(getattr(store, "client", None))
+            if not _milvus_users:
+                _close_quietly(getattr(store, "client", None))
             if not _unavailable(exc):
                 raise
             raise StorageUnavailable("Milvus storage is unavailable") from exc
