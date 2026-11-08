@@ -1,6 +1,5 @@
 """Execute configured metadata pulls and record their outcome."""
 
-import json
 import threading
 import uuid
 from datetime import UTC, datetime
@@ -8,23 +7,19 @@ from urllib.parse import urlsplit
 
 import httpx
 
-from .build_queue import add_queued_build, build_queue
+from . import project_context
 from .crypto import decrypt
-from .db import PluginConfig, PullRecord, Setting, sessions
+from .db import PullRecord, Setting, sessions
 from .plugins import discover
+from .project_context import add_queued_build
 from .source_directory import git, publish_pull, repository
 
 _lock = threading.Lock()
 
 
 def interval():
-    with sessions()() as db:
-        row = db.get(PluginConfig, ("puller", "dtb"))
-        return (
-            int(json.loads(row.parameters).get("interval_seconds", 0))
-            if row and row.enabled
-            else 0
-        )
+    config = project_context.plugin_config("puller", "dtb")
+    return int(config[1].get("interval_seconds", 0)) if config and config[0] else 0
 
 
 def run_pull():
@@ -45,14 +40,14 @@ def run_pull():
             operation_id = record.operation_id
         try:
             with sessions()() as db:
-                config = db.get(PluginConfig, ("puller", "dtb"))
+                config = project_context.plugin_config("puller", "dtb")
                 secret = db.get(Setting, "puller.dtb.token")
-                directory = db.get(Setting, "source_directory")
-                if not config or not config.enabled or not secret or not directory:
+                directory = project_context.source_directory_value()
+                if not config or not config[0] or not secret or not directory:
                     raise ValueError("DTB puller configuration is incomplete")
-                parameters = json.loads(config.parameters)
+                parameters = config[1]
                 token = decrypt(secret.value)
-                source = directory.value
+                source = directory
             url = parameters.get("url", "")
             parsed = urlsplit(url)
             if (
@@ -113,7 +108,7 @@ def finalize_pull(record_id, commit, counts=None):
         if counts:
             row.tables, row.tasks = counts["tables"], counts["tasks"]
         row.finished_at = datetime.now(UTC)
-    build_queue.enqueue()
+    project_context.wake_build_queue()
 
 
 def recover_pulls(record_id=None):

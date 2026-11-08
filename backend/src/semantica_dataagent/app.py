@@ -23,15 +23,14 @@ from pydantic import BaseModel, Field
 from pymilvus import MilvusClient
 from sqlalchemy import text, update
 
-from . import knowledge
+from . import knowledge, project_context
 from .api_time import UtcDatetime
 from .auth import admin, authenticate_mcp, bearer, current_user
-from .build_queue import build_queue, enqueue_build
+from .build_queue import build_queue
 from .db import (
     Build,
     GenerationPointer,
     KnowledgeGeneration,
-    PluginConfig,
     Setting,
     Token,
     digest,
@@ -115,9 +114,7 @@ async def lifespan(application):
 
         logging.getLogger(__name__).exception("Pull recovery failed")
     build_queue.start()
-    with sessions()() as db:
-        interval = db.get(Setting, "schedule_interval_seconds")
-        scheduler.start(int(interval.value) if interval else 0)
+    project_context.start_schedule()
     from .pull_service import interval as pull_interval
 
     pull_scheduler.start(pull_interval())
@@ -164,12 +161,7 @@ KEYS = {
     "milvus_uri",
     "embedding_url",
     "embedding_model",
-    "source_directory",
-    "knowledge_generation",
-    "generation_retention",
     "session_retention_days",
-    "schedule_interval_seconds",
-    "dimension_value_limit",
     "embedding_concurrency",
     "embedding_timeout_seconds",
     "embedding_timeout_per_input_seconds",
@@ -185,7 +177,7 @@ KEYS = {
     "langfuse_url",
     "langfuse_public_key",
     "langfuse_secret_key",
-}
+} | set(project_context.PROJECT_SETTING_KEYS)
 SECRET = {"langfuse_secret_key", "neo4j_password"}
 
 
@@ -283,7 +275,7 @@ def assistant_defaults(
 def get_settings(_: Annotated[str, Depends(admin)]) -> dict[str, str | None]:
     with sessions()() as db:
         values = {row.key: row.value for row in db.query(Setting).all()}
-    if not values.get("neo4j_password") and knowledge.neo4j_password(values):
+    if not values.get("neo4j_password") and project_context.neo4j_password(values):
         values["neo4j_password"] = "configured"
     return {
         key: ("configured" if key in values else None)
@@ -326,12 +318,12 @@ def put_settings(
             raise HTTPException(
                 status_code=422, detail="Invalid agent profiles"
             ) from None
-    limit = body.values.get("dimension_value_limit")
+    limit = body.values.get(project_context.DIMENSION_VALUE_LIMIT_KEY)
     if limit and (
         not limit.isascii() or not limit.isdigit() or not 1 <= int(limit) <= 1000000
     ):
         raise HTTPException(status_code=422, detail="Invalid dimension value limit")
-    interval = body.values.get("schedule_interval_seconds")
+    interval = body.values.get(project_context.SCHEDULE_INTERVAL_KEY)
     if interval and (
         not interval.isascii()
         or not interval.isdigit()
@@ -350,7 +342,7 @@ def put_settings(
             raise HTTPException(
                 status_code=422, detail="Invalid embedding_cache_max_mb"
             )
-    retention = body.values.get("generation_retention")
+    retention = body.values.get(project_context.GENERATION_RETENTION_KEY)
     if retention and (
         not retention.isascii()
         or not retention.isdigit()
@@ -364,7 +356,7 @@ def put_settings(
         or not 1 <= int(session_retention) <= 36500
     ):
         raise HTTPException(status_code=422, detail="Invalid session retention")
-    generation = body.values.get("knowledge_generation")
+    generation = body.values.get(project_context.GENERATION_KEY)
     if generation and not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,63}", generation):
         raise HTTPException(status_code=422, detail="Invalid generation")
     timeout = body.values.get("assistant_timeout_seconds")
@@ -402,7 +394,9 @@ def put_settings(
                 ) from None
     cipher = Fernet(os.environ["DATAAGENT_ENCRYPTION_KEY"].encode())
     with sessions().begin() as db:
-        if "knowledge_generation" in body.values and db.get(GenerationPointer, 1):
+        if project_context.GENERATION_KEY in body.values and db.get(
+            GenerationPointer, 1
+        ):
             raise HTTPException(
                 status_code=409, detail="Use the generation switch endpoint"
             )
@@ -419,13 +413,13 @@ def put_settings(
                     row.value = stored
                 else:
                     db.add(Setting(key=key, value=stored))
-    if "schedule_interval_seconds" in body.values:
-        scheduler.configure(int(interval) if interval else 0)
+    if project_context.SCHEDULE_INTERVAL_KEY in body.values:
+        project_context.configure_schedule(int(interval) if interval else 0)
     return get_settings("admin")
 
 
 async def check_neo4j(values: dict[str, str]):
-    password = knowledge.neo4j_password(values)
+    password = project_context.neo4j_password(values)
     async with (
         AsyncGraphDatabase.driver(
             values["neo4j_uri"],
@@ -455,7 +449,7 @@ async def probe(name: str, values: dict[str, str]) -> Status:
     if not all(values.get(key) for key in required) or (
         name == "neo4j"
         and not values.get("neo4j_password")
-        and not knowledge.neo4j_password(values)
+        and not project_context.neo4j_password(values)
     ):
         return Status(status="not_configured", elapsed_ms=0)
     start = time.monotonic()
@@ -555,15 +549,15 @@ class GenerationsView(BaseModel):
 
 @app.get("/api/v1/generations", response_model=GenerationsView)
 def list_generations(_: Annotated[str, Depends(current_user)]):
-    from pathlib import Path
 
     from .source_directory import git
 
     values = knowledge.settings()
+    project = project_context.from_values(values)
     head = None
     try:
         head = (
-            git(Path(values["source_directory"]), "rev-parse", "--verify", "HEAD")
+            git(project.source_directory, "rev-parse", "--verify", "HEAD")
             .decode()
             .strip()
         )
@@ -633,10 +627,10 @@ def start_build(
     build_type = body.build_type if body else "full"
     with sessions()() as db:
         token_name = db.get(Token, digest(credentials.credentials)).name
-    build_id = enqueue_build(build_type, token_name, notify=False)
+    build_id = project_context.enqueue_build(build_type, token_name, notify=False)
     with sessions()() as db:
         result = build_view(db.get(Build, build_id))
-    build_queue.enqueue()
+    project_context.wake_build_queue()
     return result
 
 
@@ -743,7 +737,9 @@ def create_mcp():
             "prompts": sorted(
                 prompt.name for prompt in server._prompt_manager.list_prompts()
             ),
-            "current_generation": knowledge.settings()["knowledge_generation"],
+            "current_generation": project_context.from_values(
+                knowledge.settings()
+            ).generation,
         }
 
     server.tool()(get_capabilities)
@@ -840,7 +836,6 @@ def update_plugin(
 ):
     from jsonschema import Draft202012Validator
 
-    from .db import PluginConfig
     from .plugins import discover
 
     plugin = discover().get((category, plugin_id))
@@ -873,18 +868,9 @@ def update_plugin(
                 db.add(Setting(key="puller.dtb.token", value=encrypt(token)))
             else:
                 secret.value = encrypt(token)
-        row = db.get(PluginConfig, (category, plugin_id))
-        if row is None:
-            row = PluginConfig(
-                category=category,
-                plugin_id=plugin_id,
-                enabled=body.enabled,
-                parameters=json.dumps(parameters),
-            )
-            db.add(row)
-        else:
-            row.enabled = body.enabled
-            row.parameters = json.dumps(parameters)
+        project_context.upsert_plugin_config(
+            db, category, plugin_id, body.enabled, parameters
+        )
     if (category, plugin_id) == ("puller", "dtb"):
         pull_scheduler.configure(
             parameters.get("interval_seconds", 0) if body.enabled else 0
@@ -952,11 +938,10 @@ class SourceDiff(BaseModel):
 
 
 def source_path():
-    with sessions()() as db:
-        value = db.get(Setting, "source_directory")
-        if value is None or not value.value:
-            raise HTTPException(422, "Source directory is not configured")
-        return value.value
+    value = project_context.source_directory_value()
+    if value is None:
+        raise HTTPException(422, "Source directory is not configured")
+    return value
 
 
 @contextmanager
@@ -1006,12 +991,8 @@ def upload_sources(
     with sessions()() as db:
         user = db.get(Token, digest(credentials.credentials))
         author = user.name
-        config = db.get(PluginConfig, ("source", "markdown"))
-        category_root = (
-            json.loads(config.parameters).get("path", "knowledge")
-            if config
-            else "knowledge"
-        )
+        config = project_context.plugin_config("source", "markdown")
+        category_root = config[1].get("path", "knowledge") if config else "knowledge"
     with source_repository() as root:
         return SourceCommit(
             commit=source.upload(

@@ -11,13 +11,11 @@ from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager, suppress
 from datetime import UTC, datetime
-from pathlib import Path
 from threading import Lock
 from urllib.parse import quote, urlsplit
 
 import grpc
 import numpy as np
-from cryptography.fernet import Fernet
 from neo4j import GraphDatabase
 from neo4j.exceptions import DatabaseUnavailable, ServiceUnavailable, SessionExpired
 from pymilvus import MilvusClient, utility
@@ -30,8 +28,9 @@ from pymilvus.exceptions import (
 from semantica.graph_store import GraphStore
 from semantica.vector_store.milvus_store import MilvusStore
 
+from . import project_context
 from .canonical import KINDS
-from .db import Build, GenerationPointer, KnowledgeGeneration, Setting, sessions
+from .db import Build, GenerationPointer, KnowledgeGeneration, sessions
 from .embedding_client import EmbeddingStats
 from .embedding_client import embed as embedding_embed
 from .filters import filter_records, get_filters
@@ -84,36 +83,9 @@ def validate_records(records):
             seen.add(key)
 
 
-def neo4j_password(values):
-    encrypted = values.get("neo4j_password")
-    if encrypted:
-        return (
-            Fernet(os.environ["DATAAGENT_ENCRYPTION_KEY"].encode())
-            .decrypt(encrypted.encode())
-            .decode()
-        )
-    user, separator, password = os.environ.get("DATAAGENT_NEO4J_AUTH", "").partition(
-        "/"
-    )
-    if separator and password and user == values.get("neo4j_user"):
-        return password
-    return None
-
-
 def settings():
-    with sessions()() as db:
-        values = {row.key: row.value for row in db.query(Setting).all()}
-        pointer = db.get(GenerationPointer, 1)
-        if pointer:
-            values["knowledge_generation"] = pointer.generation
-    password = neo4j_password(values)
-    if password:
-        values["neo4j_password"] = password
-    values.setdefault("embedding_model", "model/bge-m3")
-    values.setdefault("knowledge_generation", "default")
-    if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,63}", values["knowledge_generation"]):
-        raise ValueError("Invalid generation")
-    return values
+    """Return global settings plus the current project's project-level values."""
+    return project_context.current_project().values
 
 
 def _close_quietly(resource):
@@ -315,7 +287,7 @@ def embed(values, texts, stats=None):
 
 
 def collection_name(values):
-    return "sda_" + values["knowledge_generation"]
+    return project_context.from_values(values).collection_name()
 
 
 def milvus(values):
@@ -345,26 +317,65 @@ def reference(kind, data, counts=None):
 
 def ensure_build_indexes(store):
     """Prepare lookup indexes before either kind of build touches graph data."""
+    field = project_context.label("Field")
+    table = project_context.label("Table")
+    task = project_context.label("Task")
+    document = project_context.label("Document")
+    entity = project_context.label("Entity")
+    category = project_context.label("Category")
+    lineage = project_context.label("LineageTable")
     indexes = (
-        ("sda_field_generation_name", "SDAField", ("generation", "name")),
         (
-            "sda_field_generation_location",
-            "SDAField",
+            project_context.index_name("field_generation_name"),
+            field,
+            ("generation", "name"),
+        ),
+        (
+            project_context.index_name("field_generation_location"),
+            field,
             ("generation", "database", "table", "name"),
         ),
-        ("sda_field_generation_table", "SDAField", ("generation", "database", "table")),
         (
-            "sda_table_generation_location",
-            "SDATable",
+            project_context.index_name("field_generation_table"),
+            field,
+            ("generation", "database", "table"),
+        ),
+        (
+            project_context.index_name("table_generation_location"),
+            table,
             ("generation", "database", "name"),
         ),
-        ("sda_table_generation_name", "SDATable", ("generation", "name")),
-        ("sda_task_generation_ref", "SDATask", ("generation", "ref")),
-        ("sda_document_generation_ref", "SDADocument", ("generation", "ref")),
-        ("sda_entity_generation_ref", "SDAEntity", ("generation", "ref")),
-        ("sda_entity_generation", "SDAEntity", ("generation",)),
-        ("sda_category_generation_name", "SDACategory", ("generation", "name")),
-        ("sda_lineage_generation_name", "SDALineageTable", ("generation", "name")),
+        (
+            project_context.index_name("table_generation_name"),
+            table,
+            ("generation", "name"),
+        ),
+        (
+            project_context.index_name("task_generation_ref"),
+            task,
+            ("generation", "ref"),
+        ),
+        (
+            project_context.index_name("document_generation_ref"),
+            document,
+            ("generation", "ref"),
+        ),
+        (
+            project_context.index_name("entity_generation_ref"),
+            entity,
+            ("generation", "ref"),
+        ),
+        (project_context.index_name("entity_generation"), entity, ("generation",)),
+        (
+            project_context.index_name("category_generation_name"),
+            category,
+            ("generation", "name"),
+        ),
+        (
+            project_context.index_name("lineage_generation_name"),
+            lineage,
+            ("generation", "name"),
+        ),
     )
     for name, label, properties in indexes:
         columns = ", ".join(f"n.{prop}" for prop in properties)
@@ -383,7 +394,8 @@ def build_storage(values, embedding_stats=None):
     from .stage_contract import StorageHandles
 
     stats = embedding_stats if embedding_stats is not None else EmbeddingStats()
-    generation = values["knowledge_generation"]
+    project = project_context.from_values(values)
+    generation = project.generation
     model = values.get("embedding_model") or "model/bge-m3"
     cache = open_embedding_cache(values, model=model)
     dimension = cache.dimension if cache is not None and cache.enabled else None
@@ -445,7 +457,7 @@ def incremental_storage(values, embedding_stats=None):
         try:
             vector_store.get_collection(collection_name(values))
             yield StorageHandles(
-                values["knowledge_generation"],
+                project_context.from_values(values).generation,
                 graph_store,
                 vector_store,
                 values,
@@ -462,7 +474,7 @@ def incremental_storage(values, embedding_stats=None):
 
 
 def read_sources(values, plugins):
-    directory = Path(values["source_directory"]).resolve()
+    directory = project_context.from_values(values).source_directory
     lock = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
     try:
         fcntl.flock(lock, fcntl.LOCK_SH)
@@ -577,7 +589,8 @@ def run_build(build_id):
             build_type = build.build_type or "full"
         _record_log(build_id, logs, "build", f"{build_type} build started")
         values = settings()
-        generation = values["knowledge_generation"]
+        project = project_context.from_values(values)
+        generation = project.generation
         with sessions().begin() as db:
             if db.get(GenerationPointer, 1) is None:
                 if db.get(KnowledgeGeneration, generation) is None:
@@ -585,12 +598,13 @@ def run_build(build_id):
                 db.add(GenerationPointer(id=1, generation=generation))
         if build_type == "full":
             generation = generation[:30] + "_" + uuid.uuid4().hex
-            values["knowledge_generation"] = generation
+            values = project_context.with_generation(values, generation)
+            project = project_context.from_values(values)
             new_values = values.copy()
         plugins = configured()
         filters = get_filters()
         config = {
-            "source_directory": str(Path(values["source_directory"]).resolve()),
+            project_context.SOURCE_DIRECTORY_KEY: str(project.source_directory),
             "neo4j_uri": values["neo4j_uri"],
             "neo4j_user": values["neo4j_user"],
             "milvus_uri": values["milvus_uri"],
@@ -600,7 +614,7 @@ def run_build(build_id):
                 if enabled and category in {"source", "parser"}
             ],
             "filters": filters,
-            "dimension_value_limit": values.get("dimension_value_limit", "1000"),
+            project_context.DIMENSION_VALUE_LIMIT_KEY: project.dimension_value_limit,
             "embedding_model": values["embedding_model"],
             "embedding_url": values["embedding_url"],
         }
@@ -904,7 +918,7 @@ def run_build(build_id):
 
 
 def prune_generations(values):
-    retention = int(values.get("generation_retention", "2"))
+    retention = project_context.from_values(values).generation_retention
     with sessions()() as db:
         pointer = db.get(GenerationPointer, 1)
         rows = (
@@ -935,7 +949,7 @@ def prune_generations(values):
             ).rowcount
         if not claimed:
             continue
-        delete_generation_data({**values, "knowledge_generation": name})
+        delete_generation_data(project_context.with_generation(values, name))
         with sessions().begin() as db:
             row = db.get(KnowledgeGeneration, name)
             pointer = db.get(GenerationPointer, 1)
@@ -966,7 +980,7 @@ def cleanup_interrupted_generations():
     for build_id, generation in candidates:
         try:
             values = settings()
-            delete_generation_data({**values, "knowledge_generation": generation})
+            delete_generation_data(project_context.with_generation(values, generation))
             with sessions().begin() as db:
                 row = db.get(Build, build_id)
                 if row and row.error == interrupted:
@@ -978,13 +992,14 @@ def cleanup_interrupted_generations():
 
 
 def delete_generation_data(values):
+    project = project_context.from_values(values)
     store = graph(values)
     try:
         delete_batches(
             lambda query, params: execute(store, query, params),
             "MATCH (n:SDAEntity {generation:$generation})",
             "n",
-            {"generation": values["knowledge_generation"]},
+            {"generation": project.generation},
             detach=True,
         )
     finally:
@@ -1004,25 +1019,27 @@ def existing_refs(refs):
     if not wanted:
         return set()
     values = settings()
+    project = project_context.from_values(values)
     rows = execute(
         read_graph(values),
         """MATCH (n:SDAEntity {generation:$generation})
         WHERE n.ref IN $refs
         RETURN DISTINCT n.ref AS ref""",
-        {"generation": values["knowledge_generation"], "refs": wanted},
+        {"generation": project.generation, "refs": wanted},
     )
     return {row["ref"] for row in rows if row.get("ref")}
 
 
 def describe(names=None, database=None, search=None, summary=False):
     values = settings()
+    project = project_context.from_values(values)
     store = read_graph(values)
     filters = """MATCH (t:SDATable {generation:$generation})
             WHERE ($names IS NULL OR t.name IN $names OR t.database + '.' + t.name IN $names)
               AND ($database IS NULL OR t.database = $database)
               AND ($search IS NULL OR toLower(t.name) CONTAINS toLower($search))"""
     parameters = {
-        "generation": values["knowledge_generation"],
+        "generation": project.generation,
         "names": names,
         "database": database,
         "search": search,
@@ -1077,13 +1094,14 @@ def describe(names=None, database=None, search=None, summary=False):
 def dimension_values(database, table, field):
     """Return every indexed value for one field in the current generation."""
     values = settings()
+    project = project_context.from_values(values)
     rows = execute(
         read_graph(values),
         """MATCH (v:SDADimensionValue {generation:$generation})
            WHERE v.database = $database AND v.table = $table AND v.field = $field
            RETURN v.value AS value ORDER BY v.value""",
         {
-            "generation": values["knowledge_generation"],
+            "generation": project.generation,
             "database": database,
             "table": table,
             "field": field,
@@ -1143,8 +1161,9 @@ def mark_ambiguity(results, query):
 
 def search(query, scope, top_k, category=None):
     values = settings()
+    project = project_context.from_values(values)
     vector = np.array(embed(values, [query])[0], dtype=np.float32)
-    generation = values["knowledge_generation"]
+    generation = project.generation
     limit = max(50, top_k)
     scopes = ["tables", "fields", "tasks", "docs"] if scope == "all" else [scope]
     search_scopes = ["tables", "docs"] if scope == "tables" else scopes
@@ -1158,20 +1177,23 @@ def search(query, scope, top_k, category=None):
     }
 
     def lexical():
-        return execute(
-            read_graph(values),
-            """CALL {
+        lexical_query = """CALL {
           MATCH (n:SDAEntity {generation:$generation})
           WHERE ((n:SDATable AND 'tables' IN $scopes) OR (n:SDAField AND 'fields' IN $scopes) OR (n:SDATask AND 'tasks' IN $scopes))
             AND (toLower(n.name) = toLower($query) OR toLower(coalesce(n.database,'') + '.' + n.name) = toLower($query))
             AND $category IS NULL
           RETURN 'exact' AS source, properties(n) AS item LIMIT $limit
           UNION ALL
-          CALL db.index.fulltext.queryNodes('sda_knowledge', $term, {limit:$limit}) YIELD node, score
+          CALL db.index.fulltext.queryNodes('__KNOWLEDGE_INDEX__', $term, {limit:$limit}) YIELD node, score
           WHERE node.generation = $generation AND ((node:SDATable AND 'tables' IN $scopes) OR (node:SDAField AND 'fields' IN $scopes) OR (node:SDATask AND 'tasks' IN $scopes) OR (node:SDAChunk AND 'docs' IN $scopes))
             AND ($category IS NULL OR node.category = $category)
           RETURN 'fulltext' AS source, properties(node) AS item ORDER BY score DESC
-        } RETURN source, item""",
+        } RETURN source, item"""
+        return execute(
+            read_graph(values),
+            lexical_query.replace(
+                "__KNOWLEDGE_INDEX__", project_context.index_name("knowledge")
+            ),
             params,
         )
 

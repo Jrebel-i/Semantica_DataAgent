@@ -14,7 +14,7 @@ from sqlglot import exp
 from sqlglot.errors import ErrorLevel, ParseError
 from sqlglot.optimizer.scope import traverse_scope
 
-from . import knowledge
+from . import knowledge, project_context
 from .db import Build, sessions
 
 # Keys shared above both limits do not identify a relationship.
@@ -85,13 +85,14 @@ def _build_version():
 def load_snapshot():
     global _snapshot_cache
     values = knowledge.settings()
+    project = project_context.from_values(values)
     version = _build_version()
     key = (
         os.environ["DATAAGENT_DB_PATH"],
         values["neo4j_uri"],
         values["neo4j_user"],
         values["neo4j_password"],
-        values["knowledge_generation"],
+        project.generation,
         version,
     )
     if (
@@ -101,7 +102,7 @@ def load_snapshot():
     ):
         return _snapshot_cache[1]
     store = knowledge.read_graph(values)
-    params = {"generation": values["knowledge_generation"]}
+    params = {"generation": project.generation}
     tables = knowledge.execute(
         store,
         """MATCH (t:SDATable {generation:$generation}) OPTIONAL MATCH (t)-[:HAS_FIELD]->(f:SDAField {generation:$generation}) RETURN properties(t) AS table, collect(properties(f)) AS fields""",

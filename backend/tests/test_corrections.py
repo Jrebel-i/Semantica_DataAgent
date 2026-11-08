@@ -332,7 +332,9 @@ def test_interrupted_approval_recovers_without_duplicate_commits(
         "execute",
         lambda *args: [{"node": {"source_file": "knowledge/metrics/sales.md"}}],
     )
-    monkeypatch.setattr(corrections.build_queue, "enqueue", lambda: None)
+    from semantica_dataagent import project_context
+
+    monkeypatch.setattr(project_context, "wake_build_queue", lambda: None)
     with sessions().begin() as db:
         db.add(
             CorrectionProposal(

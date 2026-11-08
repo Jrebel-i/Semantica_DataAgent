@@ -838,7 +838,6 @@ def test_dtb_puller_token_is_encrypted_and_not_returned(client):
 def test_manual_pull_commits_then_queues_incremental_build(
     client, tmp_path, monkeypatch
 ):
-    from semantica_dataagent import pull_service
     from semantica_dataagent.dtb_puller import DtbPuller
 
     c, token = client
@@ -875,7 +874,9 @@ def test_manual_pull_commits_then_queues_incremental_build(
             {"tables": 1, "tasks": 2},
         ),
     )
-    monkeypatch.setattr(pull_service.build_queue, "enqueue", lambda: None)
+    from semantica_dataagent import project_context
+
+    monkeypatch.setattr(project_context, "wake_build_queue", lambda: None)
     response = c.post("/api/v1/pulls/dtb", headers=headers)
     assert response.status_code == 200, response.text
     assert response.json()["status"] == "succeeded"
@@ -925,7 +926,6 @@ def test_failed_pull_does_not_change_source(client, tmp_path, monkeypatch):
 
 
 def test_partial_pull_records_failed_tables(client, tmp_path, monkeypatch):
-    from semantica_dataagent import pull_service
     from semantica_dataagent.dtb_puller import DtbPuller
 
     c, token = client
@@ -958,7 +958,9 @@ def test_partial_pull_records_failed_tables(client, tmp_path, monkeypatch):
             },
         ),
     )
-    monkeypatch.setattr(pull_service.build_queue, "enqueue", lambda: None)
+    from semantica_dataagent import project_context
+
+    monkeypatch.setattr(project_context, "wake_build_queue", lambda: None)
 
     response = c.post("/api/v1/pulls/dtb", headers=headers)
 
@@ -1051,7 +1053,9 @@ def test_failed_recovery_does_not_prevent_startup_and_can_retry(tmp_path, monkey
     with sessions()() as db:
         assert db.get(PullRecord, record_id).status == "running"
     monkeypatch.setattr(pull_service, "add_queued_build", original)
-    monkeypatch.setattr(pull_service.build_queue, "enqueue", lambda: None)
+    from semantica_dataagent import project_context
+
+    monkeypatch.setattr(project_context, "wake_build_queue", lambda: None)
     pull_service.recover_pulls()
     with sessions()() as db:
         row = db.get(PullRecord, record_id)
@@ -1106,7 +1110,9 @@ def test_sigkill_between_source_commit_and_build_finalization(
         os._exit(1)
     _, status = os.waitpid(child, 0)
     assert os.WIFSIGNALED(status) and os.WTERMSIG(status) == signal.SIGKILL
-    monkeypatch.setattr(pull_service.build_queue, "enqueue", lambda: None)
+    from semantica_dataagent import project_context
+
+    monkeypatch.setattr(project_context, "wake_build_queue", lambda: None)
     pull_service.recover_pulls()
     pull_service.recover_pulls()
     with sessions()() as db:
