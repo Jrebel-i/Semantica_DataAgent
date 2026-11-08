@@ -67,8 +67,8 @@ def test_migrate_upgrades_from_0016_and_keeps_data(database, capsys):
     assert cli.main(["migrate"]) == 0
 
     output = capsys.readouterr().out
-    assert "0016" in output and "0027" in output
-    assert _schema_version(database) == "0027"
+    assert "0016" in output and "0028" in output
+    assert _schema_version(database) == "0028"
     assert _kept_rows(database) == (("kept token", "admin"), ("kept value",))
 
 
@@ -83,7 +83,7 @@ def test_migrate_backs_up_before_upgrade_and_is_repeatable(database, capsys):
 
     capsys.readouterr()
     assert cli.main(["migrate"]) == 0
-    assert "0027" in capsys.readouterr().out
+    assert "0028" in capsys.readouterr().out
     assert len(_backups(database)) == 1
 
 
@@ -108,14 +108,14 @@ def test_serve_migrates_before_starting(database, capsys, monkeypatch):
 
     assert cli.main(["serve"]) == 0
     assert started == [True]
-    assert _schema_version(database) == "0027"
+    assert _schema_version(database) == "0028"
     assert _kept_rows(database) == (("kept token", "admin"), ("kept value",))
     assert len(_backups(database)) == 1
 
     assert cli.main(["serve"]) == 0
     assert started == [True, True]
     assert len(_backups(database)) == 1
-    assert "0027" in capsys.readouterr().out
+    assert "0028" in capsys.readouterr().out
 
 
 def test_serve_does_not_start_when_migration_fails(database, capsys, monkeypatch):
@@ -136,7 +136,7 @@ def test_init_still_initializes_an_empty_database(database):
     token = cli.initialize()
 
     assert token
-    assert _schema_version(database) == "0027"
+    assert _schema_version(database) == "0028"
     with sqlite3.connect(database) as db:
         row = db.execute("SELECT name, role FROM tokens").fetchone()
     assert row == ("initial admin", "admin")
@@ -161,7 +161,7 @@ def test_serve_upgrades_0023_conversations_and_backs_up(database, monkeypatch):
         )
     monkeypatch.setattr(cli, "_serve", lambda: None)
     assert cli.main(["serve"]) == 0
-    assert _schema_version(database) == "0027"
+    assert _schema_version(database) == "0028"
     with sqlite3.connect(database) as db:
         assert db.execute(
             "SELECT title, pinned_at, archived_at FROM conversations WHERE id='old'"
@@ -231,7 +231,7 @@ def test_migrate_adds_empty_model_capabilities_for_existing_providers(database):
 
     assert cli.main(["migrate"]) == 0
 
-    assert _schema_version(database) == "0027"
+    assert _schema_version(database) == "0028"
     with sqlite3.connect(database) as db:
         columns = {
             row[1] for row in db.execute("PRAGMA table_info(providers)").fetchall()
@@ -254,9 +254,19 @@ OLD_TABLES = (
 )
 
 
-def _table_rows(path: Path, table: str) -> list[tuple]:
+def _table_columns(path: Path, table: str) -> list[str]:
     with sqlite3.connect(path) as db:
-        return sorted(db.execute(f"SELECT * FROM {table}").fetchall(), key=repr)
+        return [row[1] for row in db.execute(f"PRAGMA table_info({table})")]
+
+
+def _table_rows(
+    path: Path, table: str, columns: list[str] | None = None
+) -> list[tuple]:
+    with sqlite3.connect(path) as db:
+        if columns is None:
+            return sorted(db.execute(f"SELECT * FROM {table}").fetchall(), key=repr)
+        names = ", ".join(columns)
+        return sorted(db.execute(f"SELECT {names} FROM {table}").fetchall(), key=repr)
 
 
 def _previous_release_database(path: Path) -> None:
@@ -307,11 +317,14 @@ def _previous_release_database(path: Path) -> None:
 def test_project_migration_preserves_existing_data(database):
     _previous_release_database(database)
     before = {table: _table_rows(database, table) for table in OLD_TABLES}
+    old_columns = {table: _table_columns(database, table) for table in OLD_TABLES}
 
     assert cli.main(["migrate"]) == 0
 
-    assert _schema_version(database) == "0027"
-    assert {table: _table_rows(database, table) for table in OLD_TABLES} == before
+    assert _schema_version(database) == "0028"
+    assert {
+        table: _table_rows(database, table, old_columns[table]) for table in OLD_TABLES
+    } == before
     with sqlite3.connect(database) as db:
         assert db.execute("SELECT id, name, type, status FROM projects").fetchall() == [
             ("default", "业务数据", "warehouse", "active")
@@ -344,9 +357,53 @@ def test_empty_database_has_a_single_migration_head(database):
     from alembic.script import ScriptDirectory
 
     config = _config(database)
-    assert ScriptDirectory.from_config(config).get_heads() == ["0027"]
+    assert ScriptDirectory.from_config(config).get_heads() == ["0028"]
     command.upgrade(config, "head")
-    assert _schema_version(database) == "0027"
+    assert _schema_version(database) == "0028"
     with sqlite3.connect(database) as db:
         assert db.execute("SELECT count(*) FROM projects").fetchone() == (1,)
         assert db.execute("SELECT count(*) FROM project_members").fetchone() == (0,)
+
+
+def test_migrate_adds_null_effort_for_existing_turns(database):
+    command.upgrade(_config(database), "0026")
+    with sqlite3.connect(database) as db:
+        db.execute(
+            "INSERT INTO conversations (id, owner_id, title, agent, provider_id, model, created_at, updated_at, resumable) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                "legacy",
+                "owner",
+                "旧会话",
+                "pi",
+                "provider",
+                "model-a",
+                "2026-01-01",
+                "2026-01-01",
+                1,
+            ),
+        )
+        db.execute(
+            "INSERT INTO turns (conversation_id, sequence, question, status, answer, sql, citations, started_at, provider_id, model) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                "legacy",
+                1,
+                "旧问题",
+                "completed",
+                "旧回答",
+                "[]",
+                "[]",
+                "2026-01-01",
+                "provider",
+                "model-a",
+            ),
+        )
+
+    assert cli.main(["migrate"]) == 0
+
+    assert _schema_version(database) == "0028"
+    with sqlite3.connect(database) as db:
+        columns = {row[1] for row in db.execute("PRAGMA table_info(turns)").fetchall()}
+        assert "effort" in columns
+        assert db.execute(
+            "SELECT effort FROM turns WHERE conversation_id='legacy'"
+        ).fetchone() == (None,)

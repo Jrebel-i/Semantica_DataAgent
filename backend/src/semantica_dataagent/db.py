@@ -136,6 +136,7 @@ class Turn(Base):
     conversation_id: Mapped[str]
     provider_id: Mapped[str | None]
     model: Mapped[str | None]
+    effort: Mapped[str | None]
     sequence: Mapped[int]
     question: Mapped[str]
     status: Mapped[str]

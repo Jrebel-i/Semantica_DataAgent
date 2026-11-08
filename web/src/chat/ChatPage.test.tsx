@@ -11,6 +11,7 @@ import {
 import { ChatPage } from "../ChatPage";
 import { getMessages } from "../i18n";
 import {
+  composerSelectText,
   conversationFetcher,
   conversationRow,
   cssDeclarations,
@@ -142,9 +143,7 @@ test("提问后新会话出现在列表顶部并选中", async () => {
   );
 
   await waitFor(() =>
-    expect((screen.getByLabelText("模型") as HTMLSelectElement).value).toBe(
-      provider.models[0],
-    ),
+    expect(composerSelectText("模型")).toBe(provider.models[0]),
   );
   fireEvent.change(screen.getByLabelText("问题"), {
     target: { value: "新问题" },
@@ -341,9 +340,7 @@ test("keeps the previous answer when a second question is sent", async () => {
   vi.stubGlobal("fetch", fetcher);
   render(<ChatPage token="token" role="user" messages={getMessages("zh")} />);
   await waitFor(() =>
-    expect((screen.getByLabelText("模型") as HTMLSelectElement).value).toBe(
-      provider.models[0],
-    ),
+    expect(composerSelectText("模型")).toBe(provider.models[0]),
   );
   fireEvent.change(screen.getByLabelText("问题"), {
     target: { value: "第一问" },

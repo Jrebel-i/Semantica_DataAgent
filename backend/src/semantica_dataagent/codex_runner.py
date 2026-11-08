@@ -83,6 +83,7 @@ class CodexEventParser(EventParser):
 
 class CodexRunner:
     agent_id = "codex"
+    effort_levels = ()
 
     def __init__(self, binary=None):
         self.binary = binary

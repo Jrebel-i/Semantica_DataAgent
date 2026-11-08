@@ -108,6 +108,34 @@ export function cssDeclarations(selector: string) {
   );
 }
 
+export function composerSelectText(label: string) {
+  const input = screen.getByLabelText(label);
+  const root = input.closest(".ant-select");
+  return (
+    root
+      ?.querySelector(".ant-select-content, .ant-select-selection-item")
+      ?.textContent?.trim() ??
+    root
+      ?.querySelector(".ant-select-selection-placeholder")
+      ?.textContent?.trim() ??
+    ""
+  );
+}
+
+export function composerSelectDisabled(label: string) {
+  const input = screen.getByLabelText(label);
+  return (
+    (input as HTMLInputElement).disabled ||
+    input.closest(".ant-select")?.classList.contains("ant-select-disabled") ===
+      true
+  );
+}
+
+export async function chooseComposerOption(label: string, option: RegExp) {
+  fireEvent.mouseDown(screen.getByLabelText(label));
+  fireEvent.click(await screen.findByRole("option", { name: option }));
+}
+
 export function conversationRow(id: string, title: string) {
   return {
     id,

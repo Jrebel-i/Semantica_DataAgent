@@ -75,6 +75,11 @@ def get_runner(agent_id: str) -> AgentRunner | None:
 
 def list_agents() -> list[dict]:
     return [
-        {"id": agent_id, "name": agent_id, "available": runner.available()}
+        {
+            "id": agent_id,
+            "name": agent_id,
+            "available": runner.available(),
+            "effort_levels": list(getattr(runner, "effort_levels", ())),
+        }
         for agent_id, runner in sorted(RUNNERS.items())
     ]

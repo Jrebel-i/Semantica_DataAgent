@@ -11,6 +11,7 @@ import {
 import { ChatPage } from "../ChatPage";
 import { getMessages } from "../i18n";
 import {
+  composerSelectText,
   conversationFetcher,
   conversationRow,
   cssDeclarations,
@@ -73,9 +74,7 @@ test("后打开的引用不会被较晚返回的旧请求覆盖", async () => {
   vi.stubGlobal("fetch", fetcher);
   render(<ChatPage token="token" role="user" messages={getMessages("zh")} />);
   await waitFor(() =>
-    expect((screen.getByLabelText("模型") as HTMLSelectElement).value).toBe(
-      provider.models[0],
-    ),
+    expect(composerSelectText("模型")).toBe(provider.models[0]),
   );
   fireEvent.change(screen.getByLabelText("问题"), {
     target: { value: "支付销售额？" },
@@ -134,9 +133,7 @@ test("文档引用解码文件名并在抽屉渲染 Markdown", async () => {
     <ChatPage token="token" role="user" messages={getMessages("zh")} />,
   );
   await waitFor(() =>
-    expect((screen.getByLabelText("模型") as HTMLSelectElement).value).toBe(
-      provider.models[0],
-    ),
+    expect(composerSelectText("模型")).toBe(provider.models[0]),
   );
   fireEvent.change(screen.getByLabelText("问题"), {
     target: { value: "查看" },
@@ -206,9 +203,7 @@ test("文档路径编码非法时抽屉和悬停提示原样显示", async () =>
     <ChatPage token="token" role="user" messages={getMessages("zh")} />,
   );
   await waitFor(() =>
-    expect((screen.getByLabelText("模型") as HTMLSelectElement).value).toBe(
-      provider.models[0],
-    ),
+    expect(composerSelectText("模型")).toBe(provider.models[0]),
   );
   fireEvent.change(screen.getByLabelText("问题"), {
     target: { value: "查看" },

@@ -11,6 +11,7 @@ import {
 import { ChatPage } from "../ChatPage";
 import { getMessages } from "../i18n";
 import {
+  composerSelectText,
   conversationFetcher,
   conversationRow,
   cssDeclarations,
@@ -65,9 +66,7 @@ test("a clarification option continues the same conversation with its evidence",
   );
 
   await waitFor(() =>
-    expect((screen.getByLabelText("模型") as HTMLSelectElement).value).toBe(
-      provider.models[0],
-    ),
+    expect(composerSelectText("模型")).toBe(provider.models[0]),
   );
   fireEvent.change(screen.getByLabelText("问题"), {
     target: { value: "上个月销售额是多少？" },
@@ -145,9 +144,7 @@ test("含中文编码 ref 的澄清选项显示友好名称并提交原 ref", as
   );
 
   await waitFor(() =>
-    expect((screen.getByLabelText("模型") as HTMLSelectElement).value).toBe(
-      provider.models[0],
-    ),
+    expect(composerSelectText("模型")).toBe(provider.models[0]),
   );
   fireEvent.change(screen.getByLabelText("问题"), {
     target: { value: "上个月销售额是多少？" },
@@ -231,9 +228,7 @@ test("长澄清选项换行、来源另起一行，超过三行可展开且提�
   );
 
   await waitFor(() =>
-    expect((screen.getByLabelText("模型") as HTMLSelectElement).value).toBe(
-      provider.models[0],
-    ),
+    expect(composerSelectText("模型")).toBe(provider.models[0]),
   );
   fireEvent.change(screen.getByLabelText("问题"), {
     target: { value: "上个月销售额是多少？" },
@@ -374,9 +369,7 @@ test("直播澄清完成后重载历史仍显示选项并提交原 id", async ()
   );
 
   await waitFor(() =>
-    expect((screen.getByLabelText("模型") as HTMLSelectElement).value).toBe(
-      provider.models[0],
-    ),
+    expect(composerSelectText("模型")).toBe(provider.models[0]),
   );
   fireEvent.change(screen.getByLabelText("问题"), {
     target: { value: "上个月销售额是多少？" },

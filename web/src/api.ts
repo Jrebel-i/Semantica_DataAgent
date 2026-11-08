@@ -923,6 +923,8 @@ export interface components {
         AgentView: {
             /** Available */
             available: boolean;
+            /** Effort Levels */
+            effort_levels: ("low" | "medium" | "high" | "extra" | "max")[];
             /** Id */
             id: string;
             /** Name */
@@ -939,6 +941,8 @@ export interface components {
             agent?: string | null;
             /** Conversation Id */
             conversation_id?: string | null;
+            /** Effort */
+            effort?: ("low" | "medium" | "high" | "extra" | "max") | null;
             /** Model */
             model?: string | null;
             /** Provider Id */
@@ -1733,6 +1737,8 @@ export interface components {
             citations: {
                 [key: string]: unknown;
             }[];
+            /** Effort */
+            effort: string | null;
             /** Error */
             error: string | null;
             /**

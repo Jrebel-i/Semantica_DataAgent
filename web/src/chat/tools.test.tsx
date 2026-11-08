@@ -11,6 +11,7 @@ import {
 import { ChatPage } from "../ChatPage";
 import { getMessages } from "../i18n";
 import {
+  composerSelectText,
   conversationFetcher,
   conversationRow,
   cssDeclarations,
@@ -81,9 +82,7 @@ test("工具失败但回答成功时列表保持折叠并提示失败数", async
     <ChatPage token="token" role="user" messages={getMessages("zh")} />,
   );
   await waitFor(() =>
-    expect((screen.getByLabelText("模型") as HTMLSelectElement).value).toBe(
-      provider.models[0],
-    ),
+    expect(composerSelectText("模型")).toBe(provider.models[0]),
   );
   fireEvent.change(screen.getByLabelText("问题"), {
     target: { value: "查一下" },
@@ -154,9 +153,7 @@ test("回答整体失败时工具列表自动展开", async () => {
     <ChatPage token="token" role="user" messages={getMessages("zh")} />,
   );
   await waitFor(() =>
-    expect((screen.getByLabelText("模型") as HTMLSelectElement).value).toBe(
-      provider.models[0],
-    ),
+    expect(composerSelectText("模型")).toBe(provider.models[0]),
   );
   fireEvent.change(screen.getByLabelText("问题"), {
     target: { value: "查一下" },
@@ -228,9 +225,7 @@ test("英文界面折叠工具行显示失败数", async () => {
   );
   render(<ChatPage token="token" role="user" messages={getMessages("en")} />);
   await waitFor(() =>
-    expect((screen.getByLabelText("Model") as HTMLSelectElement).value).toBe(
-      provider.models[0],
-    ),
+    expect(composerSelectText("Model")).toBe(provider.models[0]),
   );
   fireEvent.change(screen.getByLabelText("Question"), {
     target: { value: "Query" },

@@ -91,6 +91,7 @@ class ClaudeEventParser(EventParser):
 
 class ClaudeRunner:
     agent_id = "claude"
+    effort_levels = ()
 
     def __init__(self, binary=None):
         self.binary = binary
