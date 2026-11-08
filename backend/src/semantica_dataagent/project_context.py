@@ -337,8 +337,7 @@ def source_directory_value(project_id: str | None = None) -> str | None:
     with sessions()() as db:
         if resolved != DEFAULT_PROJECT_ID:
             row = db.get(ProjectSetting, (resolved, SOURCE_DIRECTORY_KEY))
-            if row is not None and row.value:
-                return row.value
+            return row.value if row is not None and row.value else None
         row = db.get(Setting, SOURCE_DIRECTORY_KEY)
         return row.value if row is not None and row.value else None
 

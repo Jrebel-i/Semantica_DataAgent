@@ -169,7 +169,12 @@ def create_project_record(name: str, project_type: ProjectType) -> Project:
         project_id = _unique_project_id(db, name)
         final_source = project_source_directory(project_id)
         root.mkdir(parents=True, exist_ok=True)
-        (staging / "source").mkdir(parents=True, exist_ok=False)
+        try:
+            (staging / "source").mkdir(parents=True, exist_ok=False)
+        except Exception:
+            shutil.rmtree(staging, ignore_errors=True)
+            _remove_empty_root(root)
+            raise
         try:
             project = Project(
                 id=project_id,

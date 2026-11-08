@@ -205,6 +205,51 @@ def test_project_settings_overlay_keeps_default_values(client):
     assert scoped.source_directory_value.endswith(f"/{project['id']}/source")
 
 
+def test_project_without_source_override_does_not_use_global_directory(client):
+    c, token, tmp_path = client
+    global_source = tmp_path / "global-source"
+    assert (
+        c.put(
+            "/api/v1/settings",
+            headers=headers(token),
+            json={"values": {"source_directory": str(global_source)}},
+        ).status_code
+        == 200
+    )
+    project = create_project(c, token, "Isolated Source").json()
+    from semantica_dataagent import project_context
+    from semantica_dataagent.db import ProjectSetting, sessions
+
+    with sessions().begin() as db:
+        db.query(ProjectSetting).filter(
+            ProjectSetting.project_id == project["id"],
+            ProjectSetting.key == project_context.SOURCE_DIRECTORY_KEY,
+        ).delete()
+    assert project_context.source_directory_value(project["id"]) is None
+
+
+def test_creation_failure_before_db_writes_removes_empty_root(tmp_path, monkeypatch):
+    monkeypatch.setenv("DATAAGENT_DB_PATH", str(tmp_path / "app.db"))
+    monkeypatch.setenv("DATAAGENT_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    monkeypatch.setenv("DATAAGENT_PROJECTS_ROOT", str(tmp_path / "projects"))
+    from semantica_dataagent import project_api
+    from semantica_dataagent.cli import initialize
+
+    initialize()
+    original_mkdir = Path.mkdir
+
+    def fail_staging_mkdir(self, *args, **kwargs):
+        if ".creating-" in str(self):
+            raise OSError("injected staging failure")
+        return original_mkdir(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "mkdir", fail_staging_mkdir)
+    with pytest.raises(OSError):
+        project_api.create_project_record("Broken Staging", "document")
+    root = tmp_path / "projects"
+    assert not root.exists() or list(root.iterdir()) == []
+
+
 def test_build_queue_records_project_and_lists_are_filtered(client, monkeypatch):
     c, token, _ = client
     project = create_project(c, token, "Build Target").json()["id"]
