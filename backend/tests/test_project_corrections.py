@@ -140,7 +140,7 @@ def test_only_project_or_system_admins_can_review(tmp_path, monkeypatch):
     from semantica_dataagent.db import ProjectMember, sessions
 
     token = configure(tmp_path, monkeypatch)
-    a, _ = project_source_a_and_b(tmp_path)
+    a, b = project_source_a_and_b(tmp_path)
     proposal_target_evidence(monkeypatch)
     headers = {"Authorization": f"Bearer {token}"}
     with TestClient(app, headers=headers) as client:
@@ -155,22 +155,46 @@ def test_only_project_or_system_admins_can_review(tmp_path, monkeypatch):
             },
         ).json()
         proposal = created["proposal_id"]
-        issued = client.post(
+        member = client.post(
+            "/api/v1/tokens", json={"name": "project member", "role": "user"}
+        ).json()
+        project_admin = client.post(
             "/api/v1/tokens", json={"name": "project reviewer", "role": "user"}
         ).json()
+        other_admin = client.post(
+            "/api/v1/tokens", json={"name": "other project admin", "role": "user"}
+        ).json()
         with sessions().begin() as db:
-            db.add(ProjectMember(project_id=a.id, token_id=issued["id"], role="admin"))
-        user_headers = {"Authorization": f"Bearer {issued['token']}"}
+            db.add(ProjectMember(project_id=a.id, token_id=member["id"], role="member"))
+            db.add(
+                ProjectMember(
+                    project_id=a.id, token_id=project_admin["id"], role="admin"
+                )
+            )
+            db.add(
+                ProjectMember(project_id=b.id, token_id=other_admin["id"], role="admin")
+            )
+        member_headers = {"Authorization": f"Bearer {member['token']}"}
+        admin_headers = {"Authorization": f"Bearer {project_admin['token']}"}
+        other_headers = {"Authorization": f"Bearer {other_admin['token']}"}
         denied = client.post(
             f"/api/v1/corrections/{proposal}/approve",
             params={"project": a.id},
-            headers=user_headers,
+            headers=member_headers,
         )
-        assert denied.status_code == 404, denied.text
-        default_denied = client.post(
-            "/api/v1/corrections/missing/approve", headers=user_headers
+        assert denied.status_code == 403, denied.text
+        missing = client.post(
+            f"/api/v1/corrections/{proposal}/approve",
+            params={"project": a.id},
+            headers=other_headers,
         )
-        assert default_denied.status_code == 403, default_denied.text
+        assert missing.status_code == 404, missing.text
+        approved = client.post(
+            f"/api/v1/corrections/{proposal}/approve",
+            params={"project": a.id},
+            headers=admin_headers,
+        )
+        assert approved.status_code == 200, approved.text
 
 
 def test_knowledge_gaps_are_listed_per_project(tmp_path, monkeypatch):

@@ -139,27 +139,19 @@ def test_each_project_has_its_own_schedule_clock():
     from semantica_dataagent.scheduler import Scheduler
 
     now = [0.0]
-    fired = []
-    scheduler = Scheduler(
-        action=fired.append,
-        clock=lambda: now[0],
-    )
-    scheduler.start(0)
-    try:
-        scheduler.configure(10, project_id="a")
-        scheduler.configure(20, project_id="b")
-        now[0] = 9
-        assert scheduler.due_projects() == []
-        now[0] = 10
-        assert scheduler.due_projects() == ["a"]
-        assert scheduler.due_projects() == []
-        now[0] = 20
-        assert scheduler.due_projects() == ["a", "b"]
-        scheduler.remove("a")
-        now[0] = 40
-        assert scheduler.due_projects() == ["b"]
-    finally:
-        scheduler.stop()
+    scheduler = Scheduler(clock=lambda: now[0])
+    scheduler.configure(10, project_id="a")
+    scheduler.configure(20, project_id="b")
+    now[0] = 9
+    assert scheduler.due_projects() == []
+    now[0] = 10
+    assert scheduler.due_projects() == ["a"]
+    assert scheduler.due_projects() == []
+    now[0] = 20
+    assert scheduler.due_projects() == ["a", "b"]
+    scheduler.remove("a")
+    now[0] = 40
+    assert scheduler.due_projects() == ["b"]
 
 
 def test_project_schedule_api_reads_writes_and_restarts_timer(tmp_path, monkeypatch):

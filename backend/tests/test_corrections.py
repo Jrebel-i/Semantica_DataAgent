@@ -5,6 +5,14 @@ from test_clarification import _requester, call
 pytest_plugins = ["test_clarification"]
 
 
+def _project_member(requester, project_id="default", role="member"):
+    from semantica_dataagent.db import ProjectMember, sessions
+
+    with sessions().begin() as db:
+        db.add(ProjectMember(project_id=project_id, token_id=requester.id, role=role))
+    return requester
+
+
 def test_knowledge_gap_is_recorded_for_the_requester(client):
     from semantica_dataagent.app import create_mcp
 
@@ -29,7 +37,7 @@ def test_knowledge_gap_is_recorded_for_the_requester(client):
 
 def test_user_cannot_approve_correction(client):
     c, _ = client
-    requester = _requester(role="user", token="correction-reader")
+    requester = _project_member(_requester(role="user", token="correction-reader"))
     response = c.post(
         "/api/v1/corrections/nonexistent/approve",
         headers={"Authorization": f"Bearer {requester.token}"},
@@ -74,7 +82,7 @@ def test_correction_and_gap_tools_publish_self_contained_schemas():
 
 def test_user_cannot_reject_correction(client):
     c, _ = client
-    requester = _requester(role="user", token="rejection-reader")
+    requester = _project_member(_requester(role="user", token="rejection-reader"))
     response = c.post(
         "/api/v1/corrections/nonexistent/reject",
         headers={"Authorization": f"Bearer {requester.token}"},
@@ -391,7 +399,7 @@ def test_interrupted_approval_recovers_without_duplicate_commits(
             corrections._finalize = finalize_then_die
         corrections.approve(
             proposal,
-            "admin",
+            type("Scope", (), {"project_id": "default"})(),
             Requester(id=requester.id, role="admin", token=requester.token),
         )
         os._exit(2)
@@ -701,7 +709,7 @@ def test_user_can_submit_table_correction_via_rest(client, monkeypatch):
     from semantica_dataagent import knowledge
 
     c, admin_token = client
-    requester = _requester(role="user", token="issue79-corrector")
+    requester = _project_member(_requester(role="user", token="issue79-corrector"))
     monkeypatch.setattr(knowledge, "existing_refs", lambda refs: set(refs))
     monkeypatch.setattr(knowledge, "settings", lambda: {"knowledge_generation": "test"})
     monkeypatch.setattr(knowledge, "read_graph", lambda values: None)
