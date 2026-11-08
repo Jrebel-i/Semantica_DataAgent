@@ -2329,6 +2329,16 @@ code {
 }
 
 /* 管理类页面 */
+:root {
+  --admin-space-8: 8px;
+  --admin-space-12: 12px;
+  --admin-space-16: 16px;
+  --admin-space-24: 24px;
+  --status-bar-height: 32px;
+}
+.workspace-content:has(> .status-bar) > .page-content:not(.page-content--chat) {
+  padding-bottom: calc(var(--status-bar-height) + var(--admin-space-24));
+}
 .admin-page .page-title,
 .admin-page .detail-title {
   font-family: var(--font-serif);

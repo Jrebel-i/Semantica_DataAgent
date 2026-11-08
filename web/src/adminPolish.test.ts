@@ -13,4 +13,12 @@ describe("admin page polish", () => {
       /\.admin-page \.card-title,\s*\.admin-page \.detail-section-title,\s*\.admin-page \.ant-card-head-title,\s*\.admin-page \.agent-card-head h3,\s*\.admin-page label,\s*\.admin-page \.field-label\s*\{[^}]*font-family: var\(--font-sans\);/,
     );
   });
+
+  test("admin scroll areas reserve the status bar height at the bottom", () => {
+    expect(css).toMatch(
+      /\.workspace-content:has\(> \.status-bar\) > \.page-content:not\(\.page-content--chat\)\s*\{[^}]*padding-bottom: calc\(var\(--status-bar-height\) \+ var\(--admin-space-24\)\);/,
+    );
+    expect(css).toMatch(/--status-bar-height: 32px;/);
+    expect(css).toMatch(/\.status-bar\s*\{[^}]*height: 32px;/);
+  });
 });
