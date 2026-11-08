@@ -85,9 +85,7 @@ def test_pruning_one_project_never_touches_another(tmp_path, monkeypatch):
     ) == [("beta_gen2",)]
 
 
-def test_interrupted_cleanup_keeps_another_projects_generations(
-    tmp_path, monkeypatch
-):
+def test_interrupted_cleanup_keeps_another_projects_generations(tmp_path, monkeypatch):
     from semantica_dataagent import knowledge, project_context
     from semantica_dataagent.db import Build, KnowledgeGeneration, sessions
 
@@ -137,8 +135,7 @@ def test_interrupted_cleanup_keeps_another_projects_generations(
     knowledge.cleanup_interrupted_generations()
     assert deleted == ["alpha_orphan"]
     assert _fetch(
-        "SELECT name FROM knowledge_generations "
-        "WHERE project_id = 'beta' ORDER BY name"
+        "SELECT name FROM knowledge_generations WHERE project_id = 'beta' ORDER BY name"
     ) == [("beta_gen0",), ("beta_gen1",), ("beta_gen2",)]
     assert _fetch(
         "SELECT generation FROM generation_pointer WHERE project_id = 'beta'"
