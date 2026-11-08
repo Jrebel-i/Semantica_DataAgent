@@ -31,7 +31,7 @@
 项目是独立知识库实例的元数据；成员以令牌的 `id`（用户身份）关联项目，角色为 `admin` 或 `member`。系统管理员（全局角色 `admin`）隐含所有项目的管理员，不需要成员行。
 
 - `GET /api/v1/projects` 需要认证。系统管理员返回全部项目，其它用户只返回自己是成员的项目；每项包含 `id`、`name`、`type`、`status`、`created_at`、`my_role`。系统管理员的 `my_role` 恒为 `admin`。
-- `PATCH /api/v1/projects/{id}` 仅系统管理员可用，只接受 `name`；请求里出现 `type`、`status` 等其它字段返回 422。名称两端空白会被去掉，长度为 1–200。
+- `PATCH /api/v1/projects/{id}` 仅系统管理员可用，只接受 `name`；请求里出现 `type`、`status` 等其它字段返回 422。名称两端空白会被去掉，长度为 1–200。项目类型在创建时确定，之后没有任何接口可以修改。
 - 默认项目 id 固定为 `default`，类型 `warehouse`，显示名默认“业务数据”，可改名但不可删除；删除与归档留给 #190。
 - 访问规则集中在 `project_api.py` 的依赖里，接口本身不要再写成员判断：读接口用 `project_scope`（系统管理员或项目成员），管理接口用 `admin_project_scope`（系统管理员或项目管理员）。无权限与项目不存在一律返回同样的 404，不泄露项目是否存在；成员调用管理接口返回 403 或 404。
 - 显式 `project` 参数优先。缺省时，能访问默认项目就用默认项目；否则若只访问一个项目就用它；否则返回 422 `请指定项目`。只属于非默认项目的用户因此不需要显式参数。
@@ -56,6 +56,12 @@ MCP 请求必须解析出**一个**项目，所有读知识库的工具都只经
 - `get_capabilities` 返回当前解析出的 `project: {id, name, type}` 和请求者可访问的 `projects: [{id, name, type}]`。
 - `agent_credentials` 增加 `project_id`（迁移 `0032`，旧行回填 `default`）；`issue_agent_credential(..., project_id="default")` 写入对话所属项目。本票对话一律是默认项目。
 - 兼容：工具 JSON Schema 不新增必填参数；只有单项目（或系统管理员）的令牌与现有 MCP 客户端不传项目时行为不变。新增 MCP 工具必须经过项目上下文，`test_mcp_project_scope.py` 的守护测试会拦住绕过项目作用域的新工具。
+
+### 按项目类型限制工具与 skill
+
+`project_types.py` 是“工具 → 适用项目类型”的唯一权威表。数仓型项目保留全部工具；文档型项目只暴露 `search_knowledge`、`read_document`、`list_categories`、`read_category_index`、`request_clarification`、`propose_correction`、`report_knowledge_gap`、`get_capabilities`。`tools/list` 按当前请求解析出的项目类型过滤，调用被排除的工具返回 `invalid_input` “该项目类型不支持此工具”；`get_capabilities.tools` 返回同一份过滤后的列表。新增或删除 MCP 工具时必须同步更新这张表，`test_project_types.py` 的守护测试会拦住未归类的工具。
+
+项目类型也决定检索 skill：数仓型使用 `skills/dataagent-retrieval`，文档型使用 `skills/dataagent-document-retrieval`。`GET /api/v1/skill` 接受可选的 `project`（缺省按项目选择规则），返回对应类型的 Markdown 和文件名；runner 把 skill 写进沙箱时读取 `AgentTurnRequest.project_type`（默认 `warehouse`），#184 绑定对话项目后由调用方传入。
 
 ## 项目隔离与存储命名
 

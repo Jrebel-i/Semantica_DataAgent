@@ -24,7 +24,9 @@ class MyAgentRunner:
 ```
 
 `AgentTurnRequest` 在 `agent_types.py`，包含对话 id、提示词、会话 id、工作目录、
-provider、模型、MCP 地址、token 和可选的 `effort`。`effort` 是后端已按模型与
+provider、模型、MCP 地址、token、可选的 `effort` 和 `project_type`（默认
+`warehouse`）。写沙箱检索 skill 时用 `read_skill(request.project_type)` 和
+`skill_name(request.project_type)`，不要固定成数仓版。`effort` 是后端已按模型与
 agent 能力校验过的统一档位（`low` / `medium` / `high` / `extra` / `max`），
 runner 只需映射到自己的参数；不支持时返回空 `effort_levels`，收到值也应忽略。
 内置三种 runner 的映射和已验证的 CLI 版本见
