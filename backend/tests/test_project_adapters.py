@@ -539,6 +539,57 @@ def test_run_pull_does_not_fall_back_to_default_project_token(
     assert calls == []
 
 
+def test_run_pull_does_not_fall_back_to_default_project_source_directory(
+    client, tmp_path, monkeypatch
+):
+    from semantica_dataagent import project_context, pull_service
+    from semantica_dataagent.db import ProjectSetting, sessions
+    from semantica_dataagent.dtb_puller import DtbPuller
+
+    c, admin = client
+    project = _create_project(c, admin, "Sourceless pull", "warehouse")
+    response = c.put(
+        "/api/v1/settings",
+        headers=_headers(admin),
+        json={"values": {"source_directory": str(tmp_path / "default-source")}},
+    )
+    assert response.status_code == 200, response.text
+    _set_pull_config(
+        "default",
+        url="https://default.dtb.example",
+        token="default-token",
+        layer="default-layer",
+        max_tables=1,
+    )
+    _set_pull_config(
+        project["id"],
+        url="https://project.dtb.example",
+        token="project-token",
+        layer="project-layer",
+        max_tables=2,
+    )
+    with sessions().begin() as db:
+        db.query(ProjectSetting).filter(
+            ProjectSetting.project_id == project["id"],
+            ProjectSetting.key == "source_directory",
+        ).delete()
+    calls = []
+
+    def fake_fetch(*args):
+        calls.append(args)
+        return ({"任务信息.json": b"task"}, {"tables": 1, "tasks": 0})
+
+    monkeypatch.setattr(DtbPuller, "fetch", staticmethod(fake_fetch))
+    monkeypatch.setattr(project_context, "wake_build_queue", lambda: None)
+
+    record = pull_service.run_pull(project["id"])
+
+    assert record.status == "failed"
+    assert record.error == "DTB puller configuration is incomplete"
+    assert record.build_id is None
+    assert calls == []
+
+
 def test_adapter_permissions(client):
     c, admin = client
     project = _create_project(c, admin, "Guarded", "warehouse")
