@@ -210,6 +210,12 @@ Docker Desktop / WSL 下，agent 只连接 internal 网络；同一网络中的�
 
 provider 的 base_url 与 api_key 每轮按会话当前设置重新下发给 runner，不写进持久化的会话记录；切换 provider 时旧 key 不会被新 provider 的轮次复用。pi 使用固定 session id 和会话目录延续历史，Claude 用会话文件判断 `--resume`，Codex 用持久化的 thread id 执行 `resume`；三种实现都允许在同一会话内切换 model / provider。
 
+## Provider 模型能力
+
+`GET /api/v1/providers` 的每个 provider 仍以 `models: list[str]` 表示模型列表，并新增 `model_capabilities` 对象，按模型名映射到 `{description, vision, effort_levels}`。`description` 是单行说明，最长 200 字；`vision` 表示模型是否接受图片；`effort_levels` 是思考强度档位的子集，固定取值 `low`、`medium`、`high`、`extra`、`max`（界面依次为低、中（推荐）、高、超高、最高），`medium` 是默认推荐档。响应会为 `models` 中的每个模型补一个能力对象；没填的模型返回默认值：说明为空、不支持图片、`effort_levels` 为空。空档位表示只有 agent 默认强度，不暴露档位选择。
+
+`POST` / `PUT /api/v1/providers` 可带可选的 `model_capabilities`，缺省表示不修改。请求里的能力模型名必须出现在 `models` 中，档位必须在固定取值内，说明超过 200 字返回 422。`PUT` 省略能力但修改 `models` 时，已删除模型的能力一并清理，新增模型按默认值读取；显式提供能力时整份映射替换，未列出的模型回到默认值。数据库列 `providers.model_capabilities` 保存归一化后的 JSON（档位按固定顺序去重），迁移 0026 只加可空列，旧 provider 升级后仍按默认值读取。
+
 ## 观测数据边界
 
 启用 Langfuse 时，用户问题、agent 回答及 SQL 是观测内容，可能包含用户自行输入的信息；界面必须告知用户问题和回答会上报。应用持有的 MCP token、provider API key、Langfuse 密钥、Neo4j 密码、认证与 Cookie 头和会话文件内容不得上报。上报字段采用集中允许列表，并遮盖已知秘密及 Bearer、sk-、password=、api_key=、token= 等凭据形式；不得把会话文件或请求头作为遥测载荷。
