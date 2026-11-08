@@ -48,7 +48,7 @@ def upgrade():
         sa.text(
             "INSERT INTO project_members (project_id, token_id, role) "
             "SELECT :project_id, tokens.id, 'member' FROM tokens "
-            "WHERE tokens.revoked = 0 AND tokens.role != 'admin' "
+            "WHERE tokens.revoked = 0 AND tokens.role = 'user' "
             "AND NOT EXISTS ("
             "SELECT 1 FROM project_members "
             "WHERE project_members.project_id = :project_id "

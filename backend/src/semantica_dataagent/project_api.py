@@ -45,7 +45,7 @@ def ensure_default_project_member(db, token: Token) -> None:
     System administrators are implicit administrators of every project and do
     not need a membership row.
     """
-    if token.role == "admin":
+    if token.role != "user":
         return
     key = (DEFAULT_PROJECT_ID, token.id)
     if db.get(ProjectMember, key) is None:
