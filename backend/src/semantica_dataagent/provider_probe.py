@@ -267,11 +267,36 @@ def _success_shape(provider: ProviderConfig, payload: object) -> bool:
     if provider.type == "openai-completions":
         return isinstance(payload.get("choices"), list) and bool(payload["choices"])
     if provider.type == "openai-responses":
-        return (
-            isinstance(payload.get("output"), list)
-            or payload.get("status") == "completed"
-        )
+        return isinstance(payload.get("output"), list) and not payload.get("error")
     return isinstance(payload.get("candidates"), list) and bool(payload["candidates"])
+
+
+def _post_with_deadline(
+    url: str,
+    headers: dict[str, str],
+    body: dict,
+    request_timeout: float,
+    deadline: float,
+    aborted: threading.Event,
+) -> httpx.Response:
+    client = httpx.Client(
+        timeout=request_timeout,
+        trust_env=False,
+        follow_redirects=False,
+    )
+
+    def abort() -> None:
+        aborted.set()
+        client.close()
+
+    timer = threading.Timer(max(0.0, deadline - time.monotonic()), abort)
+    timer.daemon = True
+    timer.start()
+    try:
+        return client.post(url, headers=headers, json=body)
+    finally:
+        timer.cancel()
+        client.close()
 
 
 def _outcome(
@@ -287,19 +312,20 @@ def _outcome(
         ),
         remaining,
     )
+    aborted = threading.Event()
     try:
-        response = httpx.post(
+        response = _post_with_deadline(
             _url(provider, model),
-            headers=_headers(provider),
-            json=body,
-            timeout=request_timeout,
-            trust_env=False,
-            follow_redirects=False,
+            _headers(provider),
+            body,
+            request_timeout,
+            deadline,
+            aborted,
         )
     except httpx.TimeoutException:
         return "unknown", "timeout"
-    except httpx.HTTPError:
-        return "unknown", "network error"
+    except (httpx.HTTPError, RuntimeError):
+        return "unknown", "timeout" if aborted.is_set() else "network error"
 
     status = response.status_code
     if 200 <= status < 300:
