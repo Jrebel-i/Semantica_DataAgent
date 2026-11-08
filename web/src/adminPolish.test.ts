@@ -21,4 +21,13 @@ describe("admin page polish", () => {
     expect(css).toMatch(/--status-bar-height: 32px;/);
     expect(css).toMatch(/\.status-bar\s*\{[^}]*height: 32px;/);
   });
+
+  test("long knowledge tables scroll horizontally inside their own container", () => {
+    expect(css).toMatch(
+      /\.admin-page \.knowledge-table-scroll\s*\{[^}]*overflow-x: auto;/,
+    );
+    expect(css).toMatch(
+      /\.admin-page \.knowledge-table-scroll \.data-table\s*\{[^}]*min-width: 760px;/,
+    );
+  });
 });

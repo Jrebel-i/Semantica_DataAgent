@@ -344,6 +344,18 @@ test("详情请求失败显示错误，重试后恢复", async () => {
   expect(screen.queryByRole("button", { name: /重\s*试/ })).toBeNull();
 });
 
+test("字段表放在横向滚动容器里", async () => {
+  installFetch([table("shop", "orders")]);
+  const { container } = render(
+    <KnowledgePage token="token" messages={getMessages("zh")} />,
+  );
+
+  expect(await screen.findByText("日期分区")).toBeTruthy();
+  const scroll = container.querySelector(".knowledge-table-scroll");
+  expect(scroll).not.toBeNull();
+  expect(scroll?.querySelector("table.data-table")).not.toBeNull();
+});
+
 test("搜索仍按表名过滤，并继续使用 summary 视图", async () => {
   const tables = [table("quick", "quick_orders"), table("dm", "dm_customers")];
   installFetch(tables);

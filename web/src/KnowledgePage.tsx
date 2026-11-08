@@ -597,72 +597,82 @@ export function KnowledgePage({
                       {messages.fields}
                       <span className="count">{detail.fields.length}</span>
                     </h2>
-                    <table className="data-table">
-                      <thead>
-                        <tr>
-                          <th>{messages.field}</th>
-                          <th>{messages.dataType}</th>
-                          <th>{messages.comment}</th>
-                          <th>{messages.dimStatus}</th>
-                          <th>{messages.partition}</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {detail.fields.map((field) => (
-                          <Fragment key={field.name}>
-                            <tr>
-                              <td>
-                                <button
-                                  type="button"
-                                  aria-expanded={
-                                    expandedColumn ===
-                                    `${selected.database}.${selected.name}.${field.name}`
-                                  }
-                                  onClick={() => {
-                                    const key = `${selected.database}.${selected.name}.${field.name}`;
-                                    setExpandedColumn(
-                                      expandedColumn === key ? "" : key,
-                                    );
-                                  }}
-                                >
-                                  {field.name}
-                                </button>
-                              </td>
-                              <td>{field.type}</td>
-                              <td>{field.comment}</td>
-                              <td>
-                                <DimensionStatus
-                                  count={field.dimension_count}
-                                  tooMany={field.dimension_too_many}
-                                  messages={messages}
-                                />
-                                {field.dimension_samples?.length ? (
-                                  <span className="subtle">
-                                    {" "}
-                                    {field.dimension_samples.join(", ")}
-                                  </span>
-                                ) : null}
-                              </td>
-                              <td>
-                                {field.partition ? messages.yes : messages.no}
-                              </td>
-                            </tr>
-                            {expandedColumn ===
-                              `${selected.database}.${selected.name}.${field.name}` && (
+                    <div className="knowledge-table-scroll">
+                      <table className="data-table">
+                        <thead>
+                          <tr>
+                            <th>{messages.field}</th>
+                            <th>{messages.dataType}</th>
+                            <th>{messages.comment}</th>
+                            <th>{messages.dimStatus}</th>
+                            <th>{messages.partition}</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {detail.fields.map((field) => (
+                            <Fragment key={field.name}>
                               <tr>
-                                <td colSpan={5}>
-                                  <ColumnLineage
-                                    table={`${selected.database}.${selected.name}`}
-                                    column={field.name}
-                                    token={token}
+                                <td>
+                                  <button
+                                    type="button"
+                                    aria-expanded={
+                                      expandedColumn ===
+                                      `${selected.database}.${selected.name}.${field.name}`
+                                    }
+                                    onClick={() => {
+                                      const key = `${selected.database}.${selected.name}.${field.name}`;
+                                      setExpandedColumn(
+                                        expandedColumn === key ? "" : key,
+                                      );
+                                    }}
+                                  >
+                                    {field.name}
+                                  </button>
+                                </td>
+                                <td title={field.type}>{field.type}</td>
+                                <td title={field.comment}>{field.comment}</td>
+                                <td
+                                  title={
+                                    field.dimension_too_many
+                                      ? messages.dimTooMany
+                                      : field.dimension_count != null
+                                        ? `${messages.dimCount}: ${field.dimension_count}`
+                                        : undefined
+                                  }
+                                >
+                                  <DimensionStatus
+                                    count={field.dimension_count}
+                                    tooMany={field.dimension_too_many}
+                                    messages={messages}
                                   />
+                                  {field.dimension_samples?.length ? (
+                                    <span className="subtle">
+                                      {" "}
+                                      {field.dimension_samples.join(", ")}
+                                    </span>
+                                  ) : null}
+                                </td>
+                                <td>
+                                  {field.partition ? messages.yes : messages.no}
                                 </td>
                               </tr>
-                            )}
-                          </Fragment>
-                        ))}
-                      </tbody>
-                    </table>
+                              {expandedColumn ===
+                                `${selected.database}.${selected.name}.${field.name}` && (
+                                <tr>
+                                  <td colSpan={5}>
+                                    <ColumnLineage
+                                      table={`${selected.database}.${selected.name}`}
+                                      column={field.name}
+                                      token={token}
+                                    />
+                                  </td>
+                                </tr>
+                              )}
+                            </Fragment>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
                   </section>
                   <section className="detail-section">
                     <h2 className="detail-section-title">

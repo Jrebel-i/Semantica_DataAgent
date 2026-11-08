@@ -2339,6 +2339,16 @@ code {
 .workspace-content:has(> .status-bar) > .page-content:not(.page-content--chat) {
   padding-bottom: calc(var(--status-bar-height) + var(--admin-space-24));
 }
+.admin-page .knowledge-table-scroll {
+  width: 100%;
+  overflow-x: auto;
+}
+.admin-page .knowledge-table-scroll .data-table {
+  min-width: 760px;
+}
+.admin-page .knowledge-table-scroll .data-table td {
+  overflow-wrap: anywhere;
+}
 .admin-page .page-title,
 .admin-page .detail-title {
   font-family: var(--font-serif);
