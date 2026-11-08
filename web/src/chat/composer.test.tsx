@@ -106,6 +106,14 @@ async function openComposerSelect(label: string) {
   });
 }
 
+function visibleComposerDropdown() {
+  return Array.from(document.querySelectorAll(".ant-select-dropdown")).find(
+    (element) =>
+      !element.classList.contains("ant-select-dropdown-hidden") &&
+      !element.className.includes("-leave"),
+  );
+}
+
 function optionDisabled(text: string) {
   const dropdown = Array.from(
     document.querySelectorAll(".ant-select-dropdown"),
@@ -206,6 +214,34 @@ test("切换模型和强度后提问使用新的强度", async () => {
   fireEvent.click(screen.getByRole("button", { name: /提\s*问/ }));
   await waitFor(() => expect(askBody.question).toBe("继续追问"));
   expect(askBody.effort).toBe("high");
+});
+
+test("模型与思考强度弹层高于示例区且背景不透明", async () => {
+  vi.stubGlobal("fetch", effortFetcher());
+  render(<ChatPage token="token" role="user" messages={getMessages("zh")} />);
+
+  await screen.findByLabelText("思考强度");
+  const popupCss = cssDeclarations(
+    ".ant-select-dropdown.composer-select-dropdown",
+  );
+  const popupZIndex = Number(/z-index:\s*(\d+)/.exec(popupCss)?.[1]);
+  expect(popupZIndex).toBeGreaterThan(0);
+  expect(cssDeclarations(".chat-examples")).not.toContain("z-index");
+  expect(popupCss).toContain("background: #fff");
+  expect(
+    cssDeclarations(
+      ".ant-select-dropdown.composer-select-dropdown:not(.ant-slide-up-leave):not(.ant-slide-down-leave)",
+    ),
+  ).toContain("opacity: 1 !important");
+
+  for (const label of ["模型", "思考强度"]) {
+    await openComposerSelect(label);
+    const dropdown = visibleComposerDropdown();
+    expect(dropdown?.classList.contains("composer-select-dropdown")).toBe(true);
+    expect(document.querySelector(".chat-examples")).toBeTruthy();
+    fireEvent.mouseDown(document.body);
+    await waitFor(() => expect(visibleComposerDropdown()).toBeUndefined());
+  }
 });
 
 test("新会话发送所选 agent 与模型且仅锁定 agent", async () => {

@@ -144,6 +144,7 @@ export function Composer({
               <Select
                 aria-label={t.askModel}
                 className="composer-select composer-model-select"
+                classNames={{ popup: { root: "composer-select-dropdown" } }}
                 value={model || undefined}
                 onChange={(value) => onModelChange(value)}
                 disabled={!activeProvider}
@@ -170,6 +171,7 @@ export function Composer({
                 <Select
                   aria-label={t.askEffort}
                   className="composer-select composer-effort-select"
+                  classNames={{ popup: { root: "composer-select-dropdown" } }}
                   value={effort || undefined}
                   placeholder={t.effortDefault}
                   onChange={(value) => onEffortChange(value as EffortLevel)}

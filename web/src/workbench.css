@@ -2494,6 +2494,17 @@ code {
 .composer-effort-select {
   min-width: 92px;
 }
+.ant-select-dropdown.composer-select-dropdown {
+  z-index: 1100;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 8px 24px #30251c1a;
+  opacity: 1;
+}
+.ant-select-dropdown.composer-select-dropdown:not(.ant-slide-up-leave):not(.ant-slide-down-leave) {
+  opacity: 1 !important;
+}
 .composer-controls .ant-select-selector {
   min-height: 30px !important;
   border-radius: 16px !important;
