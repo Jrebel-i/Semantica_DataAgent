@@ -575,3 +575,147 @@ def test_clarification_schema_survives_clients_that_rebuild_the_root():
     validator = Draft202012Validator(schema)
     assert validator.is_valid({"questions": SYNTHETIC_QUESTIONS})
     assert not validator.is_valid({"questions": [{"question": "x", "options": []}]})
+
+
+def _conversation_with_turn(requester: Requester, conversation_id: str) -> int:
+    with sessions().begin() as db:
+        db.add(
+            Conversation(
+                id=conversation_id,
+                owner_id=requester.id,
+                title="澄清持久化",
+                agent="pi",
+                provider_id="provider",
+                model="model",
+            )
+        )
+        db.flush()
+        turn = Turn(
+            conversation_id=conversation_id,
+            sequence=1,
+            question="销售额按哪个口径？",
+            status="completed",
+            answer="",
+            sql="[]",
+            citations="[]",
+        )
+        db.add(turn)
+        db.flush()
+        return turn.id
+
+
+def _stored_turn(c, token: str, conversation_id: str) -> dict:
+    response = c.get(
+        f"/api/v1/conversations/{conversation_id}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert response.status_code == 200, response.text
+    return response.json()["turns"][0]
+
+
+def test_persisted_clarification_keeps_option_ids_labels_and_refs(client, monkeypatch):
+    from semantica_dataagent import knowledge
+    from semantica_dataagent.agent_runner import CLARIFICATION
+    from semantica_dataagent.app import create_mcp
+    from semantica_dataagent.conversation_api import _record_event
+
+    c, _ = client
+    monkeypatch.setattr(knowledge, "existing_refs", lambda refs: set(refs))
+    requester = _requester(token="clarification-persist-token")
+    conversation_id = "conversation-clarification-persist"
+    turn_id = _conversation_with_turn(requester, conversation_id)
+
+    result = call(
+        create_mcp(),
+        "request_clarification",
+        {"questions": SYNTHETIC_QUESTIONS},
+        requester,
+        conversation_id,
+    )
+    assert not result.isError, result.structuredContent
+    questions = result.structuredContent["questions"]
+    assert questions[0]["id"] and all(
+        option["id"] for option in questions[0]["options"]
+    )
+
+    _record_event(turn_id, 0, AgentEvent(CLARIFICATION, {"questions": questions}))
+
+    turn = _stored_turn(c, requester.token, conversation_id)
+    assert [event["type"] for event in turn["events"]] == ["clarification"]
+    stored = turn["events"][0]["data"]["questions"]
+    assert stored == questions
+    assert stored[0]["id"] == questions[0]["id"]
+    assert [option["label"] for option in stored[0]["options"]] == [
+        option["label"] for option in questions[0]["options"]
+    ]
+    assert [option["ref"] for option in stored[0]["options"]] == [
+        option["ref"] for option in questions[0]["options"]
+    ]
+
+
+def test_other_event_summaries_still_truncate_values_below_depth_five(client):
+    from semantica_dataagent.conversation_api import _record_event
+
+    c, _ = client
+    requester = _requester(token="summary-token")
+    conversation_id = "conversation-summary"
+    turn_id = _conversation_with_turn(requester, conversation_id)
+
+    _record_event(
+        turn_id,
+        0,
+        AgentEvent(
+            "tool_end",
+            {
+                "name": "mcp__dataagent__search_knowledge",
+                "payload": {"a": {"b": {"c": {"d": "deep-value"}}}},
+            },
+        ),
+    )
+
+    turn = _stored_turn(c, requester.token, conversation_id)
+    stored = turn["events"][0]["data"]
+    assert stored["name"] == "mcp__dataagent__search_knowledge"
+    assert stored["payload"]["a"]["b"]["c"] == {"d": "…"}
+
+
+def test_clarification_summary_still_caps_strings_and_list_length(client):
+    from semantica_dataagent.agent_runner import CLARIFICATION
+    from semantica_dataagent.conversation_api import _record_event
+
+    c, _ = client
+    requester = _requester(token="clarification-limits-token")
+    conversation_id = "conversation-clarification-limits"
+    turn_id = _conversation_with_turn(requester, conversation_id)
+    label = "口" * 4001
+
+    _record_event(
+        turn_id,
+        0,
+        AgentEvent(
+            CLARIFICATION,
+            {
+                "questions": [
+                    {
+                        "id": "q1",
+                        "question": "哪个口径？",
+                        "options": [
+                            {
+                                "id": f"o{index}",
+                                "label": label,
+                                "ref": "document:metrics/sales.md#chunk-1",
+                            }
+                            for index in range(120)
+                        ],
+                    }
+                ]
+            },
+        ),
+    )
+
+    turn = _stored_turn(c, requester.token, conversation_id)
+    options = turn["events"][0]["data"]["questions"][0]["options"]
+    assert len(options) == 100
+    assert len(options[0]["label"]) == 4000
+    assert options[0]["label"].endswith("…")
+    assert options[0]["id"] == "o0"

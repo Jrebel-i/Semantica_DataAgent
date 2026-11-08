@@ -2754,3 +2754,184 @@ test("执行失败后显示错误并可重试", async () => {
   ).toBeNull();
   expect(attempts).toBe(2);
 });
+
+test("直播澄清完成后重载历史仍显示选项并提交原 id", async () => {
+  const questions = [
+    {
+      id: "q-live",
+      question: "销售额按支付口径还是下单口径？",
+      options: [
+        {
+          id: "o-live-payment",
+          label: "支付销售额（支付成功时间）",
+          ref: "document:metrics/definitions/sales.md#chunk-1",
+        },
+        {
+          id: "o-live-order",
+          label: "下单销售额（订单创建时间）",
+          ref: "document:metrics/sales_order.md#chunk-1",
+        },
+      ],
+    },
+  ];
+  const row = conversationRow("conv-reloaded", "重载后的澄清");
+  const firstSse = [
+    'event: conversation\ndata: {"conversation_id":"conv-reloaded","turn_id":1}',
+    `event: clarification\ndata: ${JSON.stringify({ questions })}`,
+    'event: done\ndata: {"text":"请选择口径。","sql":[],"citations":[]}',
+  ].join("\n\n");
+  const secondSse = [
+    'event: conversation\ndata: {"conversation_id":"conv-reloaded","turn_id":2}',
+    'event: done\ndata: {"text":"按支付口径。","sql":[],"citations":[]}',
+  ].join("\n\n");
+  const askBodies: string[] = [];
+  let detailFetches = 0;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/v1/agents")
+        return json([{ id: "pi", name: "pi", available: true }]);
+      if (url === "/api/v1/providers") return json([provider]);
+      if (url === "/api/v1/conversations") return json([row]);
+      if (url === "/api/v1/conversations/ask") {
+        askBodies.push(String(init?.body));
+        return new Response(askBodies.length === 1 ? firstSse : secondSse, {
+          status: 200,
+          headers: { "Content-Type": "text/event-stream" },
+        });
+      }
+      if (url === "/api/v1/conversations/conv-reloaded") {
+        detailFetches += 1;
+        return json({
+          ...row,
+          turns: [
+            {
+              id: 1,
+              sequence: 1,
+              question: "上个月销售额是多少？",
+              status: "completed",
+              answer: "请选择口径。",
+              sql: [],
+              citations: [],
+              error: null,
+              started_at: row.created_at,
+              finished_at: row.updated_at,
+              events: [{ seq: 0, type: "clarification", data: { questions } }],
+            },
+          ],
+        });
+      }
+      return new Response("", { status: 404 });
+    }),
+  );
+  render(
+    <ChatPage
+      token="personal-token"
+      role="user"
+      messages={getMessages("zh")}
+    />,
+  );
+
+  await waitFor(() =>
+    expect((screen.getByLabelText("模型") as HTMLSelectElement).value).toBe(
+      provider.models[0],
+    ),
+  );
+  fireEvent.change(screen.getByLabelText("问题"), {
+    target: { value: "上个月销售额是多少？" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: /提\s*问/ }));
+  await waitFor(() => expect(detailFetches).toBeGreaterThan(0));
+  const option = await screen.findByRole("button", {
+    name: /支付销售额（支付成功时间）/,
+  });
+  expect(
+    screen.getAllByRole("button", { name: /销售额（.*时间）/ }),
+  ).toHaveLength(2);
+  fireEvent.click(option);
+
+  await waitFor(() => expect(askBodies).toHaveLength(2));
+  const followUp = JSON.parse(askBodies[1]) as {
+    question: string;
+    conversation_id: string;
+  };
+  expect(followUp.conversation_id).toBe("conv-reloaded");
+  expect(followUp.question).toContain("选项 id：o-live-payment");
+  expect(followUp.question).not.toContain("选项 id：o-live-order");
+  expect(followUp.question).toContain("支付销售额（支付成功时间）");
+  expect(followUp.question).toContain(
+    "document:metrics/definitions/sales.md#chunk-1",
+  );
+});
+
+test.each([
+  ["zh", "旧澄清", "该澄清的选项内容已丢失，请重新提问"],
+  [
+    "en",
+    "Old clarification",
+    "The options for this clarification were lost. Please ask again.",
+  ],
+] as const)(
+  "%s 历史澄清的选项损坏时显示提示且不渲染按钮",
+  async (lang, title, hint) => {
+    const row = conversationRow("conv-corrupt", title);
+    const messages = getMessages(lang);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === "/api/v1/agents")
+          return json([{ id: "pi", name: "pi", available: true }]);
+        if (url === "/api/v1/providers") return json([provider]);
+        if (url === "/api/v1/conversations") return json([row]);
+        if (url === "/api/v1/conversations/conv-corrupt")
+          return json({
+            ...row,
+            turns: [
+              {
+                id: 1,
+                sequence: 1,
+                question: "销售额按哪个口径？",
+                status: "completed",
+                answer: "请选择口径。",
+                sql: [],
+                citations: [],
+                error: null,
+                started_at: row.created_at,
+                finished_at: row.updated_at,
+                events: [
+                  {
+                    seq: 0,
+                    type: "clarification",
+                    data: {
+                      questions: [
+                        {
+                          id: "q1",
+                          question: "销售额按支付口径还是下单口径？",
+                          options: [
+                            { id: "…", label: "…", ref: "…" },
+                            { id: "…", label: "…", ref: "…" },
+                          ],
+                        },
+                      ],
+                    },
+                  },
+                ],
+              },
+            ],
+          });
+        return new Response("", { status: 404 });
+      }),
+    );
+    const { container } = render(
+      <ChatPage token="token" role="user" messages={messages} />,
+    );
+    await openHistory(title);
+    expect(await screen.findByText(hint)).toBeTruthy();
+    expect(screen.getByText("销售额按支付口径还是下单口径？")).toBeTruthy();
+    const card = container.querySelector(".clarification-card") as HTMLElement;
+    expect(card).toBeTruthy();
+    expect(card.querySelectorAll("button")).toHaveLength(0);
+  },
+);

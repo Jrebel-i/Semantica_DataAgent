@@ -385,6 +385,24 @@ function clarificationsOf(value: unknown): Clarification[] {
   );
 }
 
+function clarificationOptionIsLost(
+  option: NonNullable<Clarification["options"]>[number],
+): boolean {
+  return [option.id, option.label, option.ref].some(
+    (value) => value?.trim() === "…",
+  );
+}
+
+function clarificationOptionIsUsable(
+  option: NonNullable<Clarification["options"]>[number],
+): boolean {
+  return (
+    !clarificationOptionIsLost(option) &&
+    Boolean(option.label?.trim()) &&
+    Boolean(option.ref?.trim())
+  );
+}
+
 function applyToolStart(
   tools: ToolCall[],
   data: Record<string, unknown>,
@@ -759,36 +777,53 @@ function ClarificationList({
           {questions.map((question, questionIndex) => (
             <article key={question.id ?? questionIndex}>
               <p>{question.question}</p>
-              <Space wrap>
-                {(question.options ?? []).map((option, optionIndex) => {
-                  const source = option.ref
-                    ? citationLabel(option.ref)
-                    : undefined;
-                  return (
-                    <Button
-                      key={
-                        option.id ??
-                        `${option.label}-${option.ref}-${optionIndex}`
-                      }
-                      disabled={disabled}
-                      onClick={() => onSelect(question, option)}
-                    >
-                      <span>{option.label}</span>
-                      {source && (
-                        <>
-                          {" "}
-                          <span
-                            className="clarification-source"
-                            title={source.title}
-                          >
-                            {citationDisplayName(source)}
-                          </span>
-                        </>
-                      )}
-                    </Button>
-                  );
-                })}
-              </Space>
+              {(() => {
+                const options = question.options ?? [];
+                const usable = options.filter(clarificationOptionIsUsable);
+                const lost =
+                  options.length > 0 && usable.length < options.length;
+                return (
+                  <>
+                    {usable.length > 0 && (
+                      <Space wrap>
+                        {usable.map((option, optionIndex) => {
+                          const source = option.ref
+                            ? citationLabel(option.ref)
+                            : undefined;
+                          return (
+                            <Button
+                              key={
+                                option.id ??
+                                `${option.label}-${option.ref}-${optionIndex}`
+                              }
+                              disabled={disabled}
+                              onClick={() => onSelect(question, option)}
+                            >
+                              <span>{option.label}</span>
+                              {source && (
+                                <>
+                                  {" "}
+                                  <span
+                                    className="clarification-source"
+                                    title={source.title}
+                                  >
+                                    {citationDisplayName(source)}
+                                  </span>
+                                </>
+                              )}
+                            </Button>
+                          );
+                        })}
+                      </Space>
+                    )}
+                    {lost && (
+                      <p className="muted clarification-options-lost">
+                        {messages.clarificationOptionsLost}
+                      </p>
+                    )}
+                  </>
+                );
+              })()}
             </article>
           ))}
         </div>
@@ -1438,12 +1473,14 @@ export function ChatPage({
     clarification: Clarification,
     option: NonNullable<Clarification["options"]>[number],
   ) {
+    const id = option.id?.trim() ?? "";
     const label = option.label?.trim() ?? "";
     const ref = option.ref?.trim() ?? "";
     if (!label || !ref) return;
     const prompt = [
       "澄清选择：请只针对当前问题按所选口径继续回答，不要把它作为全局规则。",
       `问题：${clarification.question ?? ""}`,
+      ...(id && id !== "…" ? [`选项 id：${id}`] : []),
       `选项：${label}`,
       `证据：${ref}`,
     ].join("\n");

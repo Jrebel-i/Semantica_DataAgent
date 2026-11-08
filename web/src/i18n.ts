@@ -325,6 +325,7 @@ const messages = {
     loadingCitation: "正在加载来源…",
     clarification: "需要澄清",
     clarificationHint: "选择一个口径。选择只对当前问题有效。",
+    clarificationOptionsLost: "该澄清的选项内容已丢失，请重新提问",
     answerFailed: "回答失败",
     unavailable: "不可用",
     providerSettings: "模型服务配置",
@@ -724,6 +725,8 @@ const messages = {
     clarification: "Clarification needed",
     clarificationHint:
       "Choose one interpretation. It applies only to this question.",
+    clarificationOptionsLost:
+      "The options for this clarification were lost. Please ask again.",
     answerFailed: "Answer failed",
     unavailable: "unavailable",
     providerSettings: "Model providers",
