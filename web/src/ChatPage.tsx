@@ -1,28 +1,16 @@
 import { createPortal } from "react-dom";
 import { useRef, useState } from "react";
-import type { FormEvent } from "react";
 import { Alert, Button } from "antd";
 import type { Language, Messages } from "./i18n";
 import { PlusOutlined } from "@ant-design/icons";
 import { Markdown } from "./Markdown";
-import { loadTableDetail, tablePartsFromRef } from "./tableDetail";
 import {
   citationLabel,
   citationsFromRefs,
-  citationsOf,
-  sqlBlocks,
   stripCitationRefs,
 } from "./chat/citations";
-import type {
-  CitationDetail,
-  Clarification,
-  ConversationDetail,
-  DocumentView,
-  LiveTurn,
-  QueryPlan,
-  Turn,
-} from "./chat/types";
-import { copyText, readSse } from "./chat/sse";
+import type { ConversationDetail, LiveTurn, Turn } from "./chat/types";
+import { copyText } from "./chat/sse";
 import { ResultTable } from "./chat/ResultTable";
 import { ToolList } from "./chat/ToolList";
 import { SqlList } from "./chat/SqlList";
@@ -36,18 +24,9 @@ import { ContextDrawer } from "./chat/ContextDrawer";
 import { ProviderSettings } from "./chat/ProviderSettings";
 import { useProviders } from "./chat/useProviders";
 import { useConversations } from "./chat/useConversations";
-import {
-  applyToolEnd,
-  applyToolStart,
-  clarificationOptionIsUsable,
-  clarificationsOfTurn,
-  clarificationsOf,
-  queryEvent,
-  resultCountText,
-  toolLabel,
-  toolsOfTurn,
-  turnFailed,
-} from "./chat/turnEvents";
+import { useCitations } from "./chat/useCitations";
+import { useAsk } from "./chat/useAsk";
+import { turnFailed } from "./chat/turnEvents";
 
 export {
   citationDisplayName,
@@ -79,7 +58,6 @@ export function ChatPage({
   refreshKey?: number;
 }) {
   const askSequence = useRef(0);
-  const [question, setQuestion] = useState("");
   const [turns, setTurns] = useState<Turn[]>([]);
   const [live, setLive] = useState<LiveTurn | null>(null);
   const [expiredPlans, setExpiredPlans] = useState<string[]>([]);
@@ -88,14 +66,6 @@ export function ChatPage({
   const [sending, setSending] = useState(false);
   const [loadingConversation, setLoadingConversation] = useState(false);
   const [error, setError] = useState("");
-  const [copied, setCopied] = useState("");
-  const [citationRef, setCitationRef] = useState("");
-  const citationSequence = useRef(0);
-  const [citationDetail, setCitationDetail] = useState<CitationDetail | null>(
-    null,
-  );
-  const [citationError, setCitationError] = useState("");
-  const [citationLoading, setCitationLoading] = useState(false);
 
   const {
     conversations,
@@ -158,83 +128,48 @@ export function ChatPage({
     deleteProvider,
   } = useProviders({ token, messages: t, onError: setError });
 
-  async function executePlan(turn: Turn, plan: QueryPlan) {
-    if (sending || !currentConversationId) return;
-    setSending(true);
-    setError("");
-    setTurns((current) =>
-      current.map((item) =>
-        item.id === turn.id ? { ...item, error: null } : item,
-      ),
-    );
-    try {
-      const response = await fetch(
-        `/api/v1/conversations/${encodeURIComponent(currentConversationId)}/turns/${turn.id}/queries/${encodeURIComponent(plan.id)}/execute`,
-        {
-          method: "POST",
-          headers: { Authorization: `Bearer ${token}` },
-        },
-      );
-      if (!response.ok) {
-        const body = (await response.json().catch(() => null)) as {
-          detail?: string;
-        } | null;
-        if (response.status === 410) {
-          setExpiredPlans((current) =>
-            current.includes(plan.id) ? current : [...current, plan.id],
-          );
-        }
-        throw new Error(body?.detail || t.askError);
-      }
-      await readSse(response, (name, data) => {
-        if (name === "query_result") {
-          setTurns((current) =>
-            current.map((item) => {
-              if (item.id !== turn.id) return item;
-              const events = item.events ?? [];
-              return {
-                ...item,
-                status: "running",
-                events: [...events, { seq: events.length, type: name, data }],
-              };
-            }),
-          );
-        } else if (name === "done") {
-          setTurns((current) =>
-            current.map((item) =>
-              item.id === turn.id
-                ? {
-                    ...item,
-                    status: "completed",
-                    answer:
-                      typeof data.text === "string" ? data.text : item.answer,
-                  }
-                : item,
-            ),
-          );
-        } else if (name === "error") {
-          const message = String(data.message ?? t.answerFailed);
-          setError(message);
-          setTurns((current) =>
-            current.map((item) =>
-              item.id === turn.id ? { ...item, error: message } : item,
-            ),
-          );
-        }
-      });
-      await openConversation(currentConversationId);
-    } catch (caught) {
-      const message = caught instanceof Error ? caught.message : t.askError;
-      setError(message);
-      setTurns((current) =>
-        current.map((item) =>
-          item.id === turn.id ? { ...item, error: message } : item,
-        ),
-      );
-    } finally {
-      setSending(false);
-    }
-  }
+  const {
+    copied,
+    citationRef,
+    citationDetail,
+    citationError,
+    citationLoading,
+    resetCitation,
+    openCitation,
+    copySql,
+    closeCitation,
+  } = useCitations({ token, messages: t, setError });
+
+  const {
+    question,
+    setQuestion,
+    ask,
+    chooseClarification,
+    canAsk,
+    executePlan,
+  } = useAsk({
+    token,
+    messages: t,
+    agentId,
+    providerId,
+    model,
+    currentConversationId,
+    setCurrentConversationId,
+    sending,
+    setSending,
+    resumable,
+    archivedConversations,
+    selectionTouched,
+    askSequence,
+    resetCitation,
+    setLive,
+    setTurns,
+    setError,
+    setExpiredPlans,
+    refreshConversations,
+    openConversation,
+    loadCompletedConversation,
+  });
 
   async function downloadLinks(id: string): Promise<Record<string, string>> {
     const response = await fetch(
@@ -270,148 +205,6 @@ export function ChatPage({
     }
   }
 
-  function updateLive(change: (current: LiveTurn) => LiveTurn) {
-    setLive((current) => (current ? change(current) : current));
-  }
-
-  async function submitPrompt(prompt: string) {
-    const trimmed = prompt.trim();
-    if (
-      !trimmed ||
-      !providerId ||
-      !model ||
-      sending ||
-      !resumable ||
-      archivedConversations.some((row) => row.id === currentConversationId)
-    )
-      return;
-    selectionTouched.current = true;
-    const sequence = ++askSequence.current;
-    let conversationId = currentConversationId;
-    citationSequence.current += 1;
-    setCitationRef("");
-    setCitationDetail(null);
-    setSending(true);
-    setError("");
-    setLive({
-      question: trimmed,
-      text: "",
-      tools: [],
-      sql: [],
-      citations: [],
-      clarifications: [],
-      status: "running",
-    });
-    try {
-      const response = await fetch("/api/v1/conversations/ask", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          question: prompt,
-          agent: agentId,
-          provider_id: providerId,
-          model,
-          ...(currentConversationId
-            ? { conversation_id: currentConversationId }
-            : {}),
-        }),
-      });
-      if (!response.ok) {
-        const body = (await response.json().catch(() => null)) as {
-          detail?: string;
-        } | null;
-        throw new Error(body?.detail || t.askError);
-      }
-      await readSse(response, (name, data) => {
-        if (
-          name === "conversation" &&
-          typeof data.conversation_id === "string"
-        ) {
-          conversationId = data.conversation_id;
-          setCurrentConversationId(data.conversation_id);
-        } else if (name === "text_delta" && typeof data.text === "string") {
-          updateLive((current) => ({
-            ...current,
-            text: current.text + String(data.text),
-          }));
-        } else if (name === "tool_start") {
-          updateLive((current) => ({
-            ...current,
-            tools: applyToolStart(current.tools, data),
-          }));
-        } else if (name === "tool_end") {
-          updateLive((current) => {
-            return { ...current, tools: applyToolEnd(current.tools, data) };
-          });
-        } else if (name === "clarification") {
-          const questions = clarificationsOf(data.questions);
-          if (questions.length > 0) {
-            updateLive((current) => ({
-              ...current,
-              clarifications: [...current.clarifications, questions],
-            }));
-          }
-        } else if (name === "done") {
-          updateLive((current) => ({
-            ...current,
-            text: typeof data.text === "string" ? data.text : current.text,
-            sql: sqlBlocks(data.sql as unknown[] | undefined),
-            citations: citationsOf(data.citations as unknown[] | undefined),
-            status: "completed",
-          }));
-        } else if (name === "error") {
-          updateLive((current) => ({
-            ...current,
-            status: "failed",
-            error: String(data.message ?? t.answerFailed),
-          }));
-        }
-      });
-      await refreshConversations();
-      if (conversationId) {
-        await loadCompletedConversation(conversationId, sequence);
-      }
-    } catch (caught) {
-      const message = caught instanceof Error ? caught.message : t.askError;
-      setError(message);
-      updateLive((current) => ({
-        ...current,
-        status: "failed",
-        error: message,
-      }));
-    } finally {
-      setSending(false);
-    }
-  }
-
-  function ask(event: FormEvent) {
-    event.preventDefault();
-    const prompt = question.trim();
-    setQuestion("");
-    void submitPrompt(prompt);
-  }
-
-  function chooseClarification(
-    clarification: Clarification,
-    option: NonNullable<Clarification["options"]>[number],
-  ) {
-    const id = option.id?.trim() ?? "";
-    const label = option.label?.trim() ?? "";
-    const ref = option.ref?.trim() ?? "";
-    if (!label || !ref) return;
-    const prompt = [
-      "澄清选择：请只针对当前问题按所选口径继续回答，不要把它作为全局规则。",
-      `问题：${clarification.question ?? ""}`,
-      ...(id && id !== "…" ? [`选项 id：${id}`] : []),
-      `选项：${label}`,
-      `证据：${ref}`,
-    ].join("\n");
-    void submitPrompt(prompt);
-  }
-
   async function openConversation(id: string) {
     setLoadingConversation(true);
     setError("");
@@ -436,9 +229,7 @@ export function ChatPage({
     setCurrentConversationId(detail.id);
     setResumable(detail.resumable !== false);
     setTurns(detail.turns);
-    citationSequence.current += 1;
-    setCitationRef("");
-    setCitationDetail(null);
+    resetCitation();
     setLive(null);
     setAgentId(detail.agent);
     setProviderId(detail.provider_id);
@@ -488,70 +279,10 @@ export function ChatPage({
     );
     setResumable(true);
     setTurns([]);
-    citationSequence.current += 1;
-    setCitationRef("");
-    setCitationDetail(null);
+    resetCitation();
     setLive(null);
     setError("");
   }
-
-  async function openCitation(ref: string) {
-    const sequence = ++citationSequence.current;
-    setCitationRef(ref);
-    setCitationDetail(null);
-    setCitationError("");
-    setCitationLoading(true);
-    const type = ref.split(":", 1)[0];
-    const value = ref.slice(ref.indexOf(":") + 1);
-    try {
-      if (type === "table" || type === "field") {
-        const parts = tablePartsFromRef(ref);
-        if (!parts) throw new Error();
-        const table = await loadTableDetail(token, parts.database, parts.name);
-        if (sequence !== citationSequence.current) return;
-        setCitationDetail({ kind: "table", ref, table });
-      } else if (type === "document") {
-        const docId = `document:${value.split("#", 1)[0]}`;
-        const response = await fetch(
-          `/api/v1/document?${new URLSearchParams({ doc_id: docId })}`,
-          { headers: { Authorization: `Bearer ${token}` } },
-        );
-        if (!response.ok) throw new Error();
-        const document = (await response.json()) as DocumentView;
-        if (sequence !== citationSequence.current) return;
-        setCitationDetail({ kind: "document", ref, document });
-      } else {
-        setCitationDetail({
-          kind: "message",
-          ref,
-          message: t.citationUnsupported,
-        });
-      }
-    } catch {
-      if (sequence === citationSequence.current)
-        setCitationError(t.citationNotFound);
-    } finally {
-      if (sequence === citationSequence.current) setCitationLoading(false);
-    }
-  }
-
-  async function copySql(sql: string) {
-    try {
-      await copyText(sql);
-      setCopied(sql);
-    } catch {
-      setError(t.copyError);
-    }
-  }
-
-  const canAsk = Boolean(
-    question.trim() &&
-    providerId &&
-    model &&
-    !sending &&
-    resumable &&
-    !archivedConversations.some((row) => row.id === currentConversationId),
-  );
 
   const currentConversation = [...conversations, ...archivedConversations].find(
     (conversation) => conversation.id === currentConversationId,
@@ -567,12 +298,6 @@ export function ChatPage({
   const citationHeading = citationRef
     ? citationLabel(citationDetail?.ref ?? citationRef)
     : null;
-  const closeCitation = () => {
-    citationSequence.current += 1;
-    setCitationRef("");
-    setCitationDetail(null);
-    setCitationError("");
-  };
   const emptyConversation = !loadingConversation && turns.length === 0 && !live;
   const liveAnswer = live
     ? stripCitationRefs(live.text)
