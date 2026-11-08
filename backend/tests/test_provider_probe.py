@@ -10,8 +10,10 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import struct
 import threading
 import time
+import zlib
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -32,16 +34,17 @@ EFFORT_VALUES = {
 REVERSE_EFFORT = {value: level for level, value in EFFORT_VALUES.items()}
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 SECRET = "probe-secret-a7c4e1"
+MIN_IMAGE_SIZE = 64
 
 
-def _success_body(provider_type: str, model: str) -> dict:
+def _success_body(provider_type: str, model: str, text: str = "OK") -> dict:
     if provider_type == "anthropic-messages":
         return {
             "id": "msg_probe",
             "type": "message",
             "role": "assistant",
             "model": model,
-            "content": [{"type": "text", "text": "OK"}],
+            "content": [{"type": "text", "text": text}],
             "stop_reason": "end_turn",
             "usage": {"input_tokens": 8, "output_tokens": 1},
         }
@@ -54,7 +57,7 @@ def _success_body(provider_type: str, model: str) -> dict:
             "choices": [
                 {
                     "index": 0,
-                    "message": {"role": "assistant", "content": "OK"},
+                    "message": {"role": "assistant", "content": text},
                     "finish_reason": "stop",
                 }
             ],
@@ -75,7 +78,7 @@ def _success_body(provider_type: str, model: str) -> dict:
                     "content": [
                         {
                             "type": "output_text",
-                            "text": "OK",
+                            "text": text,
                             "annotations": [],
                         }
                     ],
@@ -85,7 +88,7 @@ def _success_body(provider_type: str, model: str) -> dict:
     return {
         "candidates": [
             {
-                "content": {"role": "model", "parts": [{"text": "OK"}]},
+                "content": {"role": "model", "parts": [{"text": text}]},
                 "finishReason": "STOP",
             }
         ],
@@ -123,6 +126,81 @@ def _content_blocks(body: dict) -> list[dict]:
         return []
     content = messages[0].get("content")
     return content if isinstance(content, list) else []
+
+
+def _image_bytes(provider_type: str, body: dict) -> bytes:
+    if provider_type == "anthropic-messages":
+        content = _content_blocks(body)
+        image = next(block for block in content if block.get("type") == "image")
+        return base64.b64decode(image["source"]["data"])
+    if provider_type == "openai-completions":
+        content = _content_blocks(body)
+        image = next(block for block in content if block.get("type") == "image_url")
+        return base64.b64decode(image["image_url"]["url"].split(",", 1)[1])
+    if provider_type == "openai-responses":
+        content = body["input"][0]["content"]
+        image = next(block for block in content if block.get("type") == "input_image")
+        return base64.b64decode(image["image_url"].split(",", 1)[1])
+    parts = body["contents"][0]["parts"]
+    image = next(part for part in parts if "inlineData" in part)
+    return base64.b64decode(image["inlineData"]["data"])
+
+
+def _png_info(data: bytes) -> tuple[int, int, tuple[int, int, int]]:
+    if not data.startswith(PNG_SIGNATURE):
+        raise ValueError("not a PNG")
+    width, height = struct.unpack(">II", data[16:24])
+    bit_depth = data[24]
+    color_type = data[25]
+    channels = {2: 3, 6: 4}.get(color_type)
+    if bit_depth != 8 or channels is None:
+        raise ValueError("unsupported PNG pixel format")
+    position = 8
+    compressed = b""
+    while position < len(data):
+        length = struct.unpack(">I", data[position : position + 4])[0]
+        kind = data[position + 4 : position + 8]
+        chunk = data[position + 8 : position + 8 + length]
+        if kind == b"IDAT":
+            compressed += chunk
+        position += 12 + length
+    raw = zlib.decompress(compressed)
+    if raw[0] != 0:
+        raise ValueError("unexpected PNG filter")
+    red, green, blue = raw[1 : 1 + channels][:3]
+    return width, height, (red, green, blue)
+
+
+def _color_answer(pixel: tuple[int, int, int]) -> str:
+    red, green, blue = pixel
+    if red > 200 and green < 50 and blue < 50:
+        return "深红色。"
+    if blue > 200 and red < 50 and green < 50:
+        return "蓝色"
+    return ""
+
+
+def _prompt_text(provider_type: str, body: dict) -> str:
+    if provider_type in {"anthropic-messages", "openai-completions"}:
+        content = _content_blocks(body)
+        return "".join(
+            block["text"]
+            for block in content
+            if block.get("type") == "text" and isinstance(block.get("text"), str)
+        )
+    if provider_type == "openai-responses":
+        content = body["input"][0]["content"]
+        return "".join(
+            block["text"]
+            for block in content
+            if block.get("type") == "input_text" and isinstance(block.get("text"), str)
+        )
+    parts = body["contents"][0]["parts"]
+    return "".join(
+        part["text"]
+        for part in parts
+        if isinstance(part.get("text"), str) and part.get("thought") is not True
+    )
 
 
 def _classify(provider_type: str, path: str, body: dict) -> tuple[str, str | None]:
@@ -174,6 +252,10 @@ class FakeGateway:
         provider_type: str,
         *,
         vision_status: int = 200,
+        discard_image: bool = False,
+        vision_text: str = "OK",
+        min_vision_size: bool = False,
+        fail_color: str | None = None,
         effort_status: dict[str, int] | None = None,
         delay: float = 0.0,
         drip: float | None = None,
@@ -181,11 +263,17 @@ class FakeGateway:
     ):
         self.provider_type = provider_type
         self.vision_status = vision_status
+        self.discard_image = discard_image
+        self.vision_text = vision_text
+        self.min_vision_size = min_vision_size
+        self.fail_color = fail_color
         self.effort_status = effort_status or {}
         self.delay = delay
         self.drip = drip
         self.success_body = success_body
         self.requests: list[dict] = []
+        self.vision_sizes: list[tuple[int, int]] = []
+        self.vision_statuses: list[int] = []
         self.lock = threading.Lock()
         self.received = threading.Event()
 
@@ -211,6 +299,30 @@ class FakeGateway:
             return self.effort_status.get(level, 200)
         return 200
 
+    def vision_reply(self, body: dict) -> tuple[int, str]:
+        if self.vision_status != 200:
+            self.vision_statuses.append(self.vision_status)
+            return self.vision_status, "image input is not supported"
+        try:
+            width, height, pixel = _png_info(_image_bytes(self.provider_type, body))
+        except (KeyError, StopIteration, ValueError, TypeError):
+            self.vision_statuses.append(400)
+            return 400, "a valid PNG image is required"
+        with self.lock:
+            self.vision_sizes.append((width, height))
+        if self.min_vision_size and (width < MIN_IMAGE_SIZE or height < MIN_IMAGE_SIZE):
+            self.vision_statuses.append(400)
+            return 400, "image dimensions must be at least 64x64"
+        self.vision_statuses.append(200)
+        if self.discard_image:
+            return 200, self.vision_text
+        red, green, blue = pixel
+        if self.fail_color == "red" and red > 200 and green < 50 and blue < 50:
+            return 200, self.vision_text
+        if self.fail_color == "blue" and blue > 200 and red < 50 and green < 50:
+            return 200, self.vision_text
+        return 200, _color_answer(pixel) or self.vision_text
+
 
 class _GatewayHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
@@ -226,12 +338,16 @@ class _GatewayHandler(BaseHTTPRequestHandler):
         kind, level = gateway.record(self.path, self.headers, body)
         if gateway.delay:
             time.sleep(gateway.delay)
-        status = gateway.status(kind, level)
+        text = "OK"
+        if kind == "vision":
+            status, text = gateway.vision_reply(body)
+        else:
+            status = gateway.status(kind, level)
         if status == 200:
             payload = (
                 gateway.success_body
                 if gateway.success_body is not None
-                else _success_body(gateway.provider_type, body.get("model") or "")
+                else _success_body(gateway.provider_type, body.get("model") or "", text)
             )
         else:
             payload = _error_body(
@@ -373,36 +489,60 @@ def test_probe_sends_each_provider_wire_shape_and_accepts_all(
         "effort": {level: "yes" for level in EFFORT_LEVELS},
         "notes": response.json()["notes"],
     }
-    assert len(gateway.requests) == 6
+    assert len(gateway.requests) == 7, [
+        (request["kind"], request["path"]) for request in gateway.requests
+    ]
     assert {request["path"].split("?", 1)[0] for request in gateway.requests} == {
         expected_path
     }
 
-    vision, *efforts = gateway.requests
-    content = (
-        vision["body"].get("messages", [{}])[0].get("content")
-        or vision["body"].get("input", [{}])[0].get("content")
-        or vision["body"].get("contents", [{}])[0].get("parts")
-    )
+    visions = [request for request in gateway.requests if request["kind"] == "vision"]
+    efforts = [request for request in gateway.requests if request["kind"] == "effort"]
+    assert len(visions) == 2
+    image_info = [
+        _png_info(_image_bytes(provider_type, item["body"])) for item in visions
+    ]
+    assert all(
+        width >= MIN_IMAGE_SIZE and height >= MIN_IMAGE_SIZE
+        for width, height, _ in image_info
+    ), image_info
+    assert sorted(gateway.vision_sizes) == [(MIN_IMAGE_SIZE, MIN_IMAGE_SIZE)] * 2
+    assert sorted(gateway.vision_statuses) == [200, 200]
+    assert {pixel for _, _, pixel in image_info} == {(255, 0, 0), (0, 0, 255)}
+    assert [_prompt_text(provider_type, item["body"]) for item in visions] == [
+        "这张图片是什么颜色？只回答一个词"
+    ] * 2
+
+    vision = visions[0]
     if provider_type == "anthropic-messages":
-        image = next(block for block in content if block["type"] == "image")
+        image = next(
+            block
+            for block in _content_blocks(vision["body"])
+            if block["type"] == "image"
+        )
         assert image["source"]["type"] == "base64"
         assert image["source"]["media_type"] == "image/png"
-        assert base64.b64decode(image["source"]["data"]).startswith(PNG_SIGNATURE)
     elif provider_type == "openai-completions":
-        image = next(block for block in content if block["type"] == "image_url")
-        url = image["image_url"]["url"]
-        assert url.startswith("data:image/png;base64,")
-        assert base64.b64decode(url.split(",", 1)[1]).startswith(PNG_SIGNATURE)
+        image = next(
+            block
+            for block in _content_blocks(vision["body"])
+            if block["type"] == "image_url"
+        )
+        assert image["image_url"]["url"].startswith("data:image/png;base64,")
     elif provider_type == "openai-responses":
-        image = next(block for block in content if block["type"] == "input_image")
-        url = image["image_url"]
-        assert url.startswith("data:image/png;base64,")
-        assert base64.b64decode(url.split(",", 1)[1]).startswith(PNG_SIGNATURE)
+        image = next(
+            block
+            for block in vision["body"]["input"][0]["content"]
+            if block["type"] == "input_image"
+        )
+        assert image["image_url"].startswith("data:image/png;base64,")
     else:
-        image = next(part for part in content if "inlineData" in part)
+        image = next(
+            part
+            for part in vision["body"]["contents"][0]["parts"]
+            if "inlineData" in part
+        )
         assert image["inlineData"]["mimeType"] == "image/png"
-        assert base64.b64decode(image["inlineData"]["data"]).startswith(PNG_SIGNATURE)
 
     for request in efforts:
         _assert_effort_shape(provider_type, request, request["level"])
@@ -431,7 +571,57 @@ def test_probe_reports_rejected_image_as_no(client):
     assert response.status_code == 200, response.text
     assert response.json()["vision"] == "no"
     assert response.json()["effort"] == {level: "yes" for level in EFFORT_LEVELS}
-    assert "vision" in response.json()["notes"]
+    notes = response.json()["notes"]
+    assert "vision" in notes
+    assert "HTTP 400" in notes
+    assert "image input is not supported" in notes
+    assert SECRET not in response.text
+    assert "x-api-key" not in response.text
+
+
+@pytest.mark.parametrize("vision_text", ["OK", ""])
+def test_probe_reports_accepted_but_unrecognized_image_as_no(client, vision_text):
+    c, token = client
+    with _gateway(
+        "anthropic-messages", discard_image=True, vision_text=vision_text
+    ) as (gateway, base_url):
+        provider_id = _create_provider(
+            c, token, provider_type="anthropic-messages", base_url=base_url
+        )
+        response = _probe(c, token, provider_id)
+
+    assert response.status_code == 200, response.text
+    assert response.json()["vision"] == "no"
+    assert response.json()["effort"] == {level: "yes" for level in EFFORT_LEVELS}
+    assert "请求被接受但模型未能识别图片内容" in response.json()["notes"]
+    assert len(gateway.vision_sizes) == 2
+
+
+def test_probe_requires_both_colors_to_be_recognized(client):
+    c, token = client
+    with _gateway("anthropic-messages", fail_color="red") as (_, base_url):
+        provider_id = _create_provider(
+            c, token, provider_type="anthropic-messages", base_url=base_url
+        )
+        response = _probe(c, token, provider_id)
+
+    assert response.status_code == 200, response.text
+    assert response.json()["vision"] == "no"
+    assert "请求被接受但模型未能识别图片内容" in response.json()["notes"]
+
+
+def test_probe_accepts_images_at_least_64_pixels_like_qwen(client):
+    c, token = client
+    with _gateway("anthropic-messages", min_vision_size=True) as (gateway, base_url):
+        provider_id = _create_provider(
+            c, token, provider_type="anthropic-messages", base_url=base_url
+        )
+        response = _probe(c, token, provider_id)
+
+    assert response.status_code == 200, response.text
+    assert response.json()["vision"] == "yes"
+    assert sorted(gateway.vision_sizes) == [(MIN_IMAGE_SIZE, MIN_IMAGE_SIZE)] * 2
+    assert sorted(gateway.vision_statuses) == [200, 200]
 
 
 def test_probe_reports_rejected_effort_parameters_as_no(client):

@@ -99,6 +99,7 @@ test("admins probe each model and apply the result before saving", async () => {
     "?",
   );
   expect(screen.getByText(result.notes)).toBeTruthy();
+  expect(screen.getByText("yes = 网关接受该参数，不保证生效幅度")).toBeTruthy();
 
   const probeCall = fetcher.mock.calls.find(
     ([input]) => String(input) === `/api/v1/providers/${configured.id}/probe`,
@@ -144,6 +145,29 @@ test("admins probe each model and apply the result before saving", async () => {
     });
   });
 });
+
+test.each([
+  ["yes", "支持（已验证模型能识别图片内容）", "vision: 两次都识别正确"],
+  ["no", "不支持", "vision: 请求被接受但模型未能识别图片内容"],
+  ["unknown", "未知", "vision: timeout"],
+])(
+  "shows the %s image probe outcome and its reason",
+  async (vision, label, notes) => {
+    const fetcher = fetcherFor(async () => json({ ...result, vision, notes }));
+    await openEditor(fetcher);
+
+    fireEvent.click(screen.getByRole("button", { name: "model-a 探测" }));
+
+    expect(await screen.findByLabelText("model-a 探测结果")).toBeTruthy();
+    expect(
+      screen.getByLabelText("model-a 图片 探测结果").textContent,
+    ).toContain(label);
+    expect(screen.getByText(notes)).toBeTruthy();
+    expect(
+      screen.getByText("yes = 网关接受该参数，不保证生效幅度"),
+    ).toBeTruthy();
+  },
+);
 
 test("probe errors are shown without changing the form", async () => {
   const fetcher = fetcherFor(async () => new Response("{}", { status: 409 }));

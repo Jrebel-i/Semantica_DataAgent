@@ -385,6 +385,9 @@ export function ProviderSettings({
                                   ))}
                                 </div>
                                 <span className="field-hint">
+                                  {t.providerProbeEffortHint}
+                                </span>
+                                <span className="field-hint">
                                   {probeResult.notes}
                                 </span>
                               </div>
