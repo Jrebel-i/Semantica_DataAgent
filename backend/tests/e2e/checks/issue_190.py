@@ -481,6 +481,15 @@ def check_issue_190_project_lifecycle(ctx):
         _status(ctx, ask, 409, "归档项目提问")
         ctx.require(ARCHIVED in ask.text, ask.text)
 
+        ask_attachment = ctx.rest.post(
+            "/api/v1/conversations/ask-with-attachments",
+            headers=member_headers,
+            data={"question": "归档后还能带附件问吗", "project": project_a},
+            files=[("attachments", ("notes.txt", b"hello", "text/plain"))],
+        )
+        _status(ctx, ask_attachment, 409, "归档项目带附件提问")
+        ctx.require(ARCHIVED in ask_attachment.text, ask_attachment.text)
+
         upload = ctx.rest.post(
             "/api/v1/source/upload",
             params={"project": project_a},

@@ -299,3 +299,21 @@ def test_archived_project_rejects_mcp_and_agent_credentials(client):
         issue_agent_credential(owner_id(admin), conversation_id, 1, project_id)
     assert credential_error.value.status_code == status.HTTP_409_CONFLICT
     assert credential_error.value.detail == ARCHIVED
+
+
+def test_archived_project_rejects_attachment_ask(client):
+    c, admin = client
+    project = create_project(c, admin, "Frozen Docs")
+    project_id = project["id"]
+    assert (
+        c.post(f"/api/v1/projects/{project_id}/archive", headers=headers(admin))
+    ).status_code == 200
+
+    response = c.post(
+        "/api/v1/conversations/ask-with-attachments",
+        headers=headers(admin),
+        data={"question": "看看附件", "project": project_id},
+        files=[("attachments", ("notes.txt", b"hello", "text/plain"))],
+    )
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"] == ARCHIVED
