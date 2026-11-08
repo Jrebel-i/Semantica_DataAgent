@@ -1236,6 +1236,13 @@ def test_ask_streams_events_persists_history_and_reuses_session(client, monkeypa
     assert listing.json()[0]["id"] == conversation_id
     assert listing.json()[0]["turn_count"] == 1
 
+    renamed = c.patch(
+        f"/api/v1/conversations/{conversation_id}",
+        headers=headers,
+        json={"title": "  手工标题  "},
+    )
+    assert renamed.json()["title"] == "手工标题"
+
     with c.stream(
         "POST",
         "/api/v1/conversations/ask",
@@ -1248,6 +1255,7 @@ def test_ask_streams_events_persists_history_and_reuses_session(client, monkeypa
     assert runner.requests[1].workspace == runner.requests[0].workspace
     detail = c.get(f"/api/v1/conversations/{conversation_id}", headers=headers).json()
     assert [turn["sequence"] for turn in detail["turns"]] == [1, 2]
+    assert detail["title"] == "手工标题"
     assert detail["turn_count"] == 2
 
 
