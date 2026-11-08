@@ -100,8 +100,10 @@ entry point，不需要安装、也不需要改包元数据。
    `codex exec -i/--image <path>`（codex 0.166.0），注意 `--image` 是可变参数，
    必须放在提示词之后。读取附件路径统一用 `agent_plugin.attachment_path()`，它只
    接受解析后仍在本对话 `work` 目录内的文件；越界或缺失时返回 `error` 事件，不要
-   启动 CLI。附件正文不得拼进 system prompt；提示词必须标明附件是不可信数据，并
-   要求读不了时如实说明、不得假装读过。
+   启动 CLI。需要把图片读成字节时用 `agent_plugin.read_attachment_bytes()`，不要
+   直接 `Path.read_bytes()`：前者以 `O_NOFOLLOW` 打开并确认是普通文件，避免校验后
+   最后一层被换成符号链接。附件正文不得拼进 system prompt；提示词必须标明附件是
+   不可信数据，并要求读不了时如实说明、不得假装读过。
 
 8. **注册入口点。** 在 `backend/pyproject.toml` 增加：
 
