@@ -1380,7 +1380,15 @@ export function ChatPage({
 
   async function submitPrompt(prompt: string) {
     const trimmed = prompt.trim();
-    if (!trimmed || !providerId || !model || sending) return;
+    if (
+      !trimmed ||
+      !providerId ||
+      !model ||
+      sending ||
+      !resumable ||
+      archivedConversations.some((row) => row.id === currentConversationId)
+    )
+      return;
     selectionTouched.current = true;
     const sequence = ++askSequence.current;
     let conversationId = currentConversationId;
@@ -2291,6 +2299,9 @@ export function ChatPage({
                     {t.examples.slice(0, 3).map((example) => (
                       <Button
                         key={example}
+                        disabled={
+                          !resumable || Boolean(currentConversation?.archived)
+                        }
                         onClick={() => setQuestion(example)}
                       >
                         {example}

@@ -3071,6 +3071,13 @@ test("置顶分组与归档阅读、恢复", async () => {
     ).toBe(true),
   );
   expect(screen.getByPlaceholderText(messages.restoreFirst)).toBeTruthy();
+  expect(
+    (
+      screen.getByRole("button", {
+        name: messages.examples[0],
+      }) as HTMLButtonElement
+    ).disabled,
+  ).toBe(true);
   fireEvent.click(screen.getAllByRole("button", { name: messages.restore })[0]);
   await waitFor(() =>
     expect(container.querySelector(".session-group")?.textContent).toBe(
