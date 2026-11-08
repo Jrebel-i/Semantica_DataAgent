@@ -9,7 +9,12 @@ import {
 } from "./effort";
 import type { ProviderForm } from "./ProviderSettings";
 import { EFFORT_LEVELS } from "./types";
-import type { Agent, EffortLevel, Provider, ProviderProbeResult } from "./types";
+import type {
+  Agent,
+  EffortLevel,
+  Provider,
+  ProviderProbeResult,
+} from "./types";
 
 export function useProviders({
   token,
