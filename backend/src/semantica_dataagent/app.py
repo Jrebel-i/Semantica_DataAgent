@@ -908,10 +908,8 @@ def propose_correction(
 
 
 async def ask_dataagent(question: str, conversation_id: str | None = None) -> dict:
-    """Ask the configured online agent; only the default project is supported."""
-    return await _ask_dataagent(
-        question, conversation_id, project_id=_mcp_project_arg()
-    )
+    """Ask the configured online agent inside the resolved project."""
+    return await _ask_dataagent(question, conversation_id, project_id=_mcp_project_id())
 
 
 async def sample_table_data(

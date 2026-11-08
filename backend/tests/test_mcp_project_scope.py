@@ -124,10 +124,13 @@ def test_every_registered_tool_reads_the_bound_project(client, monkeypatch):
             before = len(seen)
             result = call_registered(server, name, arguments)
             if name == "ask_dataagent":
+                # No assistant provider is configured in this fixture, so the
+                # call still fails; its project binding is covered end to end
+                # in test_conversation_project.py.
                 assert result.isError
                 assert (
                     "项目问答将在对话绑定项目后支持"
-                    in (result.structuredContent["message"])
+                    not in (result.structuredContent["message"])
                 )
                 continue
             if name == "report_knowledge_gap":

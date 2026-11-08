@@ -200,6 +200,7 @@ def _parser() -> argparse.ArgumentParser:
     execution.add_argument("--provider-id", required=True)
     execution.add_argument("--model", required=True)
     execution.add_argument("--only")
+    execution.add_argument("--project")
     execution.add_argument("--max-queries", type=int, default=40)
     execution.add_argument("--skip-reference", action="store_true")
     return parser

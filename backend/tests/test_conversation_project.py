@@ -135,9 +135,7 @@ def _start(c: TestClient, token: str, provider: dict, project: str | None, q="é”
     return _sse(text)[0][1]["conversation_id"]
 
 
-def test_new_conversation_binds_its_project_and_agent_credential(
-    client, monkeypatch
-):
+def test_new_conversation_binds_its_project_and_agent_credential(client, monkeypatch):
     from semantica_dataagent import agent_runner
 
     c, admin = client
@@ -201,9 +199,7 @@ def test_new_conversation_without_project_uses_the_only_accessible_project(
     assert detail["project_id"] == project_b["id"]
 
 
-def test_cannot_start_a_conversation_in_a_project_without_access(
-    client, monkeypatch
-):
+def test_cannot_start_a_conversation_in_a_project_without_access(client, monkeypatch):
     from semantica_dataagent import agent_runner
 
     c, admin = client
@@ -227,9 +223,9 @@ def test_cannot_start_a_conversation_in_a_project_without_access(
         },
     )
     assert status == 404, text
-    assert c.get(
-        "/api/v1/conversations", headers=_headers(member_a["token"])
-    ).json() == []
+    assert (
+        c.get("/api/v1/conversations", headers=_headers(member_a["token"])).json() == []
+    )
 
     status, text = _ask(
         c,
@@ -349,9 +345,7 @@ def test_list_filter_and_lost_project_access(client, monkeypatch):
         ).status_code
         == 404
     )
-    detail = c.get(
-        f"/api/v1/conversations/{conv_b}", headers=_headers(member["token"])
-    )
+    detail = c.get(f"/api/v1/conversations/{conv_b}", headers=_headers(member["token"]))
     assert detail.status_code == 200
     assert detail.json()["project_id"] == project_b["id"]
     assert (
@@ -390,9 +384,9 @@ def test_conversation_management_still_only_needs_ownership(client, monkeypatch)
     )
     assert archived.status_code == 200, archived.text
     assert archived.json()["archived"] is True
-    assert c.get(
-        "/api/v1/conversations", headers=_headers(member["token"])
-    ).json() == []
+    assert (
+        c.get("/api/v1/conversations", headers=_headers(member["token"])).json() == []
+    )
     assert [
         row["id"]
         for row in c.get(

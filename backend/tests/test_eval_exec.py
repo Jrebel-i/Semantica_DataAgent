@@ -351,7 +351,11 @@ def test_fake_agent_direct_clarification_and_query_plan(monkeypatch, tmp_path):
         )
         assert follow_up["conversation_id"] == "conv-clarify"
         assert report["project"] == "docs"
-        assert all(body.get("project") == "docs" for path, body in requests if path == "/api/v1/conversations/ask")
+        assert all(
+            body.get("project") == "docs"
+            for path, body in requests
+            if path == "/api/v1/conversations/ask"
+        )
         assert "请按以下口径回答并给出 SQL" in follow_up["question"]
         assert "按业务审定口径" in follow_up["question"]
         assert not any(

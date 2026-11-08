@@ -85,13 +85,15 @@ def _cell(value):
     return str(value or "").replace("|", "\\|").replace("\n", " ")
 
 
-def _ask(client, payload):
+def _ask(client, payload, project=None):
     result = {
         "sql": None,
         "conversation_id": None,
         "clarification": False,
         "via_plan": False,
     }
+    if project is not None:
+        payload = {**payload, "project": project}
     try:
         with client.stream(
             "POST", "/api/v1/conversations/ask", json=payload
@@ -178,6 +180,7 @@ def _answer(client, question, args):
             "provider_id": args.provider_id,
             "model": args.model,
         },
+        project=getattr(args, "project", None),
     )
     if first["sql"]:
         return first["sql"], False, first["via_plan"]
@@ -190,6 +193,7 @@ def _answer(client, question, args):
             "question": CLARIFY_MESSAGE.format(caliber=question.caliber),
             "conversation_id": conversation_id,
         },
+        project=getattr(args, "project", None),
     )
     return second["sql"], True, second["via_plan"]
 
@@ -288,7 +292,12 @@ def run_cli(args):
             e["agent"]["reason"] for e in entries if e["agent"]["status"] == "failed"
         )
     )
-    report = {"metrics": metrics, "failure_reasons": failures, "questions": entries}
+    report = {
+        "project": getattr(args, "project", None),
+        "metrics": metrics,
+        "failure_reasons": failures,
+        "questions": entries,
+    }
     args.report.with_suffix(".json").write_text(
         json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
     )

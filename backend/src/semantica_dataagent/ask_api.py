@@ -71,7 +71,12 @@ def _choices() -> tuple[str, str, str]:
         return agent_id, provider.id, model
 
 
-def _start_turn(question: str, conversation_id: str | None, owner_id: str):
+def _start_turn(
+    question: str,
+    conversation_id: str | None,
+    owner_id: str,
+    project_id: str,
+):
     now = datetime.now(UTC)
     cleanup_expired_sessions()
     with sessions().begin() as db:
@@ -80,6 +85,8 @@ def _start_turn(question: str, conversation_id: str | None, owner_id: str):
             conversation = db.get(Conversation, conversation_id)
             if conversation is None or conversation.owner_id != owner_id:
                 raise ValueError("Conversation not found")
+            if conversation.project_id != project_id:
+                raise ToolInvalidInput("对话已绑定其它项目，请新建对话")
             if not conversation.resumable:
                 raise ValueError("Conversation session expired and cannot be resumed")
             agent_id = conversation.agent
@@ -96,6 +103,7 @@ def _start_turn(question: str, conversation_id: str | None, owner_id: str):
             conversation = Conversation(
                 id=uuid.uuid4().hex,
                 owner_id=owner_id,
+                project_id=project_id,
                 title=question.strip()[:100],
                 agent=agent_id,
                 provider_id=provider_id,
@@ -139,6 +147,7 @@ def _start_turn(question: str, conversation_id: str | None, owner_id: str):
             "provider": provider_config(provider),
             "model": model,
             "runner": runner,
+            "project_id": project_id,
         }
 
 
@@ -152,7 +161,10 @@ async def _run_turn(context: dict, question: str, timeout: float) -> dict:
         model=context["model"],
         mcp_url=public_base_url() + "/mcp/",
         mcp_token=issue_agent_credential(
-            current_requester().id, context["conversation_id"], context["turn_id"]
+            current_requester().id,
+            context["conversation_id"],
+            context["turn_id"],
+            project_id=context["project_id"],
         ),
         turn_id=context["turn_id"],
     )
@@ -212,17 +224,21 @@ async def ask_dataagent(
     """Ask the configured online agent and wait for its final answer.
 
     Reuse ``conversation_id`` to continue the same conversation and agent
-    session.  The conversation belongs to the MCP caller's token.  A timeout is
-    reported as ``unavailable`` together with that conversation id so the
-    caller can continue instead of losing the work.
+    session.  The conversation belongs to the MCP caller's token and stays
+    bound to the project resolved for the MCP request.  A timeout is reported
+    as ``unavailable`` together with that conversation id so the caller can
+    continue instead of losing the work.
     """
     if not question or not question.strip():
         raise ValueError("question is required")
     from .project_context import DEFAULT_PROJECT_ID
 
-    if project_id not in (None, DEFAULT_PROJECT_ID):
-        raise ToolInvalidInput("项目问答将在对话绑定项目后支持")
     requester = current_requester()
     timeout = _timeout()
-    context = _start_turn(question, conversation_id, requester.id)
+    context = _start_turn(
+        question,
+        conversation_id,
+        requester.id,
+        project_id or DEFAULT_PROJECT_ID,
+    )
     return await _run_turn(context, question, timeout)
