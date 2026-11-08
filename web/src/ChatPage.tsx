@@ -8,6 +8,10 @@ import type { Language, Messages } from "./i18n";
 import { TaskLineage } from "./TaskLineage";
 import {
   ArrowUpOutlined,
+  EditOutlined,
+  PushpinOutlined,
+  InboxOutlined,
+  DeleteOutlined,
   CloseOutlined,
   MoreOutlined,
   PushpinFilled,
@@ -1945,6 +1949,7 @@ export function ChatPage({
                                 <>
                                   <button
                                     type="button"
+                                    className="session-archive-action"
                                     onClick={() =>
                                       void patchConversation(conversation.id, {
                                         archived: false,
@@ -1955,6 +1960,7 @@ export function ChatPage({
                                   </button>
                                   <button
                                     type="button"
+                                    className="session-archive-action"
                                     onClick={() =>
                                       setConfirmingDeleteId(conversation.id)
                                     }
@@ -1988,6 +1994,7 @@ export function ChatPage({
                                           setEditingId(conversation.id);
                                         }}
                                       >
+                                        <EditOutlined aria-hidden="true" />{" "}
                                         {t.rename}
                                       </button>
                                       <button
@@ -2000,6 +2007,7 @@ export function ChatPage({
                                           );
                                         }}
                                       >
+                                        <PushpinOutlined aria-hidden="true" />{" "}
                                         {conversation.pinned ? t.unpin : t.pin}
                                       </button>
                                       <button
@@ -2012,6 +2020,7 @@ export function ChatPage({
                                           );
                                         }}
                                       >
+                                        <InboxOutlined aria-hidden="true" />{" "}
                                         {t.archive}
                                       </button>
                                       <button
@@ -2024,6 +2033,7 @@ export function ChatPage({
                                           );
                                         }}
                                       >
+                                        <DeleteOutlined aria-hidden="true" />{" "}
                                         {t.deleteAction}
                                       </button>
                                     </div>
@@ -2041,6 +2051,7 @@ export function ChatPage({
                   )}
                   <button
                     type="button"
+                    className="session-archive-link"
                     onClick={() => setShowArchived(!showArchived)}
                   >
                     {showArchived

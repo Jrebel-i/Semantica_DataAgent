@@ -2774,6 +2774,12 @@ code {
 .session-menu { position: absolute; right: 0; z-index: 10; min-width: 130px; background: white; border: 1px solid #e5e5e5; border-radius: 8px; padding: 4px; box-shadow: 0 4px 12px #0002; }
 .session-menu button { display: block; border: 0; background: transparent; width: 100%; text-align: left; padding: 7px; cursor: pointer; }
 .session-menu button:hover { background: #f5f5f5; }
-.session-menu .danger { color: #c33; }
+.session-menu button.danger:not(.ant-btn) { color: var(--red); }
 .session-group { color: #888; padding: 10px 8px 4px; font-size: 12px; }
 .archive-banner { padding: 10px 20px; background: #f5f5f5; }
+
+.session-menu button .anticon { color: var(--ink-3); margin-right: 7px; }
+.session-menu button.danger .anticon { color: var(--red); }
+.session-row .session-archive-action { flex: none; padding: 2px 4px; border: 0; background: transparent; color: var(--ink-2); font-size: 12px; white-space: nowrap; }
+.session-list .session-archive-link { margin-top: auto; padding: 8px 10px; border: 0; background: transparent; color: var(--ink-2); text-align: left; }
+.session-row input { min-width: 0; width: 100%; }
