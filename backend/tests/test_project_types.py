@@ -243,3 +243,102 @@ def test_project_type_cannot_be_changed_after_creation(client):
         row["id"]: row for row in c.get("/api/v1/projects", headers=headers).json()
     }
     assert listing[project["id"]]["type"] == "document"
+
+
+
+def test_document_project_build_never_runs_dtb_even_when_globally_enabled(
+    client, tmp_path, monkeypatch
+):
+    import json
+    from contextlib import nullcontext
+
+    from semantica_dataagent import knowledge, project_context, relationships, stages
+    from semantica_dataagent.canonical import ReadResult, Record
+    from semantica_dataagent.db import Build, sessions
+    from semantica_dataagent.dtb_source import DtbAdapter
+    from semantica_dataagent.stage_contract import StageResult, StorageHandles
+
+    c, admin = client
+    headers = {"Authorization": f"Bearer {admin}"}
+    project = _create_project(c, admin, "Handbook", "document")
+    enabled = c.put(
+        "/api/v1/plugins/source/dtb",
+        headers=headers,
+        json={"enabled": True, "parameters": {}},
+    )
+    assert enabled.status_code == 200, enabled.text
+
+    source = project_context.project_source_directory(project["id"])
+    doc = source / "knowledge" / "guide" / "install.md"
+    doc.parent.mkdir(parents=True)
+    doc.write_text("# Install\n\nRun the installer.\n", encoding="utf-8")
+
+    calls = []
+
+    def fake_dtb_read(self, directory, parameters):
+        calls.append(parameters)
+        return ReadResult(
+            [
+                Record(
+                    "document",
+                    {"category": "dtb", "path": "sentinel.md"},
+                    "dtb/sentinel.md",
+                    "dtb/sentinel.md",
+                    (),
+                )
+            ],
+            {"dtb/sentinel.md": "0" * 64},
+        )
+
+    monkeypatch.setattr(DtbAdapter, "read", fake_dtb_read)
+
+    values = {
+        **project_context.current_project(project["id"]).values,
+        "source_directory": str(source),
+        "neo4j_uri": "bolt://localhost",
+        "neo4j_user": "neo4j",
+        "milvus_uri": "http://localhost",
+        "embedding_model": "test",
+        "embedding_url": "http://localhost",
+    }
+    monkeypatch.setattr(knowledge, "settings", lambda project_id=None: dict(values))
+    monkeypatch.setattr(
+        knowledge,
+        "build_storage",
+        lambda settings, stats=None: nullcontext(
+            StorageHandles("test", None, None, settings)
+        ),
+    )
+    monkeypatch.setattr(relationships, "reconcile", lambda *args: None)
+    monkeypatch.setattr(knowledge, "read_graph", lambda values: None)
+    monkeypatch.setattr(knowledge, "read_vectors", lambda values: None)
+    monkeypatch.setattr(knowledge, "prune_generations", lambda values: None)
+    seen = []
+    monkeypatch.setattr(
+        stages,
+        "STAGES",
+        [lambda records, generation, storage: seen.extend(records) or StageResult()],
+    )
+
+    with sessions().begin() as db:
+        row = Build(
+            status="running",
+            started_at="now",
+            project_id=project["id"],
+            counts="{}",
+        )
+        db.add(row)
+        db.flush()
+        build_id = row.id
+    knowledge.run_build(build_id)
+
+    assert calls == []
+    documents = {record.data["path"] for record in seen if record.kind == "document"}
+    assert "install.md" in documents
+    assert "sentinel.md" not in documents
+    with sessions()() as db:
+        row = db.get(Build, build_id)
+        assert row.status == "succeeded", row.error
+        hashes = json.loads(row.source_hashes)
+    assert "knowledge/guide/install.md" in hashes
+    assert not any(path.startswith("dtb/") for path in hashes)
