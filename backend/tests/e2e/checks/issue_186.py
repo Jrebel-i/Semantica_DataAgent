@@ -315,4 +315,17 @@ def check_permissions_and_cross_project_isolation(ctx):
         == 200,
         "项目管理员应能修改自动构建",
     )
-    ctx.require(_builds(ctx, project=project_id) == [], "默认项目上传影响了新项目")
+    default_builds = _upload_builds(ctx)
+    marker = f"issue186cross{ctx.generation[-6:]}"
+    response = _upload(
+        ctx, "issue186cross", {f"{marker}.md": marker}, project=project_id
+    )
+    ctx.require(response.status_code == 200, response.text[:300])
+    ctx.require(
+        _status(ctx, project=project_id)["state"] in {"pending", "building"},
+        "上传到新项目后没有待构建或构建中状态",
+    )
+    ctx.require(
+        _upload_builds(ctx) == default_builds,
+        "上传到新项目不应触发默认项目构建",
+    )

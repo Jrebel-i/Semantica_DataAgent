@@ -320,6 +320,8 @@ def test_running_build_gets_one_followup_and_queued_uploads_merge(
         ), "a second follow-up was queued while one was already waiting"
         assert build_rows(b["id"]) == []
         assert pending_rows(b["id"]) == []
+        assert build_rows() == [], "上传到其它项目不应在默认项目排队构建"
+        assert pending_rows("default") == [], "上传到其它项目不应登记默认项目请求"
 
 
 def test_auto_build_permissions_and_project_isolation(tmp_path, monkeypatch):
