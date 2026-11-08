@@ -5,6 +5,7 @@ export type Agent = components["schemas"]["AgentView"];
 export type Provider = components["schemas"]["ProviderView"];
 export type ModelCapability = components["schemas"]["ModelCapability"];
 export type EffortLevel = NonNullable<ModelCapability["effort_levels"]>[number];
+export type ProviderProbeResult = components["schemas"]["ProviderProbeView"];
 export type Conversation = components["schemas"]["ConversationView"];
 export type ConversationDetail = components["schemas"]["ConversationDetail"];
 export type Turn = components["schemas"]["TurnView"];
@@ -76,4 +77,12 @@ export const PROVIDER_TYPES = [
   "openai-completions",
   "openai-responses",
   "google-generative-ai",
+];
+
+export const EFFORT_LEVELS: EffortLevel[] = [
+  "low",
+  "medium",
+  "high",
+  "extra",
+  "max",
 ];

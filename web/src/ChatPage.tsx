@@ -113,6 +113,9 @@ export function ChatPage({
     editingProviderId,
     providerError,
     providerNotice,
+    probeResults,
+    probeLoadingModel,
+    probeError,
     activeProvider,
     setAgentId,
     setProviderId,
@@ -126,6 +129,8 @@ export function ChatPage({
     resetProviderForm,
     saveProvider,
     deleteProvider,
+    probeProviderModel,
+    applyProbeResult,
   } = useProviders({ token, messages: t, onError: setError });
 
   const {
@@ -560,10 +565,15 @@ export function ChatPage({
           providerForm={providerForm}
           setProviderForm={setProviderForm}
           editingProviderId={editingProviderId}
+          probeResults={probeResults}
+          probeLoadingModel={probeLoadingModel}
+          probeError={probeError}
           onEditProvider={editProvider}
           onDeleteProvider={(provider) => void deleteProvider(provider)}
           onSaveProvider={saveProvider}
           onResetProviderForm={resetProviderForm}
+          onProbeModel={probeProviderModel}
+          onApplyProbe={applyProbeResult}
         />
       )}
     </section>
