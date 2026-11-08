@@ -1,8 +1,14 @@
 import type { FormEvent } from "react";
-import { Alert, Button, Input, Tag } from "antd";
+import { Alert, Button, Checkbox, Input, Tag } from "antd";
 import type { Messages } from "../i18n";
 import { PROVIDER_TYPES } from "./types";
-import type { Provider } from "./types";
+import type { EffortLevel, Provider } from "./types";
+
+export type ProviderModelCapabilityForm = {
+  description: string;
+  vision: boolean;
+  effort_levels: EffortLevel[];
+};
 
 export type ProviderForm = {
   name: string;
@@ -10,6 +16,13 @@ export type ProviderForm = {
   base_url: string;
   api_key: string;
   models: string;
+  model_capabilities: Record<string, ProviderModelCapabilityForm>;
+};
+
+const EMPTY_CAPABILITY: ProviderModelCapabilityForm = {
+  description: "",
+  vision: false,
+  effort_levels: [],
 };
 
 export function ProviderSettings({
@@ -40,6 +53,32 @@ export function ProviderSettings({
   onResetProviderForm: () => void;
 }) {
   const t = messages;
+  const models = providerForm.models
+    .split(",")
+    .map((model) => model.trim())
+    .filter(Boolean)
+    .filter((model, index, all) => all.indexOf(model) === index);
+  const effortOptions: { value: EffortLevel; label: string }[] = [
+    { value: "low", label: t.effortLow },
+    { value: "medium", label: t.effortMedium },
+    { value: "high", label: t.effortHigh },
+    { value: "extra", label: t.effortExtra },
+    { value: "max", label: t.effortMax },
+  ];
+  const updateCapability = (
+    model: string,
+    patch: Partial<ProviderModelCapabilityForm>,
+  ) =>
+    setProviderForm({
+      ...providerForm,
+      model_capabilities: {
+        ...providerForm.model_capabilities,
+        [model]: {
+          ...(providerForm.model_capabilities[model] ?? EMPTY_CAPABILITY),
+          ...patch,
+        },
+      },
+    });
   return (
     <div className="stack">
       <div className="page-header">
@@ -193,6 +232,82 @@ export function ProviderSettings({
                   required
                 />
               </div>
+              {models.length > 0 && (
+                <div className="field" style={{ gridColumn: "1 / -1" }}>
+                  <span className="field-label">
+                    {t.providerModelCapabilities}
+                  </span>
+                  <span className="field-hint">
+                    {t.providerModelCapabilitiesHint}
+                  </span>
+                  <div className="provider-capability-list">
+                    {models.map((model) => {
+                      const capability =
+                        providerForm.model_capabilities[model] ??
+                        EMPTY_CAPABILITY;
+                      return (
+                        <div className="provider-capability-card" key={model}>
+                          <code className="provider-capability-model">
+                            {model}
+                          </code>
+                          <div className="provider-capability-fields">
+                            <Input
+                              aria-label={`${model} ${t.providerModelDescription}`}
+                              placeholder={t.providerModelDescription}
+                              maxLength={200}
+                              value={capability.description}
+                              onChange={(event) =>
+                                updateCapability(model, {
+                                  description: event.target.value,
+                                })
+                              }
+                            />
+                            <Checkbox
+                              aria-label={`${model} ${t.providerModelVision}`}
+                              checked={capability.vision}
+                              onChange={(event) =>
+                                updateCapability(model, {
+                                  vision: event.target.checked,
+                                })
+                              }
+                            >
+                              {t.providerModelVision}
+                            </Checkbox>
+                            <div className="provider-effort-group">
+                              <span className="subtle">
+                                {t.providerModelEffortLevels}
+                              </span>
+                              {effortOptions.map((option) => (
+                                <Checkbox
+                                  key={option.value}
+                                  aria-label={`${model} ${option.label}`}
+                                  checked={capability.effort_levels.includes(
+                                    option.value,
+                                  )}
+                                  onChange={(event) =>
+                                    updateCapability(model, {
+                                      effort_levels: event.target.checked
+                                        ? [
+                                            ...capability.effort_levels,
+                                            option.value,
+                                          ]
+                                        : capability.effort_levels.filter(
+                                            (level) => level !== option.value,
+                                          ),
+                                    })
+                                  }
+                                >
+                                  {option.label}
+                                </Checkbox>
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
             </div>
             <div className="save-bar">
               <Button htmlType="submit" type="primary">

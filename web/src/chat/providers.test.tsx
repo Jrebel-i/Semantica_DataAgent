@@ -74,6 +74,18 @@ test("admins configure providers without sending a blank API key", async () => {
       type: "anthropic-messages",
       base_url: "https://gateway.example.test",
       models: ["model-a", "model-b"],
+      model_capabilities: {
+        "model-a": {
+          description: "",
+          vision: false,
+          effort_levels: [],
+        },
+        "model-b": {
+          description: "",
+          vision: false,
+          effort_levels: [],
+        },
+      },
     });
   });
   expect(await screen.findByText("provider 已保存")).toBeTruthy();
@@ -156,7 +168,10 @@ test("admins edit per-model capabilities and save them", async () => {
         return json([{ id: "pi", name: "pi", available: true }]);
       if (url === "/api/v1/providers") return json([configured]);
       if (url === "/api/v1/conversations") return json([]);
-      if (url === `/api/v1/providers/${configured.id}` && init?.method === "PUT")
+      if (
+        url === `/api/v1/providers/${configured.id}` &&
+        init?.method === "PUT"
+      )
         return json(configured);
       return new Response("", { status: 404 });
     },
@@ -173,7 +188,7 @@ test("admins edit per-model capabilities and save them", async () => {
 
   fireEvent.click(await screen.findByRole("button", { name: "编辑" }));
   expect(
-    (await screen.findByLabelText("model-a 说明") as HTMLInputElement).value,
+    ((await screen.findByLabelText("model-a 说明")) as HTMLInputElement).value,
   ).toBe("带截图问答");
   expect(
     (screen.getByLabelText("model-a 支持图片") as HTMLInputElement).checked,
@@ -193,7 +208,7 @@ test("admins edit per-model capabilities and save them", async () => {
   });
   fireEvent.click(screen.getByLabelText("model-b 支持图片"));
   fireEvent.click(screen.getByLabelText("model-b 中（推荐）"));
-  fireEvent.click(screen.getByRole("button", { name: "保存" }));
+  fireEvent.click(screen.getByRole("button", { name: /保\s*存/ }));
 
   await waitFor(() => {
     const call = fetcher.mock.calls.find(
