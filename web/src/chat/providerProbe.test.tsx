@@ -18,7 +18,11 @@ const configured = {
   ...provider,
   models: ["model-a", "model-b"],
   model_capabilities: {
-    "model-a": { description: "带截图问答", vision: true, effort_levels: [] },
+    "model-a": {
+      description: "带截图问答",
+      vision: true,
+      effort_levels: ["high", "max"],
+    },
     "model-b": { description: "", vision: false, effort_levels: [] },
   },
 };

@@ -176,11 +176,15 @@ class FakeGateway:
         vision_status: int = 200,
         effort_status: dict[str, int] | None = None,
         delay: float = 0.0,
+        drip: float | None = None,
+        success_body: dict | None = None,
     ):
         self.provider_type = provider_type
         self.vision_status = vision_status
         self.effort_status = effort_status or {}
         self.delay = delay
+        self.drip = drip
+        self.success_body = success_body
         self.requests: list[dict] = []
         self.lock = threading.Lock()
         self.received = threading.Event()
@@ -224,7 +228,11 @@ class _GatewayHandler(BaseHTTPRequestHandler):
             time.sleep(gateway.delay)
         status = gateway.status(kind, level)
         if status == 200:
-            payload = _success_body(gateway.provider_type, body.get("model") or "")
+            payload = (
+                gateway.success_body
+                if gateway.success_body is not None
+                else _success_body(gateway.provider_type, body.get("model") or "")
+            )
         else:
             payload = _error_body(
                 gateway.provider_type,
@@ -239,7 +247,13 @@ class _GatewayHandler(BaseHTTPRequestHandler):
             self.send_header("content-type", "application/json")
             self.send_header("content-length", str(len(encoded)))
             self.end_headers()
-            self.wfile.write(encoded)
+            if gateway.drip:
+                for byte in encoded:
+                    self.wfile.write(bytes([byte]))
+                    self.wfile.flush()
+                    time.sleep(gateway.drip)
+            else:
+                self.wfile.write(encoded)
         except (BrokenPipeError, ConnectionResetError):
             pass
 
@@ -251,6 +265,7 @@ class _GatewayHandler(BaseHTTPRequestHandler):
 def _gateway(provider_type: str, **kwargs):
     gateway = FakeGateway(provider_type, **kwargs)
     server = ThreadingHTTPServer(("127.0.0.1", 0), _GatewayHandler)
+    server.daemon_threads = True
     server.gateway = gateway
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -482,6 +497,70 @@ def test_probe_reports_timeout_as_unknown(client, monkeypatch: pytest.MonkeyPatc
     assert response.json()["effort"] == {level: "unknown" for level in EFFORT_LEVELS}
     assert "timeout" in response.json()["notes"]
     assert elapsed < 5
+
+
+def test_probe_enforces_total_deadline_on_slow_responses(
+    client, monkeypatch: pytest.MonkeyPatch
+):
+    c, token = client
+    monkeypatch.setenv("DATAAGENT_PROVIDER_PROBE_TIMEOUT_SECONDS", "0.8")
+    monkeypatch.setenv("DATAAGENT_PROVIDER_PROBE_REQUEST_TIMEOUT_SECONDS", "30")
+    started = time.monotonic()
+    with _gateway("anthropic-messages", drip=0.02) as (gateway, base_url):
+        provider_id = _create_provider(
+            c, token, provider_type="anthropic-messages", base_url=base_url
+        )
+        response = _probe(c, token, provider_id)
+    elapsed = time.monotonic() - started
+
+    assert response.status_code == 200, response.text
+    assert response.json()["vision"] == "unknown"
+    assert response.json()["effort"] == {level: "unknown" for level in EFFORT_LEVELS}
+    assert "timeout" in response.json()["notes"]
+    assert elapsed < 2.5
+    assert len(gateway.requests) < 6
+
+
+def test_probe_reports_responses_completion_without_output_as_unknown(client):
+    c, token = client
+    with _gateway("openai-responses", success_body={"status": "completed"}) as (
+        _,
+        base_url,
+    ):
+        provider_id = _create_provider(
+            c, token, provider_type="openai-responses", base_url=base_url
+        )
+        response = _probe(c, token, provider_id)
+
+    assert response.status_code == 200, response.text
+    assert response.json()["vision"] == "unknown"
+    assert response.json()["effort"] == {level: "unknown" for level in EFFORT_LEVELS}
+    assert "unexpected response body" in response.json()["notes"]
+
+
+def test_probe_maps_google_gemini_3_thinking_levels(client):
+    c, token = client
+    model = "gemini-3-pro-preview"
+    with _gateway("google-generative-ai") as (gateway, base_url):
+        provider_id = _create_provider(
+            c,
+            token,
+            provider_type="google-generative-ai",
+            base_url=base_url,
+            models=[model],
+        )
+        response = _probe(c, token, provider_id, model=model)
+
+    assert response.status_code == 200, response.text
+    assert response.json()["vision"] == "yes"
+    assert response.json()["effort"] == {level: "yes" for level in EFFORT_LEVELS}
+    levels = [
+        request["body"]["generationConfig"]["thinkingConfig"]["thinkingLevel"]
+        for request in gateway.requests
+        if request["kind"] == "effort"
+    ]
+    assert levels == ["LOW", "MEDIUM", "HIGH", "HIGH", "HIGH"]
+    assert "google extra/max" in response.json()["notes"]
 
 
 def test_concurrent_probe_for_same_provider_returns_409(client):
