@@ -366,7 +366,10 @@ export function SourcePage({
         </div>
         <div className="page-actions source-status-actions">
           {status && (
-            <Tag color={statusColors[status.state]}>
+            <Tag
+              color={statusColors[status.state]}
+              title={statusLabel(status, t)}
+            >
               {statusLabel(status, t)}
             </Tag>
           )}

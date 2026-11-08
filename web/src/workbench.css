@@ -3326,8 +3326,12 @@ code {
   justify-content: flex-end;
 }
 .source-status-actions .ant-tag {
+  max-width: 38vw;
   margin-inline-end: 0;
   padding: 2px 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .source-auto-build {
   display: inline-flex;
