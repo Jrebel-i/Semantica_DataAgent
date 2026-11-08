@@ -26,6 +26,22 @@
 - 新增或修改返回时间的接口时，把该接口加进 `backend/tests/test_api_time.py` 的接口清单；该测试同时检查 OpenAPI 把时间字段声明为 `date-time`。
 - 前端直接用服务端返回值构造 `Date`，不再为缺时区的值补 `Z`。
 
+## 项目接口
+
+项目是独立知识库实例的元数据；成员以令牌的 `id`（用户身份）关联项目，角色为 `admin` 或 `member`。系统管理员（全局角色 `admin`）隐含所有项目的管理员，不需要成员行。
+
+- `GET /api/v1/projects` 需要认证。系统管理员返回全部项目，其它用户只返回自己是成员的项目；每项包含 `id`、`name`、`type`、`status`、`created_at`、`my_role`。系统管理员的 `my_role` 恒为 `admin`。
+- `PATCH /api/v1/projects/{id}` 仅系统管理员可用，只接受 `name`；请求里出现 `type`、`status` 等其它字段返回 422。名称两端空白会被去掉，长度为 1–200。
+- 默认项目 id 固定为 `default`，类型 `warehouse`，显示名默认“业务数据”，可改名但不可删除；删除与归档留给 #190。
+- 新建普通用户令牌时自动写入默认项目的 `member` 成员行；管理员令牌不写成员行。`project_context` 的解析规则仍恒为默认项目（#175 再按项目解析），但名称、类型、状态来自 `projects` 表。
+
+## 数据库迁移
+
+- 迁移号接在合并时 `origin/master` 的最大迁移号之后；并行票可能先合并，提交前重新 `git fetch` 并核对，空库 `alembic heads` 只能有一个头。
+- 迁移必须幂等：用 `INSERT ... WHERE NOT EXISTS` 或等价的“先查再插”处理种子数据，重复运行不能产生重复项目或成员。
+- 升级即生效，不重建、不停服、不移动检索存储数据。`serve` / `migrate` 在版本不是 head 时先自动备份 SQLite，再执行迁移；已是 head 时不备份。
+- 迁移测试用上一版本（合并时的 master）的数据库升级，逐行比较会话、令牌、纠错审批、构建记录、设置和知识代指针，并检查默认项目、成员回填、自动备份与空库单头。
+
 ## 平台与环境矩阵
 
 Python 3.12 / uv；Node 24 / pnpm 10；开发机 WSL2 Linux；存储运行在 k8s，见 [infrastructure.md](infrastructure.md)。
