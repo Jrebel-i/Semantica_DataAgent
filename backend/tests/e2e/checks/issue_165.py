@@ -331,3 +331,83 @@ def check_unparseable_tool_result_degrades_to_raw_text(ctx):
     ctx.require("缺少分区条件" in summary, f"raw text missing: {summary!r}")
     ctx.require(len(summary) <= EVENT_DETAIL_LIMIT, f"summary too long: {len(summary)}")
     return {"summary_length": len(summary)}
+
+
+def check_field_level_ambiguity_uses_retrieved_field_refs(ctx):
+    response = ctx.rest.get("/api/v1/skill")
+    ctx.require(response.status_code == 200, response.text[:500])
+    normalized = " ".join(response.text.split())
+    for phrase in (
+        "Field-level ambiguity",
+        "two or more fields",
+        "field:db.table.column",
+        "one option per candidate field",
+        "at most one ambiguous word per turn",
+        "different representations of the same field",
+        "Do not clarify when",
+    ):
+        ctx.require(phrase in normalized, f"skill is missing: {phrase}")
+
+    hits = ctx.mcp_call(
+        "search_knowledge",
+        {"query": "操作系统", "scope": "fields", "top_k": 10},
+    )
+    refs = {hit.get("ref") for hit in hits}
+    expected = {
+        "field:shop.channels.os_type",
+        "field:shop.channels.os_name",
+    }
+    ctx.require(expected <= refs, f"field refs missing from retrieval: {sorted(refs)}")
+
+    result = ctx.mcp_call(
+        "request_clarification",
+        {
+            "questions": [
+                {
+                    "question": "“操作系统”指哪个字段？",
+                    "options": [
+                        {
+                            "label": "os_type（操作系统代码）",
+                            "ref": "field:shop.channels.os_type",
+                        },
+                        {
+                            "label": "os_name（操作系统名称）",
+                            "ref": "field:shop.channels.os_name",
+                        },
+                    ],
+                }
+            ]
+        },
+    )
+    ctx.require(result.get("status") == "pending", result)
+    selected = [option["ref"] for option in result["questions"][0]["options"]]
+    ctx.require(
+        selected == ["field:shop.channels.os_type", "field:shop.channels.os_name"],
+        f"field refs were not preserved: {selected}",
+    )
+
+    rejected = ctx.mcp_call(
+        "request_clarification",
+        {
+            "questions": [
+                {
+                    "question": "“操作系统”指哪个字段？",
+                    "options": [
+                        {
+                            "label": "os_type（操作系统代码）",
+                            "ref": "field:shop.channels.os_type",
+                        },
+                        {
+                            "label": "不存在的字段",
+                            "ref": "field:shop.channels.os_missing",
+                        },
+                    ],
+                }
+            ]
+        },
+        allow_error=True,
+    )
+    ctx.require(rejected.isError, f"fabricated field ref was accepted: {rejected}")
+    body = rejected.structuredContent or {}
+    ctx.require(body.get("code") == "invalid_input", body)
+    return {"field_refs": sorted(refs & expected)}
