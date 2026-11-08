@@ -12,6 +12,7 @@ from semantica_dataagent.agent_plugin import (
     AttachmentPathError,
     attachment_path,
     build_attachment_prompt,
+    read_attachment_bytes,
     supported_image_attachments,
 )
 from semantica_dataagent.agent_types import (
@@ -173,3 +174,41 @@ def test_runner_rejects_symlinked_attachment_escape(
     assert events[-1].type == "error"
     assert "附件" in events[-1].data["message"]
     assert secret.read_bytes() == PNG
+
+
+def test_read_attachment_bytes_reads_regular_file(tmp_path: Path):
+    workspace = _workspace(tmp_path)
+    stored = workspace / "work" / "attachments" / "chart.png"
+    stored.write_bytes(PNG)
+
+    assert read_attachment_bytes(workspace, _attachment("chart.png")) == PNG
+
+
+def test_read_attachment_bytes_refuses_a_last_component_symlink(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from semantica_dataagent import agent_plugin
+
+    workspace = _workspace(tmp_path)
+    outside = tmp_path / "outside.png"
+    outside.write_bytes(PNG)
+    link = workspace / "work" / "attachments" / "chart.png"
+    os.symlink(outside, link)
+    monkeypatch.setattr(agent_plugin, "attachment_path", lambda *_args: link)
+
+    with pytest.raises(AttachmentPathError):
+        read_attachment_bytes(workspace, _attachment("chart.png"))
+
+
+def test_read_attachment_bytes_refuses_a_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from semantica_dataagent import agent_plugin
+
+    workspace = _workspace(tmp_path)
+    directory = workspace / "work" / "attachments" / "folder"
+    directory.mkdir()
+    monkeypatch.setattr(agent_plugin, "attachment_path", lambda *_args: directory)
+
+    with pytest.raises(AttachmentPathError):
+        read_attachment_bytes(workspace, _attachment("folder"))
