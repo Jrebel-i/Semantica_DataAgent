@@ -23,6 +23,22 @@ class Token(Base):
     revoked: Mapped[bool] = mapped_column(default=False)
 
 
+class Project(Base):
+    __tablename__ = "projects"
+    id: Mapped[str] = mapped_column(primary_key=True)
+    name: Mapped[str]
+    type: Mapped[str]
+    status: Mapped[str] = mapped_column(default="active", server_default="active")
+    created_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC))
+
+
+class ProjectMember(Base):
+    __tablename__ = "project_members"
+    project_id: Mapped[str] = mapped_column(primary_key=True)
+    token_id: Mapped[str] = mapped_column(primary_key=True)
+    role: Mapped[str]
+
+
 class AgentCredential(Base):
     __tablename__ = "agent_credentials"
     digest: Mapped[str] = mapped_column(primary_key=True)

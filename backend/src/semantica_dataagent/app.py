@@ -37,6 +37,7 @@ from .db import (
     sessions,
 )
 from .embedding_client import validate_settings
+from .project_api import ensure_default_project_member
 from .scheduler import pull_scheduler, scheduler
 
 
@@ -217,6 +218,7 @@ def create_token(body: TokenCreate, _: Annotated[str, Depends(admin)]):
         row = Token(digest=digest(plaintext), name=body.name, role=body.role)
         db.add(row)
         db.flush()
+        ensure_default_project_member(db, row)
         return TokenIssued(
             **TokenInfo.model_validate(row).model_dump(), token=plaintext
         )
@@ -694,6 +696,10 @@ from .gaps import report_knowledge_gap
 from .gaps import router as gaps_router
 
 app.include_router(gaps_router)
+
+from .project_api import router as projects_router
+
+app.include_router(projects_router)
 
 
 def create_mcp():
