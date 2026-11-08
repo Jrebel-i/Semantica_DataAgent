@@ -159,9 +159,7 @@ def test_each_project_has_its_own_schedule_clock():
         scheduler.stop()
 
 
-def test_project_schedule_api_reads_writes_and_restarts_timer(
-    tmp_path, monkeypatch
-):
+def test_project_schedule_api_reads_writes_and_restarts_timer(tmp_path, monkeypatch):
     from semantica_dataagent.app import app
     from semantica_dataagent.cli import initialize
     from semantica_dataagent.scheduler import scheduler
@@ -185,7 +183,9 @@ def test_project_schedule_api_reads_writes_and_restarts_timer(
         )
         assert saved.status_code == 200, saved.text
         assert saved.json() == {"interval_seconds": 15}
-        assert client.get("/api/v1/settings").json()["schedule_interval_seconds"] == "15"
+        assert (
+            client.get("/api/v1/settings").json()["schedule_interval_seconds"] == "15"
+        )
         assert client.get("/api/v1/projects/default/schedule").json() == {
             "interval_seconds": 15
         }
