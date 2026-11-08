@@ -113,7 +113,7 @@ def check_issue_184_conversation_project_scope(ctx):
     suffix = uuid.uuid4().hex[:8]
     created = ctx.rest.post(
         "/api/v1/projects",
-        json={"name": f"Issue 184 B {suffix}", "type": "document"},
+        json={"name": f"Issue 184 B {suffix}", "type": "warehouse"},
     )
     ctx.require(created.status_code == 201, created.text[:300])
     project_b = created.json()

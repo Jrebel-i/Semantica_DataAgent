@@ -432,7 +432,7 @@ def test_mcp_ask_creates_a_conversation_in_the_resolved_project(client, monkeypa
     from semantica_dataagent import agent_runner
 
     c, admin = client
-    project_b = _project(c, admin, "Issue 184 MCP B")
+    project_b = _project(c, admin, "Issue 184 MCP B", kind="warehouse")
     member = _user_token(
         c, admin, "mcp-b", [{"project_id": project_b["id"], "role": "member"}]
     )
@@ -474,8 +474,8 @@ def test_mcp_follow_up_rejects_a_different_project(client, monkeypatch):
     from semantica_dataagent import agent_runner
 
     c, admin = client
-    project_a = _project(c, admin, "Issue 184 MCP A")
-    project_b = _project(c, admin, "Issue 184 MCP B2")
+    project_a = _project(c, admin, "Issue 184 MCP A", kind="warehouse")
+    project_b = _project(c, admin, "Issue 184 MCP B2", kind="warehouse")
     member = _user_token(
         c,
         admin,
