@@ -155,8 +155,8 @@ class ClaudeRunner:
             "--mcp-config",
             "/sessions/claude/mcp.json" if sandboxed else str(mcp),
             "--append-system-prompt",
-            "Follow this retrieval skill exactly for warehouse questions.\n\n"
-            + read_skill(),
+            "Follow this retrieval skill exactly for this project's questions.\n\n"
+            + read_skill(request.project_type),
             "--resume" if existing else "--session-id",
             session,
         ]

@@ -38,6 +38,36 @@ def test_skill_download_requires_authentication_and_is_an_attachment(client):
     assert response.text == read_skill()
 
 
+def test_skill_download_selects_by_project_type(client):
+    from semantica_dataagent.skill import read_skill
+
+    c, token = client
+    headers = {"Authorization": f"Bearer {token}"}
+    created = c.post(
+        "/api/v1/projects",
+        headers=headers,
+        json={"name": "Platform docs", "type": "document"},
+    )
+    assert created.status_code == 201, created.text
+    project_id = created.json()["id"]
+
+    warehouse = c.get("/api/v1/skill", headers=headers, params={"project": "default"})
+    document = c.get("/api/v1/skill", headers=headers, params={"project": project_id})
+    assert warehouse.status_code == 200, warehouse.text
+    assert document.status_code == 200, document.text
+    assert warehouse.text == read_skill("warehouse")
+    assert document.text == read_skill("document")
+    assert warehouse.text != document.text
+    assert (
+        'filename="dataagent-retrieval-SKILL.md"'
+        in warehouse.headers["content-disposition"]
+    )
+    assert (
+        'filename="dataagent-document-retrieval-SKILL.md"'
+        in document.headers["content-disposition"]
+    )
+
+
 def test_mcp_prompt_and_capabilities_expose_the_same_skill(client):
     from semantica_dataagent.app import create_mcp
     from semantica_dataagent.skill import SKILL_NAME, read_skill

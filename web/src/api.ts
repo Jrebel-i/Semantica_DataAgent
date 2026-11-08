@@ -1458,6 +1458,8 @@ export interface components {
             parameters_schema: {
                 [key: string]: unknown;
             };
+            /** Project Types */
+            project_types?: string[] | null;
             /** Version */
             version: string;
         };
@@ -3916,7 +3918,9 @@ export interface operations {
     };
     download_skill_api_v1_skill_get: {
         parameters: {
-            query?: never;
+            query?: {
+                project?: string | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -3930,6 +3934,15 @@ export interface operations {
                 };
                 content: {
                     "text/markdown": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

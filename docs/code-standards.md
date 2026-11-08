@@ -31,7 +31,7 @@
 项目是独立知识库实例的元数据；成员以令牌的 `id`（用户身份）关联项目，角色为 `admin` 或 `member`。系统管理员（全局角色 `admin`）隐含所有项目的管理员，不需要成员行。
 
 - `GET /api/v1/projects` 需要认证。系统管理员返回全部项目，其它用户只返回自己是成员的项目；每项包含 `id`、`name`、`type`、`status`、`created_at`、`my_role`。系统管理员的 `my_role` 恒为 `admin`。
-- `PATCH /api/v1/projects/{id}` 仅系统管理员可用，只接受 `name`；请求里出现 `type`、`status` 等其它字段返回 422。名称两端空白会被去掉，长度为 1–200。
+- `PATCH /api/v1/projects/{id}` 仅系统管理员可用，只接受 `name`；请求里出现 `type`、`status` 等其它字段返回 422。名称两端空白会被去掉，长度为 1–200。项目类型在创建时确定，之后没有任何接口可以修改。
 - 默认项目 id 固定为 `default`，类型 `warehouse`，显示名默认“业务数据”，可改名但不可删除；删除与归档留给 #190。
 - 访问规则集中在 `project_api.py` 的依赖里，接口本身不要再写成员判断：读接口用 `project_scope`（系统管理员或项目成员），管理接口用 `admin_project_scope`（系统管理员或项目管理员）。无权限与项目不存在一律返回同样的 404，不泄露项目是否存在；成员调用管理接口返回 403 或 404。
 - 显式 `project` 参数优先。缺省时，能访问默认项目就用默认项目；否则若只访问一个项目就用它；否则返回 422 `请指定项目`。只属于非默认项目的用户因此不需要显式参数。
@@ -57,6 +57,12 @@ MCP 请求必须解析出**一个**项目，所有读知识库的工具都只经
 - `agent_credentials` 增加 `project_id`（迁移 `0032`，旧行回填 `default`）；`issue_agent_credential(..., project_id="default")` 写入对话所属项目。本票对话一律是默认项目。
 - 兼容：工具 JSON Schema 不新增必填参数；只有单项目（或系统管理员）的令牌与现有 MCP 客户端不传项目时行为不变。新增 MCP 工具必须经过项目上下文，`test_mcp_project_scope.py` 的守护测试会拦住绕过项目作用域的新工具。
 
+### 按项目类型限制工具与 skill
+
+`project_types.py` 是“工具 → 适用项目类型”的唯一权威表。数仓型项目保留全部工具；文档型项目只暴露 `search_knowledge`、`read_document`、`list_categories`、`read_category_index`、`request_clarification`、`propose_correction`、`report_knowledge_gap`、`get_capabilities`。`tools/list` 按当前请求解析出的项目类型过滤，调用被排除的工具返回 `invalid_input` “该项目类型不支持此工具”；`get_capabilities.tools` 返回同一份过滤后的列表。项目解析失败时工具列表为空（失败关闭），不回退到全部工具。新增或删除 MCP 工具时必须同步更新这张表，`test_project_types.py` 的守护测试会拦住未归类的工具。
+
+项目类型也决定检索 skill：数仓型使用 `skills/dataagent-retrieval`，文档型使用 `skills/dataagent-document-retrieval`。`GET /api/v1/skill` 接受可选的 `project`（缺省按项目选择规则），返回对应类型的 Markdown 和文件名；runner 把 skill 写进沙箱时读取 `AgentTurnRequest.project_type`（默认 `warehouse`），#184 绑定对话项目后由调用方传入。MCP prompt 目前仍只注册数仓版，直连 MCP prompt 的客户端不在本票范围。
+
 ## 项目隔离与存储命名
 
 项目之间靠“知识代命名前缀”隔离，不新增 Neo4j 标签或 Milvus 索引。
@@ -66,7 +72,7 @@ MCP 请求必须解析出**一个**项目，所有读知识库的工具都只经
 - 代保留清理和中断清理只处理本项目：先按 `project_id` 圈定代记录，再删除存储数据。跨项目误删是必须被测试守护的缺陷。
 - `project_settings(project_id, key, value)` 只存项目级覆盖；默认项目没有覆盖行，仍读全局 `settings`。`current_project(project_id)` 返回“全局设置 + 本项目覆盖”。
 - 新项目源目录为 `$DATAAGENT_PROJECTS_ROOT/<项目 id>/source`；未设置该环境变量时取数据库文件同目录下的 `projects/<项目 id>/source`。默认项目继续使用全局 `source_directory`。
-- `builds.project_id` 决定工作线程读取哪个项目的代、源目录和检索存储。构建队列按项目并行：同一项目任一时刻最多一个构建，后续构建排队；不同项目可同时运行，并发上限取全局设置 `build_concurrency`（默认 2）。一个项目失败或卡住不阻塞其它项目，排队与运行状态用 `GET /api/v1/builds?project=<id>` 查看。新项目构建只启用 Markdown 源适配器，插件配置表仍是全局的。
+- `builds.project_id` 决定工作线程读取哪个项目的代、源目录和检索存储。构建队列按项目并行：同一项目任一时刻最多一个构建，后续构建排队；不同项目可同时运行，并发上限取全局设置 `build_concurrency`（默认 2）。一个项目失败或卡住不阻塞其它项目，排队与运行状态用 `GET /api/v1/builds?project=<id>` 查看。新项目构建使用全局插件配置，但只运行与项目类型兼容的源适配器：文档型项目运行 Markdown 及以后声明支持 `document` 的适配器，数仓型项目可运行全局启用的 canonical/DTB 等适配器。
 - REST 的项目参数是可选的 `project`。缺省解析规则见“项目接口”；解析结果决定源目录、知识代和检索存储，不能退回固定的默认项目。
 
 ## 数据库迁移

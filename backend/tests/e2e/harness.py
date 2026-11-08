@@ -394,6 +394,18 @@ class McpSession:
         )
         return future.result(timeout=timeout or self._timeout)
 
+    def list_tools(self, timeout: float | None = None):
+        if self._error is not None:
+            raise RuntimeError(
+                f"MCP session failed: {type(self._error).__name__}: {self._error}"
+            ) from self._error
+        if self._session is None:
+            raise RuntimeError("MCP session is not open")
+        future = asyncio.run_coroutine_threadsafe(
+            self._session.list_tools(), self._loop
+        )
+        return future.result(timeout=timeout or self._timeout).tools
+
     def close(self) -> None:
         if self._stop is not None and self._loop.is_running():
             self._loop.call_soon_threadsafe(self._stop.set)

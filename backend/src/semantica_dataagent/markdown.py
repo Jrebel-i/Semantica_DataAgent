@@ -209,6 +209,7 @@ class MarkdownAdapter:
     id = "markdown"
     version = "1.0.0"
     display_name = "Markdown"
+    project_types = ("warehouse", "document")
     parameters_schema: ClassVar[dict] = {
         "type": "object",
         "properties": {"path": {"type": "string", "default": "knowledge"}},

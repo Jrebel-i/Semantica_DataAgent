@@ -96,6 +96,7 @@ class DtbAdapter:
     id = "dtb"
     version = "1.0.0"
     display_name = "DTB export"
+    project_types = ("warehouse",)
     parameters_schema: ClassVar[dict] = {
         "type": "object",
         "properties": {

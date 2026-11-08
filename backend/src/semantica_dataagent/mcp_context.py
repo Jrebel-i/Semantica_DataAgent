@@ -92,3 +92,14 @@ def current_project_context():
     from . import project_context
 
     return project_context.current_project(current_project_id())
+
+
+def current_project_type() -> str:
+    """Return the immutable type of the project resolved for this request."""
+    from . import project_context
+    from .project_types import WAREHOUSE
+
+    project_id = current_project_id()
+    if project_id == project_context.DEFAULT_PROJECT_ID:
+        return WAREHOUSE
+    return project_context.project_type(project_id)

@@ -1,12 +1,13 @@
-"""Authenticated download of the retrieval skill."""
+"""Authenticated download of the retrieval skill for one project type."""
 
 from typing import Annotated
 
 from fastapi import APIRouter, Depends
 from fastapi.responses import Response
 
-from .auth import current_user
-from .skill import SKILL_FILENAME, read_skill
+from .project_api import project_scope
+from .project_context import ProjectContext
+from .skill import read_skill, skill_filename
 
 router = APIRouter()
 
@@ -21,9 +22,10 @@ router = APIRouter()
         }
     },
 )
-def download_skill(_: Annotated[str, Depends(current_user)]):
+def download_skill(scope: Annotated[ProjectContext, Depends(project_scope)]):
+    filename = skill_filename(scope.project_type)
     return Response(
-        content=read_skill(),
+        content=read_skill(scope.project_type),
         media_type="text/markdown; charset=utf-8",
-        headers={"Content-Disposition": f'attachment; filename="{SKILL_FILENAME}"'},
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )

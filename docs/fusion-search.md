@@ -13,3 +13,8 @@
 每个 MCP 请求只服务一个项目。优先级固定为：在线 agent 凭据绑定的项目 > 请求显式选择 > 与 REST 相同的缺省规则（能访问默认项目就用默认，否则只有一个可访问项目就用它，否则要求指定）。普通令牌用查询参数 `project` 或请求头 `X-Dataagent-Project` 二选一；两者同时出现且不一致时返回 `invalid_input`。凭据绑定的项目不能被请求参数覆盖，指向其它项目时统一按“项目不存在”拒绝。
 
 未指定项目且令牌可访问多个项目时返回 `invalid_input`，消息以 `请指定项目` 开头并列出可访问的 `id（名称）`。项目不存在、无权限都返回同样的“项目不存在”，不泄露项目是否存在。`get_capabilities` 返回当前解析到的 `project` 与请求者可访问的 `projects`；`ask_dataagent` 在非默认项目上返回明确的工具错误。
+
+
+## 项目类型与工具集
+
+项目类型在创建时确定，之后任何接口都不能修改。`tools/list` 按请求解析出的项目类型过滤：数仓型项目返回全部工具；文档型项目只返回 `search_knowledge`、`read_document`、`list_categories`、`read_category_index`、`request_clarification`、`propose_correction`、`report_knowledge_gap` 和 `get_capabilities`。调用被排除的工具返回 `invalid_input`，消息为“该项目类型不支持此工具”。`get_capabilities.tools` 与 `tools/list` 返回同一份过滤后的列表；项目解析失败时工具列表为空，不回退到全部工具。权威表是 `backend/src/semantica_dataagent/project_types.py` 的 `TOOL_PROJECT_TYPES`，新增工具必须归类。
