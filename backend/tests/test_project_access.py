@@ -397,6 +397,34 @@ def test_rename_writes_audit(client):
     assert rename["actor_name"]
 
 
+def test_revoked_project_admin_does_not_count_as_last_admin(client):
+    c, admin = client
+    project = create_project(c, admin, "Revoked admin")
+    pa = create_token(c, admin, "pa", [{"project_id": project["id"], "role": "admin"}])
+    pa2 = create_token(
+        c, admin, "pa2", [{"project_id": project["id"], "role": "admin"}]
+    )
+    assert (
+        c.delete(f"/api/v1/tokens/{pa2['id']}", headers=headers(admin)).status_code
+        == 204
+    )
+    assert (
+        c.put(
+            f"/api/v1/projects/{project['id']}/members/{pa['id']}",
+            headers=headers(admin),
+            json={"role": "member"},
+        ).status_code
+        == 409
+    )
+    assert (
+        c.delete(
+            f"/api/v1/projects/{project['id']}/members/{pa['id']}",
+            headers=headers(admin),
+        ).status_code
+        == 409
+    )
+
+
 def test_users_endpoint_requires_project_admin_and_returns_three_fields(client):
     c, admin = client
     project = create_project(c, admin, "Users")

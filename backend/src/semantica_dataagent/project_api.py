@@ -418,7 +418,12 @@ def rename_project(
 def _member_admin_count(db, project_id: str) -> int:
     return (
         db.query(ProjectMember)
-        .filter(ProjectMember.project_id == project_id, ProjectMember.role == "admin")
+        .join(Token, Token.id == ProjectMember.token_id)
+        .filter(
+            ProjectMember.project_id == project_id,
+            ProjectMember.role == "admin",
+            Token.revoked.is_(False),
+        )
         .count()
     )
 
