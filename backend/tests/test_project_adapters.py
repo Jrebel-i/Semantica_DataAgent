@@ -322,6 +322,99 @@ def test_project_adapter_configs_are_isolated(client):
     assert second_plugins["dtb"] is False
 
 
+def test_run_pull_uses_each_projects_own_dtb_config_secret_and_source(
+    client, tmp_path, monkeypatch
+):
+    from semantica_dataagent import project_context, pull_service
+    from semantica_dataagent.crypto import encrypt
+    from semantica_dataagent.db import Build, sessions
+    from semantica_dataagent.dtb_puller import DtbPuller
+    from semantica_dataagent.source_directory import git
+
+    c, admin = client
+    first = _create_project(c, admin, "First warehouse", "warehouse")
+    second = _create_project(c, admin, "Second warehouse", "warehouse")
+    default_source = tmp_path / "default-source"
+    response = c.put(
+        "/api/v1/settings",
+        headers=_headers(admin),
+        json={"values": {"source_directory": str(default_source)}},
+    )
+    assert response.status_code == 200, response.text
+
+    projects = [
+        (
+            first["id"],
+            f"https://{first['id']}.dtb.example",
+            "first-layer",
+            "first-token",
+            1,
+        ),
+        (
+            second["id"],
+            f"https://{second['id']}.dtb.example",
+            "second-layer",
+            "second-token",
+            2,
+        ),
+        (
+            "default",
+            "https://default.dtb.example",
+            "default-layer",
+            "default-token",
+            3,
+        ),
+    ]
+    for project_id, url, layer, token, max_tables in projects:
+        with sessions().begin() as db:
+            project_context.upsert_plugin_config(
+                db,
+                "puller",
+                "dtb",
+                True,
+                {
+                    "url": url,
+                    "layer": layer,
+                    "max_tables": max_tables,
+                    "interval_seconds": 0,
+                },
+                project_id,
+            )
+            project_context.set_plugin_secret(
+                db, project_id, "puller.dtb.token", encrypt(token)
+            )
+
+    calls = []
+
+    def fake_fetch(http_client, url, token, parameters=None):
+        calls.append({"url": url, "token": token, "parameters": parameters or {}})
+        return (
+            {"任务信息.json": b"task", "表信息.xlsx": b"table"},
+            {"tables": 1, "tasks": 0},
+        )
+
+    monkeypatch.setattr(DtbPuller, "fetch", staticmethod(fake_fetch))
+    monkeypatch.setattr(project_context, "wake_build_queue", lambda: None)
+
+    for project_id, url, layer, token, max_tables in projects:
+        record = pull_service.run_pull(project_id)
+
+        assert record.status == "succeeded", record.error
+        assert calls[-1] == {
+            "url": url,
+            "token": token,
+            "parameters": {"layer": layer, "max_tables": max_tables},
+        }
+        directory = project_context.source_directory_value(project_id)
+        assert record.source_directory == directory
+        with sessions()() as db:
+            build = db.get(Build, record.build_id)
+            assert build.project_id == project_id
+        assert (
+            git(Path(directory), "rev-parse", "HEAD").decode().strip() == record.commit
+        )
+
+
 def test_adapter_permissions(client):
     c, admin = client
     project = _create_project(c, admin, "Guarded", "warehouse")
