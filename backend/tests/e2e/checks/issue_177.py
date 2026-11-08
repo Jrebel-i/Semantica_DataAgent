@@ -631,9 +631,8 @@ def check_issue_177_isolation_matrix(ctx):
             {row["id"] for row in members.json()} >= {pa["id"], ua["id"]},
             members.json(),
         )
-        temp = issue(
-            f"issue177-temp-{suffix}", [{"project_id": "default", "role": "member"}]
-        )
+        # No projects: the membership is created by the project admin below.
+        temp = issue(f"issue177-temp-{suffix}", [])
         added = _request(
             ctx,
             "PUT",
@@ -642,6 +641,14 @@ def check_issue_177_isolation_matrix(ctx):
             token=pa["token"],
         )
         ctx.require(added.status_code == 200, added.text[:300])
+        promoted = _request(
+            ctx,
+            "PUT",
+            f"/api/v1/projects/default/members/{temp['id']}",
+            json={"role": "admin"},
+            token=pa["token"],
+        )
+        ctx.require(promoted.status_code == 200, promoted.text[:300])
         removed = _request(
             ctx,
             "DELETE",
@@ -680,7 +687,7 @@ def check_issue_177_isolation_matrix(ctx):
         )
         ctx.require(audit.status_code == 200, audit.text[:300])
         actions = {row["action"] for row in audit.json()}
-        ctx.require({"member.add", "member.remove"} <= actions, actions)
+        ctx.require({"member.add", "member.update", "member.remove"} <= actions, actions)
         audit_b = _request(
             ctx,
             "GET",
