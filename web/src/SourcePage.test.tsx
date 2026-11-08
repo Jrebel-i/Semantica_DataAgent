@@ -128,6 +128,9 @@ test("uploads an archive and a selected category folder", async () => {
     }),
   );
   render(<SourcePage token="t" messages={getMessages("zh")} />);
+  expect(
+    screen.getByLabelText("选择文件").closest(".ant-upload"),
+  ).not.toBeNull();
   fireEvent.change(screen.getByLabelText("目标目录"), {
     target: { value: "knowledge/cat" },
   });

@@ -205,7 +205,7 @@ export function AgentSettings({
               <span className="field-label">{t.allowedProviders}</span>
               <div className="provider-grid">
                 {providers.length === 0 && (
-                  <p className="muted">{t.noProviders}</p>
+                  <div className="empty-state">{t.noProviders}</div>
                 )}
                 {providers.map((provider) => {
                   const checked = profile.providers.includes(provider.id);

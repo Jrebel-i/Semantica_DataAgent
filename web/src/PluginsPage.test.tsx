@@ -116,7 +116,9 @@ test("renders schema, reports validation errors and saves enabled state", async 
     target: { value: "valid" },
   });
   fireEvent.change(screen.getByLabelText("mode"), { target: { value: "1" } });
-  fireEvent.click(screen.getByLabelText("Enabled"));
+  const enabled = screen.getByLabelText("Enabled");
+  expect(enabled.closest(".ant-checkbox-wrapper")).not.toBeNull();
+  fireEvent.click(enabled);
   await waitFor(() => expect(requests.at(-1)?.enabled).toBe(true));
   expect(requests.at(-1)?.parameters).toEqual({
     name: "valid",

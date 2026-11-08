@@ -30,4 +30,19 @@ describe("admin page polish", () => {
       /\.admin-page \.knowledge-table-scroll \.data-table\s*\{[^}]*min-width: 760px;/,
     );
   });
+
+  test("admin cards, fields and empty states use one spacing scale", () => {
+    for (const size of ["8", "12", "16", "24"]) {
+      expect(css).toContain(`--admin-space-${size}: ${size}px;`);
+    }
+    expect(css).toMatch(
+      /\.admin-page \.section-card\s*\{[^}]*padding: var\(--admin-space-16\) var\(--admin-space-24\);/,
+    );
+    expect(css).toMatch(
+      /\.admin-page \.field\s*\{[^}]*gap: var\(--admin-space-8\);/,
+    );
+    expect(css).toMatch(
+      /\.admin-page \.empty-state,\s*\.admin-page \.ant-empty\s*\{[^}]*border: 1px dashed var\(--line\);/,
+    );
+  });
 });
