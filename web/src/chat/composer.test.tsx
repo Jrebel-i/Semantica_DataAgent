@@ -585,6 +585,18 @@ function attachFile(label: string, file: File) {
   });
 }
 
+function attachFiles(label: string, files: File[]) {
+  fireEvent.change(screen.getByLabelText(label), {
+    target: { files },
+  });
+}
+
+function sizedFile(name: string, size: number, type = "text/plain") {
+  const file = new File(["x"], name, { type });
+  Object.defineProperty(file, "size", { value: size });
+  return file;
+}
+
 test("添加附件后显示文件名和大小，可删除并以 multipart 发送", async () => {
   let askBody: FormData | Record<string, unknown> | undefined;
   vi.stubGlobal(
@@ -663,4 +675,59 @@ test("图片附件显示缩略图", async () => {
   );
   const thumbnail = await screen.findByRole("img", { name: "chart.png" });
   expect(thumbnail.getAttribute("src")).toBeTruthy();
+});
+
+test("附件数量刚好 10 个通过，第 11 个在发送前被拒", async () => {
+  vi.stubGlobal("fetch", attachmentFetcher("model-vision"));
+  render(<ChatPage token="token" role="user" messages={getMessages("zh")} />);
+
+  await screen.findByLabelText("添加文件");
+  attachFiles(
+    "添加文件",
+    Array.from({ length: 10 }, (_, index) => sizedFile(`file-${index}.txt`, 1)),
+  );
+  await waitFor(() =>
+    expect(document.querySelectorAll(".composer-attachment")).toHaveLength(10),
+  );
+
+  attachFiles("添加文件", [sizedFile("file-10.txt", 1)]);
+  expect(await screen.findByText("一次最多添加 10 个附件")).toBeTruthy();
+  expect(document.querySelectorAll(".composer-attachment")).toHaveLength(10);
+});
+
+test("单个与总量刚好到上限通过，超 1 字节在发送前被拒", async () => {
+  vi.stubGlobal("fetch", attachmentFetcher("model-vision"));
+  render(<ChatPage token="token" role="user" messages={getMessages("zh")} />);
+
+  await screen.findByLabelText("添加文件");
+  attachFile("添加文件", sizedFile("twenty.bin", 20 * 1024 * 1024));
+  await screen.findByText("twenty.bin");
+  attachFiles("添加文件", [
+    sizedFile("twenty-more.bin", 20 * 1024 * 1024),
+    sizedFile("ten.bin", 10 * 1024 * 1024),
+  ]);
+  await waitFor(() =>
+    expect(document.querySelectorAll(".composer-attachment")).toHaveLength(3),
+  );
+
+  attachFile("添加文件", sizedFile("one-byte.bin", 1));
+  expect(
+    await screen.findByText("一条消息的附件总大小不能超过 50MB"),
+  ).toBeTruthy();
+  expect(document.querySelectorAll(".composer-attachment")).toHaveLength(3);
+});
+
+test("模型不支持图片时通过添加文件入口选图片也会提示", async () => {
+  vi.stubGlobal("fetch", attachmentFetcher("model-text"));
+  render(<ChatPage token="token" role="user" messages={getMessages("zh")} />);
+
+  await screen.findByLabelText("添加文件");
+  attachFile(
+    "添加文件",
+    new File([new Uint8Array([137, 80, 78, 71])], "chart.png", {
+      type: "image/png",
+    }),
+  );
+  expect(await screen.findByText(/请更换支持图片的模型/)).toBeTruthy();
+  expect(screen.queryByText("chart.png")).toBeNull();
 });
