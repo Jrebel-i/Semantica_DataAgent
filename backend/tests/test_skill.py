@@ -100,3 +100,8 @@ def test_skill_source_is_a_valid_agent_skill():
         assert tool in text
     assert "Every option must contain" in text
     assert "Do not pick a definition" in text
+    normalized = " ".join(text.split())
+    assert "INSERT OVERWRITE" in text
+    assert "treat the table as a snapshot" in normalized
+    assert "never the partition column of a snapshot table" in normalized
+    assert "business time column" in normalized
