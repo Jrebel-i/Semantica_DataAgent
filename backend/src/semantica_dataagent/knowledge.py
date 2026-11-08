@@ -33,6 +33,7 @@ from .db import (
     Build,
     GenerationPointer,
     KnowledgeGeneration,
+    Project,
     generation_pointer,
     sessions,
 )
@@ -602,11 +603,14 @@ def run_build(build_id):
         with sessions()() as db:
             row = db.get(Build, build_id)
             project_id = (row.project_id if row is not None else None) or "default"
+            project_row = db.get(Project, project_id)
+            project_type = project_row.type if project_row is not None else "warehouse"
         values = (
             settings()
             if project_id == project_context.DEFAULT_PROJECT_ID
             else settings(project_id)
         )
+        values["_project_type"] = project_type
         project = project_context.from_values(values, project_id)
         generation = project.generation
         with sessions().begin() as db:
