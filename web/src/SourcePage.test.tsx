@@ -322,3 +322,87 @@ test("allows downloading binary source files", async () => {
   );
   expect(link.getAttribute("download")).toBe("tables.xlsx");
 });
+
+const pendingStatus = {
+  state: "pending",
+  due_in_seconds: 12,
+  last_build_id: null,
+  source_commit: null,
+  auto_build: true,
+  error: null,
+};
+
+test("shows pending source status and the auto build switch", async () => {
+  const fetcher = vi.fn(async (url: string) => {
+    if (url === "/api/v1/projects") return Response.json(projects);
+    if (url.startsWith("/api/v1/categories")) return Response.json([]);
+    if (url === "/api/v1/source/files?project=default")
+      return Response.json([]);
+    if (url === "/api/v1/projects/default/source-status")
+      return Response.json(pendingStatus);
+    if (url === "/api/v1/projects/default/auto-build")
+      return Response.json({ enabled: true });
+    return Response.json([]);
+  });
+  vi.stubGlobal("fetch", fetcher);
+  render(<SourcePage token="t" messages={getMessages("zh")} />);
+
+  expect(await screen.findByText("待构建（约 12 秒后开始）")).toBeTruthy();
+  const autoBuild = await screen.findByRole("switch", { name: "自动构建" });
+  expect((autoBuild as HTMLButtonElement).getAttribute("aria-checked")).toBe(
+    "true",
+  );
+});
+
+test("turning auto build off sends the new setting", async () => {
+  const updates: { method?: string; body?: string }[] = [];
+  const fetcher = vi.fn(async (url: string, options?: RequestInit) => {
+    if (url === "/api/v1/projects") return Response.json(projects);
+    if (url.startsWith("/api/v1/categories")) return Response.json([]);
+    if (url === "/api/v1/source/files?project=default")
+      return Response.json([]);
+    if (url === "/api/v1/projects/default/source-status")
+      return Response.json({ ...pendingStatus, state: "effective" });
+    if (url === "/api/v1/projects/default/auto-build") {
+      if (options?.method === "PUT") {
+        updates.push({ method: options.method, body: String(options.body) });
+        return Response.json({ enabled: false });
+      }
+      return Response.json({ enabled: true });
+    }
+    return Response.json([]);
+  });
+  vi.stubGlobal("fetch", fetcher);
+  render(<SourcePage token="t" messages={getMessages("zh")} />);
+
+  fireEvent.click(await screen.findByRole("switch", { name: "自动构建" }));
+  await waitFor(() => expect(updates).toHaveLength(1));
+  expect(updates[0]).toEqual({
+    method: "PUT",
+    body: JSON.stringify({ enabled: false }),
+  });
+});
+
+test("shows the failure reason for a failed build", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) => {
+      if (url === "/api/v1/projects") return Response.json(projects);
+      if (url.startsWith("/api/v1/categories")) return Response.json([]);
+      if (url === "/api/v1/source/files?project=default")
+        return Response.json([]);
+      if (url === "/api/v1/projects/default/source-status")
+        return Response.json({
+          ...pendingStatus,
+          state: "failed",
+          due_in_seconds: null,
+          error: "维度值读取失败",
+        });
+      if (url === "/api/v1/projects/default/auto-build")
+        return Response.json({ enabled: true });
+      return Response.json([]);
+    }),
+  );
+  render(<SourcePage token="t" messages={getMessages("zh")} />);
+  expect(await screen.findByText("构建失败：维度值读取失败")).toBeTruthy();
+});
