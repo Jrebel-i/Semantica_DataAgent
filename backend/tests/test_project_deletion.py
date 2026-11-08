@@ -346,3 +346,46 @@ def test_prefix_matching_never_crosses_projects():
     assert not is_project_collection("sda_abc_initial", "ab")
     assert not is_project_collection("sda_ab", "ab")
     assert not is_project_collection("other_ab_initial", "ab")
+
+
+def test_startup_recovery_does_not_recreate_source_for_deleting_projects(client):
+    c, admin = client
+    project = create_project(c, admin, "Deleting Docs")
+    archive(c, admin, project)
+
+    from semantica_dataagent import project_context, project_deletion
+    from semantica_dataagent.db import ProjectDeletion, sessions
+
+    state = project_deletion.prepare_deletion(
+        project["id"], project["name"], "owner", "Owner"
+    )
+    assert state == "active"
+    source = project_context.project_source_directory(project["id"])
+    assert source.exists()
+    project_deletion._delete_source(project["id"], {})
+    assert not source.exists()
+    with sessions().begin() as db:
+        row = db.get(ProjectDeletion, project["id"])
+        row.steps = json.dumps([{"name": "source", "status": "succeeded"}])
+        row.step = "neo4j"
+        row.status = "deleting"
+
+    project_context.recover_projects()
+
+    assert not source.exists(), "重启恢复了删除中项目的源目录，留下残留"
+
+
+def test_startup_recovery_still_restores_source_for_archived_projects(client):
+    c, admin = client
+    project = create_project(c, admin, "Archived Docs")
+    archive(c, admin, project)
+
+    from semantica_dataagent import project_context
+
+    source = project_context.project_source_directory(project["id"])
+    assert source.exists()
+    source.rmdir()
+
+    project_context.recover_projects()
+
+    assert source.exists(), "归档项目的数据应保留并可恢复源目录"
