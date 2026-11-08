@@ -94,7 +94,9 @@ test("folder upload fills the category, previews, then confirms", async () => {
       });
     }
     if (url === "/api/v1/source/upload?project=default") {
-      uploads.push(JSON.parse(String(options?.body)) as Record<string, unknown>);
+      uploads.push(
+        JSON.parse(String(options?.body)) as Record<string, unknown>,
+      );
       return Response.json({ commit: "c".repeat(40) });
     }
     return Response.json([]);
@@ -133,7 +135,11 @@ test("folder upload fills the category, previews, then confirms", async () => {
     replace: false,
     files: [{ path: "子目录/a.md", content_base64: btoa("document") }],
   });
-  expect(fetcher.mock.calls.filter(([url]) => String(url).includes("/api/v1/source/files?project=default")).length).toBeGreaterThanOrEqual(2);
+  expect(
+    fetcher.mock.calls.filter(([url]) =>
+      String(url).includes("/api/v1/source/files?project=default"),
+    ).length,
+  ).toBeGreaterThanOrEqual(2);
 });
 
 test("requires a category and files before previewing", async () => {
@@ -146,20 +152,23 @@ test("requires a category and files before previewing", async () => {
   );
   render(<SourcePage token="t" messages={getMessages("zh")} />);
   expect(
-    (screen.getByRole("button", { name: "预览" }) as HTMLButtonElement).disabled,
+    (screen.getByRole("button", { name: "预览" }) as HTMLButtonElement)
+      .disabled,
   ).toBe(true);
   fireEvent.change(screen.getByLabelText("选择文件"), {
     target: { files: [new File(["x"], "a.md")] },
   });
   expect(
-    (screen.getByRole("button", { name: "预览" }) as HTMLButtonElement).disabled,
+    (screen.getByRole("button", { name: "预览" }) as HTMLButtonElement)
+      .disabled,
   ).toBe(true);
   fireEvent.change(screen.getByLabelText("新建知识类"), {
     target: { value: "metrics" },
   });
   await waitFor(() =>
     expect(
-      (screen.getByRole("button", { name: "预览" }) as HTMLButtonElement).disabled,
+      (screen.getByRole("button", { name: "预览" }) as HTMLButtonElement)
+        .disabled,
     ).toBe(false),
   );
 });
@@ -182,7 +191,9 @@ test("advanced replacement shows the deletion warning and confirm label", async 
           truncated: false,
         });
       if (url === "/api/v1/source/upload?project=default") {
-        uploads.push(JSON.parse(String(options?.body)) as Record<string, unknown>);
+        uploads.push(
+          JSON.parse(String(options?.body)) as Record<string, unknown>,
+        );
         return Response.json({ commit: "d".repeat(40) });
       }
       return Response.json([]);
@@ -196,9 +207,7 @@ test("advanced replacement shows the deletion warning and confirm label", async 
     target: { value: "metrics" },
   });
   fireEvent.click(screen.getByText("高级选项"));
-  fireEvent.click(
-    screen.getByLabelText("替换整个知识类（删除未上传的文件）"),
-  );
+  fireEvent.click(screen.getByLabelText("替换整个知识类（删除未上传的文件）"));
   fireEvent.click(screen.getByRole("button", { name: "预览" }));
   expect(await screen.findByText(/将删除 2 个文件/)).toBeTruthy();
   const confirm = await screen.findByRole("button", {
@@ -222,7 +231,7 @@ test("changing the project switches every source request", async () => {
   );
   render(<SourcePage token="t" messages={getMessages("zh")} />);
   expect(await screen.findByText("业务数据")).toBeTruthy();
-  fireEvent.mouseDown(screen.getByRole("combobox"));
+  fireEvent.mouseDown(screen.getAllByRole("combobox")[0]);
   fireEvent.click(await screen.findByTitle("Platform Docs"));
   await waitFor(() =>
     expect(calls).toContain("/api/v1/source/files?project=docs"),

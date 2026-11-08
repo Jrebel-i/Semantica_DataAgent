@@ -883,6 +883,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/source/upload/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Preview Sources */
+        post: operations["preview_sources_api_v1_source_upload_preview_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/table-lineage": {
         parameters: {
             query?: never;
@@ -1768,10 +1785,33 @@ export interface components {
             /** Message */
             message: string;
         };
+        /** SourcePreview */
+        SourcePreview: {
+            /** Added */
+            added: string[];
+            /** Category */
+            category: string;
+            /** Counts */
+            counts: {
+                [key: string]: number;
+            };
+            /** Deleted */
+            deleted: string[];
+            /** Overwritten */
+            overwritten: string[];
+            /** Target */
+            target: string;
+            /** Truncated */
+            truncated: boolean;
+            /** Unchanged */
+            unchanged: string[];
+        };
         /** SourceUpload */
         SourceUpload: {
             /** Archive Base64 */
             archive_base64?: string | null;
+            /** Category */
+            category?: string | null;
             /**
              * Files
              * @default []
@@ -1782,8 +1822,10 @@ export interface components {
              * @default false
              */
             replace: boolean;
+            /** Subfolder */
+            subfolder?: string | null;
             /** Target */
-            target: string;
+            target?: string | null;
         };
         /** Status */
         Status: {
@@ -3883,6 +3925,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SourceCommit"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    preview_sources_api_v1_source_upload_preview_post: {
+        parameters: {
+            query?: {
+                project?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SourceUpload"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SourcePreview"];
                 };
             };
             /** @description Validation Error */

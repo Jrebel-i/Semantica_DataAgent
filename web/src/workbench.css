@@ -2131,6 +2131,56 @@ button.clarification-option-toggle:hover {
   gap: 16px;
   min-width: 0;
 }
+.advanced-options summary,
+.upload-preview summary {
+  cursor: pointer;
+  color: var(--ink-2);
+  font-size: 12.5px;
+}
+.advanced-options .ant-checkbox-wrapper {
+  margin-top: 10px;
+}
+.upload-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+.preview-counts {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 0;
+}
+.preview-counts span {
+  font-weight: 600;
+}
+.preview-added,
+.preview-added-title {
+  color: var(--green);
+}
+.preview-overwritten,
+.preview-overwritten-title {
+  color: #b7791f;
+}
+.preview-deleted,
+.preview-deleted-title {
+  color: var(--red);
+}
+.upload-preview h4 {
+  margin: 10px 0 4px;
+  font-size: 12.5px;
+}
+.upload-preview ul {
+  margin: 0;
+  padding-left: 18px;
+  max-height: 180px;
+  overflow: auto;
+  font-size: 12px;
+}
 .source-tree {
   max-height: 360px;
   overflow: auto;
@@ -2502,7 +2552,9 @@ code {
   box-shadow: 0 8px 24px #30251c1a;
   opacity: 1;
 }
-.ant-select-dropdown.composer-select-dropdown:not(.ant-slide-up-leave):not(.ant-slide-down-leave) {
+.ant-select-dropdown.composer-select-dropdown:not(.ant-slide-up-leave):not(
+    .ant-slide-down-leave
+  ) {
   opacity: 1 !important;
 }
 .composer-controls .ant-select-selector {
