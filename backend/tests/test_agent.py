@@ -1621,9 +1621,7 @@ def test_conversation_switches_model_and_records_each_turn(client, monkeypatch):
     monkeypatch.setitem(agent_runner.RUNNERS, "pi", runner)
     c, token = client
     headers = {"Authorization": f"Bearer {token}"}
-    provider = _create_provider(
-        c, headers, "switch-model", ["model-a", "model-b"]
-    )
+    provider = _create_provider(c, headers, "switch-model", ["model-a", "model-b"])
     status, body = _ask(
         c,
         headers,
@@ -1646,16 +1644,12 @@ def test_conversation_switches_model_and_records_each_turn(client, monkeypatch):
     assert {request.provider.id for request in runner.requests} == {provider["id"]}
     assert runner.requests[0].session_id == runner.requests[1].session_id
     assert runner.requests[0].workspace == runner.requests[1].workspace
-    detail = c.get(
-        f"/api/v1/conversations/{conversation_id}", headers=headers
-    ).json()
+    detail = c.get(f"/api/v1/conversations/{conversation_id}", headers=headers).json()
     assert (detail["provider_id"], detail["model"]) == (
         provider["id"],
         "model-b",
     )
-    assert [
-        (turn["provider_id"], turn["model"]) for turn in detail["turns"]
-    ] == [
+    assert [(turn["provider_id"], turn["model"]) for turn in detail["turns"]] == [
         (provider["id"], "model-a"),
         (provider["id"], "model-b"),
     ]
@@ -1710,13 +1704,12 @@ def test_conversation_switches_provider_with_new_credentials(client, monkeypatch
     assert runner.requests[1].provider.base_url == "http://127.0.0.1:9002"
     assert "secret-provider-a" not in body
     assert "secret-provider-b" not in body
-    detail = c.get(
-        f"/api/v1/conversations/{conversation_id}", headers=headers
-    ).json()
+    detail = c.get(f"/api/v1/conversations/{conversation_id}", headers=headers).json()
     assert (detail["provider_id"], detail["model"]) == (second["id"], "model-b")
-    assert [
-        (turn["provider_id"], turn["model"]) for turn in detail["turns"]
-    ] == [(first["id"], "model-a"), (second["id"], "model-b")]
+    assert [(turn["provider_id"], turn["model"]) for turn in detail["turns"]] == [
+        (first["id"], "model-a"),
+        (second["id"], "model-b"),
+    ]
     database = Path(os.environ["DATAAGENT_DB_PATH"]).read_bytes()
     assert b"secret-provider-a" not in database
     assert b"secret-provider-b" not in database
@@ -1796,9 +1789,7 @@ def test_provider_must_be_allowed_for_the_conversation_agent(client, monkeypatch
         model="model-b",
     )
     assert status == 422, body
-    detail = c.get(
-        f"/api/v1/conversations/{conversation_id}", headers=headers
-    ).json()
+    detail = c.get(f"/api/v1/conversations/{conversation_id}", headers=headers).json()
     assert (detail["provider_id"], len(detail["turns"])) == (allowed["id"], 1)
 
 
@@ -1829,9 +1820,7 @@ def test_switched_model_must_belong_to_the_provider(client, monkeypatch):
     )
     assert status == 422, body
     assert len(runner.requests) == 1
-    detail = c.get(
-        f"/api/v1/conversations/{conversation_id}", headers=headers
-    ).json()
+    detail = c.get(f"/api/v1/conversations/{conversation_id}", headers=headers).json()
     assert (detail["model"], len(detail["turns"])) == ("model-a", 1)
 
 

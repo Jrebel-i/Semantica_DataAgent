@@ -175,6 +175,7 @@ def test_serve_upgrades_0023_conversations_and_backs_up(database, monkeypatch):
             "SELECT title FROM conversations WHERE id='old'"
         ).fetchone() == ("旧会话",)
 
+
 def test_turn_switch_columns_migrate_without_rewriting_history(database):
     command.upgrade(_config(database), "0024")
     with sqlite3.connect(database) as db:
@@ -198,16 +199,12 @@ def test_turn_switch_columns_migrate_without_rewriting_history(database):
         )
     command.upgrade(_config(database), "0025")
     with sqlite3.connect(database) as db:
-        columns = {
-            row[1] for row in db.execute("PRAGMA table_info(turns)").fetchall()
-        }
+        columns = {row[1] for row in db.execute("PRAGMA table_info(turns)").fetchall()}
         assert {"provider_id", "model"} <= columns
         assert db.execute(
             "SELECT provider_id, model FROM turns WHERE conversation_id='old'"
         ).fetchone() == (None, None)
     command.downgrade(_config(database), "0024")
     with sqlite3.connect(database) as db:
-        columns = {
-            row[1] for row in db.execute("PRAGMA table_info(turns)").fetchall()
-        }
+        columns = {row[1] for row in db.execute("PRAGMA table_info(turns)").fetchall()}
         assert "provider_id" not in columns and "model" not in columns

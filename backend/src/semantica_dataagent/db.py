@@ -117,6 +117,8 @@ class Turn(Base):
     __tablename__ = "turns"
     id: Mapped[int] = mapped_column(primary_key=True)
     conversation_id: Mapped[str]
+    provider_id: Mapped[str | None]
+    model: Mapped[str | None]
     sequence: Mapped[int]
     question: Mapped[str]
     status: Mapped[str]
