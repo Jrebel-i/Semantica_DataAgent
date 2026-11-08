@@ -993,6 +993,19 @@ legend {
   font-size: 12px;
   background-position: right 8px center;
 }
+.chat-selector-hint {
+  max-width: 220px;
+  overflow: hidden;
+  color: var(--ink-3);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.composer-switch-hint {
+  margin-top: 6px;
+  color: var(--ink-2);
+  font-size: 12px;
+}
 .chat-scroll {
   flex: 1 1 auto;
   min-height: 0;

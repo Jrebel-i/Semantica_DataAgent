@@ -120,6 +120,8 @@ def _start_turn(question: str, conversation_id: str | None, owner_id: str):
         conversation.updated_at = now
         turn = Turn(
             conversation_id=conversation.id,
+            provider_id=provider_id,
+            model=model,
             sequence=sequence,
             question=question.strip(),
             status="running",

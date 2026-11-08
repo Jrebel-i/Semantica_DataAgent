@@ -1667,7 +1667,7 @@ test("长澄清选项换行、来源另起一行，超过三行可展开且提�
   expect(followUp.question).toContain(longRef);
 });
 
-test("新会话发送所选 agent 与模型并在建立后锁定", async () => {
+test("新会话发送所选 agent 与模型且仅锁定 agent", async () => {
   const fetcher = vi.fn(
     async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
@@ -1732,8 +1732,87 @@ test("新会话发送所选 agent 与模型并在建立后锁定", async () => {
     ),
   );
   expect((screen.getByLabelText("模型") as HTMLSelectElement).disabled).toBe(
-    true,
+    false,
   );
+  expect(
+    (screen.getByLabelText("Provider") as HTMLSelectElement).disabled,
+  ).toBe(false);
+});
+
+test("对话中可切换 provider 与模型并在下一条消息使用", async () => {
+  const messages = getMessages("zh");
+  const second = {
+    ...provider,
+    id: "provider-2",
+    name: "Second gateway",
+    models: ["model-b", "model-c"],
+  };
+  const row = conversationRow("conv-1", "订单分析");
+  let askBody = "";
+  const fetcher = vi.fn(
+    async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/v1/agents")
+        return json([{ id: "pi", name: "pi", available: true }]);
+      if (url === "/api/v1/providers") return json([provider, second]);
+      if (url === "/api/v1/conversations?archived=true") return json([]);
+      if (url === "/api/v1/conversations") return json([row]);
+      if (url === "/api/v1/assistant-defaults") return json({});
+      if (url === "/api/v1/conversations/conv-1")
+        return json({ ...row, turns: [] });
+      if (url === "/api/v1/conversations/ask" && init?.method === "POST") {
+        askBody = String(init.body);
+        return new Response(sse, {
+          headers: { "Content-Type": "text/event-stream" },
+        });
+      }
+      return new Response("", { status: 404 });
+    },
+  );
+  vi.stubGlobal("fetch", fetcher);
+  render(<ChatPage token="token" role="user" messages={messages} />);
+  await screen.findByRole("button", { name: "订单分析" });
+  fireEvent.click(screen.getByRole("button", { name: "订单分析" }));
+  await waitFor(() =>
+    expect(
+      (screen.getByLabelText(messages.askProvider) as HTMLSelectElement).value,
+    ).toBe(provider.id),
+  );
+  const agent = screen.getByLabelText(messages.askAgent) as HTMLSelectElement;
+  expect(agent.disabled).toBe(true);
+  expect(screen.getByText(messages.agentLockedHint)).toBeTruthy();
+  fireEvent.change(screen.getByLabelText(messages.askProvider), {
+    target: { value: second.id },
+  });
+  expect(
+    (screen.getByLabelText(messages.askModel) as HTMLSelectElement).value,
+  ).toBe("model-b");
+  fireEvent.change(screen.getByLabelText(messages.askModel), {
+    target: { value: "model-c" },
+  });
+  expect(
+    await screen.findByText(
+      messages.nextMessageModel.replace("{model}", "model-c"),
+    ),
+  ).toBeTruthy();
+  fireEvent.change(screen.getByLabelText(messages.askQuestion), {
+    target: { value: "继续追问" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: /提\s*问/ }));
+  await waitFor(() => expect(askBody).not.toBe(""));
+  expect(JSON.parse(askBody)).toMatchObject({
+    question: "继续追问",
+    conversation_id: "conv-1",
+    agent: "pi",
+    provider_id: second.id,
+    model: "model-c",
+  });
+  expect(
+    (screen.getByLabelText(messages.askProvider) as HTMLSelectElement).disabled,
+  ).toBe(false);
+  expect(
+    (screen.getByLabelText(messages.askModel) as HTMLSelectElement).disabled,
+  ).toBe(false);
 });
 
 test("新会话切换 agent 时使用该 agent 的 provider 和默认模型", async () => {

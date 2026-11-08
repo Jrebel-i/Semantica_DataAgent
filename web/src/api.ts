@@ -1588,6 +1588,10 @@ export interface components {
             finished_at: string | null;
             /** Id */
             id: number;
+            /** Model */
+            model: string | null;
+            /** Provider Id */
+            provider_id: string | null;
             /** Question */
             question: string;
             /** Sequence */

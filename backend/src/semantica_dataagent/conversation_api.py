@@ -52,6 +52,8 @@ class EventView(BaseModel):
 class TurnView(BaseModel):
     id: int
     sequence: int
+    provider_id: str | None
+    model: str | None
     question: str
     status: str
     answer: str
@@ -178,10 +180,17 @@ def _event(row: TurnEvent) -> EventView:
     return EventView(seq=row.seq, type=row.type, data=json.loads(row.data))
 
 
-def _turn(row: Turn, events: list[TurnEvent]) -> TurnView:
+def _turn(
+    row: Turn,
+    events: list[TurnEvent],
+    provider_id: str | None = None,
+    model: str | None = None,
+) -> TurnView:
     return TurnView(
         id=row.id,
         sequence=row.sequence,
+        provider_id=row.provider_id or provider_id,
+        model=row.model or model,
         question=row.question,
         status=row.status,
         answer=row.answer,
@@ -323,7 +332,10 @@ def conversation_detail(
             by_turn[event.turn_id].append(event)
         return ConversationDetail(
             **_view(row, len(turns)).model_dump(),
-            turns=[_turn(turn, by_turn[turn.id]) for turn in turns],
+            turns=[
+                _turn(turn, by_turn[turn.id], row.provider_id, row.model)
+                for turn in turns
+            ],
         )
 
 
@@ -414,6 +426,42 @@ def delete_conversation(
         shutil.rmtree(workspace)
 
 
+def _agent_allowed_providers(db, agent_id: str) -> set[str] | None:
+    """Return the agent's provider allowlist, or None when unrestricted."""
+
+    setting = db.get(Setting, "assistant_agent_profiles")
+    if setting is None or not setting.value:
+        return None
+    try:
+        profiles = json.loads(setting.value)
+    except (TypeError, ValueError):
+        raise HTTPException(422, "Agent provider profile is invalid") from None
+    if not isinstance(profiles, dict):
+        raise HTTPException(422, "Agent provider profile is invalid")
+    profile = profiles.get(agent_id)
+    if not isinstance(profile, dict):
+        return None
+    providers = profile.get("providers")
+    if not isinstance(providers, list):
+        return None
+    allowed = {value for value in providers if isinstance(value, str) and value}
+    return allowed or None
+
+
+def _validate_agent_provider(db, agent_id: str, provider_id: str, model: str):
+    provider = db.get(Provider, provider_id)
+    if provider is None:
+        raise HTTPException(404, "Provider not found")
+    allowed = _agent_allowed_providers(db, agent_id)
+    if allowed is not None and provider_id not in allowed:
+        raise HTTPException(
+            422, "Provider is not available for this conversation's agent"
+        )
+    if model not in json.loads(provider.models):
+        raise HTTPException(422, "Model is not configured for this provider")
+    return provider
+
+
 @router.post("/api/v1/conversations/ask")
 async def ask(
     body: AskRequest,
@@ -432,20 +480,11 @@ async def ask(
                 raise HTTPException(
                     409, "Conversation session expired and cannot be resumed"
                 )
-            if any(
-                requested is not None and requested != saved
-                for requested, saved in (
-                    (body.agent, conversation.agent),
-                    (body.provider_id, conversation.provider_id),
-                    (body.model, conversation.model),
-                )
-            ):
-                raise HTTPException(
-                    409, "Start a new conversation to change agent or model"
-                )
+            if body.agent is not None and body.agent != conversation.agent:
+                raise HTTPException(409, "Start a new conversation to change agent")
             agent_id = conversation.agent
-            provider_id = conversation.provider_id
-            model = conversation.model
+            provider_id = body.provider_id or conversation.provider_id
+            model = body.model or conversation.model
             sequence = (
                 db.query(func.max(Turn.sequence))
                 .filter(Turn.conversation_id == conversation.id)
@@ -471,11 +510,7 @@ async def ask(
             db.add(conversation)
             db.flush()
             sequence = 1
-        provider = db.get(Provider, provider_id)
-        if provider is None:
-            raise HTTPException(404, "Provider not found")
-        if model not in json.loads(provider.models):
-            raise HTTPException(422, "Model is not configured for this provider")
+        provider = _validate_agent_provider(db, agent_id, provider_id, model)
         runner = get_runner(agent_id)
         if runner is None:
             raise HTTPException(422, "Unknown agent")
@@ -487,6 +522,8 @@ async def ask(
         conversation.updated_at = now
         turn = Turn(
             conversation_id=conversation.id,
+            provider_id=provider_id,
+            model=model,
             sequence=sequence,
             question=body.question.strip(),
             status="running",
@@ -553,11 +590,12 @@ async def confirm_query(
         if not any(json.loads(event.data).get("id") == query_id for event in plans):
             raise HTTPException(404, "查询计划不存在")
         runner = get_runner(conversation.agent)
-        provider = db.get(Provider, conversation.provider_id)
+        provider_id = turn.provider_id or conversation.provider_id
+        provider = db.get(Provider, provider_id)
         if runner is None or not runner.available() or provider is None:
             raise HTTPException(503, "Agent runtime is unavailable")
         provider_settings = provider_config(provider)
-        model = conversation.model
+        model = turn.model or conversation.model
         seq = (
             db.query(func.max(TurnEvent.seq)).filter_by(turn_id=turn_id).scalar() or 0
         ) + 1

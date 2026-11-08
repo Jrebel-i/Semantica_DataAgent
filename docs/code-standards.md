@@ -192,6 +192,8 @@ MCP 工具的参数 schema 必须自包含，不含任何层级的 `$ref` 或 `$
 
 Docker Desktop / WSL 下，agent 只连接 internal 网络；同一网络中的专用中继仅转发到当前 provider 和 MCP 的两个目标地址。中继还连接 Docker bridge，并把配置中的宿主机 loopback 地址转换为 `host.docker.internal`；所以 WSL mirrored 网络中的 `127.0.0.1:3425` 和后端监听端口可由中继访问。两端 URL 的路径保留，HTTPS 保留原主机名以验证证书。不要把容器连接到普通 bridge 或挂载其他宿主机路径。
 
+provider 的 base_url 与 api_key 每轮按会话当前设置重新下发给 runner，不写进持久化的会话记录；切换 provider 时旧 key 不会被新 provider 的轮次复用。pi 使用固定 session id 和会话目录延续历史，Claude 用会话文件判断 `--resume`，Codex 用持久化的 thread id 执行 `resume`；三种实现都允许在同一会话内切换 model / provider。
+
 ## 观测数据边界
 
 启用 Langfuse 时，用户问题、agent 回答及 SQL 是观测内容，可能包含用户自行输入的信息；界面必须告知用户问题和回答会上报。应用持有的 MCP token、provider API key、Langfuse 密钥、Neo4j 密码、认证与 Cookie 头和会话文件内容不得上报。上报字段采用集中允许列表，并遮盖已知秘密及 Bearer、sk-、password=、api_key=、token= 等凭据形式；不得把会话文件或请求头作为遥测载荷。
@@ -199,6 +201,8 @@ Docker Desktop / WSL 下，agent 只连接 internal 网络；同一网络中的�
 ## 会话管理接口
 
 `GET /api/v1/conversations` 默认只列出未归档会话；`?archived=true` 列出已归档会话。响应包含 `pinned`、`archived`，置顶会话按置顶时间倒序，其余按更新时间倒序。`PATCH /api/v1/conversations/{id}` 接收 `title`、`pinned`、`archived` 的可选字段；标题去除首尾空白后长度须为 1–200，归档运行中的会话返回 409。归档不会取消置顶，恢复后仍保持原置顶顺序。详情与删除接口同样按所有者授权，删除已归档会话与普通会话一致。
+
+`POST /api/v1/conversations/ask` 带 `conversation_id` 时可以改用同一 agent 允许范围内的其他 provider / model；改 agent 仍返回 409，要求新建对话。provider 不在该 agent 的 `assistant_agent_profiles.providers` 允许列表时返回 422（列表为空或未配置表示不限制），model 不在 provider 的 `models` 中同样返回 422。切换后本轮及之后的轮次使用新值，会话行的 `provider_id` / `model` 更新为最近一次使用；每轮在 `turns.provider_id` / `turns.model` 记录自己使用的值，旧数据的空值按会话值展示。切换 provider 时按该轮 provider 重新下发凭据，旧 provider 的 key 不沿用。
 
 ## Kubernetes 会话沙箱
 
