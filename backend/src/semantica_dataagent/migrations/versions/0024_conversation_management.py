@@ -11,7 +11,9 @@ depends_on = None
 
 def upgrade():
     op.add_column("conversations", sa.Column("pinned_at", sa.DateTime(), nullable=True))
-    op.add_column("conversations", sa.Column("archived_at", sa.DateTime(), nullable=True))
+    op.add_column(
+        "conversations", sa.Column("archived_at", sa.DateTime(), nullable=True)
+    )
 
 
 def downgrade():
