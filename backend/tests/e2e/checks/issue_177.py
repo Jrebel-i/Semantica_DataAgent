@@ -392,6 +392,14 @@ def check_issue_177_isolation_matrix(ctx):
                 response.status_code in MANAGE_DENIED,
                 f"{actor['name']} 越权读取 A 的源文件: {response.status_code}",
             )
+        revoked_source = _request(
+            ctx,
+            "GET",
+            "/api/v1/source/files",
+            project="default",
+            token=revoked["token"],
+        )
+        ctx.require(revoked_source.status_code == 401, revoked_source.status_code)
         for actor in (pa,):
             response = _request(
                 ctx,
@@ -403,6 +411,32 @@ def check_issue_177_isolation_matrix(ctx):
             )
             ctx.require(response.status_code == 200, response.text[:300])
             ctx.require(marker_a in response.json()["content"], "源文件内容不属于 A")
+        for actor in (ua, ub, uz):
+            response = _request(
+                ctx,
+                "GET",
+                "/api/v1/source/files",
+                project=project_b_id,
+                token=actor["token"],
+            )
+            ctx.require(
+                response.status_code in MANAGE_DENIED,
+                f"{actor['name']} 越权读取 B 的源文件: {response.status_code}",
+            )
+        b_source = _request(ctx, "GET", "/api/v1/source/files", project=project_b_id)
+        ctx.require(b_source.status_code == 200, b_source.text[:300])
+        b_source_path = next(
+            path for path in b_source.json() if path.endswith("probe.md")
+        )
+        b_file = _request(
+            ctx,
+            "GET",
+            "/api/v1/source/file",
+            project=project_b_id,
+            params={"path": b_source_path},
+        )
+        ctx.require(b_file.status_code == 200, b_file.text[:300])
+        ctx.require(marker_b in b_file.json()["content"], "源文件内容不属于 B")
 
         # B matrix: only ub and the system administrator may read.
         b_content = {
@@ -540,6 +574,54 @@ def check_issue_177_isolation_matrix(ctx):
                 switch.status_code in MANAGE_DENIED,
                 f"{actor['name']} 越权切换知识代: {switch.status_code}",
             )
+        for actor in (uz,):
+            switch = _request(
+                ctx,
+                "POST",
+                f"/api/v1/generations/{_current_generation(ctx, 'default')}/switch",
+                project="default",
+                token=actor["token"],
+            )
+            ctx.require(
+                switch.status_code in MANAGE_DENIED,
+                f"{actor['name']} 越权切换知识代: {switch.status_code}",
+            )
+        revoked_switch = _request(
+            ctx,
+            "POST",
+            f"/api/v1/generations/{_current_generation(ctx, 'default')}/switch",
+            project="default",
+            token=revoked["token"],
+        )
+        ctx.require(revoked_switch.status_code == 401, revoked_switch.status_code)
+        revoked_manage = [
+            _request(
+                ctx,
+                "POST",
+                "/api/v1/source/upload",
+                project="default",
+                json={"target": f"knowledge/{category_a}", "files": []},
+                token=revoked["token"],
+            ),
+            _request(
+                ctx,
+                "POST",
+                "/api/v1/builds",
+                project="default",
+                json={"build_type": "incremental"},
+                token=revoked["token"],
+            ),
+            _request(
+                ctx,
+                "GET",
+                "/api/v1/projects/default/members",
+                token=revoked["token"],
+            ),
+        ]
+        ctx.require(
+            all(row.status_code == 401 for row in revoked_manage),
+            [row.status_code for row in revoked_manage],
+        )
 
         pa_upload = _request(
             ctx,
@@ -687,7 +769,9 @@ def check_issue_177_isolation_matrix(ctx):
         )
         ctx.require(audit.status_code == 200, audit.text[:300])
         actions = {row["action"] for row in audit.json()}
-        ctx.require({"member.add", "member.update", "member.remove"} <= actions, actions)
+        ctx.require(
+            {"member.add", "member.update", "member.remove"} <= actions, actions
+        )
         audit_b = _request(
             ctx,
             "GET",
