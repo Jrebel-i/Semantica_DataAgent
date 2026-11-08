@@ -140,7 +140,12 @@ def result_text(result) -> str:
         text = _text_content(result.get("content"))
         if text is not None:
             return text
-        for key in ("structuredContent", "structured_content", "result", "result_fragment"):
+        for key in (
+            "structuredContent",
+            "structured_content",
+            "result",
+            "result_fragment",
+        ):
             value = result.get(key)
             if value is not None:
                 return truncate(value, EVENT_DETAIL_LIMIT)
