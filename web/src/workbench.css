@@ -1133,6 +1133,91 @@ legend {
   align-items: flex-end;
   gap: 8px;
 }
+.composer-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.composer-attachment {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 280px;
+  padding: 6px 8px;
+  border: 1px solid var(--line-soft);
+  border-radius: 12px;
+  background: var(--surface-2, rgba(0, 0, 0, 0.02));
+}
+.composer-attachment-thumb {
+  width: 34px;
+  height: 34px;
+  flex: none;
+  border-radius: 8px;
+  object-fit: cover;
+}
+.composer-attachment-icon {
+  width: 34px;
+  height: 34px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  background: var(--line-soft);
+  color: var(--ink-3);
+}
+.composer-attachment-text {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+.composer-attachment-name {
+  overflow: hidden;
+  color: var(--ink-2);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.composer-attachment-size {
+  color: var(--ink-3);
+  font-size: 11px;
+}
+.composer-attachment-error {
+  color: var(--danger, #b42318);
+  font-size: 12px;
+}
+.composer-attach-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.composer-attach-button {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  flex: none;
+  border-radius: 8px;
+  color: var(--ink-2);
+  cursor: pointer;
+}
+.composer-attach-button:hover {
+  background: var(--line-soft);
+}
+.composer-attach-button--disabled {
+  color: var(--ink-3);
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+.composer-file-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
 .composer-box textarea {
   flex: 1 1 auto;
   min-height: 42px;

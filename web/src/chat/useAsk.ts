@@ -11,6 +11,11 @@ import type {
   QueryPlan,
   Turn,
 } from "./types";
+import {
+  releaseAttachment,
+  validateAttachments,
+  type PendingAttachment,
+} from "./attachments";
 import { readSse } from "./sse";
 import { applyToolEnd, applyToolStart, clarificationsOf } from "./turnEvents";
 
@@ -22,6 +27,7 @@ export function useAsk({
   model,
   effort,
   projectId,
+  visionEnabled,
   currentConversationId,
   setCurrentConversationId,
   sending,
@@ -46,6 +52,7 @@ export function useAsk({
   model: string;
   effort: EffortLevel | "";
   projectId: string;
+  visionEnabled: boolean;
   currentConversationId: string;
   setCurrentConversationId: Dispatch<SetStateAction<string>>;
   sending: boolean;
@@ -64,6 +71,34 @@ export function useAsk({
   loadCompletedConversation: (id: string, sequence: number) => Promise<void>;
 }) {
   const [question, setQuestion] = useState("");
+  const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
+  const [attachmentError, setAttachmentError] = useState("");
+
+  function addAttachments(files: File[]) {
+    setAttachmentError("");
+    const result = validateAttachments(files, attachments, t, visionEnabled);
+    if (result.error) {
+      setAttachmentError(result.error);
+      return;
+    }
+    setAttachments((current) => [...current, ...result.items]);
+  }
+
+  function removeAttachment(id: string) {
+    setAttachments((current) => {
+      const removed = current.find((item) => item.id === id);
+      if (removed) releaseAttachment(removed);
+      return current.filter((item) => item.id !== id);
+    });
+  }
+
+  function clearAttachments() {
+    setAttachments((current) => {
+      current.forEach(releaseAttachment);
+      return [];
+    });
+    setAttachmentError("");
+  }
 
   async function executePlan(turn: Turn, plan: QueryPlan) {
     if (sending || !currentConversationId) return;
@@ -147,7 +182,7 @@ export function useAsk({
     setLive((current) => (current ? change(current) : current));
   }
 
-  async function submitPrompt(prompt: string) {
+  async function submitPrompt(prompt: string, files: PendingAttachment[] = []) {
     const trimmed = prompt.trim();
     if (
       !trimmed ||
@@ -174,29 +209,50 @@ export function useAsk({
       status: "running",
     });
     try {
-      const response = await fetch("/api/v1/conversations/ask", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          question: prompt,
-          agent: agentId,
-          provider_id: providerId,
-          model,
-          ...(projectId ? { project: projectId } : {}),
-          ...(effort ? { effort } : {}),
-          ...(currentConversationId
-            ? { conversation_id: currentConversationId }
-            : {}),
-        }),
-      });
+      const fields: Record<string, string> = {
+        question: prompt,
+        agent: agentId,
+        provider_id: providerId,
+        model,
+        ...(projectId ? { project: projectId } : {}),
+        ...(effort ? { effort } : {}),
+        ...(currentConversationId
+          ? { conversation_id: currentConversationId }
+          : {}),
+      };
+      let response: Response;
+      if (files.length > 0) {
+        const form = new FormData();
+        for (const [key, value] of Object.entries(fields)) {
+          form.append(key, value);
+        }
+        for (const attachment of files) {
+          form.append("attachments", attachment.file, attachment.file.name);
+        }
+        response = await fetch("/api/v1/conversations/ask-with-attachments", {
+          method: "POST",
+          headers: { Authorization: `Bearer ${token}` },
+          body: form,
+        });
+      } else {
+        response = await fetch("/api/v1/conversations/ask", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(fields),
+        });
+      }
       if (!response.ok) {
         const body = (await response.json().catch(() => null)) as {
           detail?: string;
         } | null;
         throw new Error(body?.detail || t.askError);
+      }
+      if (files.length > 0) {
+        files.forEach(releaseAttachment);
+        setAttachments([]);
       }
       await readSse(response, (name, data) => {
         if (
@@ -263,8 +319,10 @@ export function useAsk({
   function ask(event: FormEvent) {
     event.preventDefault();
     const prompt = question.trim();
+    const files = attachments;
     setQuestion("");
-    void submitPrompt(prompt);
+    setAttachmentError("");
+    void submitPrompt(prompt, files);
   }
 
   function chooseClarification(
@@ -291,6 +349,7 @@ export function useAsk({
     model &&
     !sending &&
     resumable &&
+    !(attachments.some((item) => item.isImage) && !visionEnabled) &&
     !archivedConversations.some((row) => row.id === currentConversationId),
   );
 
@@ -302,5 +361,10 @@ export function useAsk({
     chooseClarification,
     canAsk,
     executePlan,
+    attachments,
+    attachmentError,
+    addAttachments,
+    removeAttachment,
+    clearAttachments,
   };
 }

@@ -561,7 +561,11 @@ function attachmentFetcher(
         assistant_provider_id: attachmentProvider.id,
         assistant_model: model,
       });
-    if (url === "/api/v1/conversations/ask" && init?.method === "POST") {
+    if (
+      (url === "/api/v1/conversations/ask" ||
+        url === "/api/v1/conversations/ask-with-attachments") &&
+      init?.method === "POST"
+    ) {
       onAsk?.(
         init.body instanceof FormData
           ? init.body
@@ -626,9 +630,9 @@ test("模型不支持图片时图片入口置灰并说明原因，其它文件�
   const imageButton = await screen.findByLabelText("添加图片");
   expect((imageButton as HTMLButtonElement).disabled).toBe(true);
   expect(screen.getByText("当前模型不支持图片")).toBeTruthy();
-  expect(
-    (screen.getByLabelText("添加文件") as HTMLInputElement).disabled,
-  ).toBe(false);
+  expect((screen.getByLabelText("添加文件") as HTMLInputElement).disabled).toBe(
+    false,
+  );
 });
 
 test("超过单个附件 20MB 时在发送前提示并拒绝", async () => {
@@ -636,7 +640,9 @@ test("超过单个附件 20MB 时在发送前提示并拒绝", async () => {
   render(<ChatPage token="token" role="user" messages={getMessages("zh")} />);
 
   await screen.findByLabelText("添加文件");
-  const huge = new File(["x"], "huge.bin", { type: "application/octet-stream" });
+  const huge = new File(["x"], "huge.bin", {
+    type: "application/octet-stream",
+  });
   Object.defineProperty(huge, "size", { value: 20 * 1024 * 1024 + 1 });
   attachFile("添加文件", huge);
 
