@@ -15,6 +15,7 @@
 ```python
 class MyAgentRunner:
     agent_id = "my-agent"          # 必须和 entry point 名称一致
+    effort_levels = ()             # 本 agent 支持的思考强度；不支持就留空
 
     def available(self) -> bool: ...
 
@@ -23,7 +24,10 @@ class MyAgentRunner:
 ```
 
 `AgentTurnRequest` 在 `agent_types.py`，包含对话 id、提示词、会话 id、工作目录、
-provider、模型、MCP 地址和 token。`run` 必须以 `done` 或 `error` 结束；
+provider、模型、MCP 地址、token 和可选的 `effort`。`effort` 是后端已按模型与
+agent 能力校验过的统一档位（`low` / `medium` / `high` / `extra` / `max`），
+runner 只需映射到自己的参数；不支持时返回空 `effort_levels`，收到值也应忽略。
+`run` 必须以 `done` 或 `error` 结束；
 `conversation_api` 和 `ask_api` 只消费这里产出的事件。
 
 统一事件只有 `text_delta`、`tool_start`、`tool_end`、`clarification`、`done`、

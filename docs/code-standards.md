@@ -248,6 +248,8 @@ provider 的 base_url 与 api_key 每轮按会话当前设置重新下发给 run
 
 `POST /api/v1/conversations/ask` 带 `conversation_id` 时可以改用同一 agent 允许范围内的其他 provider / model；改 agent 仍返回 409，要求新建对话。provider 不在该 agent 的 `assistant_agent_profiles.providers` 允许列表时返回 422（列表为空或未配置表示不限制），model 不在 provider 的 `models` 中同样返回 422。切换后本轮及之后的轮次使用新值，会话行的 `provider_id` / `model` 更新为最近一次使用；每轮在 `turns.provider_id` / `turns.model` 记录自己使用的值，旧数据的空值按会话值展示。切换 provider 时按该轮 provider 重新下发凭据，旧 provider 的 key 不沿用。
 
+`ask` 还可带可选的 `effort`，取值固定为 `low` / `medium` / `high` / `extra` / `max`。它必须同时出现在该模型的 `model_capabilities.effort_levels` 和该 agent 的 `effort_levels` 中，否则返回 422；模型没有任何档位而传了 `effort` 也是 422，不传则保持 agent 的默认行为。`GET /api/v1/agents` 的每个 agent 返回 `effort_levels`：pi 为五档全集，Claude 与 Codex 本阶段为空集合（收到 `effort` 时忽略，不报错）。强度可随每一轮切换，`turns.effort` 记录该轮实际值，旧数据与未传强度的轮次为空；会话详情的 `turns` 原样返回。pi 的映射为 `low→low`、`medium→medium`、`high→high`、`extra→xhigh`、`max→max`，通过 `--thinking` 传入，未传时不加该参数。
+
 ## Kubernetes 会话沙箱
 
 `DATAAGENT_AGENT_MODE=k8s` 使用独立会话 Pod；本地默认继续使用 Docker。Pod 规格、命名空间 RBAC 和 NetworkPolicy 在 `tests/test_k8s_sandbox_spec.py` 检查，真实双栈默认拒绝及允许目标还须在集群运行 `tests/e2e/checks/issue_26.py` 验证。会话出站实际由 init 容器的 iptables 限制；当前 flannel 不执行 NetworkPolicy。会话 Pod 在独立命名空间使用临时卷，轮次开始和结束时传递该对话的工作目录及会话文件；不得向 agent 容器传入 Kubernetes ServiceAccount token 或能力。运行时 Neo4j Secret 经 `DATAAGENT_NEO4J_AUTH` 注入时只用于匹配用户名的默认凭据，管理员显式保存的设置优先。
