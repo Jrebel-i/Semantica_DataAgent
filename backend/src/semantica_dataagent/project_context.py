@@ -406,23 +406,29 @@ def recover_projects() -> None:
     if not root.exists():
         return
     with sessions()() as db:
-        known = {row.id for row in db.query(Project).all()}
+        known = {row.id: row.status for row in db.query(Project).all()}
     for entry in root.iterdir():
         if not entry.is_dir() or entry.is_symlink():
             continue
         if entry.name.startswith(".creating-"):
             shutil.rmtree(entry, ignore_errors=True)
             continue
-        if entry.name not in known:
+        status = known.get(entry.name)
+        if status is None:
             try:
                 entry.rmdir()
             except OSError:
                 pass
             continue
+        if status == DELETING_STATUS:
+            shutil.rmtree(entry, ignore_errors=True)
+            continue
         source = entry / "source"
         if not source.exists():
             source.mkdir(parents=True, exist_ok=True)
-    for project_id in known - {DEFAULT_PROJECT_ID}:
+    for project_id, status in known.items():
+        if project_id == DEFAULT_PROJECT_ID or status == DELETING_STATUS:
+            continue
         project_source_directory(project_id).mkdir(parents=True, exist_ok=True)
     try:
         root.rmdir()
