@@ -28,7 +28,41 @@ kubectl apply -k deploy/k8s
 
 Alternatively fill `deploy/k8s/neo4j-secret.template.yaml` outside version control and apply it for each namespace. Never overwrite an existing Secret without coordinating Neo4j's persisted credentials. The model download uses Hugging Face; set `HF_ENDPOINT` in the init container to `https://hf-mirror.com` if needed, then reapply. The revision and hashes stay unchanged.
 
-The embedding container sets `--batch-size 2`: [infinity 0.0.77](https://github.com/michaelfeil/infinity/blob/0.0.77/libs/infinity_emb/infinity_emb/inference/batch_handler.py) uses this as the maximum number of inputs in a dynamic inference batch, not the number of inputs permitted in an HTTP request. Larger requests are queued and processed in smaller batches. Its memory request is 2Gi and limit 4Gi; the request reflects the observed resident model footprint, and the limit leaves room for inference while staying below the 5Gi node budget. This trades throughput and latency for lower peak memory. Batch size alone does not bound memory for arbitrarily long inputs: the [pinned model's maximum sequence length](https://huggingface.co/BAAI/bge-m3/blob/5617a9f61b028005a4858fdac845db406aefb181/sentence_bert_config.json) is 8192 tokens, and the limit is not a guarantee for that maximum. Monitor OOMs, queue latency and node capacity when changing traffic or input lengths.
+The cluster embedding pool is a 4-replica StatefulSet (`embedding-pool`) behind the unchanged `embedding` Service on NodePort 31603. Pods keep `app: embedding`, so the old Deployment and the new StatefulSet can serve behind the same Service during a switch. Each replica gets its own 10Gi `local-path` volume through `volumeClaimTemplates` (volume name `model`); the init container downloads and verifies the pinned model into it, and the inference container mounts it read-only. `podManagementPolicy: Parallel` starts all four replicas at once, and preferred pod anti-affinity on `kubernetes.io/hostname` spreads them across nodes when capacity allows. A replica that cannot be placed waits for capacity rather than being pinned to a missing node. Each replica requests 2 CPU and 2Gi memory, with a 4Gi memory limit, so a full pool needs about 8 schedulable cores across the cluster.
+
+Synthetic throughput from the small-scale benchmark that motivated this change (no real data):
+
+| Configuration | Throughput (texts/s) |
+| --- | --- |
+| 1 replica, batch size 2 (previous production) | ~8.3 |
+| 3 replicas, batch size 2 | 21.4 |
+| 1 replica, batch size 16 | 13.7 |
+| 4 replicas, batch size 16 (projected) | ~50 |
+
+The StatefulSet uses `--batch-size 16`. [infinity 0.0.77](https://github.com/michaelfeil/infinity/blob/0.0.77/libs/infinity_emb/infinity_emb/inference/batch_handler.py) uses this as the maximum number of inputs in a dynamic inference batch, not the number of inputs permitted in an HTTP request; larger requests are queued and processed in smaller batches. Batch size 32 was not benchmarked for throughput and is not adopted. The older stress test below OOMKilled the single replica on approximately 1888-character inputs with the old default batch size 32; the 4Gi memory limit is not a guarantee for the [pinned model's maximum sequence length](https://huggingface.co/BAAI/bge-m3/blob/5617a9f61b028005a4858fdac845db406aefb181/sentence_bert_config.json) of 8192 tokens. Monitor OOMs, queue latency and node capacity when changing traffic or input lengths.
+
+The recommended `embedding_concurrency` is 8 (allowed range 1–32). A single replica saturates at about 2–4; with four replicas the useful range is about 8–12, so 8 leaves headroom without adding queue latency, while raising concurrency on a single replica only increases waiting. Change it at runtime through the admin "plugin configuration / embedding request settings" UI or `PUT /api/v1/settings` with `{"values": {"embedding_concurrency": "8"}}`; the value is read when the next build starts, not during an in-flight build. A cold start (model download, SHA-256 verification and load) takes about 7 minutes. With `Parallel` management all four replicas start together, so the first rollout takes at least that long and the downloads may contend for bandwidth.
+
+The local development compose services are unchanged: bge-m3 on 17997 keeps batch size 2 and the daily test model on 17998 keeps batch size 8. Those values are local conventions, not the cluster setting.
+
+To switch from the old Deployment to the pool (coordinator only):
+
+1. `kubectl apply -k deploy/k8s` creates StatefulSet `embedding-pool` while keeping Service `embedding`. `kubectl apply` does not delete the old `Deployment embedding` or the old PVC `embedding-model`.
+2. `kubectl -n semantica-dataagent rollout status statefulset/embedding-pool --timeout=20m`, then `kubectl -n semantica-dataagent get pods -l app=embedding`. Wait until the four `embedding-pool-*` pods are Ready; during the overlap the old Deployment pod also appears.
+3. Verify through the unchanged NodePort: `curl http://172.16.242.124:31603/health` and one `/embeddings` request, and confirm `kubectl -n semantica-dataagent get endpoints embedding` includes the new pods.
+4. `kubectl -n semantica-dataagent delete deployment embedding`. The old pod leaves the Service while the four StatefulSet pods keep serving.
+5. Recheck the endpoints and health, then confirm `kubectl -n semantica-dataagent get pvc` shows `model-embedding-pool-0` through `model-embedding-pool-3` and delete the now-unused old volume with `kubectl -n semantica-dataagent delete pvc embedding-model`. Never delete `embedding-model` before the old Deployment is gone.
+
+To roll back before deleting `embedding-model`, re-apply the previous manifest from git history (`git show <previous-sha>:deploy/k8s/embedding.yaml | kubectl apply -f -`), wait for `kubectl -n semantica-dataagent rollout status deployment/embedding`, verify the NodePort, and then delete `statefulset/embedding-pool`. The old PVC still holds the model, so this path needs no download; the four `model-embedding-pool-*` PVCs remain until explicitly deleted. If `embedding-model` was already deleted, the rollback init container downloads the model again (about 7 minutes).
+
+For a synthetic throughput curve without touching real data, run `scripts/embedding_bench.py` from the repository root. It sends random Chinese/English words, so it exercises the same request path without reading the source directory:
+
+```sh
+uv run --with httpx scripts/embedding_bench.py \
+  http://172.16.242.124:31603 model/bge-m3 16,64 1,2,4,8 20
+```
+
+The arguments are the base URL, model, comma-separated batch sizes, comma-separated concurrency values, and optional seconds per combination (default 20). It prints texts/s, p50/p95 request latency and failure counts. Run short windows on the shared service and coordinate with other users; it is only a throughput curve and does not replace restart/OOM monitoring.
 
 For a coordinated load test of the shared service, run `python3 scripts/stress_embedding.py` from WSL. It sends two requests of 32 distinct, approximately 1888-character Chinese inputs from each of three clients, samples `kubectl top` through SSH, and checks returned dimensions. It can interrupt other users and may cause an OOM with an unsafe configuration. Samples are periodic and can miss a short peak; compare Pod restart counts and termination reason before and after as well. Adjust `--url`, `--ssh`, `--clients`, `--batches`, `--chars`, and `--timeout` as needed. On 2026-11-04, `--timeout 600` completed 6/6 requests in 453.6 seconds with a sampled peak of 2053 MiB and no Pod restart. The old default batch size 32 OOMKilled on the same inputs; `--batch-size 1` avoided a restart but only 3/6 requests completed within a 900-second per-request timeout. Sampling can miss peaks and this test does not establish a bound for 8192-token inputs.
 
