@@ -2328,6 +2328,72 @@ code {
   font-family: var(--font-mono);
 }
 
+/* 管理类页面 */
+.admin-page .file-picker.ant-upload-wrapper {
+  display: block;
+  min-height: 0;
+  overflow: visible;
+  border: 0;
+  background: transparent;
+  cursor: default;
+}
+.admin-page .file-picker.ant-upload-wrapper:hover {
+  border-color: transparent;
+}
+.admin-page .file-picker .ant-upload {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-height: 36px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--white);
+  cursor: pointer;
+  transition:
+    border-color 0.14s ease,
+    box-shadow 0.14s ease;
+}
+.admin-page .file-picker .ant-upload:hover {
+  border-color: var(--teal);
+}
+.admin-page .file-picker .ant-upload:focus-within {
+  border-color: var(--teal);
+  box-shadow: 0 0 0 2px var(--focus-ring);
+}
+.admin-page .file-picker .file-picker-value {
+  flex: 1 1 auto;
+}
+.admin-page .ant-checkbox-wrapper {
+  align-items: center;
+  color: var(--ink);
+  font-size: 13px;
+}
+.admin-page .ant-checkbox + span {
+  padding-inline: 8px 0;
+}
+.admin-page .plugin-enable {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ink);
+}
+.admin-page .plugin-param {
+  display: grid;
+  grid-template-columns: 180px minmax(0, 1fr);
+  align-items: center;
+  gap: 16px;
+}
+.admin-page .plugin-param > span:last-of-type {
+  min-width: 0;
+}
+.admin-page .plugin-param > span:last-of-type > * {
+  max-width: 100%;
+}
+.admin-page .plugin-param .ant-checkbox-wrapper {
+  justify-self: start;
+}
+
 /* Shared conversation navigation */
 .chat-page-host {
   flex: 1 1 auto;

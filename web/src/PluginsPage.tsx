@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Alert } from "antd";
+import { Alert, Checkbox } from "antd";
 import type { Messages } from "./i18n";
 
 type Schema = {
@@ -151,7 +151,7 @@ export function PluginsPage({
     }
   }
   return (
-    <section className="stack">
+    <section className="stack admin-page">
       <div className="page-header">
         <div>
           <h1 className="page-title">{t.plugins}</h1>
@@ -194,14 +194,12 @@ export function PluginsPage({
       <section className="card form-card">
         <h2 className="card-title">{t.langfuseSettings}</h2>
         <p>{t.langfuseDisclosure}</p>
-        <label>
+        <Checkbox
+          checked={langfuseEnabled}
+          onChange={(e) => setLangfuseEnabled(e.target.checked)}
+        >
           {t.langfuseEnabled}
-          <input
-            type="checkbox"
-            checked={langfuseEnabled}
-            onChange={(e) => setLangfuseEnabled(e.target.checked)}
-          />
-        </label>
+        </Checkbox>
         <label>
           {t.langfuseUrl}
           <input
@@ -303,27 +301,25 @@ export function PluginsPage({
               {plugin.display_name} ({plugin.category} / {plugin.id} /{" "}
               {plugin.version})
             </h2>
-            <label>
-              <input
-                type="checkbox"
-                checked={plugin.enabled}
-                onChange={(e) => {
-                  const next = { ...plugin, enabled: e.target.checked };
-                  change(next);
-                  void save(next).then((ok) => {
-                    if (!ok)
-                      setPlugins((old) =>
-                        old.map((p) =>
-                          p.id === plugin.id && p.category === plugin.category
-                            ? { ...p, enabled: plugin.enabled }
-                            : p,
-                        ),
-                      );
-                  });
-                }}
-              />
+            <Checkbox
+              checked={plugin.enabled}
+              onChange={(e) => {
+                const next = { ...plugin, enabled: e.target.checked };
+                change(next);
+                void save(next).then((ok) => {
+                  if (!ok)
+                    setPlugins((old) =>
+                      old.map((p) =>
+                        p.id === plugin.id && p.category === plugin.category
+                          ? { ...p, enabled: plugin.enabled }
+                          : p,
+                      ),
+                    );
+                });
+              }}
+            >
               {t.enabled}
-            </label>
+            </Checkbox>
             {Object.entries(plugin.parameters_schema.properties || {}).map(
               ([name, schema]) => {
                 const value = plugin.parameters[name] ?? schema.default;
@@ -333,12 +329,14 @@ export function PluginsPage({
                     parameters: { ...plugin.parameters, [name]: v },
                   });
                 return (
-                  <div key={name}>
-                    <label>
+                  <div className="field plugin-param" key={name}>
+                    <span className="field-label">
                       {schema.title || name}
                       {plugin.parameters_schema.required?.includes(name)
                         ? " *"
                         : " "}
+                    </span>
+                    <span>
                       {schema.enum ? (
                         <select
                           aria-label={name}
@@ -358,9 +356,8 @@ export function PluginsPage({
                           ))}
                         </select>
                       ) : schema.type === "boolean" ? (
-                        <input
+                        <Checkbox
                           aria-label={name}
-                          type="checkbox"
                           checked={value === true}
                           onChange={(e) => set(e.target.checked)}
                         />
@@ -394,7 +391,7 @@ export function PluginsPage({
                           }
                         />
                       )}
-                    </label>
+                    </span>
                     {issues
                       .filter((issue) => issue.path[0] === name)
                       .map((issue, i) => (
