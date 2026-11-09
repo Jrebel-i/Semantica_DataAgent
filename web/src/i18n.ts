@@ -334,6 +334,13 @@ const messages = {
     projectManagement: "项目管理",
     projectMembers: "项目成员",
     projectMembersHint: "为本项目添加成员并分配项目管理员或成员角色。",
+    sourceAdapters: "来源适配器",
+    sourceAdaptersHint:
+      "为本项目启用来源适配器并填写参数；保存后从下一次构建生效，正在运行的构建不受影响。",
+    adapterPull: "DTB 拉取配置",
+    adapterTokenSaved: "凭据已保存；留空表示不修改",
+    adapterSave: "保存适配器配置",
+    adapterSaveFailed: "适配器配置保存失败",
     addMember: "添加成员",
     selectUser: "选择用户",
     selectProjectRole: "项目角色",
@@ -857,6 +864,13 @@ const messages = {
     archiveConfirm: "Archive {name}?",
     projectManagement: "Project management",
     projectMembers: "Project members",
+    sourceAdapters: "Source adapters",
+    sourceAdaptersHint:
+      "Enable source adapters and edit their parameters for this project. Changes apply to the next build; a running build is unaffected.",
+    adapterPull: "DTB pull configuration",
+    adapterTokenSaved: "Credential saved; leave blank to keep it",
+    adapterSave: "Save adapter configuration",
+    adapterSaveFailed: "Could not save adapter configuration",
     projectMembersHint:
       "Add members to this project and assign the project administrator or member role.",
     addMember: "Add member",

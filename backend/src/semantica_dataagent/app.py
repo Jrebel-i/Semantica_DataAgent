@@ -14,7 +14,7 @@ from urllib.parse import urlsplit
 
 import httpx
 from cryptography.fernet import Fernet
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.security import HTTPAuthorizationCredentials
 from mcp.server.fastmcp import FastMCP
@@ -114,8 +114,12 @@ async def lifespan(application):
     auto_build.pending_build_scheduler.start()
     project_context.start_schedule()
     from .pull_service import interval as pull_interval
+    from .pull_service import intervals as pull_intervals
 
     pull_scheduler.start(pull_interval())
+    for project_id, seconds in pull_intervals().items():
+        if project_id != project_context.DEFAULT_PROJECT_ID:
+            pull_scheduler.start(seconds, project_id)
     server = create_mcp()
     application.state.mcp_app = server.streamable_http_app()
     async with server.session_manager.run():
@@ -1201,11 +1205,12 @@ def update_plugin(
         if token:
             from .crypto import encrypt
 
-            secret = db.get(Setting, "puller.dtb.token")
-            if secret is None:
-                db.add(Setting(key="puller.dtb.token", value=encrypt(token)))
-            else:
-                secret.value = encrypt(token)
+            project_context.set_plugin_secret(
+                db,
+                project_context.DEFAULT_PROJECT_ID,
+                "puller.dtb.token",
+                encrypt(token),
+            )
         project_context.upsert_plugin_config(
             db, category, plugin_id, body.enabled, parameters
         )
@@ -1307,11 +1312,7 @@ def source_repository(project_id=None):
 
 
 def source_category_root(scope):
-    config = (
-        project_context.plugin_config("source", "markdown")
-        if scope.project_id == project_context.DEFAULT_PROJECT_ID
-        else None
-    )
+    config = project_context.plugin_config("source", "markdown", scope.project_id)
     return config[1].get("path", "knowledge") if config else "knowledge"
 
 
@@ -1532,11 +1533,14 @@ class PullView(BaseModel):
 
 
 @app.post("/api/v1/pulls/dtb", response_model=PullView)
-def trigger_pull(_: Annotated[str, Depends(admin)]):
+def trigger_pull(
+    _: Annotated[str, Depends(admin)], project: Annotated[str | None, Query()] = None
+):
     from .pull_service import run_pull
 
+    project_id = project_context.resolve_project_id(project)
     try:
-        return run_pull()
+        return run_pull(project_id)
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
 

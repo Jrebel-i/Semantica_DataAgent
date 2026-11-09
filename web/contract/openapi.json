@@ -1,6 +1,53 @@
 {
   "components": {
     "schemas": {
+      "AdapterPullUpdate": {
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "default": true,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "parameters": {
+            "additionalProperties": true,
+            "title": "Parameters",
+            "type": "object"
+          }
+        },
+        "title": "AdapterPullUpdate",
+        "type": "object"
+      },
+      "AdapterPullView": {
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "parameters": {
+            "additionalProperties": true,
+            "title": "Parameters",
+            "type": "object"
+          },
+          "parameters_schema": {
+            "additionalProperties": true,
+            "title": "Parameters Schema",
+            "type": "object"
+          },
+          "token_configured": {
+            "title": "Token Configured",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enabled",
+          "parameters",
+          "parameters_schema",
+          "token_configured"
+        ],
+        "title": "AdapterPullView",
+        "type": "object"
+      },
       "AgentView": {
         "properties": {
           "available": {
@@ -1278,6 +1325,127 @@
           "max"
         ],
         "title": "ProbeEffortResult",
+        "type": "object"
+      },
+      "ProjectAdapterUpdate": {
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "parameters": {
+            "additionalProperties": true,
+            "title": "Parameters",
+            "type": "object"
+          },
+          "pull": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AdapterPullUpdate"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "enabled"
+        ],
+        "title": "ProjectAdapterUpdate",
+        "type": "object"
+      },
+      "ProjectAdapterView": {
+        "properties": {
+          "compatible": {
+            "title": "Compatible",
+            "type": "boolean"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "parameters": {
+            "additionalProperties": true,
+            "title": "Parameters",
+            "type": "object"
+          },
+          "parameters_schema": {
+            "additionalProperties": true,
+            "title": "Parameters Schema",
+            "type": "object"
+          },
+          "project_types": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Project Types",
+            "type": "array"
+          },
+          "pull": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AdapterPullView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "project_types",
+          "enabled",
+          "parameters",
+          "parameters_schema",
+          "compatible",
+          "reason"
+        ],
+        "title": "ProjectAdapterView",
+        "type": "object"
+      },
+      "ProjectAdaptersUpdate": {
+        "additionalProperties": false,
+        "properties": {
+          "adapters": {
+            "items": {
+              "$ref": "#/components/schemas/ProjectAdapterUpdate"
+            },
+            "title": "Adapters",
+            "type": "array"
+          }
+        },
+        "required": [
+          "adapters"
+        ],
+        "title": "ProjectAdaptersUpdate",
         "type": "object"
       },
       "ProjectAuditView": {
@@ -4737,6 +4905,110 @@
         "summary": "Rename Project"
       }
     },
+    "/api/v1/projects/{project_id}/adapters": {
+      "get": {
+        "operationId": "list_project_adapters_api_v1_projects__project_id__adapters_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ProjectAdapterView"
+                  },
+                  "title": "Response List Project Adapters Api V1 Projects  Project Id  Adapters Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Project Adapters"
+      },
+      "put": {
+        "operationId": "put_project_adapters_api_v1_projects__project_id__adapters_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProjectAdaptersUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ProjectAdapterView"
+                  },
+                  "title": "Response Put Project Adapters Api V1 Projects  Project Id  Adapters Put",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Put Project Adapters"
+      }
+    },
     "/api/v1/projects/{project_id}/archive": {
       "post": {
         "operationId": "archive_project_route_api_v1_projects__project_id__archive_post",
@@ -5575,6 +5847,24 @@
     "/api/v1/pulls/dtb": {
       "post": {
         "operationId": "trigger_pull_api_v1_pulls_dtb_post",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "project",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Project"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -5585,6 +5875,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
           }
         },
         "security": [

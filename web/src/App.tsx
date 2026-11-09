@@ -77,6 +77,7 @@ export function App() {
   } | null>(null);
   const [dtbConfigured, setDtbConfigured] = useState<boolean | null>(null);
   const [projectAdmin, setProjectAdmin] = useState(false);
+  const [projectMember, setProjectMember] = useState(false);
   const t = getMessages(lang);
   const authenticate = useCallback(async (value: string) => {
     try {
@@ -125,9 +126,15 @@ export function App() {
           setProjectAdmin(
             projects.some((project) => project.my_role === "admin"),
           );
+          setProjectMember(
+            projects.some((project) => project.my_role === "member"),
+          );
         },
       )
-      .catch(() => setProjectAdmin(false));
+      .catch(() => {
+        setProjectAdmin(false);
+        setProjectMember(false);
+      });
   }, [loggedIn, refreshKey, token]);
   useEffect(() => {
     const onPop = () => setPath(window.location.pathname);
@@ -301,8 +308,13 @@ export function App() {
         <Alert title={t.forbidden} type="warning" />
       )
     ) : path === "/projects" ? (
-      role === "admin" || projectAdmin ? (
-        <ProjectsPage token={token} messages={t} canCreate={role === "admin"} />
+      role === "admin" || projectAdmin || projectMember ? (
+        <ProjectsPage
+          token={token}
+          messages={t}
+          canCreate={role === "admin"}
+          includeMemberProjects={!projectAdmin}
+        />
       ) : (
         <Alert title={t.forbidden} type="warning" />
       )

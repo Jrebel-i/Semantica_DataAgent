@@ -35,6 +35,7 @@ from .db import (
     ProjectMember,
     ProjectPendingBuild,
     ProjectSetting,
+    PullRecord,
     QueryExecution,
     Turn,
     TurnEvent,
@@ -221,6 +222,10 @@ def _delete_database(project_id: str, settings: dict) -> None:
             ProjectPendingBuild.project_id == project_id
         ).delete(synchronize_session=False)
         db.query(ProjectSetting).filter(ProjectSetting.project_id == project_id).delete(
+            synchronize_session=False
+        )
+        project_context.delete_plugin_configs(db, project_id)
+        db.query(PullRecord).filter(PullRecord.project_id == project_id).delete(
             synchronize_session=False
         )
         db.query(ProjectMember).filter(ProjectMember.project_id == project_id).delete(

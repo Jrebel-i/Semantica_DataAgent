@@ -90,7 +90,7 @@ def test_document_project_selects_only_compatible_source_adapters(monkeypatch):
     monkeypatch.setattr(
         plugins.project_context,
         "plugin_configs",
-        lambda: {("source", "dtb"): (True, {})},
+        lambda project_id=None: {("source", "dtb"): (True, {})},
     )
 
     selected = plugins.configured("docs", project_type="document")
@@ -267,6 +267,12 @@ def test_document_project_build_never_runs_dtb_even_when_globally_enabled(
         json={"enabled": True, "parameters": {}},
     )
     assert enabled.status_code == 200, enabled.text
+    configured = c.put(
+        f"/api/v1/projects/{warehouse['id']}/adapters",
+        headers=headers,
+        json={"adapters": [{"id": "dtb", "enabled": True, "parameters": {}}]},
+    )
+    assert configured.status_code == 200, configured.text
 
     source = project_context.project_source_directory(project["id"])
     doc = source / "knowledge" / "guide" / "install.md"
@@ -307,9 +313,11 @@ def test_document_project_build_never_runs_dtb_even_when_globally_enabled(
     sources = {project["id"]: source, warehouse["id"]: warehouse_source}
 
     def fake_settings(project_id=None):
+        resolved = project_id or project["id"]
         return {
             **values,
-            "source_directory": str(sources[project_id or project["id"]]),
+            "_project_id": resolved,
+            "source_directory": str(sources[resolved]),
         }
 
     monkeypatch.setattr(knowledge, "settings", fake_settings)

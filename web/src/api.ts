@@ -487,6 +487,24 @@ export interface paths {
         patch: operations["rename_project_api_v1_projects__project_id__patch"];
         trace?: never;
     };
+    "/api/v1/projects/{project_id}/adapters": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Project Adapters */
+        get: operations["list_project_adapters_api_v1_projects__project_id__adapters_get"];
+        /** Put Project Adapters */
+        put: operations["put_project_adapters_api_v1_projects__project_id__adapters_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{project_id}/archive": {
         parameters: {
             query?: never;
@@ -1127,6 +1145,33 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** AdapterPullUpdate */
+        AdapterPullUpdate: {
+            /**
+             * Enabled
+             * @default true
+             */
+            enabled: boolean;
+            /** Parameters */
+            parameters?: {
+                [key: string]: unknown;
+            };
+        };
+        /** AdapterPullView */
+        AdapterPullView: {
+            /** Enabled */
+            enabled: boolean;
+            /** Parameters */
+            parameters: {
+                [key: string]: unknown;
+            };
+            /** Parameters Schema */
+            parameters_schema: {
+                [key: string]: unknown;
+            };
+            /** Token Configured */
+            token_configured: boolean;
+        };
         /** AgentView */
         AgentView: {
             /** Available */
@@ -1587,6 +1632,47 @@ export interface components {
              * @enum {string}
              */
             medium: "yes" | "no" | "unknown";
+        };
+        /** ProjectAdapterUpdate */
+        ProjectAdapterUpdate: {
+            /** Enabled */
+            enabled: boolean;
+            /** Id */
+            id: string;
+            /** Parameters */
+            parameters?: {
+                [key: string]: unknown;
+            };
+            pull?: components["schemas"]["AdapterPullUpdate"] | null;
+        };
+        /** ProjectAdapterView */
+        ProjectAdapterView: {
+            /** Compatible */
+            compatible: boolean;
+            /** Enabled */
+            enabled: boolean;
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Parameters */
+            parameters: {
+                [key: string]: unknown;
+            };
+            /** Parameters Schema */
+            parameters_schema: {
+                [key: string]: unknown;
+            };
+            /** Project Types */
+            project_types: string[];
+            pull?: components["schemas"]["AdapterPullView"] | null;
+            /** Reason */
+            reason: string | null;
+        };
+        /** ProjectAdaptersUpdate */
+        ProjectAdaptersUpdate: {
+            /** Adapters */
+            adapters: components["schemas"]["ProjectAdapterUpdate"][];
         };
         /** ProjectAuditView */
         ProjectAuditView: {
@@ -3257,6 +3343,72 @@ export interface operations {
             };
         };
     };
+    list_project_adapters_api_v1_projects__project_id__adapters_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectAdapterView"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    put_project_adapters_api_v1_projects__project_id__adapters_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProjectAdaptersUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectAdapterView"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     archive_project_route_api_v1_projects__project_id__archive_post: {
         parameters: {
             query?: never;
@@ -3820,7 +3972,9 @@ export interface operations {
     };
     trigger_pull_api_v1_pulls_dtb_post: {
         parameters: {
-            query?: never;
+            query?: {
+                project?: string | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -3834,6 +3988,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PullView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

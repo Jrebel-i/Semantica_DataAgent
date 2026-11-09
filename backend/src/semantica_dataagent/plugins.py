@@ -82,7 +82,9 @@ def configured(project_id=None, project_type=None):
 
     plugins = discover()
     project_type = project_type or project_context.project_type(project_id)
-    saved = project_context.plugin_configs()
+    saved = project_context.plugin_configs(
+        project_id or project_context.DEFAULT_PROJECT_ID
+    )
     result = []
     for (category, _), plugin in plugins.items():
         if project_id not in (None, project_context.DEFAULT_PROJECT_ID) and (

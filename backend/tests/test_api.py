@@ -1018,6 +1018,122 @@ def test_interrupted_pull_recovers_committed_snapshot_once(client, tmp_path):
         assert db.query(Build).filter(Build.id == record.build_id).count() == 1
 
 
+def test_interrupted_project_pull_recovers_build_in_its_project(client, tmp_path):
+    from datetime import UTC, datetime
+
+    from semantica_dataagent.db import Build, PullRecord, sessions
+    from semantica_dataagent.pull_service import recover_pulls
+    from semantica_dataagent.source_directory import publish_pull, repository
+
+    c, token = client
+    response = c.post(
+        "/api/v1/projects",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"name": "Pull Project", "type": "warehouse"},
+    )
+    assert response.status_code == 201, response.text
+    project_id = response.json()["id"]
+    root = tmp_path / "project-pull-source"
+    with sessions().begin() as db:
+        record = PullRecord(
+            project_id=project_id,
+            status="running",
+            started_at=datetime.now(UTC),
+            tables=0,
+            tasks=0,
+            source_directory=str(root),
+            operation_id="project-operation",
+        )
+        db.add(record)
+        db.flush()
+        record_id = record.id
+    with repository(root) as source:
+        commit = publish_pull(
+            source, {"任务信息.json": b"x"}, operation_id="project-operation"
+        )
+
+    recover_pulls()
+
+    with sessions()() as db:
+        record = db.get(PullRecord, record_id)
+        assert record.status == "succeeded"
+        assert record.commit == commit
+        assert record.build_id is not None
+        build = db.get(Build, record.build_id)
+        assert build.project_id == project_id
+
+
+@pytest.mark.parametrize("state", ["archived", "deleting"])
+def test_pull_recovery_does_not_touch_frozen_project_source(client, tmp_path, state):
+    from datetime import UTC, datetime
+
+    from semantica_dataagent import project_context, project_deletion
+    from semantica_dataagent.db import PullRecord, sessions
+    from semantica_dataagent.pull_service import recover_pulls
+
+    c, token = client
+    headers = {"Authorization": f"Bearer {token}"}
+    created = c.post(
+        "/api/v1/projects",
+        headers=headers,
+        json={"name": f"Frozen {state} pull", "type": "warehouse"},
+    )
+    assert created.status_code == 201, created.text
+    project = created.json()
+    assert (
+        c.post(f"/api/v1/projects/{project['id']}/archive", headers=headers).status_code
+        == 200
+    )
+    if state == "deleting":
+        assert (
+            project_deletion.prepare_deletion(
+                project["id"], project["name"], "owner", "Owner"
+            )
+            == "active"
+        )
+        assert project_context.project_status(project["id"]) == "deleting"
+    root = tmp_path / f"{state}-source"
+    with sessions().begin() as db:
+        record = PullRecord(
+            project_id=project["id"],
+            status="running",
+            started_at=datetime.now(UTC),
+            tables=0,
+            tasks=0,
+            source_directory=str(root),
+            operation_id=f"{state}-operation",
+        )
+        db.add(record)
+        db.flush()
+        record_id = record.id
+
+    recover_pulls()
+
+    with sessions()() as db:
+        record = db.get(PullRecord, record_id)
+        assert record.status == "failed"
+        assert record.error is not None
+        expected = "归档" if state == "archived" else "删除"
+        assert expected in record.error
+        assert record.build_id is None
+        assert record.finished_at is not None
+    assert not root.exists(), "启动恢复为冻结项目重建了源目录"
+
+
+def test_pull_locks_are_per_project(client):
+    from semantica_dataagent import pull_service
+
+    lock = pull_service._lock_for("alpha")
+    assert lock.acquire(blocking=False)
+    try:
+        with pytest.raises(ValueError, match="already running"):
+            pull_service.run_pull("alpha")
+        record = pull_service.run_pull("beta")
+        assert record.status == "failed"
+    finally:
+        lock.release()
+
+
 def test_failed_recovery_does_not_prevent_startup_and_can_retry(tmp_path, monkeypatch):
     from datetime import UTC, datetime
 

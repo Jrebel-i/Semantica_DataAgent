@@ -195,16 +195,52 @@ def test_deletion_removes_project_data_but_keeps_tokens_and_audit(client, monkey
         CorrectionProposal,
         GenerationPointer,
         KnowledgeGeneration,
+        PluginConfig,
         Project,
         ProjectAudit,
         ProjectDeletion,
         ProjectMember,
         ProjectSetting,
+        PullRecord,
         Token,
         Turn,
         digest,
         sessions,
     )
+
+    with sessions().begin() as db:
+        db.add(
+            PluginConfig(
+                project_id=project_id,
+                category="source",
+                plugin_id="markdown",
+                enabled=True,
+                parameters="{}",
+            )
+        )
+        db.add(
+            PluginConfig(
+                project_id=DEFAULT,
+                category="source",
+                plugin_id="markdown",
+                enabled=True,
+                parameters="{}",
+            )
+        )
+        db.add(
+            PullRecord(
+                project_id=project_id,
+                status="succeeded",
+                started_at=datetime(2026, 1, 1, tzinfo=UTC),
+            )
+        )
+        db.add(
+            PullRecord(
+                project_id=DEFAULT,
+                status="succeeded",
+                started_at=datetime(2026, 1, 1, tzinfo=UTC),
+            )
+        )
 
     calls: list[str] = []
     monkeypatch.setattr(
@@ -255,6 +291,16 @@ def test_deletion_removes_project_data_but_keeps_tokens_and_audit(client, monkey
             .first()
             is None
         )
+        assert (
+            db.query(PluginConfig).filter(PluginConfig.project_id == project_id).first()
+            is None
+        )
+        assert (
+            db.query(PullRecord).filter(PullRecord.project_id == project_id).first()
+            is None
+        )
+        assert db.query(PluginConfig).count() == 1
+        assert db.query(PullRecord).count() == 1
         deletion = db.get(ProjectDeletion, project_id)
         assert deletion is not None
         assert deletion.status == "completed"

@@ -67,9 +67,76 @@ def test_migrate_upgrades_from_0016_and_keeps_data(database, capsys):
     assert cli.main(["migrate"]) == 0
 
     output = capsys.readouterr().out
-    assert "0016" in output and "0035" in output
-    assert _schema_version(database) == "0035"
+    assert "0016" in output and "0037" in output
+    assert _schema_version(database) == "0037"
     assert _kept_rows(database) == (("kept token", "admin"), ("kept value",))
+
+
+def test_migrate_moves_plugin_config_to_the_default_project(database):
+    command.upgrade(_config(database), "0034")
+    rows = [
+        ("source", "markdown", 1, '{"path": "legacy-knowledge"}'),
+        ("source", "dtb", 1, '{"snapshot_path": "legacy-dtb"}'),
+        ("puller", "dtb", 1, '{"url": "https://legacy.example"}'),
+        ("source", "canonical", 0, "{}"),
+    ]
+    with sqlite3.connect(database) as db:
+        db.executemany(
+            "INSERT INTO plugin_config (category, plugin_id, enabled, parameters) "
+            "VALUES (?, ?, ?, ?)",
+            rows,
+        )
+
+    command.upgrade(_config(database), "0036")
+
+    with sqlite3.connect(database) as db:
+        migrated = db.execute(
+            "SELECT project_id, category, plugin_id, enabled, parameters "
+            "FROM plugin_config ORDER BY category, plugin_id"
+        ).fetchall()
+    assert migrated == [
+        ("default", "puller", "dtb", 1, '{"url": "https://legacy.example"}'),
+        ("default", "source", "canonical", 0, "{}"),
+        ("default", "source", "dtb", 1, '{"snapshot_path": "legacy-dtb"}'),
+        ("default", "source", "markdown", 1, '{"path": "legacy-knowledge"}'),
+    ]
+
+    command.downgrade(_config(database), "0034")
+    with sqlite3.connect(database) as db:
+        restored = db.execute(
+            "SELECT category, plugin_id, enabled, parameters FROM plugin_config "
+            "ORDER BY category, plugin_id"
+        ).fetchall()
+    assert restored == [
+        ("puller", "dtb", 1, '{"url": "https://legacy.example"}'),
+        ("source", "canonical", 0, "{}"),
+        ("source", "dtb", 1, '{"snapshot_path": "legacy-dtb"}'),
+        ("source", "markdown", 1, '{"path": "legacy-knowledge"}'),
+    ]
+
+
+def test_migrate_backfills_pull_record_project(database):
+    command.upgrade(_config(database), "0036")
+    with sqlite3.connect(database) as db:
+        db.execute(
+            "INSERT INTO pull_records (status, started_at, tables, tasks) "
+            "VALUES ('running', '2026-01-01T00:00:00+00:00', 0, 0)"
+        )
+
+    command.upgrade(_config(database), "0037")
+
+    with sqlite3.connect(database) as db:
+        assert db.execute("SELECT project_id, status FROM pull_records").fetchone() == (
+            "default",
+            "running",
+        )
+
+    command.downgrade(_config(database), "0036")
+    with sqlite3.connect(database) as db:
+        columns = {
+            row[1] for row in db.execute("PRAGMA table_info(pull_records)").fetchall()
+        }
+    assert "project_id" not in columns
 
 
 def test_migrate_creates_pending_builds_table(database):
@@ -95,7 +162,7 @@ def test_migrate_backs_up_before_upgrade_and_is_repeatable(database, capsys):
 
     capsys.readouterr()
     assert cli.main(["migrate"]) == 0
-    assert "0035" in capsys.readouterr().out
+    assert "0037" in capsys.readouterr().out
     assert len(_backups(database)) == 1
 
 
@@ -120,14 +187,14 @@ def test_serve_migrates_before_starting(database, capsys, monkeypatch):
 
     assert cli.main(["serve"]) == 0
     assert started == [True]
-    assert _schema_version(database) == "0035"
+    assert _schema_version(database) == "0037"
     assert _kept_rows(database) == (("kept token", "admin"), ("kept value",))
     assert len(_backups(database)) == 1
 
     assert cli.main(["serve"]) == 0
     assert started == [True, True]
     assert len(_backups(database)) == 1
-    assert "0035" in capsys.readouterr().out
+    assert "0037" in capsys.readouterr().out
 
 
 def test_serve_does_not_start_when_migration_fails(database, capsys, monkeypatch):
@@ -148,7 +215,7 @@ def test_init_still_initializes_an_empty_database(database):
     token = cli.initialize()
 
     assert token
-    assert _schema_version(database) == "0035"
+    assert _schema_version(database) == "0037"
     with sqlite3.connect(database) as db:
         row = db.execute("SELECT name, role FROM tokens").fetchone()
     assert row == ("initial admin", "admin")
@@ -173,7 +240,7 @@ def test_serve_upgrades_0023_conversations_and_backs_up(database, monkeypatch):
         )
     monkeypatch.setattr(cli, "_serve", lambda: None)
     assert cli.main(["serve"]) == 0
-    assert _schema_version(database) == "0035"
+    assert _schema_version(database) == "0037"
     with sqlite3.connect(database) as db:
         assert db.execute(
             "SELECT title, pinned_at, archived_at FROM conversations WHERE id='old'"
@@ -243,7 +310,7 @@ def test_migrate_adds_empty_model_capabilities_for_existing_providers(database):
 
     assert cli.main(["migrate"]) == 0
 
-    assert _schema_version(database) == "0035"
+    assert _schema_version(database) == "0037"
     with sqlite3.connect(database) as db:
         columns = {
             row[1] for row in db.execute("PRAGMA table_info(providers)").fetchall()
@@ -364,7 +431,7 @@ def test_master_project_database_upgrades_to_audit_table(database):
 
     assert cli.main(["migrate"]) == 0
 
-    assert _schema_version(database) == "0035"
+    assert _schema_version(database) == "0037"
     with sqlite3.connect(database) as db:
         assert db.execute("SELECT count(*) FROM project_audit").fetchone() == (0,)
         assert (
@@ -390,7 +457,7 @@ def test_project_migration_preserves_existing_data(database):
 
     assert cli.main(["migrate"]) == 0
 
-    assert _schema_version(database) == "0035"
+    assert _schema_version(database) == "0037"
     assert {
         table: _table_rows(database, table, old_columns[table]) for table in OLD_TABLES
     } == before
@@ -438,9 +505,9 @@ def test_empty_database_has_a_single_migration_head(database):
     from alembic.script import ScriptDirectory
 
     config = _config(database)
-    assert ScriptDirectory.from_config(config).get_heads() == ["0035"]
+    assert ScriptDirectory.from_config(config).get_heads() == ["0037"]
     command.upgrade(config, "head")
-    assert _schema_version(database) == "0035"
+    assert _schema_version(database) == "0037"
     with sqlite3.connect(database) as db:
         assert db.execute("SELECT count(*) FROM projects").fetchone() == (1,)
         assert db.execute("SELECT count(*) FROM project_members").fetchone() == (0,)
@@ -482,7 +549,7 @@ def test_migrate_adds_null_effort_for_existing_turns(database):
 
     assert cli.main(["migrate"]) == 0
 
-    assert _schema_version(database) == "0035"
+    assert _schema_version(database) == "0037"
     with sqlite3.connect(database) as db:
         columns = {row[1] for row in db.execute("PRAGMA table_info(turns)").fetchall()}
         assert "effort" in columns
@@ -508,7 +575,7 @@ def test_migrate_backfills_agent_credential_project(database):
             ("credential-digest",),
         ).fetchone()
     assert project == ("default",)
-    assert _schema_version(database) == "0035"
+    assert _schema_version(database) == "0037"
 
 
 def test_migrated_builds_index_is_unique_per_project_and_status(database):
@@ -561,6 +628,6 @@ def test_conversations_gain_the_default_project_when_upgrading(database):
             "FROM conversations WHERE id='old'"
         ).fetchone()
         assert db.execute("SELECT version_num FROM alembic_version").fetchone() == (
-            "0035",
+            "0037",
         )
     assert after == before + ("default",)

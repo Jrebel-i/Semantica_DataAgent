@@ -13,7 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import func, text
 
-from . import auto_build
+from . import auto_build, project_context
 from .api_time import UtcDatetime
 from .auth import Requester, admin, current_requester
 from .db import (
@@ -253,6 +253,14 @@ def admin_project_path_scope(
     return _require_project_admin(scope, requester)
 
 
+def admin_project_path_write_scope(
+    project_id: str,
+    requester: Annotated[Requester, Depends(current_requester)],
+) -> ProjectContext:
+    scope = _resolve_project_context(project_id, requester)
+    return _require_project_admin(scope, requester)
+
+
 ProjectSourceState = Literal["pending", "building", "effective", "failed", "unknown"]
 
 
@@ -283,6 +291,47 @@ class ProjectScheduleUpdate(BaseModel):
 
 class ProjectScheduleView(BaseModel):
     interval_seconds: int
+
+
+class AdapterPullUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = True
+    parameters: dict = Field(default_factory=dict)
+
+
+class ProjectAdapterUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    enabled: bool
+    parameters: dict = Field(default_factory=dict)
+    pull: AdapterPullUpdate | None = None
+
+
+class ProjectAdaptersUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    adapters: list[ProjectAdapterUpdate]
+
+
+class AdapterPullView(BaseModel):
+    enabled: bool
+    parameters: dict
+    parameters_schema: dict
+    token_configured: bool
+
+
+class ProjectAdapterView(BaseModel):
+    id: str
+    name: str
+    project_types: list[str]
+    enabled: bool
+    parameters: dict
+    parameters_schema: dict
+    compatible: bool
+    reason: str | None
+    pull: AdapterPullView | None = None
 
 
 def _schedule_interval(db, project_id: str) -> int:
@@ -374,6 +423,203 @@ def set_project_auto_build(
         if not body.enabled:
             auto_build.discard_pending_builds(scope.project_id, db)
     return AutoBuildView(enabled=body.enabled)
+
+
+ADAPTER_DEFAULT_ENABLED = frozenset({"canonical", "markdown"})
+DTB_PULL_TOKEN_KEY = "puller.dtb.token"
+PROJECT_TYPE_LABELS = {"warehouse": "数仓型", "document": "文档型"}
+
+
+def _adapter_reason(project_type: str, supported: tuple[str, ...]) -> str:
+    labels = "、".join(PROJECT_TYPE_LABELS.get(item, item) for item in supported)
+    return f"该适配器仅支持{labels}项目，不能用于{PROJECT_TYPE_LABELS.get(project_type, project_type)}项目"
+
+
+def _project_adapters(scope: ProjectContext) -> list[ProjectAdapterView]:
+    from .plugins import discover
+    from .project_types import source_project_types, supports_project_type
+
+    discovered = discover()
+    saved = project_context.plugin_configs(scope.project_id)
+    rows = []
+    for (category, plugin_id), plugin in sorted(
+        discovered.items(), key=lambda item: item[1].id
+    ):
+        if category != "source":
+            continue
+        supported = source_project_types(plugin)
+        compatible = supports_project_type(plugin, scope.project_type)
+        enabled, parameters = saved.get(
+            (category, plugin_id),
+            (plugin_id in ADAPTER_DEFAULT_ENABLED, {}),
+        )
+        if not compatible:
+            enabled = False
+        pull = None
+        if plugin_id == "dtb":
+            puller = discovered.get(("puller", "dtb"))
+            pull_enabled, pull_parameters = saved.get(("puller", "dtb"), (False, {}))
+            if not compatible:
+                pull_enabled = False
+            pull = AdapterPullView(
+                enabled=pull_enabled,
+                parameters={
+                    key: value
+                    for key, value in pull_parameters.items()
+                    if key != "token"
+                },
+                parameters_schema=(
+                    puller.parameters_schema if puller is not None else {}
+                ),
+                token_configured=bool(
+                    project_context.plugin_secret(scope.project_id, DTB_PULL_TOKEN_KEY)
+                ),
+            )
+        rows.append(
+            ProjectAdapterView(
+                id=plugin_id,
+                name=plugin.display_name,
+                project_types=list(supported),
+                enabled=enabled,
+                parameters=parameters,
+                parameters_schema=plugin.parameters_schema,
+                compatible=compatible,
+                reason=None
+                if compatible
+                else _adapter_reason(scope.project_type, supported),
+                pull=pull,
+            )
+        )
+    return rows
+
+
+@router.get(
+    "/api/v1/projects/{project_id}/adapters",
+    response_model=list[ProjectAdapterView],
+)
+def list_project_adapters(
+    project_id: str,
+    scope: Annotated[ProjectContext, Depends(project_path_scope)],
+):
+    return _project_adapters(scope)
+
+
+@router.put(
+    "/api/v1/projects/{project_id}/adapters",
+    response_model=list[ProjectAdapterView],
+)
+def put_project_adapters(
+    project_id: str,
+    body: ProjectAdaptersUpdate,
+    scope: Annotated[ProjectContext, Depends(admin_project_path_write_scope)],
+):
+    from jsonschema import Draft202012Validator
+
+    from .crypto import encrypt
+    from .plugins import discover
+    from .project_types import source_project_types, supports_project_type
+
+    discovered = discover()
+    seen = set()
+    for update in body.adapters:
+        if update.id in seen:
+            raise HTTPException(status_code=422, detail=f"适配器重复：{update.id}")
+        seen.add(update.id)
+        plugin = discovered.get(("source", update.id))
+        if plugin is None:
+            raise HTTPException(status_code=422, detail=f"未知源适配器：{update.id}")
+        errors = sorted(
+            Draft202012Validator(plugin.parameters_schema).iter_errors(
+                update.parameters
+            ),
+            key=lambda error: list(map(str, error.absolute_path)),
+        )
+        if errors:
+            raise HTTPException(
+                status_code=422,
+                detail=[
+                    {"path": list(error.absolute_path), "message": error.message}
+                    for error in errors
+                ],
+            )
+        compatible = supports_project_type(plugin, scope.project_type)
+        if update.enabled and not compatible:
+            raise HTTPException(
+                status_code=422,
+                detail=_adapter_reason(
+                    scope.project_type, source_project_types(plugin)
+                ),
+            )
+        if update.pull is not None:
+            if update.id != "dtb":
+                raise HTTPException(status_code=422, detail="该适配器没有拉取配置")
+            puller = discovered.get(("puller", "dtb"))
+            if puller is None:
+                raise HTTPException(status_code=422, detail="DTB 拉取器未注册")
+            errors = sorted(
+                Draft202012Validator(puller.parameters_schema).iter_errors(
+                    update.pull.parameters
+                ),
+                key=lambda error: list(map(str, error.absolute_path)),
+            )
+            if errors:
+                raise HTTPException(
+                    status_code=422,
+                    detail=[
+                        {
+                            "path": list(error.absolute_path),
+                            "message": error.message,
+                        }
+                        for error in errors
+                    ],
+                )
+            if update.pull.enabled and not compatible:
+                raise HTTPException(
+                    status_code=422,
+                    detail=_adapter_reason(
+                        scope.project_type, source_project_types(plugin)
+                    ),
+                )
+    with sessions().begin() as db:
+        schedules = []
+        for update in body.adapters:
+            project_context.upsert_plugin_config(
+                db,
+                "source",
+                update.id,
+                update.enabled,
+                update.parameters,
+                scope.project_id,
+            )
+            if update.pull is not None:
+                parameters = dict(update.pull.parameters)
+                token = parameters.pop("token", None)
+                project_context.upsert_plugin_config(
+                    db,
+                    "puller",
+                    "dtb",
+                    update.pull.enabled,
+                    parameters,
+                    scope.project_id,
+                )
+                if token is not None and token != "***":
+                    project_context.set_plugin_secret(
+                        db,
+                        scope.project_id,
+                        DTB_PULL_TOKEN_KEY,
+                        encrypt(token) if token else None,
+                    )
+                interval = (
+                    update.pull.parameters.get("interval_seconds", 0)
+                    if update.pull.enabled
+                    else 0
+                )
+                schedules.append((scope.project_id, interval))
+    from .scheduler import pull_scheduler
+
+    for target, interval in schedules:
+        pull_scheduler.configure(interval, target)
+    return _project_adapters(scope)
 
 
 @router.get(

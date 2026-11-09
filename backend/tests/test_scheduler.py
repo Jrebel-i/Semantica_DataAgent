@@ -136,6 +136,273 @@ def test_puller_interval_restored_on_restart(tmp_path, monkeypatch):
     assert starts == [0, 42]
 
 
+def test_pull_scheduler_runs_the_due_project(monkeypatch):
+    from semantica_dataagent import project_context, pull_service
+    from semantica_dataagent.scheduler import _scheduled_pull
+
+    calls = []
+    monkeypatch.setattr(
+        pull_service, "run_pull", lambda project_id: calls.append(project_id)
+    )
+    monkeypatch.setattr(project_context, "project_is_frozen", lambda project_id: False)
+
+    _scheduled_pull("alpha")
+
+    assert calls == ["alpha"]
+
+
+def test_pull_scheduler_skips_archived_project_and_keeps_its_interval(
+    tmp_path, monkeypatch, caplog
+):
+    import logging
+
+    from semantica_dataagent import project_context, pull_service
+    from semantica_dataagent.app import app
+    from semantica_dataagent.cli import initialize
+    from semantica_dataagent.scheduler import (
+        Scheduler,
+        _scheduled_pull,
+        pull_scheduler,
+    )
+
+    monkeypatch.setenv("DATAAGENT_DB_PATH", str(tmp_path / "frozen-pull.db"))
+    caplog.set_level(logging.DEBUG, logger="semantica_dataagent.scheduler")
+    monkeypatch.setenv("DATAAGENT_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    token = initialize()
+    headers = {"Authorization": f"Bearer {token}"}
+    calls = []
+    monkeypatch.setattr(
+        pull_service, "run_pull", lambda project_id: calls.append(project_id)
+    )
+
+    with TestClient(app, headers=headers) as client:
+        created = client.post(
+            "/api/v1/projects", json={"name": "Frozen Pull", "type": "warehouse"}
+        )
+        assert created.status_code == 201, created.text
+        project_id = created.json()["id"]
+        saved = client.put(
+            f"/api/v1/projects/{project_id}/adapters",
+            json={
+                "adapters": [
+                    {
+                        "id": "dtb",
+                        "enabled": True,
+                        "parameters": {},
+                        "pull": {
+                            "enabled": True,
+                            "parameters": {
+                                "url": "https://dtb.example",
+                                "interval_seconds": 9,
+                            },
+                        },
+                    }
+                ]
+            },
+        )
+        assert saved.status_code == 200, saved.text
+        assert pull_scheduler._schedules[project_id].interval == 9
+
+        now = [0.0]
+        scheduler = Scheduler(_scheduled_pull, clock=lambda: now[0])
+        scheduler.configure(9, project_id)
+
+        archived = client.post(f"/api/v1/projects/{project_id}/archive")
+        assert archived.status_code == 200, archived.text
+        assert pull_service.intervals() == {project_id: 9}
+        assert pull_scheduler._schedules[project_id].interval == 9
+
+        def tick():
+            for due in scheduler.due_projects():
+                _scheduled_pull(due)
+
+        now[0] = 9
+        tick()
+        assert calls == [], "归档项目的定时拉取没有被跳过"
+        assert any(
+            "Skipping scheduled pull" in record.getMessage()
+            for record in caplog.records
+            if record.name == "semantica_dataagent.scheduler"
+        ), "跳过冻结项目的定时拉取时没有记录 debug"
+        now[0] = 18
+        tick()
+        assert calls == [], "归档项目在下一个周期仍然执行了拉取"
+
+        restored = client.post(f"/api/v1/projects/{project_id}/restore")
+        assert restored.status_code == 200, restored.text
+        assert pull_service.intervals() == {project_id: 9}
+        assert pull_scheduler._schedules[project_id].interval == 9
+
+        now[0] = 27
+        tick()
+        assert calls == [project_id], "恢复后没有按原间隔继续定时拉取"
+        assert project_context.project_status(project_id) == "active"
+
+
+def test_pull_scheduler_skips_deleting_project(tmp_path, monkeypatch, caplog):
+    import logging
+
+    from semantica_dataagent import project_context, project_deletion, pull_service
+    from semantica_dataagent.app import app
+    from semantica_dataagent.cli import initialize
+    from semantica_dataagent.scheduler import _scheduled_pull
+
+    monkeypatch.setenv("DATAAGENT_DB_PATH", str(tmp_path / "deleting-pull.db"))
+    monkeypatch.setenv("DATAAGENT_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    monkeypatch.setenv("DATAAGENT_PROJECTS_ROOT", str(tmp_path / "projects"))
+    token = initialize()
+    headers = {"Authorization": f"Bearer {token}"}
+    caplog.set_level(logging.DEBUG, logger="semantica_dataagent.scheduler")
+
+    with TestClient(app, headers=headers) as client:
+        created = client.post(
+            "/api/v1/projects", json={"name": "Deleting Pull", "type": "warehouse"}
+        )
+        assert created.status_code == 201, created.text
+        project = created.json()
+        saved = client.put(
+            f"/api/v1/projects/{project['id']}/adapters",
+            json={
+                "adapters": [
+                    {
+                        "id": "dtb",
+                        "enabled": True,
+                        "parameters": {},
+                        "pull": {
+                            "enabled": True,
+                            "parameters": {
+                                "url": "https://dtb.example",
+                                "interval_seconds": 5,
+                            },
+                        },
+                    }
+                ]
+            },
+        )
+        assert saved.status_code == 200, saved.text
+        assert (
+            client.post(f"/api/v1/projects/{project['id']}/archive").status_code == 200
+        )
+        assert (
+            project_deletion.prepare_deletion(
+                project["id"], project["name"], "owner", "Owner"
+            )
+            == "active"
+        )
+        assert project_context.project_status(project["id"]) == "deleting"
+
+        calls = []
+        monkeypatch.setattr(
+            pull_service, "run_pull", lambda project_id: calls.append(project_id)
+        )
+        _scheduled_pull(project["id"])
+
+        assert calls == [], "删除中项目的定时拉取没有被跳过"
+        assert any(
+            "Skipping scheduled pull" in record.getMessage()
+            for record in caplog.records
+            if record.name == "semantica_dataagent.scheduler"
+        ), "跳过删除中项目的定时拉取时没有记录 debug"
+
+
+def test_pull_intervals_are_collected_per_project(tmp_path, monkeypatch):
+    from semantica_dataagent.app import app
+    from semantica_dataagent.cli import initialize
+    from semantica_dataagent.pull_service import intervals
+
+    monkeypatch.setenv("DATAAGENT_DB_PATH", str(tmp_path / "pull-intervals.db"))
+    monkeypatch.setenv("DATAAGENT_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    token = initialize()
+    headers = {"Authorization": f"Bearer {token}"}
+    with TestClient(app, headers=headers) as client:
+        created = client.post(
+            "/api/v1/projects", json={"name": "Pull Intervals", "type": "warehouse"}
+        )
+        assert created.status_code == 201, created.text
+        project_id = created.json()["id"]
+        saved = client.put(
+            f"/api/v1/projects/{project_id}/adapters",
+            json={
+                "adapters": [
+                    {
+                        "id": "dtb",
+                        "enabled": True,
+                        "parameters": {},
+                        "pull": {
+                            "enabled": True,
+                            "parameters": {
+                                "url": "https://dtb.example",
+                                "interval_seconds": 7,
+                            },
+                        },
+                    }
+                ]
+            },
+        )
+        assert saved.status_code == 200, saved.text
+
+    assert intervals() == {project_id: 7}
+
+
+def test_project_puller_interval_is_saved_and_restored(tmp_path, monkeypatch):
+    from semantica_dataagent.app import app
+    from semantica_dataagent.cli import initialize
+    from semantica_dataagent.scheduler import pull_scheduler
+
+    monkeypatch.setenv("DATAAGENT_DB_PATH", str(tmp_path / "project-pull.db"))
+    monkeypatch.setenv("DATAAGENT_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    token = initialize()
+    headers = {"Authorization": f"Bearer {token}"}
+    configured = []
+    original_configure = pull_scheduler.configure
+
+    def observe_configure(interval, project_id="default"):
+        configured.append((project_id, interval))
+        original_configure(interval, project_id=project_id)
+
+    monkeypatch.setattr(pull_scheduler, "configure", observe_configure)
+    with TestClient(app, headers=headers) as client:
+        created = client.post(
+            "/api/v1/projects", json={"name": "Scheduled Pull", "type": "warehouse"}
+        )
+        assert created.status_code == 201, created.text
+        project_id = created.json()["id"]
+        saved = client.put(
+            f"/api/v1/projects/{project_id}/adapters",
+            json={
+                "adapters": [
+                    {
+                        "id": "dtb",
+                        "enabled": True,
+                        "parameters": {},
+                        "pull": {
+                            "enabled": True,
+                            "parameters": {
+                                "url": "https://dtb.example",
+                                "interval_seconds": 9,
+                            },
+                        },
+                    }
+                ]
+            },
+        )
+        assert saved.status_code == 200, saved.text
+
+    assert (project_id, 9) in configured
+
+    starts = []
+    original_start = pull_scheduler.start
+
+    def observe_start(interval, project_id="default"):
+        starts.append((project_id, interval))
+        original_start(interval, project_id=project_id)
+
+    monkeypatch.setattr(pull_scheduler, "start", observe_start)
+    with TestClient(app):
+        pass
+    assert (project_id, 9) in starts
+
+
 def test_each_project_has_its_own_schedule_clock():
     from semantica_dataagent.scheduler import Scheduler
 

@@ -1,5 +1,15 @@
 import { useCallback, useEffect, useState } from "react";
-import { Alert, Button, Input, Modal, Select, Space, Table, Tag } from "antd";
+import {
+  Alert,
+  Button,
+  Checkbox,
+  Input,
+  Modal,
+  Select,
+  Space,
+  Table,
+  Tag,
+} from "antd";
 import type { components } from "./api";
 import type { Messages } from "./i18n";
 
@@ -18,6 +28,124 @@ type UserRow = {
   role: "user" | "admin";
 };
 
+type ParamSchema = {
+  type?: string;
+  title?: string;
+  format?: string;
+  default?: unknown;
+  enum?: (string | number | boolean)[];
+  items?: ParamSchema;
+  properties?: Record<string, ParamSchema>;
+  required?: string[];
+};
+
+type AdapterPull = Omit<
+  components["schemas"]["AdapterPullView"],
+  "parameters_schema"
+> & { parameters_schema: ParamSchema };
+
+type AdapterRow = Omit<
+  components["schemas"]["ProjectAdapterView"],
+  "parameters_schema" | "pull"
+> & {
+  parameters_schema: ParamSchema;
+  pull: AdapterPull | null;
+};
+
+const PROJECT_TYPE_LABELS: Record<string, string> = {
+  warehouse: "数仓型",
+  document: "文档型",
+};
+
+function ParameterFields({
+  schema,
+  values,
+  disabled,
+  tokenConfigured,
+  onChange,
+}: {
+  schema: ParamSchema;
+  values: Record<string, unknown>;
+  disabled: boolean;
+  tokenConfigured?: boolean;
+  onChange: (name: string, value: unknown) => void;
+}) {
+  return (
+    <>
+      {Object.entries(schema.properties || {}).map(([name, field]) => {
+        const value = values[name] ?? field.default;
+        return (
+          <label className="field" key={name}>
+            <span className="field-label">
+              {field.title || name}
+              {schema.required?.includes(name) ? " *" : ""}
+            </span>
+            {field.enum ? (
+              <Select
+                aria-label={name}
+                disabled={disabled}
+                value={typeof value === "string" ? value : undefined}
+                onChange={(next) => onChange(name, next)}
+                options={field.enum.map((item) => ({
+                  value: item,
+                  label: String(item),
+                }))}
+              />
+            ) : field.type === "boolean" ? (
+              <Checkbox
+                aria-label={name}
+                disabled={disabled}
+                checked={value === true}
+                onChange={(event) => onChange(name, event.target.checked)}
+              >
+                {field.title || name}
+              </Checkbox>
+            ) : field.type === "array" ? (
+              <Input.TextArea
+                aria-label={name}
+                disabled={disabled}
+                value={Array.isArray(value) ? value.join("\n") : ""}
+                onChange={(event) =>
+                  onChange(
+                    name,
+                    event.target.value ? event.target.value.split("\n") : [],
+                  )
+                }
+              />
+            ) : (
+              <Input
+                aria-label={name}
+                disabled={disabled}
+                type={
+                  field.format === "password"
+                    ? "password"
+                    : field.type === "integer"
+                      ? "number"
+                      : "text"
+                }
+                placeholder={
+                  field.format === "password" && tokenConfigured
+                    ? undefined
+                    : undefined
+                }
+                value={value == null ? "" : String(value)}
+                onChange={(event) =>
+                  onChange(
+                    name,
+                    field.type === "integer" && event.target.value !== ""
+                      ? Number(event.target.value)
+                      : event.target.value,
+                  )
+                }
+              />
+            )}
+          </label>
+        );
+      })}
+    </>
+  );
+}
+
 function localTime(value: string | null) {
   return value ? new Date(value).toLocaleString() : "";
 }
@@ -26,10 +154,12 @@ export function ProjectsPage({
   token,
   messages: t,
   canCreate = true,
+  includeMemberProjects = false,
 }: {
   token: string;
   messages: Messages;
   canCreate?: boolean;
+  includeMemberProjects?: boolean;
 }) {
   const [rows, setRows] = useState<ProjectRow[]>([]);
   const [open, setOpen] = useState(false);
@@ -47,6 +177,8 @@ export function ProjectsPage({
   const [deleteTarget, setDeleteTarget] = useState<ProjectRow | null>(null);
   const [deleteName, setDeleteName] = useState("");
   const [lifecycleBusy, setLifecycleBusy] = useState(false);
+  const [adapters, setAdapters] = useState<AdapterRow[]>([]);
+  const [adapterError, setAdapterError] = useState("");
 
   const authHeaders = { Authorization: `Bearer ${token}` };
   const refresh = useCallback(async () => {
@@ -84,12 +216,109 @@ export function ProjectsPage({
     [token, t.memberError],
   );
 
+  const loadAdapters = useCallback(
+    async (projectId: string) => {
+      try {
+        const response = await fetch(`/api/v1/projects/${projectId}/adapters`, {
+          headers: authHeaders,
+        });
+        if (!response.ok) throw new Error();
+        const rows = (await response.json()) as AdapterRow[];
+        setAdapters(
+          rows.map((row) => {
+            if (!row.pull) return row;
+            const parameters = { ...row.pull.parameters };
+            Object.entries(row.pull.parameters_schema.properties || {}).forEach(
+              ([name, schema]) => {
+                if (
+                  schema.format === "password" &&
+                  row.pull?.token_configured
+                ) {
+                  parameters[name] = "***";
+                }
+              },
+            );
+            return { ...row, pull: { ...row.pull, parameters } };
+          }),
+        );
+        setAdapterError("");
+      } catch {
+        setAdapterError(t.adapterSaveFailed);
+      }
+    },
+    [token, t.adapterSaveFailed],
+  );
+
   async function openProject(project: ProjectRow) {
     setSelected(project);
     setMemberError("");
+    setAdapterError("");
+    setAdapters([]);
     setAddUserId(undefined);
     setAddRole("member");
-    await loadMembers(project.id);
+    await Promise.all([
+      project.my_role === "admin" ? loadMembers(project.id) : undefined,
+      loadAdapters(project.id),
+    ]);
+  }
+
+  function updateAdapter(id: string, patch: Partial<AdapterRow>) {
+    setAdapters((old) =>
+      old.map((row) => (row.id === id ? { ...row, ...patch } : row)),
+    );
+  }
+
+  function updateAdapterParameter(
+    id: string,
+    name: string,
+    value: unknown,
+    pull = false,
+  ) {
+    setAdapters((old) =>
+      old.map((row) => {
+        if (row.id !== id) return row;
+        if (pull && row.pull) {
+          return {
+            ...row,
+            pull: {
+              ...row.pull,
+              parameters: { ...row.pull.parameters, [name]: value },
+            },
+          };
+        }
+        return { ...row, parameters: { ...row.parameters, [name]: value } };
+      }),
+    );
+  }
+
+  async function saveAdapters() {
+    if (!selected) return;
+    try {
+      const response = await fetch(`/api/v1/projects/${selected.id}/adapters`, {
+        method: "PUT",
+        headers: { ...authHeaders, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          adapters: adapters.map((row) => ({
+            id: row.id,
+            enabled: row.enabled,
+            parameters: row.parameters,
+            ...(row.pull
+              ? {
+                  pull: {
+                    enabled: row.pull.enabled,
+                    parameters: row.pull.parameters,
+                  },
+                }
+              : {}),
+          })),
+        }),
+      });
+      if (!response.ok) throw new Error();
+      setAdapterError("");
+      await loadAdapters(selected.id);
+    } catch {
+      setAdapterError(t.adapterSaveFailed);
+    }
   }
 
   async function create() {
@@ -241,6 +470,7 @@ export function ProjectsPage({
   }
 
   if (selected) {
+    const canEditAdapters = selected.my_role === "admin";
     const adminCount = members.filter((item) => item.role === "admin").length;
     const lastAdmin = (member: MemberRow) =>
       member.role === "admin" && adminCount <= 1;
@@ -262,77 +492,170 @@ export function ProjectsPage({
         </div>
         {memberError && <Alert type="error" title={memberError} />}
         <div className="card section-card">
-          <h2 className="card-title">{t.projectMembers}</h2>
-          <Space wrap className="member-add">
-            <Select
-              aria-label={t.selectUser}
-              placeholder={t.selectUser}
-              value={addUserId}
-              onChange={setAddUserId}
-              style={{ minWidth: 220 }}
-              options={availableUsers.map((user) => ({
-                value: user.id,
-                label: `${user.name} (${user.role === "admin" ? t.roleAdmin : t.roleUser})`,
-              }))}
-            />
-            <Select
-              aria-label={t.selectProjectRole}
-              value={addRole}
-              onChange={setAddRole}
-              options={[
-                { value: "member", label: t.projectMemberRole },
-                { value: "admin", label: t.projectAdminRole },
-              ]}
-            />
+          <h2 className="card-title">{t.sourceAdapters}</h2>
+          <p className="page-subtitle">{t.sourceAdaptersHint}</p>
+          {adapterError && <Alert type="error" title={adapterError} />}
+          <div className="stack">
+            {adapters.map((adapter) => (
+              <div
+                key={adapter.id}
+                className="adapter-row"
+                data-testid={`adapter-${adapter.id}`}
+              >
+                <Space wrap>
+                  <Checkbox
+                    checked={adapter.enabled}
+                    disabled={!canEditAdapters || !adapter.compatible}
+                    onChange={(event) =>
+                      updateAdapter(adapter.id, {
+                        enabled: event.target.checked,
+                      })
+                    }
+                  >
+                    {adapter.name}
+                  </Checkbox>
+                  {adapter.project_types.map((type) => (
+                    <Tag key={type}>{PROJECT_TYPE_LABELS[type] || type}</Tag>
+                  ))}
+                </Space>
+                {adapter.reason && (
+                  <p className="field-hint">{adapter.reason}</p>
+                )}
+                {adapter.enabled && adapter.compatible && (
+                  <div className="stack">
+                    <ParameterFields
+                      schema={adapter.parameters_schema}
+                      values={adapter.parameters}
+                      disabled={!canEditAdapters}
+                      onChange={(name, value) =>
+                        updateAdapterParameter(adapter.id, name, value)
+                      }
+                    />
+                    {adapter.pull && (
+                      <div className="stack">
+                        <h3 className="card-title">{t.adapterPull}</h3>
+                        <Checkbox
+                          checked={adapter.pull.enabled}
+                          disabled={!canEditAdapters}
+                          onChange={(event) =>
+                            updateAdapter(adapter.id, {
+                              pull: {
+                                ...adapter.pull!,
+                                enabled: event.target.checked,
+                              },
+                            })
+                          }
+                        >
+                          {t.enabled}
+                        </Checkbox>
+                        <ParameterFields
+                          schema={adapter.pull.parameters_schema}
+                          values={adapter.pull.parameters}
+                          disabled={!canEditAdapters}
+                          tokenConfigured={adapter.pull.token_configured}
+                          onChange={(name, value) =>
+                            updateAdapterParameter(
+                              adapter.id,
+                              name,
+                              value,
+                              true,
+                            )
+                          }
+                        />
+                        {adapter.pull.token_configured && (
+                          <p className="field-hint">{t.adapterTokenSaved}</p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+          {canEditAdapters && (
             <Button
               autoInsertSpace={false}
               type="primary"
-              disabled={!addUserId}
-              onClick={() => void addMember()}
+              onClick={() => void saveAdapters()}
             >
-              {t.addMember}
+              {t.adapterSave}
             </Button>
-          </Space>
-          <Table
-            rowKey="id"
-            dataSource={members}
-            pagination={false}
-            locale={{ emptyText: t.noMembers }}
-            columns={[
-              { title: t.name, dataIndex: "name" },
-              {
-                title: t.role,
-                render: (_, member) => (
-                  <Select
-                    aria-label={`${t.selectProjectRole}: ${member.name}`}
-                    value={member.role}
-                    disabled={lastAdmin(member)}
-                    title={lastAdmin(member) ? t.lastProjectAdmin : undefined}
-                    onChange={(role) => void putRole(member, role)}
-                    options={[
-                      { value: "member", label: t.projectMemberRole },
-                      { value: "admin", label: t.projectAdminRole },
-                    ]}
-                  />
-                ),
-              },
-              {
-                title: t.actions,
-                render: (_, member) => (
-                  <Button
-                    autoInsertSpace={false}
-                    danger
-                    disabled={lastAdmin(member)}
-                    title={lastAdmin(member) ? t.lastProjectAdmin : undefined}
-                    onClick={() => setConfirmMember(member)}
-                  >
-                    {t.removeMember}
-                  </Button>
-                ),
-              },
-            ]}
-          />
+          )}
         </div>
+        {selected.my_role === "admin" && (
+          <div className="card section-card">
+            <h2 className="card-title">{t.projectMembers}</h2>
+            <Space wrap className="member-add">
+              <Select
+                aria-label={t.selectUser}
+                placeholder={t.selectUser}
+                value={addUserId}
+                onChange={setAddUserId}
+                style={{ minWidth: 220 }}
+                options={availableUsers.map((user) => ({
+                  value: user.id,
+                  label: `${user.name} (${user.role === "admin" ? t.roleAdmin : t.roleUser})`,
+                }))}
+              />
+              <Select
+                aria-label={t.selectProjectRole}
+                value={addRole}
+                onChange={setAddRole}
+                options={[
+                  { value: "member", label: t.projectMemberRole },
+                  { value: "admin", label: t.projectAdminRole },
+                ]}
+              />
+              <Button
+                autoInsertSpace={false}
+                type="primary"
+                disabled={!addUserId}
+                onClick={() => void addMember()}
+              >
+                {t.addMember}
+              </Button>
+            </Space>
+            <Table
+              rowKey="id"
+              dataSource={members}
+              pagination={false}
+              locale={{ emptyText: t.noMembers }}
+              columns={[
+                { title: t.name, dataIndex: "name" },
+                {
+                  title: t.role,
+                  render: (_, member) => (
+                    <Select
+                      aria-label={`${t.selectProjectRole}: ${member.name}`}
+                      value={member.role}
+                      disabled={lastAdmin(member)}
+                      title={lastAdmin(member) ? t.lastProjectAdmin : undefined}
+                      onChange={(role) => void putRole(member, role)}
+                      options={[
+                        { value: "member", label: t.projectMemberRole },
+                        { value: "admin", label: t.projectAdminRole },
+                      ]}
+                    />
+                  ),
+                },
+                {
+                  title: t.actions,
+                  render: (_, member) => (
+                    <Button
+                      autoInsertSpace={false}
+                      danger
+                      disabled={lastAdmin(member)}
+                      title={lastAdmin(member) ? t.lastProjectAdmin : undefined}
+                      onClick={() => setConfirmMember(member)}
+                    >
+                      {t.removeMember}
+                    </Button>
+                  ),
+                },
+              ]}
+            />
+          </div>
+        )}
         {confirmMember !== null && (
           <Modal
             open
@@ -349,9 +672,10 @@ export function ProjectsPage({
     );
   }
 
-  const visibleRows = canCreate
-    ? rows
-    : rows.filter((row) => row.my_role === "admin");
+  const visibleRows =
+    canCreate || includeMemberProjects
+      ? rows
+      : rows.filter((row) => row.my_role === "admin");
   return (
     <section className="stack admin-page">
       <div className="page-header">
