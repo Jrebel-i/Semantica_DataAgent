@@ -757,3 +757,85 @@ test("切换项目后丢弃旧项目迟到的表列表响应", async () => {
   expect(screen.queryByRole("button", { name: "orders" })).toBeNull();
   expect(screen.getByRole("button", { name: "finance_orders" })).toBeTruthy();
 });
+
+test("切换项目后丢弃旧项目迟到的关联文档响应", async () => {
+  const pendingDocument = deferredResponse();
+  const rowWithDocs: TableRow = {
+    ...table("dwd", "orders"),
+    documents: [
+      {
+        ref: "document:metrics/sales.md",
+        path: "metrics/sales.md",
+        category: "metrics",
+      },
+    ],
+  };
+  const financeRow = table("dwd", "finance_orders");
+  const fetcher = vi.fn(async (url: string) => {
+    if (url === "/api/v1/projects")
+      return Response.json([
+        project("default", "业务数据"),
+        project("finance", "财务数据"),
+      ]);
+    if (url.startsWith("/api/v1/categories")) return Response.json([]);
+    if (url.startsWith("/api/v1/tables?")) {
+      const projectId =
+        new URL(url, "http://localhost").searchParams.get("project") ?? "";
+      return Response.json(
+        projectId === "default" ? [rowWithDocs] : [financeRow],
+      );
+    }
+    const detail = url.match(
+      /^\/api\/v1\/tables\/([^/?]+)\/([^/?]+)(?:\?.*)?$/,
+    );
+    if (detail) {
+      const projectId =
+        new URL(url, "http://localhost").searchParams.get("project") ?? "";
+      return Response.json(projectId === "default" ? rowWithDocs : financeRow);
+    }
+    if (url.startsWith("/api/v1/document")) return pendingDocument.promise;
+    if (url.startsWith("/api/v1/table-lineage"))
+      return Response.json({ upstream: [], downstream: [], tasks: [] });
+    if (url.startsWith("/api/v1/column-lineage"))
+      return Response.json({ upstream: [], downstream: [] });
+    return Response.json({});
+  });
+  vi.stubGlobal("fetch", fetcher);
+  render(<KnowledgePage token="token" messages={getMessages("zh")} />);
+
+  fireEvent.click(
+    await screen.findByRole("button", { name: "metrics/sales.md" }),
+  );
+  await waitFor(() =>
+    expect(
+      fetcher.mock.calls.some(([url]) =>
+        String(url).startsWith("/api/v1/document"),
+      ),
+    ).toBe(true),
+  );
+
+  fireEvent.mouseDown(screen.getByRole("combobox", { name: "项目" }));
+  fireEvent.click(await screen.findByTitle("财务数据"));
+  expect(await screen.findByText("dwd (1)")).toBeTruthy();
+  fireEvent.click(screen.getByText("dwd (1)"));
+  fireEvent.click(
+    await screen.findByRole("button", { name: "finance_orders" }),
+  );
+  expect(await screen.findByText("日期分区")).toBeTruthy();
+
+  await act(async () => {
+    pendingDocument.resolve(
+      Response.json({
+        path: "metrics/sales.md",
+        category: "metrics",
+        content: "旧关联文档",
+        start_line: 1,
+        generated: false,
+      }),
+    );
+    await pendingDocument.promise;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+
+  expect(screen.queryByText("旧关联文档")).toBeNull();
+});
