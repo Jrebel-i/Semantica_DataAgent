@@ -802,6 +802,23 @@ def test_probe_keeps_effort_output_budget_at_32(client, provider_type):
     assert effort_limits == [32] * len(EFFORT_LEVELS)
 
 
+def test_probe_effort_ignores_truncated_success(client):
+    c, token = client
+    truncated_body = _success_body("anthropic-messages", "model-a", truncated=True)
+    with _gateway("anthropic-messages", success_body=truncated_body) as (
+        _,
+        base_url,
+    ):
+        provider_id = _create_provider(
+            c, token, provider_type="anthropic-messages", base_url=base_url
+        )
+        response = _probe(c, token, provider_id)
+
+    assert response.status_code == 200, response.text
+    assert response.json()["vision"] == "unknown"
+    assert response.json()["effort"] == {level: "yes" for level in EFFORT_LEVELS}
+
+
 @pytest.mark.parametrize(
     "provider_type",
     ["openai-completions", "openai-responses", "google-generative-ai"],
