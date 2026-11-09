@@ -97,6 +97,25 @@ class Setting(Base):
 
 _factories = {}
 _factory_lock = Lock()
+_stale_factories = []
+
+
+def _reset_after_fork() -> None:
+    """Give the child fresh locks and engines instead of the parent's state.
+
+    A forked child inherits locks held by unrelated parent threads.  Reusing the
+    parent's SQLAlchemy pool can therefore wait forever on a mutex that no
+    thread in the child will ever release.  Keep the old engines referenced so
+    their connections are not finalized in the child, and build a new engine on
+    the first ``sessions()`` call.
+    """
+    global _factory_lock
+    _factory_lock = Lock()
+    _stale_factories.extend(_factories.values())
+    _factories.clear()
+
+
+os.register_at_fork(after_in_child=_reset_after_fork)
 
 
 def _sessions_for_path(path: str):

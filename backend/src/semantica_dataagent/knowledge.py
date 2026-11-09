@@ -1372,3 +1372,22 @@ def search(query, scope, top_k, category=None, project_id=None):
             )
         )
     return mark_ambiguity(results, query)[:top_k]
+
+
+_stale_readers = []
+
+
+def _reset_state_after_fork() -> None:
+    """Drop inherited reader caches and locks after a fork (#231)."""
+    global _read_lock, _round_trip_lock, _milvus_connection_lock, _milvus_users
+    _read_lock = Lock()
+    _round_trip_lock = Lock()
+    _milvus_connection_lock = Lock()
+    _stale_readers.extend(_read_graphs.values())
+    _stale_readers.extend(_read_vectors.values())
+    _read_graphs.clear()
+    _read_vectors.clear()
+    _milvus_users = 0
+
+
+os.register_at_fork(after_in_child=_reset_state_after_fork)
