@@ -839,3 +839,88 @@ test("切换项目后丢弃旧项目迟到的关联文档响应", async () => {
 
   expect(screen.queryByText("旧关联文档")).toBeNull();
 });
+
+function projectRequests(fetcher: ReturnType<typeof vi.fn>, project: string) {
+  return fetcher.mock.calls
+    .map(([url]) => String(url))
+    .filter((url) => {
+      if (!url.startsWith("/api/")) return false;
+      return (
+        new URL(url, "http://localhost").searchParams.get("project") === project
+      );
+    });
+}
+
+test("切换项目后不用旧项目选中的表向新项目请求详情、血缘和字段血缘", async () => {
+  const oldTable = "app_air_abtest_markup_di";
+  installFetch(
+    (projectId) => (projectId === "docs" ? [] : [table("app", oldTable)]),
+    [],
+    undefined,
+    projects,
+  );
+  const fetcher = fetch as unknown as ReturnType<typeof vi.fn>;
+  render(<KnowledgePage token="token" messages={getMessages("zh")} />);
+
+  expect(await screen.findByRole("button", { name: oldTable })).toBeTruthy();
+  expect(await screen.findByText("日期分区")).toBeTruthy();
+  fireEvent.click(
+    await screen.findByRole("button", { name: "air_segment_income_cny" }),
+  );
+  await waitFor(() =>
+    expect(
+      fetcher.mock.calls.some(
+        ([url]) =>
+          String(url).startsWith("/api/v1/column-lineage?") &&
+          String(url).includes("project=default"),
+      ),
+    ).toBe(true),
+  );
+
+  fireEvent.mouseDown(screen.getByRole("combobox", { name: "项目" }));
+  fireEvent.click(await screen.findByTitle("Platform Docs"));
+  expect(await screen.findByText("从左侧选择一张表或一份文档")).toBeTruthy();
+
+  await waitFor(() => {
+    const stale = projectRequests(fetcher, "docs").filter((url) =>
+      decodeURIComponent(url).includes(oldTable),
+    );
+    expect(stale).toEqual([]);
+  });
+});
+
+test("切换项目后不用旧项目已选文档向新项目请求文档", async () => {
+  installFetch(
+    [],
+    [
+      {
+        ref: "category:metrics",
+        name: "指标",
+        description: "",
+        documents: [
+          { ref: "document:metrics/sales.md", path: "metrics/sales.md" },
+        ],
+      },
+    ],
+  );
+  const fetcher = fetch as unknown as ReturnType<typeof vi.fn>;
+  render(<KnowledgePage token="token" messages={getMessages("zh")} />);
+
+  fireEvent.click(await screen.findByText("知识文档 (1)"));
+  fireEvent.click(await screen.findByText("指标"));
+  fireEvent.click(
+    await screen.findByRole("button", { name: "metrics/sales.md" }),
+  );
+  expect(await screen.findByText(/订单定义/)).toBeTruthy();
+
+  fireEvent.mouseDown(screen.getByRole("combobox", { name: "项目" }));
+  fireEvent.click(await screen.findByTitle("Platform Docs"));
+  expect(await screen.findByText("从左侧选择一张表或一份文档")).toBeTruthy();
+
+  await waitFor(() => {
+    const stale = projectRequests(fetcher, "docs").filter((url) =>
+      url.includes("doc_id=metrics%2Fsales.md"),
+    );
+    expect(stale).toEqual([]);
+  });
+});

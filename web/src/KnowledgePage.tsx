@@ -32,6 +32,8 @@ type LayerId =
 
 const TABLE_PAGE_SIZE = 100;
 
+type ProjectBound<T> = { project: string; value: T };
+
 export const WAREHOUSE_LAYERS: {
   id: LayerId;
   pattern: RegExp | null;
@@ -71,12 +73,22 @@ export function KnowledgePage({
     projects.find((row) => row.id === project)?.type !== "document";
   const [tables, setTables] = useState<TableSummary[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
-  const [selected, setSelected] = useState<TableSummary | null>(null);
+  const [selection, setSelection] = useState<ProjectBound<TableSummary> | null>(
+    null,
+  );
+  const [readingDocState, setReadingDocState] =
+    useState<ProjectBound<Document> | null>(null);
+  const selected = selection?.project === project ? selection.value : null;
+  const readingDoc =
+    readingDocState?.project === project ? readingDocState.value : null;
+  const setSelected = (table: TableSummary | null) =>
+    setSelection(table ? { project, value: table } : null);
+  const setReadingDoc = (document: Document | null) =>
+    setReadingDocState(document ? { project, value: document } : null);
   const [detail, setDetail] = useState<TableDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState(false);
   const [detailRetry, setDetailRetry] = useState(0);
-  const [readingDoc, setReadingDoc] = useState<Document | null>(null);
   const [linkedDocument, setLinkedDocument] = useState<Document | null>(null);
   const [expandedColumn, setExpandedColumn] = useState("");
   const [lineage, setLineage] = useState<TableLineage | null>(null);

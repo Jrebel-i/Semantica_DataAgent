@@ -363,3 +363,57 @@ test("切换项目清空旧类别并丢弃迟到的类别响应", async () => {
   expect(screen.queryByRole("option", { name: "旧类别" })).toBeNull();
   expect(screen.getByRole("option", { name: "财务" })).toBeTruthy();
 });
+
+test("切换项目后不用旧项目的检索词向新项目自动发起检索", async () => {
+  const fetcher = vi.fn(async (url: string) => {
+    if (url === "/api/v1/projects") return Response.json(projects);
+    if (url.startsWith("/api/v1/categories")) {
+      const projectId =
+        new URL(url, "http://localhost").searchParams.get("project") ?? "";
+      return Response.json([
+        {
+          name: projectId === "docs" ? "平台" : "指标",
+          ref: projectId === "docs" ? "category:platform" : "category:metrics",
+          description: "",
+          documents: [],
+        },
+      ]);
+    }
+    return Response.json([]);
+  });
+  vi.stubGlobal("fetch", fetcher);
+  render(<SearchPage token="token" messages={getMessages("zh")} />);
+
+  await screen.findByRole("option", { name: "指标" });
+  fireEvent.change(screen.getByLabelText("查询内容"), {
+    target: { value: "app_air_abtest_markup_di" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: /检\s*索/ }));
+  await waitFor(() =>
+    expect(
+      fetcher.mock.calls.some(
+        ([url]) =>
+          String(url).startsWith("/api/v1/search?") &&
+          new URL(String(url), "http://localhost").searchParams.get(
+            "project",
+          ) === "default",
+      ),
+    ).toBe(true),
+  );
+
+  fireEvent.mouseDown(screen.getByRole("combobox", { name: "项目" }));
+  fireEvent.click(await screen.findByTitle("Platform Docs"));
+  expect(await screen.findByRole("option", { name: "平台" })).toBeTruthy();
+
+  await waitFor(() => {
+    const stale = fetcher.mock.calls
+      .map(([url]) => String(url))
+      .filter(
+        (url) =>
+          url.startsWith("/api/v1/search?") &&
+          new URL(url, "http://localhost").searchParams.get("project") ===
+            "docs",
+      );
+    expect(stale).toEqual([]);
+  });
+});
