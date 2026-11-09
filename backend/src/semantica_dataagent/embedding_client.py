@@ -10,6 +10,7 @@ load produced by a build (and vice versa).
 from __future__ import annotations
 
 import math
+import os
 import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
@@ -189,6 +190,14 @@ class _ConcurrencyLimiter:
 
 
 _LIMITER = _ConcurrencyLimiter()
+
+
+def _reset_after_fork() -> None:
+    global _LIMITER
+    _LIMITER = _ConcurrencyLimiter()
+
+
+os.register_at_fork(after_in_child=_reset_after_fork)
 
 
 def _parse_vectors(payload, inputs: int) -> list[list[float]]:

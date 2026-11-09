@@ -2,6 +2,7 @@
 
 import json
 import logging
+import os
 import threading
 import time
 from datetime import UTC, datetime
@@ -85,6 +86,16 @@ class BuildQueue:
         with self._condition:
             self._wake = True
             self._condition.notify_all()
+
+    def fork_child(self):
+        """Drop parent-thread state inherited by a forked child (#231)."""
+        self._condition = threading.Condition()
+        self._thread = None
+        self._workers = set()
+        self._stopping = False
+        self._wake = False
+        self._running = {}
+        self._excluded = frozenset()
 
     def stop(self, timeout=5):
         with self._condition:
@@ -221,6 +232,13 @@ class BuildQueue:
 
 
 build_queue = BuildQueue()
+
+
+def _reset_after_fork() -> None:
+    build_queue.fork_child()
+
+
+os.register_at_fork(after_in_child=_reset_after_fork)
 
 
 def add_queued_build(

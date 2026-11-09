@@ -1,7 +1,44 @@
+import faulthandler
 import os
+import signal
+import sys
+
+import pytest
 
 os.environ.setdefault("TEST_EMBEDDING_URL", "http://127.0.0.1:17998")
 os.environ.setdefault("TEST_EMBEDDING_MODEL", "model/bge-small-zh-v1.5")
+
+DEFAULT_TEST_TIMEOUT_SECONDS = 300
+
+
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers",
+        "extended_timeout(seconds): allow a known-slow test more than the "
+        "default 300-second hang guard",
+    )
+
+
+@pytest.fixture(autouse=True)
+def _hang_guard(request):
+    """Fail a test that runs past its limit, dumping every thread's stack first."""
+    if not hasattr(signal, "SIGALRM"):
+        yield
+        return
+    marker = request.node.get_closest_marker("extended_timeout")
+    seconds = marker.args[0] if marker and marker.args else DEFAULT_TEST_TIMEOUT_SECONDS
+
+    def expire(_signum, _frame):
+        faulthandler.dump_traceback(file=sys.__stderr__, all_threads=True)
+        raise TimeoutError(f"{request.node.nodeid} exceeded {seconds} seconds")
+
+    previous = signal.signal(signal.SIGALRM, expire)
+    signal.alarm(seconds)
+    try:
+        yield
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, previous)
 
 
 def cleanup_test_generations(driver, vectors, configured_generation):

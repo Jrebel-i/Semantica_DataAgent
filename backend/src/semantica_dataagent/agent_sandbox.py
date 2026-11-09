@@ -256,6 +256,15 @@ ACTIVE: dict[str, SessionSandbox] = {}
 ACTIVE_LOCK = threading.Lock()
 
 
+def _reset_after_fork() -> None:
+    global ACTIVE_LOCK
+    ACTIVE_LOCK = threading.Lock()
+    ACTIVE.clear()
+
+
+os.register_at_fork(after_in_child=_reset_after_fork)
+
+
 def register_session(conversation_id: str, sandbox: SessionSandbox) -> None:
     with ACTIVE_LOCK:
         if conversation_id in ACTIVE:

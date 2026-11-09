@@ -186,10 +186,11 @@
 - 怎么提前发现：脚本先打印基线通过数；变异后看“失败数 > 0 且来自目标测试”；没变红的变异逐个判断：改动是否真的改变行为，不是就记为等价变异写进 PR。
 - Seen 1× (spec #171 · 2026-11-09)
 
-**不要把十几个测试文件放进同一个 pytest 进程一起跑；逐文件跑并加超时。**
-- 证据：#216 复核时把 12 个文件放进一个 pytest 进程，挂了 2 小时 37 分，CPU 几乎为零；逐个文件跑全部通过，每个 4–36 秒。疑似 `test_build_queue` 里 fork 子进程的测试与其它模块相互影响，未单独定位。
-- 怎么提前发现：派发和复核都用“逐文件 + `timeout`”；挂起后先用 `ps -o etime,pcpu` 判断是慢还是卡。
-- Seen 1× (spec #171 · 2026-11-09)
+**多个测试文件同进程挂起时，先抓 fork 子进程的栈；不要靠逐文件跑或加大超时绕过去。**
+- 证据：#216 复核时把 12 个文件放进一个 pytest 进程，挂了 2 小时 37 分，CPU 几乎为零；#231 用 `faulthandler_timeout=120` 抓到子进程栈：`test_build_queue` 的 `os.fork()` 子进程继承了父进程里已被其它线程持有的数据库工厂锁 / 连接池 mutex / 知识库读写锁，卡在 `sqlalchemy/util/queue.py` 的 `get()` 和 `_sessions_for_path` 上；逐文件跑不会同时有持锁线程，所以全部通过。
+- 修复：所有进程级锁、连接池和后台线程状态注册 `os.register_at_fork(after_in_child=...)` 在子进程重建；`backend/tests/test_fork_safety.py` 覆盖；`backend/pyproject.toml` 默认 `faulthandler_timeout=120`，`conftest.py` 每测 300 秒 `SIGALRM` 打印全线程栈。
+- 怎么提前发现：同进程偶发挂起时，用 `timeout` + pytest 的 `faulthandler_timeout` 拿父进程栈，再按 `ps --ppid <pytest pid>` 找 fork 子进程，`kill -USR1`（子进程先 `faulthandler.register`）或 `SIGABRT` 取子进程栈；栈里出现 `lock.acquire` / `queue.get` / 连接池就是继承锁死锁，不是慢。
+- Seen 2× (spec #171 · 2026-11-09; #231 · 2026-11-09)
 
 **杀进程不要用 `pkill -f` 匹配命令行，它会匹配到自己所在的 shell 命令。**
 - 证据：想杀挂起的 pytest，`pkill -f "…/.venv/bin/pytest"` 把当前这条命令的 shell 也杀了（退出码 144）。

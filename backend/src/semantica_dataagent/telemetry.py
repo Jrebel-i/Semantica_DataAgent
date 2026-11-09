@@ -2,6 +2,7 @@
 
 import hashlib
 import logging
+import os
 import queue
 import re
 import threading
@@ -155,6 +156,16 @@ def configuration():
 _queue = queue.Queue(maxsize=256)
 _lock = threading.Lock()
 _worker = None
+
+
+def _reset_after_fork() -> None:
+    global _queue, _lock, _worker
+    _queue = queue.Queue(maxsize=256)
+    _lock = threading.Lock()
+    _worker = None
+
+
+os.register_at_fork(after_in_child=_reset_after_fork)
 
 
 def _consume():
