@@ -45,6 +45,7 @@ def _success_body(
     thinking: bool = False,
     truncated: bool = False,
     include_text: bool = False,
+    incomplete_reason: str = "max_output_tokens",
 ) -> dict:
     if provider_type == "anthropic-messages":
         content: list[dict] = []
@@ -123,7 +124,7 @@ def _success_body(
             "output": output,
         }
         if truncated:
-            body["incomplete_details"] = {"reason": "max_output_tokens"}
+            body["incomplete_details"] = {"reason": incomplete_reason}
         return body
     parts: list[dict] = []
     if thinking or truncated:
@@ -318,6 +319,7 @@ class FakeGateway:
         vision_thinking: bool = False,
         vision_truncated: bool = False,
         vision_truncated_text: bool = False,
+        vision_incomplete_reason: str = "max_output_tokens",
     ):
         self.provider_type = provider_type
         self.vision_status = vision_status
@@ -332,6 +334,7 @@ class FakeGateway:
         self.vision_thinking = vision_thinking
         self.vision_truncated = vision_truncated
         self.vision_truncated_text = vision_truncated_text
+        self.vision_incomplete_reason = vision_incomplete_reason
         self.requests: list[dict] = []
         self.vision_sizes: list[tuple[int, int]] = []
         self.vision_statuses: list[int] = []
@@ -415,6 +418,7 @@ class _GatewayHandler(BaseHTTPRequestHandler):
                     thinking=gateway.vision_thinking,
                     truncated=gateway.vision_truncated,
                     include_text=gateway.vision_truncated_text,
+                    incomplete_reason=gateway.vision_incomplete_reason,
                 )
             else:
                 payload = _success_body(
@@ -851,6 +855,23 @@ def test_probe_reports_truncated_vision_with_whitespace_text_as_unknown(client):
     assert response.status_code == 200, response.text
     assert response.json()["vision"] == "unknown"
     assert "截断" in response.json()["notes"]
+
+
+def test_probe_does_not_treat_other_incomplete_reasons_as_truncation(client):
+    c, token = client
+    with _gateway(
+        "openai-responses",
+        vision_truncated=True,
+        vision_incomplete_reason="content_filter",
+    ) as (_, base_url):
+        provider_id = _create_provider(
+            c, token, provider_type="openai-responses", base_url=base_url
+        )
+        response = _probe(c, token, provider_id)
+
+    assert response.status_code == 200, response.text
+    assert response.json()["vision"] == "no"
+    assert "截断" not in response.json()["notes"]
 
 
 def test_probe_accepts_images_at_least_64_pixels_like_qwen(client):
