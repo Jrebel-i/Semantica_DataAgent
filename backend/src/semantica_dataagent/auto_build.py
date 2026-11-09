@@ -10,6 +10,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import func, text
 
 from . import project_context
+from .build_queue import active_build, has_successful_full_build
 from .db import Build, ProjectPendingBuild, ProjectSetting, Setting, sessions
 
 LOGGER = logging.getLogger(__name__)
@@ -101,7 +102,12 @@ def discard_pending_builds(project_id: str, db=None) -> None:
 
 
 def process_due_pending_builds(now: datetime | None = None) -> list[str]:
-    """Delete due requests and queue one incremental build in one transaction."""
+    """Delete due requests and queue one build in one transaction.
+
+    A project without a successful full build gets a full build; an incremental
+    build would be rejected before it starts.  One already queued build still
+    merges the request, while a running build gets one follow-up.
+    """
     now = now or datetime.now(UTC)
     stamp = now.isoformat()
     processed: list[str] = []
@@ -120,19 +126,15 @@ def process_due_pending_builds(now: datetime | None = None) -> list[str]:
                 continue
             if not auto_build_enabled(project_id, db):
                 continue
-            queued = (
-                db.query(Build)
-                .filter(
-                    func.coalesce(Build.project_id, "default") == project_id,
-                    Build.status == "queued",
-                    Build.build_type == "incremental",
-                )
-                .order_by(Build.id)
-                .first()
-            )
+            queued = active_build(db, project_id, status="queued")
             if queued is None:
+                build_type = (
+                    "incremental"
+                    if has_successful_full_build(db, project_id)
+                    else "full"
+                )
                 project_context.add_queued_build(
-                    db, "incremental", "upload", project_id=project_id
+                    db, build_type, "upload", project_id=project_id
                 )
                 processed.append(project_id)
     if processed:
