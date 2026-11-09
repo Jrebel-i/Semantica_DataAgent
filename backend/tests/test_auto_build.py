@@ -9,6 +9,7 @@ import sqlite3
 import time
 from datetime import UTC, datetime, timedelta
 
+import pytest
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
@@ -65,6 +66,20 @@ def build_rows(project_id="default"):
             "FROM builds WHERE project_id = ? ORDER BY id",
             (project_id,),
         ).fetchall()
+
+
+def insert_setting(key, value):
+    with sqlite3.connect(os.environ["DATAAGENT_DB_PATH"]) as db:
+        db.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+            (key, value),
+        )
+
+
+def pending_due(project_id="default"):
+    rows = pending_rows(project_id)
+    assert len(rows) == 1, rows
+    return datetime.fromisoformat(rows[0][1])
 
 
 def insert_build(
@@ -576,3 +591,184 @@ def test_auto_build_switch_off_skips_new_project_upload(tmp_path, monkeypatch):
         time.sleep(1.5)
         assert build_rows(project_id) == []
         assert pending_rows(project_id) == []
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (None, 30.0),
+        ("", 30.0),
+        ("   ", 30.0),
+        ("\n\t", 30.0),
+        ("0", 0.0),
+        ("5", 5.0),
+        ("-3", 0.0),
+        ("not-a-number", 30.0),
+        ("nan", 30.0),
+        ("inf", 30.0),
+    ],
+)
+def test_debounce_seconds_reads_setting_values(tmp_path, monkeypatch, value, expected):
+    from semantica_dataagent import auto_build
+    from semantica_dataagent.db import sessions
+
+    configure(tmp_path, monkeypatch)
+    if value is not None:
+        insert_setting(auto_build.DEBOUNCE_KEY, value)
+    with sessions()() as db:
+        assert auto_build.debounce_seconds(db) == expected
+
+
+def test_upload_without_debounce_setting_uses_default_window(tmp_path, monkeypatch):
+    from semantica_dataagent import auto_build
+    from semantica_dataagent.app import app
+
+    token = configure(tmp_path, monkeypatch)
+    pause_build_queue(monkeypatch)
+    monkeypatch.setattr(auto_build.pending_build_scheduler, "start", lambda: None)
+    auth = headers(token)
+    with TestClient(app, headers=auth) as client:
+        assert (
+            client.put(
+                "/api/v1/settings",
+                json={"values": {"source_directory": str(tmp_path / "sources")}},
+            ).status_code
+            == 200
+        )
+        before = datetime.now(UTC)
+        assert (
+            upload(client, auth, "default", "default.md", "default\n").status_code
+            == 200
+        )
+
+        due = pending_due("default")
+        window = (due - before).total_seconds()
+        assert 28 <= window <= 33, f"缺失设置没有使用 30 秒默认窗口: {window}"
+        status = client.get("/api/v1/projects/default/source-status").json()
+        assert status["state"] == "pending", status
+        assert 25 <= status["due_in_seconds"] <= 31, status
+        assert build_rows() == []
+
+
+def test_explicit_zero_debounce_queues_immediately(tmp_path, monkeypatch):
+    from semantica_dataagent import auto_build
+    from semantica_dataagent.app import app
+
+    token = configure(tmp_path, monkeypatch)
+    pause_build_queue(monkeypatch)
+    monkeypatch.setattr(auto_build.pending_build_scheduler, "start", lambda: None)
+    auth = headers(token)
+    with TestClient(app, headers=auth) as client:
+        assert (
+            client.put(
+                "/api/v1/settings",
+                json={
+                    "values": {
+                        "source_directory": str(tmp_path / "sources"),
+                        "auto_build_debounce_seconds": "0",
+                    }
+                },
+            ).status_code
+            == 200
+        )
+        before = datetime.now(UTC)
+        assert upload(client, auth, "default", "zero.md", "zero\n").status_code == 200
+
+        due = pending_due("default")
+        assert (due - before).total_seconds() < 2, due
+        assert auto_build.process_due_pending_builds() == ["default"]
+        assert len([row for row in build_rows() if row[1] == "queued"]) == 1
+        assert pending_rows() == []
+
+
+def test_explicit_five_second_debounce_is_honoured(tmp_path, monkeypatch):
+    from semantica_dataagent import auto_build
+    from semantica_dataagent.app import app
+
+    token = configure(tmp_path, monkeypatch)
+    pause_build_queue(monkeypatch)
+    monkeypatch.setattr(auto_build.pending_build_scheduler, "start", lambda: None)
+    auth = headers(token)
+    with TestClient(app, headers=auth) as client:
+        assert (
+            client.put(
+                "/api/v1/settings",
+                json={
+                    "values": {
+                        "source_directory": str(tmp_path / "sources"),
+                        "auto_build_debounce_seconds": "5",
+                    }
+                },
+            ).status_code
+            == 200
+        )
+        before = datetime.now(UTC)
+        assert upload(client, auth, "default", "five.md", "five\n").status_code == 200
+
+        due = pending_due("default")
+        assert 4 <= (due - before).total_seconds() <= 6, due
+        status = client.get("/api/v1/projects/default/source-status").json()
+        assert status["state"] == "pending", status
+        assert 4 <= status["due_in_seconds"] <= 5, status
+
+
+@pytest.mark.parametrize("value", ["", "   ", "\n\t"])
+def test_blank_debounce_setting_uses_default_window(tmp_path, monkeypatch, value):
+    from semantica_dataagent import auto_build
+    from semantica_dataagent.app import app
+
+    token = configure(tmp_path, monkeypatch)
+    pause_build_queue(monkeypatch)
+    monkeypatch.setattr(auto_build.pending_build_scheduler, "start", lambda: None)
+    insert_setting(auto_build.DEBOUNCE_KEY, value)
+    auth = headers(token)
+    with TestClient(app, headers=auth) as client:
+        assert (
+            client.put(
+                "/api/v1/settings",
+                json={"values": {"source_directory": str(tmp_path / "sources")}},
+            ).status_code
+            == 200
+        )
+        before = datetime.now(UTC)
+        assert upload(client, auth, "default", "blank.md", "blank\n").status_code == 200
+
+        due = pending_due("default")
+        assert 28 <= (due - before).total_seconds() <= 33, due
+        status = client.get("/api/v1/projects/default/source-status").json()
+        assert status["state"] == "pending", status
+        assert 25 <= status["due_in_seconds"] <= 31, status
+
+
+def test_two_uploads_without_setting_share_one_debounce_window(tmp_path, monkeypatch):
+    from semantica_dataagent import auto_build
+    from semantica_dataagent.app import app
+
+    token = configure(tmp_path, monkeypatch)
+    pause_build_queue(monkeypatch)
+    monkeypatch.setattr(auto_build.pending_build_scheduler, "start", lambda: None)
+    auth = headers(token)
+    with TestClient(app, headers=auth) as client:
+        assert (
+            client.put(
+                "/api/v1/settings",
+                json={"values": {"source_directory": str(tmp_path / "sources")}},
+            ).status_code
+            == 200
+        )
+        assert upload(client, auth, "default", "one.md", "one\n").status_code == 200
+        before = datetime.now(UTC)
+        assert upload(client, auth, "default", "two.md", "two\n").status_code == 200
+
+        rows = pending_rows("default")
+        assert len(rows) == 1, rows
+        due = pending_due("default")
+        window = (due - before).total_seconds()
+        assert 28 <= window <= 33, f"两次上传没有共用一个 30 秒窗口: {window}"
+
+        assert auto_build.process_due_pending_builds(
+            due + timedelta(milliseconds=1)
+        ) == ["default"]
+        assert pending_rows() == []
+        queued = [row for row in build_rows() if row[1] == "queued"]
+        assert len(queued) == 1, queued
