@@ -3516,6 +3516,7 @@ code {
 }
 @media (max-width: 768px) {
   .workspace {
+    flex-direction: column;
     min-width: 0;
   }
   .workspace-content {
