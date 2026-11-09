@@ -889,6 +889,36 @@ test("切换项目后不用旧项目选中的表向新项目请求详情、血�
   });
 });
 
+test("切换到另一个数仓项目也不复用旧项目选中的表", async () => {
+  const oldTable = "app_air_abtest_markup_di";
+  installFetch(
+    (projectId) =>
+      projectId === "finance"
+        ? [table("dwd", "finance_orders")]
+        : [table("app", oldTable)],
+    [],
+    undefined,
+    [project("default", "业务数据"), project("finance", "财务数据")],
+  );
+  const fetcher = fetch as unknown as ReturnType<typeof vi.fn>;
+  render(<KnowledgePage token="token" messages={getMessages("zh")} />);
+
+  expect(await screen.findByRole("button", { name: oldTable })).toBeTruthy();
+  expect(await screen.findByText("日期分区")).toBeTruthy();
+
+  fireEvent.mouseDown(screen.getByRole("combobox", { name: "项目" }));
+  fireEvent.click(await screen.findByTitle("财务数据"));
+  expect(await screen.findByText("dwd (1)")).toBeTruthy();
+  expect(await screen.findByText("从左侧选择一张表或一份文档")).toBeTruthy();
+
+  await waitFor(() => {
+    const stale = projectRequests(fetcher, "finance").filter((url) =>
+      decodeURIComponent(url).includes(oldTable),
+    );
+    expect(stale).toEqual([]);
+  });
+});
+
 test("切换项目后不用旧项目已选文档向新项目请求文档", async () => {
   installFetch(
     [],
