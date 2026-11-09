@@ -27,8 +27,10 @@ def debounce_seconds(db=None) -> float:
         with sessions()() as own:
             return debounce_seconds(own)
     row = db.get(Setting, DEBOUNCE_KEY)
+    if row is None or row.value is None or not row.value.strip():
+        return DEFAULT_DEBOUNCE_SECONDS
     try:
-        value = float(row.value) if row is not None and row.value else 0.0
+        value = float(row.value)
     except (TypeError, ValueError):
         return DEFAULT_DEBOUNCE_SECONDS
     if not math.isfinite(value):
