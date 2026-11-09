@@ -417,3 +417,83 @@ test("切换项目后不用旧项目的检索词向新项目自动发起检索",
     expect(stale).toEqual([]);
   });
 });
+
+test("切换项目时中止旧检索且不向新项目复用旧检索词", async () => {
+  const pendingSearch = deferredResponse();
+  const fetcher = vi.fn(async (url: string) => {
+    if (url === "/api/v1/projects") return Response.json(projects);
+    if (url.startsWith("/api/v1/categories")) {
+      const projectId =
+        new URL(url, "http://localhost").searchParams.get("project") ?? "";
+      return Response.json([
+        {
+          name: projectId === "docs" ? "平台" : "指标",
+          ref: projectId === "docs" ? "category:platform" : "category:metrics",
+          description: "",
+          documents: [],
+        },
+      ]);
+    }
+    if (url.startsWith("/api/v1/search")) {
+      const projectId =
+        new URL(url, "http://localhost").searchParams.get("project") ?? "";
+      return projectId === "default"
+        ? pendingSearch.promise
+        : Response.json([]);
+    }
+    return Response.json([]);
+  });
+  vi.stubGlobal("fetch", fetcher);
+  render(<SearchPage token="token" messages={getMessages("zh")} />);
+
+  await screen.findByRole("option", { name: "指标" });
+  fireEvent.change(screen.getByLabelText("查询内容"), {
+    target: { value: "app_air_abtest_markup_di" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: /检\s*索/ }));
+  await waitFor(() =>
+    expect(
+      fetcher.mock.calls.some(
+        ([url]) =>
+          String(url).startsWith("/api/v1/search?") &&
+          String(url).includes("project=default"),
+      ),
+    ).toBe(true),
+  );
+
+  fireEvent.mouseDown(screen.getByRole("combobox", { name: "项目" }));
+  fireEvent.click(await screen.findByTitle("Platform Docs"));
+  expect(await screen.findByRole("option", { name: "平台" })).toBeTruthy();
+
+  await act(async () => {
+    pendingSearch.resolve(
+      Response.json([
+        {
+          ref: "document:metrics/old#chunk-1",
+          type: "document",
+          name: "旧项目命中",
+          content: "旧结果",
+          score: 0.1,
+          sources: ["fulltext"],
+          confidence: "high",
+          ambiguous: false,
+          ambiguity_refs: [],
+        },
+      ]),
+    );
+    await pendingSearch.promise;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+
+  expect(screen.queryByText("旧项目命中")).toBeNull();
+  expect(
+    fetcher.mock.calls
+      .map(([url]) => String(url))
+      .filter(
+        (url) =>
+          url.startsWith("/api/v1/search?") &&
+          new URL(url, "http://localhost").searchParams.get("project") ===
+            "docs",
+      ),
+  ).toEqual([]);
+});
