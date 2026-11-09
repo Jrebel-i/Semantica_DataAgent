@@ -954,3 +954,41 @@ test("切换项目后不用旧项目已选文档向新项目请求文档", async
     expect(stale).toEqual([]);
   });
 });
+
+test("切换项目后不再用旧项目的关联文档向新项目请求文档", async () => {
+  const rowWithDocs: TableRow = {
+    ...table("dwd", "orders"),
+    documents: [
+      {
+        ref: "document:metrics/sales.md",
+        path: "metrics/sales.md",
+        category: "metrics",
+      },
+    ],
+  };
+  installFetch(
+    (projectId) => (projectId === "docs" ? [] : [rowWithDocs]),
+    [],
+    undefined,
+    projects,
+  );
+  const fetcher = fetch as unknown as ReturnType<typeof vi.fn>;
+  render(<KnowledgePage token="token" messages={getMessages("zh")} />);
+
+  fireEvent.click(
+    await screen.findByRole("button", { name: "metrics/sales.md" }),
+  );
+  expect(await screen.findByText(/订单定义/)).toBeTruthy();
+
+  fireEvent.mouseDown(screen.getByRole("combobox", { name: "项目" }));
+  fireEvent.click(await screen.findByTitle("Platform Docs"));
+  expect(await screen.findByText("从左侧选择一张表或一份文档")).toBeTruthy();
+
+  await waitFor(() => {
+    const stale = projectRequests(fetcher, "docs").filter((url) =>
+      url.includes("doc_id=metrics%2Fsales.md"),
+    );
+    expect(stale).toEqual([]);
+  });
+  expect(screen.queryByText(/订单定义/)).toBeNull();
+});
