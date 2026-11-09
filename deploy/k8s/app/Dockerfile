@@ -15,7 +15,7 @@ RUN python -c "import hashlib, pathlib, urllib.request; p=pathlib.Path('/usr/loc
 COPY backend/pyproject.toml backend/uv.lock ./backend/
 COPY backend/src ./backend/src
 COPY schemas ./schemas
-COPY skills/dataagent-retrieval ./skills/dataagent-retrieval
+COPY skills ./skills
 RUN uv sync --directory backend --locked --no-dev
 COPY --from=frontend /app/web/dist /app/static
 ENV PATH=/app/backend/.venv/bin:$PATH DATAAGENT_LISTEN=0.0.0.0:8000 DATAAGENT_STATIC_DIR=/app/static
