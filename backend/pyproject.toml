@@ -51,3 +51,6 @@ build-backend = "hatchling.build"
 "../schemas/v2" = "semantica_dataagent/schemas/v2"
 "../skills/dataagent-retrieval/SKILL.md" = "semantica_dataagent/skills/dataagent-retrieval/SKILL.md"
 "../skills/dataagent-document-retrieval/SKILL.md" = "semantica_dataagent/skills/dataagent-document-retrieval/SKILL.md"
+
+[tool.pytest.ini_options]
+faulthandler_timeout = 120

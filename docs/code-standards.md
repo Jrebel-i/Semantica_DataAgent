@@ -18,6 +18,8 @@
 | OpenAPI 与类型漂移 | `pnpm --dir web check:types`；更新时先 `uv run --directory backend python -m semantica_dataagent.openapi > web/contract/openapi.json`，再 `pnpm --dir web types` |
 | 全量套件 | 仅发布级验收时执行项目所有测试；本票按任务书只运行相关测试。 |
 
+后端 pytest 默认带挂起保护。`backend/pyproject.toml` 设置 `faulthandler_timeout = 120`：单个测试超过 120 秒时打印进程内所有线程的栈，但不终止测试。`backend/tests/conftest.py` 再给每个测试设置 300 秒的 `SIGALRM` 上限，超时会先打印所有线程的栈，再以 `TimeoutError` 结束该测试。已知的慢测试用 `@pytest.mark.extended_timeout(seconds)` 单独放宽。挂起时先看这两段栈，不要靠继续加大超时掩盖。fork 出来的子进程不在 pytest 的监控范围内；不要指望 pytest 的 `faulthandler_timeout` 覆盖它。子进程里也不要再调用 `faulthandler.dump_traceback_later`：父进程的 `faulthandler_timeout` 已经启动了同名定时器，fork 后的子进程可能卡在它的全局状态上。由父进程在超时后向子进程发 `SIGABRT`（pytest 已启用 faulthandler），或先在子进程 `faulthandler.register(signal.SIGUSR1)` 再由父进程 `kill -USR1` 取证。
+
 ## API 时间字段
 
 所有 REST 响应里的时间字段一律是 ISO 8601、带显式 UTC 偏移（统一以 Pydantic 输出的 `Z` 结尾）。数据库里已有的无时区值按 UTC 解释，在序列化时补上时区，不能把无时区字符串直接返回给客户端；秒级精度不丢。
