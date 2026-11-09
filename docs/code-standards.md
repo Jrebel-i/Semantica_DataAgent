@@ -258,7 +258,7 @@ grep -E '^E2E_(RESULT|DONE) ' "$LOG"
 
 zip 可以直接包含文档，也可以包含同名知识类顶层文件夹；使用 `category` 时顶层知识类文件夹会被去掉。单次上传最多 1000 个文件（zip 中包括目录条目），解压后总大小不超过 20 MiB；源文件浏览支持 UTF-8 文本，二进制文件可以下载。源目录必须在项目仓库以外；首次上传将已有源文件一并纳入首个提交。上传以令牌名称为 Git 作者，Git 无法表示的名称（首尾空白、尖括号或换行）需更换令牌名称。进程间上传使用目录锁串行化；仓库已有暂存内容时拒绝上传，避免把其他人的修改收入提交。提交信息为中文，包含知识类、新增与覆盖数量，替换模式还包含删除数量。
 
-上传接口在 Git 提交成功后立即返回；若项目的 `auto_build` 开关开启（默认开启），同时把该项目写入 `project_pending_builds`，把 `due_at` 推迟到“现在 + `auto_build_debounce_seconds`（默认 30 秒）”。请求只存在数据库中，进程在窗口内被杀也不会丢。项目已有排队中的增量构建时不重复入队；只有正在运行的构建时会多排一个后续增量构建，同一项目最多一个排队中的增量构建。
+上传接口在 Git 提交成功后立即返回；若项目的 `auto_build` 开关开启（默认开启），同时把该项目写入 `project_pending_builds`，把 `due_at` 推迟到“现在 + `auto_build_debounce_seconds`（默认 30 秒）”。请求只存在数据库中，进程在窗口内被杀也不会丢。项目已有排队中的构建（全量或增量）时不重复入队；只有正在运行的构建时会多排一个后续构建，后续构建按该项目是否已有成功的全量构建选择全量或增量，同一项目最多一个排队中的构建。
 
 ## 表检索与文档关联
 
@@ -272,7 +272,7 @@ zip 可以直接包含文档，也可以包含同名知识类顶层文件夹；�
 
 `POST /api/v1/builds` 不传请求体时保持原全量构建；传 `{"build_type":"incremental"}` 在当前知识代增量构建，返回记录包含构建类型、令牌名称和源目录 commit。源目录未处于干净 Git 提交时 commit 为 null。增量以同一知识代上一次成功构建的源文件哈希为基线；首次构建、源目录/启用插件/过滤规则/维度上限/embedding 配置变化或最近一次全量构建失败后需先做全量构建。文件统计区分新增、变化、删除；自动生成索引的派生哈希不计入源文件统计。上传和构建读取共享目录锁，构建在读取完来源快照后释放锁。调度按项目独立计时：默认项目的 `schedule_interval_seconds` 仍读全局设置，其它项目读项目级设置；`GET/PUT /api/v1/projects/{id}/schedule` 读写 `interval_seconds`（0 关闭，1–604800 秒启用），保存后该项目立即重新计时，新建项目默认关闭，重启后逐项目恢复。定时构建与手动、纠错构建在同一项目内去重，并与其它项目并行。
 
-上传后的自动构建由 `project_pending_builds` 驱动：每 1 秒检查到期的请求，在同一个事务里删除请求并按上面的合并规则入队 `triggered_by="upload"` 的增量构建。不同项目互不影响；关闭 `auto_build` 时上传只提交、不登记请求，已登记但未到期的请求立即丢弃。`GET/PUT /api/v1/projects/{id}/auto-build`（项目管理员）读写开关；`GET /api/v1/projects/{id}/source-status`（项目成员可读）返回 `state`、`due_in_seconds`、`last_build_id`、`source_commit`、`auto_build` 和失败时的 `error`（最多 300 字符）。`state` 口径：有运行中的构建为 `building`；有待构建请求或排队中的增量构建为 `pending`；最近一次构建失败为 `failed`；最近一次成功构建的 `source_commit` 等于源仓库当前 HEAD 为 `effective`；没有任何构建为 `unknown`。最近一次成功构建落后于 HEAD 且没有排队时也返回 `pending`。
+上传后的自动构建由 `project_pending_builds` 驱动：每 1 秒检查到期的请求，在同一个事务里删除请求并按上面的合并规则入队 `triggered_by="upload"` 的构建：项目还没有任何成功的全量构建时入队全量，已有成功全量后入队增量。不同项目互不影响；关闭 `auto_build` 时上传只提交、不登记请求，已登记但未到期的请求立即丢弃。`GET/PUT /api/v1/projects/{id}/auto-build`（项目管理员）读写开关；`GET /api/v1/projects/{id}/source-status`（项目成员可读）返回 `state`、`due_in_seconds`、`last_build_id`、`source_commit`、`auto_build` 和失败时的 `error`（最多 300 字符）。`state` 口径：有运行中的构建为 `building`；有待构建请求或排队中的增量构建为 `pending`；最近一次构建失败为 `failed`；最近一次成功构建的 `source_commit` 等于源仓库当前 HEAD 为 `effective`；没有任何构建为 `unknown`。最近一次成功构建落后于 HEAD 且没有排队时也返回 `pending`。
 
 ## 纠错审批与知识缺口
 

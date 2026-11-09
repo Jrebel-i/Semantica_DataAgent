@@ -24,12 +24,18 @@ def active_build(
     build_type=None,
     triggered_by=None,
     correction_proposal_id=None,
+    status=None,
 ):
     """Return an active build matching a trigger, used to merge duplicate triggers."""
     query = db.query(Build).filter(
         func.coalesce(Build.project_id, "default") == project_id,
-        Build.status.in_(("queued", "running")),
     )
+    if status is None:
+        query = query.filter(Build.status.in_(("queued", "running")))
+    elif isinstance(status, str):
+        query = query.filter(Build.status == status)
+    else:
+        query = query.filter(Build.status.in_(tuple(status)))
     if build_type is not None:
         query = query.filter(Build.build_type == build_type)
     if triggered_by is not None:
@@ -37,6 +43,20 @@ def active_build(
     if correction_proposal_id is not None:
         query = query.filter(Build.correction_proposal_id == correction_proposal_id)
     return query.order_by(Build.id).first()
+
+
+def has_successful_full_build(db, project_id):
+    """Whether a project ever finished a full build successfully."""
+    return (
+        db.query(Build.id)
+        .filter(
+            func.coalesce(Build.project_id, "default") == project_id,
+            Build.status == "succeeded",
+            or_(Build.build_type == "full", Build.build_type.is_(None)),
+        )
+        .first()
+        is not None
+    )
 
 
 class BuildQueue:
