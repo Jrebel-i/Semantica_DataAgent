@@ -32,7 +32,7 @@ def write_checks(tmp_path, source):
 def test_parse_defaults_and_source_specs(harness, tmp_path):
     defaults = harness.parse_args(["--scratch", str(tmp_path)])
     assert [plugin for plugin, _ in defaults.sources] == ["canonical", "markdown"]
-    assert defaults.embedding_url == "http://127.0.0.1:17998"
+    assert defaults.embedding_url == "http://172.16.242.124:31613"
     assert defaults.embedding_model == "model/bge-small-zh-v1.5"
     assert defaults.generation.startswith("e2e_")
     assert harness.GENERATION_RE.fullmatch(defaults.generation)
@@ -42,7 +42,7 @@ def test_parse_defaults_and_source_specs(harness, tmp_path):
             "--scratch",
             str(tmp_path),
             "--embedding-url",
-            "http://127.0.0.1:17997",
+            "http://172.16.242.124:31614",
             "--embedding-model",
             "model/bge-m3",
             "--source",
@@ -51,7 +51,7 @@ def test_parse_defaults_and_source_specs(harness, tmp_path):
             "canonical",
         ]
     )
-    assert parsed.embedding_url == "http://127.0.0.1:17997"
+    assert parsed.embedding_url == "http://172.16.242.124:31614"
     assert parsed.embedding_model == "model/bge-m3"
     assert parsed.sources == (("markdown", {"path": "docs"}), ("canonical", {}))
 

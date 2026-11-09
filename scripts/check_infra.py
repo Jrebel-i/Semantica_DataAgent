@@ -40,7 +40,7 @@ if args.skip_embedding:
 request = urllib.request.Request(
     (args.embedding_url or (
         f'http://{args.host}:31603' if args.environment == 'dev'
-        else 'http://127.0.0.1:17998'
+        else f'http://{args.host}:31613'
     )).rstrip('/') + '/embeddings',
     data=json.dumps({
         'model': args.embedding_model or (

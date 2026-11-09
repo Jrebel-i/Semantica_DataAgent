@@ -178,7 +178,7 @@ PYTHONPYCACHEPREFIX="$(mktemp -d)" uv run --directory backend pytest -p no:cache
 
 ## 共享测试存储隔离
 
-日常集成测试默认使用小模型：`TEST_EMBEDDING_URL=http://127.0.0.1:17998`、`TEST_EMBEDDING_MODEL=model/bge-small-zh-v1.5`（512 维）。只有真实样例构建、验收评测，或专门复验 bge-m3 兼容性时，才改用 `http://127.0.0.1:17997` 与 `model/bge-m3`（1024 维）；不要用 bge-m3 跑日常主接缝测试。连接 `-test` Neo4j / Milvus / embedding 的集成测试，每次运行必须生成唯一知识代与集合前缀，只读取和清理本次创建的数据；在 `finally` 中删除这些节点和集合。不能清理或修改其他测试的代，缺少连接环境变量时必须明确跳过并说明原因。
+日常集成测试默认使用小模型：`TEST_EMBEDDING_URL=http://172.16.242.124:31613`、`TEST_EMBEDDING_MODEL=model/bge-small-zh-v1.5`（512 维）。只有真实样例构建、验收评测，或专门复验 bge-m3 兼容性时，才改用 `http://172.16.242.124:31614` 与 `model/bge-m3`（1024 维）；不要用 bge-m3 跑日常主接缝测试。连接 `-test` Neo4j / Milvus / embedding 的集成测试，每次运行必须生成唯一知识代与集合前缀，只读取和清理本次创建的数据；在 `finally` 中删除这些节点和集合。不能清理或修改其他测试的代，缺少连接环境变量时必须明确跳过并说明原因。
 
 ## 端到端测试工具
 
@@ -197,7 +197,7 @@ uv run --directory backend python tests/e2e/harness.py \
   --log "$HOME/wt/sda/scratch/issue-47/e2e.log"
 ```
 
-`--neo4j-password-command` 的 stdout 只进入进程内存（去掉末尾换行和可选的 `neo4j/` 前缀），不打印、不落盘。也可以改用环境变量 `NEO4J_PASSWORD` 或 `--neo4j-password-env <名称>`。默认存储是测试实例 `bolt://172.16.242.124:31611`、`http://172.16.242.124:31612` 和本机 embedding `http://127.0.0.1:17998`（`model/bge-small-zh-v1.5`）；需要 bge-m3 时传入 `--embedding-url http://127.0.0.1:17997 --embedding-model model/bge-m3`；工具拒绝连接开发实例的 31601 / 31602 / 31603。第二套测试存储 `bolt://172.16.242.124:31621`、`http://172.16.242.124:31622`（Secret 在 `semantica-dataagent-test2`）用 `--neo4j-uri`、`--milvus-uri` 和对应的 `--neo4j-password-command` 指定；并行测试按任务书各用一套。
+`--neo4j-password-command` 的 stdout 只进入进程内存（去掉末尾换行和可选的 `neo4j/` 前缀），不打印、不落盘。也可以改用环境变量 `NEO4J_PASSWORD` 或 `--neo4j-password-env <名称>`。默认存储是测试实例 `bolt://172.16.242.124:31611`、`http://172.16.242.124:31612` 和集群 embedding `http://172.16.242.124:31613`（`model/bge-small-zh-v1.5`）；需要 bge-m3 时传入 `--embedding-url http://172.16.242.124:31614 --embedding-model model/bge-m3`；工具拒绝连接开发实例的 31601 / 31602 / 31603。第二套测试存储 `bolt://172.16.242.124:31621`、`http://172.16.242.124:31622`（Secret 在 `semantica-dataagent-test2`）用 `--neo4j-uri`、`--milvus-uri` 和对应的 `--neo4j-password-command` 指定；并行测试按任务书各用一套。
 
 常用参数：
 
