@@ -96,7 +96,7 @@ def wait_for(predicate, timeout=10, message="condition not reached"):
     raise AssertionError(message)
 
 
-def test_uploads_in_one_window_create_one_incremental_build(tmp_path, monkeypatch):
+def test_uploads_in_one_window_create_one_build(tmp_path, monkeypatch):
     from semantica_dataagent import knowledge
     from semantica_dataagent.app import app
     from semantica_dataagent.db import Build, sessions
@@ -135,13 +135,14 @@ def test_uploads_in_one_window_create_one_incremental_build(tmp_path, monkeypatc
         wait_for(lambda: len(finished) == 1, message="debounced build did not run")
         rows = build_rows()
         assert len(rows) == 1
-        assert rows[0][1:4] == ("succeeded", "incremental", "upload")
+        assert rows[0][1:4] == ("succeeded", "full", "upload")
         time.sleep(1.3)
         assert len(build_rows()) == 1, "one upload window produced several builds"
 
         assert upload(client, auth, "default", "d.md", "d\n").status_code == 200
         wait_for(lambda: len(finished) == 2, message="next window did not build")
         assert len(build_rows()) == 2
+        assert build_rows()[1][1:4] == ("succeeded", "incremental", "upload")
 
 
 def test_auto_build_switch_skips_and_discards_requests(tmp_path, monkeypatch):
@@ -290,6 +291,7 @@ def test_running_build_gets_one_followup_and_queued_uploads_merge(
         b = client.post(
             "/api/v1/projects", json={"name": "Auto B", "type": "document"}
         ).json()
+        insert_build(a["id"], "succeeded", build_type="full")
         insert_build(a["id"], "running", build_type="incremental")
 
         assert upload(client, auth, a["id"], "one.md", "one\n").status_code == 200
