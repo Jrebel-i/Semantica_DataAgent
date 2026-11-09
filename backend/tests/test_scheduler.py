@@ -152,8 +152,10 @@ def test_pull_scheduler_runs_the_due_project(monkeypatch):
 
 
 def test_pull_scheduler_skips_archived_project_and_keeps_its_interval(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, caplog
 ):
+    import logging
+
     from semantica_dataagent import project_context, pull_service
     from semantica_dataagent.app import app
     from semantica_dataagent.cli import initialize
@@ -164,6 +166,7 @@ def test_pull_scheduler_skips_archived_project_and_keeps_its_interval(
     )
 
     monkeypatch.setenv("DATAAGENT_DB_PATH", str(tmp_path / "frozen-pull.db"))
+    caplog.set_level(logging.DEBUG, logger="semantica_dataagent.scheduler")
     monkeypatch.setenv("DATAAGENT_ENCRYPTION_KEY", Fernet.generate_key().decode())
     token = initialize()
     headers = {"Authorization": f"Bearer {token}"}
@@ -216,6 +219,11 @@ def test_pull_scheduler_skips_archived_project_and_keeps_its_interval(
         now[0] = 9
         tick()
         assert calls == [], "归档项目的定时拉取没有被跳过"
+        assert any(
+            "Skipping scheduled pull" in record.getMessage()
+            for record in caplog.records
+            if record.name == "semantica_dataagent.scheduler"
+        ), "跳过冻结项目的定时拉取时没有记录 debug"
         now[0] = 18
         tick()
         assert calls == [], "归档项目在下一个周期仍然执行了拉取"
