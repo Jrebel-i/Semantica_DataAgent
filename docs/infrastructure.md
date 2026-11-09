@@ -1,13 +1,13 @@
 # Infrastructure
 
-The development and integration-test resources are confined to `semantica-dataagent` and `semantica-dataagent-test`. Each has its own Neo4j and Milvus StatefulSet and local-path PVC; development uses a CPU embedding service, and tests use two local Docker instances. Milvus v2.5.27 uses embedded etcd and local storage. Daily integration tests use BAAI/bge-small-zh-v1.5; BAAI/bge-m3 is reserved for real-sample builds and acceptance evaluation. Both models use infinity 0.0.77 and the same `deploy/k8s/model.py`: each pinned revision is downloaded with its exact file list, every file's SHA-256 is verified, and the service verifies again before every start. No inference starts on a mismatch. Model files are mounted read-only for inference. The bge-m3 revision is `5617a9f61b028005a4858fdac845db406aefb181`; the small-model revision is `7999e1d3359715c523056ef9478215996d62a620`.
+The development and integration-test resources are confined to `semantica-dataagent` and `semantica-dataagent-test`. Each has its own Neo4j and Milvus StatefulSet and local-path PVC; development uses a CPU embedding service, and tests use two embedding services in the cluster test namespace. Milvus v2.5.27 uses embedded etcd and local storage. Daily integration tests use BAAI/bge-small-zh-v1.5; BAAI/bge-m3 is reserved for real-sample builds and acceptance evaluation. Both models use infinity 0.0.77 and the same `deploy/k8s/model.py`: each pinned revision is downloaded with its exact file list, every file's SHA-256 is verified, and the service verifies again before every start. No inference starts on a mismatch. Model files are mounted read-only for inference. The bge-m3 revision is `5617a9f61b028005a4858fdac845db406aefb181`; the small-model revision is `7999e1d3359715c523056ef9478215996d62a620`.
 
 | Environment | Neo4j Bolt | Milvus | Embedding |
 | --- | --- | --- | --- |
 | dev | 31601 | 31602 | 31603 |
-| test (daily) | 31611 | 31612 | 127.0.0.1:17998 (bge-small-zh-v1.5, local Docker) |
-| test (real samples / acceptance) | 31611 | 31612 | 127.0.0.1:17997 (bge-m3, local Docker) |
-| test2（第二套测试存储，`semantica-dataagent-test2`） | 31621 | 31622 | 同上两个本机 embedding |
+| test (daily) | 31611 | 31612 | 31613 (bge-small-zh-v1.5, cluster) |
+| test (real samples / acceptance) | 31611 | 31612 | 31614 (bge-m3, cluster) |
+| test2（第二套测试存储，`semantica-dataagent-test2`） | 31621 | 31622 | 同上两个集群 embedding（与 test 共用） |
 
 两套测试存储互相独立，供并行的测试各用一套，避免多张票同时写同一套存储时互相干扰（见 #44）。协调者在测试任务书里指定使用哪一套；只用一套时默认 test。`deploy/k8s/test2.yaml` 与 `test.yaml` 只有命名空间和端口不同，Neo4j Secret 同样在 `semantica-dataagent-test2` 里单独创建。
 
@@ -43,7 +43,7 @@ The StatefulSet uses `--batch-size 16`. [infinity 0.0.77](https://github.com/mic
 
 The recommended `embedding_concurrency` is 8 (allowed range 1–32). A single replica saturates at about 2–4; with four replicas the useful range is about 8–12, so 8 leaves headroom without adding queue latency, while raising concurrency on a single replica only increases waiting. Change it at runtime through the admin "plugin configuration / embedding request settings" UI or `PUT /api/v1/settings` with `{"values": {"embedding_concurrency": "8"}}`; the value is read when the next build starts, not during an in-flight build. A cold start (model download, SHA-256 verification and load) takes about 7 minutes. With `Parallel` management all four replicas start together, so the first rollout takes at least that long and the downloads may contend for bandwidth.
 
-The local development compose services are unchanged: bge-m3 on 17997 keeps batch size 2 and the daily test model on 17998 keeps batch size 8. Those values are local conventions, not the cluster setting.
+The local machine no longer runs embedding containers. Tests use the cluster `embedding-small` service (batch size 8) and `embedding-m3` service (batch size 2). These batch sizes are conventions of the test services, not the production `embedding-pool` setting.
 
 To switch from the old Deployment to the pool (coordinator only):
 
@@ -66,19 +66,22 @@ The arguments are the base URL, model, comma-separated batch sizes, comma-separa
 
 For a coordinated load test of the shared service, run `python3 scripts/stress_embedding.py` from WSL. It sends two requests of 32 distinct, approximately 1888-character Chinese inputs from each of three clients, samples `kubectl top` through SSH, and checks returned dimensions. It can interrupt other users and may cause an OOM with an unsafe configuration. Samples are periodic and can miss a short peak; compare Pod restart counts and termination reason before and after as well. Adjust `--url`, `--ssh`, `--clients`, `--batches`, `--chars`, and `--timeout` as needed. On 2026-11-04, `--timeout 600` completed 6/6 requests in 453.6 seconds with a sampled peak of 2053 MiB and no Pod restart. The old default batch size 32 OOMKilled on the same inputs; `--batch-size 1` avoided a restart but only 3/6 requests completed within a 900-second per-request timeout. Sampling can miss peaks and this test does not establish a bound for 8192-token inputs.
 
-## Local test embedding
+## Test embedding (cluster)
 
-From the repository root, start and inspect only the daily small-model service:
+Two embedding services run in the `semantica-dataagent-test` namespace and are shared by test and test2 (`deploy/k8s/embedding-test.yaml`):
+
+- `embedding-small`: bge-small-zh-v1.5, NodePort 31613 (`http://172.16.242.124:31613`), batch size 8, used by daily tests.
+- `embedding-m3`: bge-m3, NodePort 31614 (`http://172.16.242.124:31614`), batch size 2, used by real-sample builds and acceptance.
+
+The coordinator deploys them with (the ConfigMap `embedding-integrity` must exist in the namespace before the StatefulSets start):
 
 ```sh
-docker compose -f deploy/embedding-compose.yaml up -d embedding-small
-docker compose -f deploy/embedding-compose.yaml ps
-docker compose -f deploy/embedding-compose.yaml logs -f embedding-small
+kubectl -n semantica-dataagent-test create configmap embedding-integrity --from-file=deploy/k8s/model.py --dry-run=client -o yaml | kubectl apply -f -
+kubectl apply -f deploy/k8s/embedding-test.yaml
+kubectl -n semantica-dataagent-test get pods -l 'app in (embedding-small,embedding-m3)'
 ```
 
-`embedding-small` uses port 17998, batch size 8, a 2 GiB memory limit, and the fixed bge-small-zh-v1.5 revision above. Its default model directory is `~/.cache/semantica-dataagent/bge-small-zh-v1.5`, outside the repository; set `EMBEDDING_SMALL_MODEL_DIR` to an absolute path to override it. The first start downloads and verifies the pinned files; each later start verifies them again before inference. The model and the shared integrity script are mounted read-only. On 2026-11-05, 24 concurrent requests of 8 approximately 900-character Chinese inputs sampled a peak of about 1.0 GiB with no restart; 2 GiB leaves headroom while staying well below bge-m3's 4 GiB limit.
-
-The existing `embedding` service on 17997 is the bge-m3 instance used by `scripts/verify_sample_build.py` and acceptance checks. Do not stop, recreate, or otherwise modify that container during routine test work. To stop the daily service without touching bge-m3, use `docker compose -f deploy/embedding-compose.yaml stop embedding-small`; do not use `down`.
+Do not restart these services during routine testing, because test and test2 share them. The test defaults already point to them. To use another endpoint, set `TEST_EMBEDDING_URL` (and `TEST_EMBEDDING_MODEL` for the matching model name).
 
 ## Connectivity
 
@@ -89,7 +92,7 @@ NEO4J_PASSWORD='your-password' python scripts/check_infra.py dev
 NEO4J_PASSWORD='your-test-password' python scripts/check_infra.py test
 ```
 
-The script performs Cypher, creates and deletes a uniquely named Milvus collection, and checks a Chinese embedding returned by the selected model (512 dimensions for the daily small model, 1024 for dev bge-m3). `--skip-embedding` permits independent database diagnosis. The test embedding runs locally and has its own model directory. Use isolated test instances for integration tests; the script creates temporary collections and deletes them even if a check fails.
+The script performs Cypher, creates and deletes a uniquely named Milvus collection, and checks a Chinese embedding returned by the selected model (512 dimensions for the daily small model, 1024 for dev bge-m3). `--skip-embedding` permits independent database diagnosis. The test embedding services run in the cluster namespace `semantica-dataagent-test`. Use isolated test instances for integration tests; the script creates temporary collections and deletes them even if a check fails.
 
 ## Langfuse 观测服务
 
