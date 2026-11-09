@@ -418,12 +418,13 @@ def prepare_deletion(project_id: str, name: str, actor_id: str, actor_name: str)
     with sessions().begin() as db:
         deletion = db.get(ProjectDeletion, project_id)
         project = db.get(Project, project_id)
-        if deletion is not None and deletion.status == "completed":
-            return "completed"
         if project is None:
+            if deletion is not None and deletion.status == "completed":
+                return "completed"
             if deletion is not None:
                 return "active"
             raise HTTPException(status_code=404, detail="Project not found")
+        stale = deletion is not None and deletion.status == "completed"
         if project.id == DEFAULT_PROJECT_ID:
             raise HTTPException(status_code=409, detail="默认项目不可删除")
         if project.status not in (
@@ -452,6 +453,20 @@ def prepare_deletion(project_id: str, name: str, actor_id: str, actor_name: str)
                 detail={"name": project.name},
             )
         else:
+            if stale:
+                deletion.project_name = project.name
+                deletion.step = "begin"
+                deletion.steps = "[]"
+                deletion.requested_by = actor_id
+                deletion.created_at = datetime.now(UTC)
+                record_project_audit(
+                    db,
+                    project_id=project_id,
+                    actor_id=actor_id,
+                    actor_name=actor_name,
+                    action="project.delete",
+                    detail={"name": project.name},
+                )
             deletion.status = "deleting"
             deletion.error = None
             deletion.updated_at = datetime.now(UTC)
@@ -465,7 +480,9 @@ def recover_project_deletions() -> None:
         project_ids = [
             row.project_id
             for row in db.query(ProjectDeletion)
+            .join(Project, Project.id == ProjectDeletion.project_id)
             .filter(ProjectDeletion.status.in_(("deleting", "failed")))
+            .filter(Project.status == project_context.DELETING_STATUS)
             .all()
         ]
     for project_id in project_ids:

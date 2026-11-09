@@ -21,6 +21,7 @@ from .db import (
     KnowledgeGeneration,
     Project,
     ProjectAudit,
+    ProjectDeletion,
     ProjectMember,
     ProjectSetting,
     Setting,
@@ -681,6 +682,10 @@ def create_project_record(
         ):
             raise ProjectNameTaken(name)
         project_id = _unique_project_id(db, name)
+        db.query(ProjectDeletion).filter(
+            ProjectDeletion.project_id == project_id,
+            ProjectDeletion.status == "completed",
+        ).delete(synchronize_session=False)
         final_source = project_source_directory(project_id)
         root.mkdir(parents=True, exist_ok=True)
         try:
