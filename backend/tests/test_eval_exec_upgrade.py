@@ -199,8 +199,25 @@ def test_eval_exec_defaults_to_dev_and_lists_unconfirmed(
         ],
     )
     monkeypatch.setenv("EVAL_EXEC_TOKEN", "secret")
-    args = _args(tmp_path, path)
-    args.base_url = service.base_url
+    args = _parser().parse_args(
+        [
+            "eval-exec",
+            "--questions",
+            str(path),
+            "--report",
+            str(tmp_path / "report"),
+            "--base-url",
+            service.base_url,
+            "--token",
+            "EVAL_EXEC_TOKEN",
+            "--agent",
+            "pi",
+            "--provider-id",
+            "fake",
+            "--model",
+            "fake",
+        ]
+    )
     assert run_cli(args) == 0
 
     report = json.loads((tmp_path / "report.json").read_text())
