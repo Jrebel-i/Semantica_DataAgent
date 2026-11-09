@@ -251,6 +251,7 @@ def test_eval_exec_defaults_to_dev_and_lists_unconfirmed(
     assert report["metrics"]["wrong"] == 1
     assert report["coverage"]["选表"]["total"] == 1
     assert report["coverage"]["口径"]["total"] == 1
+    assert report["coverage_gaps"] == ["口径"]
     markdown = (tmp_path / "report.md").read_text()
     assert "参考 SQL" in markdown
     assert "工具调用" in markdown
@@ -494,3 +495,28 @@ def test_split_defaults_to_28_and_12_for_40_questions():
     ]
     result = assign_splits(rows)
     assert Counter(item["split"] for item in result) == {"dev": 28, "holdout": 12}
+
+
+def test_only_smoke_still_works_inside_the_selected_split(
+    service, tmp_path, monkeypatch
+):
+    service.reset({"dev good": [GOOD], "dev other": [GOOD], "holdout": [GOOD]})
+    path = _write_questions(
+        tmp_path,
+        [
+            _question("d1", "dev good"),
+            _question("d2", "dev other"),
+            _question("h1", "holdout", split="holdout"),
+        ],
+    )
+    monkeypatch.setenv("EVAL_EXEC_TOKEN", "secret")
+    args = _args(tmp_path, path, only="d1")
+    args.base_url = service.base_url
+    assert run_cli(args) == 0
+    asked = [body["question"] for path, body in service.asks if path.endswith("/ask")]
+    assert asked == ["dev good"]
+
+    blocked = _args(tmp_path, path, only="h1", name="blocked")
+    blocked.base_url = service.base_url
+    with pytest.raises(SystemExit):
+        run_cli(blocked)
