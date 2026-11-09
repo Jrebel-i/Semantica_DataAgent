@@ -239,6 +239,72 @@ def test_pull_scheduler_skips_archived_project_and_keeps_its_interval(
         assert project_context.project_status(project_id) == "active"
 
 
+def test_pull_scheduler_skips_deleting_project(tmp_path, monkeypatch, caplog):
+    import logging
+
+    from semantica_dataagent import project_context, project_deletion, pull_service
+    from semantica_dataagent.app import app
+    from semantica_dataagent.cli import initialize
+    from semantica_dataagent.scheduler import _scheduled_pull
+
+    monkeypatch.setenv("DATAAGENT_DB_PATH", str(tmp_path / "deleting-pull.db"))
+    monkeypatch.setenv("DATAAGENT_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    monkeypatch.setenv("DATAAGENT_PROJECTS_ROOT", str(tmp_path / "projects"))
+    token = initialize()
+    headers = {"Authorization": f"Bearer {token}"}
+    caplog.set_level(logging.DEBUG, logger="semantica_dataagent.scheduler")
+
+    with TestClient(app, headers=headers) as client:
+        created = client.post(
+            "/api/v1/projects", json={"name": "Deleting Pull", "type": "warehouse"}
+        )
+        assert created.status_code == 201, created.text
+        project = created.json()
+        saved = client.put(
+            f"/api/v1/projects/{project['id']}/adapters",
+            json={
+                "adapters": [
+                    {
+                        "id": "dtb",
+                        "enabled": True,
+                        "parameters": {},
+                        "pull": {
+                            "enabled": True,
+                            "parameters": {
+                                "url": "https://dtb.example",
+                                "interval_seconds": 5,
+                            },
+                        },
+                    }
+                ]
+            },
+        )
+        assert saved.status_code == 200, saved.text
+        assert (
+            client.post(f"/api/v1/projects/{project['id']}/archive").status_code == 200
+        )
+        assert (
+            project_deletion.prepare_deletion(
+                project["id"], project["name"], "owner", "Owner"
+            )
+            == "active"
+        )
+        assert project_context.project_status(project["id"]) == "deleting"
+
+        calls = []
+        monkeypatch.setattr(
+            pull_service, "run_pull", lambda project_id: calls.append(project_id)
+        )
+        _scheduled_pull(project["id"])
+
+        assert calls == [], "删除中项目的定时拉取没有被跳过"
+        assert any(
+            "Skipping scheduled pull" in record.getMessage()
+            for record in caplog.records
+            if record.name == "semantica_dataagent.scheduler"
+        ), "跳过删除中项目的定时拉取时没有记录 debug"
+
+
 def test_pull_intervals_are_collected_per_project(tmp_path, monkeypatch):
     from semantica_dataagent.app import app
     from semantica_dataagent.cli import initialize
