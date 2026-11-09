@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import signal
 import uuid
@@ -9,6 +10,7 @@ from pathlib import Path
 
 import pytest
 from cryptography.fernet import Fernet
+from fastapi.testclient import TestClient
 from neo4j import GraphDatabase
 from pymilvus import MilvusClient
 
@@ -20,7 +22,7 @@ pytestmark = pytest.mark.skipif(
 STEPS = ("source", "neo4j", "milvus", "attachments", "database")
 
 
-def _seed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def _seed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> str:
     monkeypatch.setenv("DATAAGENT_DB_PATH", str(tmp_path / "app.db"))
     monkeypatch.setenv("DATAAGENT_ENCRYPTION_KEY", Fernet.generate_key().decode())
     monkeypatch.setenv("DATAAGENT_PROJECTS_ROOT", str(tmp_path / "projects"))
@@ -32,7 +34,7 @@ def _seed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from semantica_dataagent.cli import initialize
     from semantica_dataagent.db import Setting, sessions
 
-    initialize()
+    token = initialize()
     with sessions().begin() as db:
         values = {
             "neo4j_uri": os.environ["TEST_NEO4J_URI"],
@@ -47,6 +49,7 @@ def _seed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         }
         for key, value in values.items():
             db.add(Setting(key=key, value=value))
+    return token
 
 
 def _dispose_engine() -> None:
@@ -140,6 +143,43 @@ def _seed_storage(project_id: str, lookalike: str) -> None:
             generation=lookalike_generation,
         )
         vectors.create_collection("sda_" + lookalike_generation, dimension=2)
+    finally:
+        driver.close()
+        vectors.close()
+
+
+def _seed_generation(project_id: str, generation: str) -> None:
+    driver = GraphDatabase.driver(
+        os.environ["TEST_NEO4J_URI"],
+        auth=(os.environ["TEST_NEO4J_USER"], os.environ["TEST_NEO4J_PASSWORD"]),
+    )
+    vectors = MilvusClient(uri=os.environ["TEST_MILVUS_URI"])
+    try:
+        driver.execute_query(
+            "CREATE (:SDAEntity {generation:$generation})",
+            generation=generation,
+        )
+        vectors.create_collection("sda_" + generation, dimension=2)
+    finally:
+        driver.close()
+        vectors.close()
+
+
+def _drop_storage(project_id: str) -> None:
+    driver = GraphDatabase.driver(
+        os.environ["TEST_NEO4J_URI"],
+        auth=(os.environ["TEST_NEO4J_USER"], os.environ["TEST_NEO4J_PASSWORD"]),
+    )
+    vectors = MilvusClient(uri=os.environ["TEST_MILVUS_URI"])
+    try:
+        driver.execute_query(
+            "MATCH (n:SDAEntity) WHERE n.generation STARTS WITH $prefix "
+            "DETACH DELETE n",
+            prefix=project_id + "_",
+        )
+        for name in list(vectors.list_collections()):
+            if name.startswith("sda_" + project_id + "_"):
+                vectors.drop_collection(name)
     finally:
         driver.close()
         vectors.close()
@@ -302,3 +342,119 @@ def test_sigkill_after_each_deletion_step_resumes_without_residue(
         assert collections == 1
     finally:
         _cleanup([project_id], lookalike)
+
+
+def _seed_reused_rows(project_id: str, conversation_id: str) -> None:
+    from semantica_dataagent.db import Build, Conversation, sessions
+
+    with sessions().begin() as db:
+        db.add(
+            Build(
+                project_id=project_id,
+                status="succeeded",
+                started_at="2026-01-01T00:00:00+00:00",
+                counts="{}",
+                build_type="full",
+            )
+        )
+        db.add(
+            Conversation(
+                id=conversation_id,
+                owner_id="owner",
+                project_id=project_id,
+                title=conversation_id,
+                agent="pi",
+                provider_id="provider",
+                model="model",
+            )
+        )
+
+
+def test_reused_project_id_deletes_new_real_storage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    token = _seed(tmp_path, monkeypatch)
+    suffix = uuid.uuid4().hex[:10]
+    name = f"Reuse real {suffix}"
+    lookalike = "p" + suffix + "c"
+    project_id = None
+    try:
+        from semantica_dataagent.app import app
+        from semantica_dataagent.db import (
+            Build,
+            Conversation,
+            Project,
+            ProjectDeletion,
+            sessions,
+        )
+
+        headers = {"Authorization": f"Bearer {token}"}
+        with TestClient(app) as client:
+            created = client.post(
+                "/api/v1/projects",
+                headers=headers,
+                json={"name": name, "type": "document"},
+            )
+            assert created.status_code == 201, created.text
+            project_id = created.json()["id"]
+
+            _seed_reused_rows(project_id, f"{project_id}-first")
+            _seed_generation(project_id, f"{project_id}_initial")
+
+            archived = client.post(
+                f"/api/v1/projects/{project_id}/archive", headers=headers
+            )
+            assert archived.status_code == 200, archived.text
+            deleted = client.post(
+                f"/api/v1/projects/{project_id}/delete",
+                headers=headers,
+                json={"name": name},
+            )
+            assert deleted.status_code == 204, deleted.text
+            assert _residual(project_id) == (0, 0, False)
+
+            recreated = client.post(
+                "/api/v1/projects",
+                headers=headers,
+                json={"name": name, "type": "document"},
+            )
+            assert recreated.status_code == 201, recreated.text
+            assert recreated.json()["id"] == project_id
+            _seed_reused_rows(project_id, f"{project_id}-second")
+            _seed_generation(project_id, f"{project_id}_initial")
+
+            active = client.post(
+                f"/api/v1/projects/{project_id}/delete",
+                headers=headers,
+                json={"name": name},
+            )
+            assert active.status_code == 409, active.text
+            archived = client.post(
+                f"/api/v1/projects/{project_id}/archive", headers=headers
+            )
+            assert archived.status_code == 200, archived.text
+            deleted = client.post(
+                f"/api/v1/projects/{project_id}/delete",
+                headers=headers,
+                json={"name": name},
+            )
+            assert deleted.status_code == 204, deleted.text
+            assert _residual(project_id) == (0, 0, False)
+
+        with sessions()() as db:
+            assert db.get(Project, project_id) is None
+            assert db.query(Build).filter(Build.project_id == project_id).count() == 0
+            assert (
+                db.query(Conversation)
+                .filter(Conversation.project_id == project_id)
+                .count()
+                == 0
+            )
+            deletion = db.get(ProjectDeletion, project_id)
+            assert deletion is not None and deletion.status == "completed"
+            steps = [item.get("name") for item in json.loads(deletion.steps)]
+            assert steps == list(STEPS), "第二次删除没有使用新一轮步骤记录"
+    finally:
+        if project_id is not None:
+            _drop_storage(project_id)
+        _cleanup([project_id] if project_id else [], lookalike)
