@@ -834,6 +834,25 @@ def test_probe_reports_wrong_answer_from_truncated_vision_as_no(client):
     assert "请求被接受但模型未能识别图片内容" in response.json()["notes"]
 
 
+def test_probe_reports_truncated_vision_with_whitespace_text_as_unknown(client):
+    c, token = client
+    with _gateway(
+        "anthropic-messages",
+        vision_truncated=True,
+        vision_truncated_text=True,
+        discard_image=True,
+        vision_text="   ",
+    ) as (_, base_url):
+        provider_id = _create_provider(
+            c, token, provider_type="anthropic-messages", base_url=base_url
+        )
+        response = _probe(c, token, provider_id)
+
+    assert response.status_code == 200, response.text
+    assert response.json()["vision"] == "unknown"
+    assert "截断" in response.json()["notes"]
+
+
 def test_probe_accepts_images_at_least_64_pixels_like_qwen(client):
     c, token = client
     with _gateway("anthropic-messages", min_vision_size=True) as (gateway, base_url):
