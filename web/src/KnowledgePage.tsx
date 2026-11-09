@@ -272,16 +272,19 @@ export function KnowledgePage({
   }
 
   async function openLinkedDocument(ref: string) {
+    const generation = projectGeneration.current;
     try {
       const response = await fetch(
         `/api/v1/document?${new URLSearchParams({ doc_id: ref, project })}`,
         { headers: { Authorization: `Bearer ${token}` } },
       );
       if (!response.ok) throw new Error();
-      setLinkedDocument((await response.json()) as Document);
+      const document = (await response.json()) as Document;
+      if (generation !== projectGeneration.current) return;
+      setLinkedDocument(document);
       setError(false);
     } catch {
-      setError(true);
+      if (generation === projectGeneration.current) setError(true);
     }
   }
 
@@ -294,6 +297,7 @@ export function KnowledgePage({
     }
     const separator = name.indexOf(".");
     if (separator < 1) return;
+    const generation = projectGeneration.current;
     try {
       const row = await loadTableDetail(
         token,
@@ -301,16 +305,18 @@ export function KnowledgePage({
         name.slice(separator + 1),
         project,
       );
+      if (generation !== projectGeneration.current) return;
       setSelected(summaryFromDetail(row));
       setReadingDoc(null);
       setError(false);
     } catch {
-      setError(true);
+      if (generation === projectGeneration.current) setError(true);
     }
   }
 
   async function submitCorrection() {
     if (!selected) return;
+    const generation = projectGeneration.current;
     try {
       const response = await fetch(
         `/api/v1/corrections?${new URLSearchParams({ project })}`,
@@ -324,12 +330,14 @@ export function KnowledgePage({
         },
       );
       if (!response.ok) throw new Error();
+      if (generation !== projectGeneration.current) return;
       setProposalStatus(messages.correctionSubmitted);
       setPatch("");
       setReason("");
       setCorrectionOpen(false);
     } catch {
-      setProposalStatus(messages.error);
+      if (generation === projectGeneration.current)
+        setProposalStatus(messages.error);
     }
   }
 
