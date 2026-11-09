@@ -453,3 +453,68 @@ def check_issue_187_project_adapters(ctx):
         ctx.logger.line(f"issue187 cleanup: {cleanup}")
         if cleanup.get("generations"):
             ctx.runtime.storage_touched = True
+
+
+def check_issue_187_frozen_project_pull(ctx):
+    """An archived or deleting project must not pull into its source directory."""
+    import sqlite3
+
+    suffix = uuid.uuid4().hex[:8]
+    project = _create_project(ctx, f"Issue 187 Frozen Pull {suffix}", "warehouse")
+    project_id = project["id"]
+
+    def pull_count():
+        with sqlite3.connect(ctx.runtime.db_path) as db:
+            return db.execute(
+                "SELECT COUNT(*) FROM pull_records WHERE project_id = ?",
+                (project_id,),
+            ).fetchone()[0]
+
+    saved = _set_adapters(
+        ctx,
+        project_id,
+        [
+            {
+                "id": "dtb",
+                "enabled": True,
+                "parameters": {},
+                "pull": {
+                    "enabled": True,
+                    "parameters": {
+                        "url": "http://127.0.0.1:9/",
+                        "token": f"issue187-{suffix}",
+                        "interval_seconds": 1,
+                    },
+                },
+            }
+        ],
+    )
+    ctx.require(saved.status_code == 200, saved.text[:300])
+    before = pull_count()
+
+    archived = ctx.rest.post(f"/api/v1/projects/{project_id}/archive")
+    ctx.require(archived.status_code == 200, archived.text[:300])
+    blocked = ctx.rest.post("/api/v1/pulls/dtb", params={"project": project_id})
+    ctx.require(blocked.status_code == 409, blocked.text[:300])
+    ctx.require(blocked.json().get("detail") == "项目已归档", blocked.text[:300])
+    ctx.require(pull_count() == before, "归档项目手动拉取仍创建了拉取记录")
+
+    time.sleep(3)
+    ctx.require(pull_count() == before, "归档项目的定时拉取仍在运行")
+
+    restored = ctx.rest.post(f"/api/v1/projects/{project_id}/restore")
+    ctx.require(restored.status_code == 200, restored.text[:300])
+    resumed = ctx.rest.post("/api/v1/pulls/dtb", params={"project": project_id})
+    ctx.require(resumed.status_code == 200, resumed.text[:300])
+    ctx.require(
+        resumed.json()["status"] == "failed",
+        f"恢复后的拉取没有执行到拉取器: {resumed.text[:300]}",
+    )
+    ctx.require(pull_count() >= before + 1, "恢复后的拉取没有写入拉取记录")
+    return {
+        "project": project_id,
+        "pull_records_before": before,
+        "pull_records_after": pull_count(),
+        "archived_pull_status": blocked.status_code,
+        "restored_pull_status": resumed.json()["status"],
+    }

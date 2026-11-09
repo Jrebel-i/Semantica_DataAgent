@@ -1063,6 +1063,63 @@ def test_interrupted_project_pull_recovers_build_in_its_project(client, tmp_path
         assert build.project_id == project_id
 
 
+@pytest.mark.parametrize("state", ["archived", "deleting"])
+def test_pull_recovery_does_not_touch_frozen_project_source(client, tmp_path, state):
+    from datetime import UTC, datetime
+
+    from semantica_dataagent import project_context, project_deletion
+    from semantica_dataagent.db import PullRecord, sessions
+    from semantica_dataagent.pull_service import recover_pulls
+
+    c, token = client
+    headers = {"Authorization": f"Bearer {token}"}
+    created = c.post(
+        "/api/v1/projects",
+        headers=headers,
+        json={"name": f"Frozen {state} pull", "type": "warehouse"},
+    )
+    assert created.status_code == 201, created.text
+    project = created.json()
+    assert (
+        c.post(f"/api/v1/projects/{project['id']}/archive", headers=headers).status_code
+        == 200
+    )
+    if state == "deleting":
+        assert (
+            project_deletion.prepare_deletion(
+                project["id"], project["name"], "owner", "Owner"
+            )
+            == "active"
+        )
+        assert project_context.project_status(project["id"]) == "deleting"
+    root = tmp_path / f"{state}-source"
+    with sessions().begin() as db:
+        record = PullRecord(
+            project_id=project["id"],
+            status="running",
+            started_at=datetime.now(UTC),
+            tables=0,
+            tasks=0,
+            source_directory=str(root),
+            operation_id=f"{state}-operation",
+        )
+        db.add(record)
+        db.flush()
+        record_id = record.id
+
+    recover_pulls()
+
+    with sessions()() as db:
+        record = db.get(PullRecord, record_id)
+        assert record.status == "failed"
+        assert record.error is not None
+        expected = "归档" if state == "archived" else "删除"
+        assert expected in record.error
+        assert record.build_id is None
+        assert record.finished_at is not None
+    assert not root.exists(), "启动恢复为冻结项目重建了源目录"
+
+
 def test_pull_locks_are_per_project(client):
     from semantica_dataagent import pull_service
 

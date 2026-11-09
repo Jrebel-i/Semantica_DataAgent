@@ -137,17 +137,98 @@ def test_puller_interval_restored_on_restart(tmp_path, monkeypatch):
 
 
 def test_pull_scheduler_runs_the_due_project(monkeypatch):
-    from semantica_dataagent import pull_service
+    from semantica_dataagent import project_context, pull_service
     from semantica_dataagent.scheduler import _scheduled_pull
 
     calls = []
     monkeypatch.setattr(
         pull_service, "run_pull", lambda project_id: calls.append(project_id)
     )
+    monkeypatch.setattr(project_context, "project_is_frozen", lambda project_id: False)
 
     _scheduled_pull("alpha")
 
     assert calls == ["alpha"]
+
+
+def test_pull_scheduler_skips_archived_project_and_keeps_its_interval(
+    tmp_path, monkeypatch
+):
+    from semantica_dataagent import project_context, pull_service
+    from semantica_dataagent.app import app
+    from semantica_dataagent.cli import initialize
+    from semantica_dataagent.scheduler import (
+        Scheduler,
+        _scheduled_pull,
+        pull_scheduler,
+    )
+
+    monkeypatch.setenv("DATAAGENT_DB_PATH", str(tmp_path / "frozen-pull.db"))
+    monkeypatch.setenv("DATAAGENT_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    token = initialize()
+    headers = {"Authorization": f"Bearer {token}"}
+    calls = []
+    monkeypatch.setattr(
+        pull_service, "run_pull", lambda project_id: calls.append(project_id)
+    )
+
+    with TestClient(app, headers=headers) as client:
+        created = client.post(
+            "/api/v1/projects", json={"name": "Frozen Pull", "type": "warehouse"}
+        )
+        assert created.status_code == 201, created.text
+        project_id = created.json()["id"]
+        saved = client.put(
+            f"/api/v1/projects/{project_id}/adapters",
+            json={
+                "adapters": [
+                    {
+                        "id": "dtb",
+                        "enabled": True,
+                        "parameters": {},
+                        "pull": {
+                            "enabled": True,
+                            "parameters": {
+                                "url": "https://dtb.example",
+                                "interval_seconds": 9,
+                            },
+                        },
+                    }
+                ]
+            },
+        )
+        assert saved.status_code == 200, saved.text
+        assert pull_scheduler._schedules[project_id].interval == 9
+
+        now = [0.0]
+        scheduler = Scheduler(_scheduled_pull, clock=lambda: now[0])
+        scheduler.configure(9, project_id)
+
+        archived = client.post(f"/api/v1/projects/{project_id}/archive")
+        assert archived.status_code == 200, archived.text
+        assert pull_service.intervals() == {project_id: 9}
+        assert pull_scheduler._schedules[project_id].interval == 9
+
+        def tick():
+            for due in scheduler.due_projects():
+                _scheduled_pull(due)
+
+        now[0] = 9
+        tick()
+        assert calls == [], "归档项目的定时拉取没有被跳过"
+        now[0] = 18
+        tick()
+        assert calls == [], "归档项目在下一个周期仍然执行了拉取"
+
+        restored = client.post(f"/api/v1/projects/{project_id}/restore")
+        assert restored.status_code == 200, restored.text
+        assert pull_service.intervals() == {project_id: 9}
+        assert pull_scheduler._schedules[project_id].interval == 9
+
+        now[0] = 27
+        tick()
+        assert calls == [project_id], "恢复后没有按原间隔继续定时拉取"
+        assert project_context.project_status(project_id) == "active"
 
 
 def test_pull_intervals_are_collected_per_project(tmp_path, monkeypatch):

@@ -590,6 +590,169 @@ def test_run_pull_does_not_fall_back_to_default_project_source_directory(
     assert calls == []
 
 
+def _source_tree(project_id: str) -> dict[str, bytes | None]:
+    from semantica_dataagent import project_context
+
+    root = project_context.project_source_directory(project_id)
+    return {
+        path.relative_to(root).as_posix(): (
+            path.read_bytes() if path.is_file() else None
+        )
+        for path in sorted(root.rglob("*"))
+    }
+
+
+def _pull_record_count(project_id: str) -> int:
+    from semantica_dataagent.db import PullRecord, sessions
+
+    with sessions()() as db:
+        return db.query(PullRecord).filter(PullRecord.project_id == project_id).count()
+
+
+def test_run_pull_rejects_archived_project_without_writing(client, monkeypatch):
+    from semantica_dataagent import project_context
+    from semantica_dataagent.dtb_puller import DtbPuller
+
+    c, admin = client
+    project = _create_project(c, admin, "Archived pull", "warehouse")
+    _set_pull_config(
+        project["id"],
+        url="https://archived.dtb.example",
+        token="archived-token",
+        layer="dimensions",
+        max_tables=1,
+    )
+    calls = []
+
+    def fake_fetch(*args):
+        calls.append(args)
+        return ({"任务信息.json": b"task"}, {"tables": 1, "tasks": 0})
+
+    monkeypatch.setattr(DtbPuller, "fetch", staticmethod(fake_fetch))
+    monkeypatch.setattr(project_context, "wake_build_queue", lambda: None)
+    before_tree = _source_tree(project["id"])
+    archived = c.post(
+        f"/api/v1/projects/{project['id']}/archive", headers=_headers(admin)
+    )
+    assert archived.status_code == 200, archived.text
+
+    response = c.post(
+        "/api/v1/pulls/dtb",
+        headers=_headers(admin),
+        params={"project": project["id"]},
+    )
+
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"] == "项目已归档"
+    assert calls == [], "归档项目仍然调用了拉取器"
+    assert _pull_record_count(project["id"]) == 0, "归档项目仍然创建了拉取记录"
+    assert _source_tree(project["id"]) == before_tree, "归档项目的源目录被改写"
+
+
+def test_run_pull_rejects_deleting_project_without_writing(client, monkeypatch):
+    from semantica_dataagent import project_context, project_deletion
+    from semantica_dataagent.dtb_puller import DtbPuller
+
+    c, admin = client
+    project = _create_project(c, admin, "Deleting pull", "warehouse")
+    _set_pull_config(
+        project["id"],
+        url="https://deleting.dtb.example",
+        token="deleting-token",
+        layer="dimensions",
+        max_tables=1,
+    )
+    calls = []
+
+    def fake_fetch(*args):
+        calls.append(args)
+        return ({"任务信息.json": b"task"}, {"tables": 1, "tasks": 0})
+
+    monkeypatch.setattr(DtbPuller, "fetch", staticmethod(fake_fetch))
+    monkeypatch.setattr(project_context, "wake_build_queue", lambda: None)
+    assert (
+        c.post(
+            f"/api/v1/projects/{project['id']}/archive", headers=_headers(admin)
+        ).status_code
+        == 200
+    )
+    assert (
+        project_deletion.prepare_deletion(
+            project["id"], project["name"], "owner", "Owner"
+        )
+        == "active"
+    )
+    assert project_context.project_status(project["id"]) == "deleting"
+    before_tree = _source_tree(project["id"])
+
+    response = c.post(
+        "/api/v1/pulls/dtb",
+        headers=_headers(admin),
+        params={"project": project["id"]},
+    )
+
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"] == "项目已归档"
+    assert calls == [], "删除中的项目仍然调用了拉取器"
+    assert _pull_record_count(project["id"]) == 0, "删除中的项目仍然创建了拉取记录"
+    assert _source_tree(project["id"]) == before_tree, "删除中的项目源目录被重建"
+
+
+def test_archived_project_pull_resumes_after_restore(client, monkeypatch):
+    from semantica_dataagent import project_context
+    from semantica_dataagent.db import PullRecord, sessions
+    from semantica_dataagent.dtb_puller import DtbPuller
+
+    c, admin = client
+    project = _create_project(c, admin, "Restored pull", "warehouse")
+    _set_pull_config(
+        project["id"],
+        url="https://restored.dtb.example",
+        token="restored-token",
+        layer="dimensions",
+        max_tables=1,
+    )
+    calls = []
+
+    def fake_fetch(*args):
+        calls.append(args)
+        return ({"任务信息.json": b"task"}, {"tables": 1, "tasks": 0})
+
+    monkeypatch.setattr(DtbPuller, "fetch", staticmethod(fake_fetch))
+    monkeypatch.setattr(project_context, "wake_build_queue", lambda: None)
+    assert (
+        c.post(
+            f"/api/v1/projects/{project['id']}/archive", headers=_headers(admin)
+        ).status_code
+        == 200
+    )
+    blocked = c.post(
+        "/api/v1/pulls/dtb",
+        headers=_headers(admin),
+        params={"project": project["id"]},
+    )
+    assert blocked.status_code == 409, blocked.text
+    assert (
+        c.post(
+            f"/api/v1/projects/{project['id']}/restore", headers=_headers(admin)
+        ).status_code
+        == 200
+    )
+
+    response = c.post(
+        "/api/v1/pulls/dtb",
+        headers=_headers(admin),
+        params={"project": project["id"]},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "succeeded"
+    assert len(calls) == 1
+    with sessions()() as db:
+        record = db.get(PullRecord, response.json()["id"])
+        assert record.project_id == project["id"]
+
+
 def test_adapter_permissions(client):
     c, admin = client
     project = _create_project(c, admin, "Guarded", "warehouse")
