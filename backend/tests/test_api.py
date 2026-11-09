@@ -747,6 +747,10 @@ def test_scheduler_interval_setting_is_validated_and_persisted(client):
 def test_langfuse_settings_encrypt_secret_and_preserve_omitted_key(client):
     c, token = client
     headers = {"Authorization": f"Bearer {token}"}
+    assert (
+        c.get("/api/v1/settings", headers=headers).json()["langfuse_capture_content"]
+        is None
+    )
     secret = "private-langfuse-test-value"
     values = {
         "langfuse_enabled": "true",
@@ -759,6 +763,22 @@ def test_langfuse_settings_encrypt_secret_and_preserve_omitted_key(client):
     assert secret not in response.text
     assert response.json()["langfuse_secret_key"] == "configured"
     assert secret.encode() not in Path(os.environ["DATAAGENT_DB_PATH"]).read_bytes()
+    assert (
+        c.put(
+            "/api/v1/settings",
+            headers=headers,
+            json={"values": {"langfuse_capture_content": "yes"}},
+        ).status_code
+        == 422
+    )
+    assert (
+        c.put(
+            "/api/v1/settings",
+            headers=headers,
+            json={"values": {"langfuse_capture_content": "true"}},
+        ).json()["langfuse_capture_content"]
+        == "true"
+    )
     response = c.put(
         "/api/v1/settings",
         headers=headers,

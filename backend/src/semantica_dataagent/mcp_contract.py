@@ -358,6 +358,8 @@ def install_contract(server):
                     "endTime": datetime.now(UTC).isoformat(),
                     "input": arguments,
                     "output": data,
+                    "is_error": bool(getattr(result, "isError", False)),
+                    "status": "error" if getattr(result, "isError", False) else "ok",
                     "metadata": {"duration_ms": int((time.monotonic() - clock) * 1000)},
                 },
                 secrets,

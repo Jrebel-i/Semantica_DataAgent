@@ -12,7 +12,6 @@ from fastapi.testclient import TestClient
 from semantica_dataagent import telemetry
 from semantica_dataagent.agent_runner import DONE, TEXT_DELTA, AgentEvent
 
-
 SQL = "SELECT id FROM shop.orders WHERE dt = '2025-01-01' AND customer = 'issue-234-literal'"
 QUESTION = "issue-234-question"
 PROMPT = "issue-234-prompt"
@@ -65,7 +64,9 @@ class Receiver:
                 telemetry._queue.join()
                 return
             time.sleep(0.02)
-        raise AssertionError(f"expected {count} ingestion requests, got {len(self.bodies)}")
+        raise AssertionError(
+            f"expected {count} ingestion requests, got {len(self.bodies)}"
+        )
 
     def payloads(self):
         return [body["batch"][0]["body"] for body in self.bodies]
@@ -79,7 +80,9 @@ class FakeRunner:
 
     async def run(self, request):
         yield AgentEvent(TEXT_DELTA, {"text": "推荐 "})
-        yield AgentEvent(DONE, {"text": "推荐 shop.orders。", "sql": [], "citations": []})
+        yield AgentEvent(
+            DONE, {"text": "推荐 shop.orders。", "sql": [], "citations": []}
+        )
 
 
 @pytest.fixture
@@ -147,7 +150,14 @@ def test_default_and_disabled_capture_send_only_metadata(client, capture):
         body = receiver.payloads()[0]
 
     encoded = json.dumps(body, ensure_ascii=False)
-    for secret in (SQL, "2025-01-01", "issue-234-literal", QUESTION, PROMPT, RESULT_ROW):
+    for secret in (
+        SQL,
+        "2025-01-01",
+        "issue-234-literal",
+        QUESTION,
+        PROMPT,
+        RESULT_ROW,
+    ):
         assert secret not in encoded, f"content leaked in default mode: {secret}"
     assert body["name"] == "propose_query"
     assert body["metadata"] == {
@@ -174,7 +184,6 @@ def test_enabling_capture_includes_question_prompt_sql_and_result_rows(client):
     assert body["input"]["prompt"] == PROMPT
     assert body["input"]["sql"] == SQL
     assert body["output"]["rows"] == [[RESULT_ROW]]
-    assert body["sql"] == SQL
 
 
 def test_error_messages_are_reduced_to_a_category_by_default(client):
@@ -241,7 +250,11 @@ def test_conversation_trace_omits_question_and_answer_by_default(client, monkeyp
     provider = test_client.post(
         "/api/v1/providers",
         headers=headers,
-        json={"name": "Local", "base_url": "http://127.0.0.1:3425", "models": ["model"]},
+        json={
+            "name": "Local",
+            "base_url": "http://127.0.0.1:3425",
+            "models": ["model"],
+        },
     ).json()
     with Receiver() as receiver:
         configure(client, receiver)
@@ -275,7 +288,11 @@ def test_unavailable_receiver_does_not_interrupt_an_answer(client, monkeypatch):
     provider = test_client.post(
         "/api/v1/providers",
         headers=headers,
-        json={"name": "Local", "base_url": "http://127.0.0.1:3425", "models": ["model"]},
+        json={
+            "name": "Local",
+            "base_url": "http://127.0.0.1:3425",
+            "models": ["model"],
+        },
     ).json()
     closed = Receiver()
     closed.server.server_close()

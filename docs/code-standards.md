@@ -325,7 +325,7 @@ provider 的 base_url 与 api_key 每轮按会话当前设置重新下发给 run
 
 ## 观测数据边界
 
-启用 Langfuse 时，用户问题、agent 回答及 SQL 是观测内容，可能包含用户自行输入的信息；界面必须告知用户问题和回答会上报。应用持有的 MCP token、provider API key、Langfuse 密钥、Neo4j 密码、认证与 Cookie 头和会话文件内容不得上报。上报字段采用集中允许列表，并遮盖已知秘密及 Bearer、sk-、password=、api_key=、token= 等凭据形式；不得把会话文件或请求头作为遥测载荷。
+启用 Langfuse 后默认只上报元数据：工具名、耗时、状态、模型、provider、表名、是否出错、错误类别和 SQL 指纹。用户问题、agent 回答、工具入参与结果、SQL 原文、结果行和错误原文只在管理员显式开启全局设置 `langfuse_capture_content` 后上报；未设置与显式关闭等价。SQL 指纹用 sqlglot 解析后把字面值替换为占位符再哈希，解析失败时指纹为空，不得回退为原文。界面必须说明默认只上报元数据，并说明开启内容采集后会上报问题和回答。应用持有的 MCP token、provider API key、Langfuse 密钥、Neo4j 密码、认证与 Cookie 头和会话文件内容不得上报。上报字段采用集中允许列表，并遮盖已知秘密及 Bearer、sk-、password=、api_key=、token= 等凭据形式；不得把会话文件或请求头作为遥测载荷。
 
 ## 会话管理接口
 
