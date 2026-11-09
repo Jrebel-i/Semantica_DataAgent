@@ -60,7 +60,13 @@ def owner_id(token: str) -> str:
         return db.get(Token, digest(token)).id
 
 
-def seed_project_data(project_id: str, token: str) -> None:
+def seed_project_data(
+    project_id: str,
+    token: str,
+    *,
+    generation: str | None = None,
+    conversation_id: str = "old",
+) -> None:
     from semantica_dataagent.db import (
         Build,
         Conversation,
@@ -71,19 +77,18 @@ def seed_project_data(project_id: str, token: str) -> None:
         sessions,
     )
 
+    generation = generation or f"{project_id}_gen"
     with sessions().begin() as db:
-        db.add(KnowledgeGeneration(name=f"{project_id}_gen", project_id=project_id))
+        db.add(KnowledgeGeneration(name=generation, project_id=project_id))
         pointer = (
             db.query(GenerationPointer)
             .filter(GenerationPointer.project_id == project_id)
             .first()
         )
         if pointer is None:
-            db.add(
-                GenerationPointer(project_id=project_id, generation=f"{project_id}_gen")
-            )
+            db.add(GenerationPointer(project_id=project_id, generation=generation))
         else:
-            pointer.generation = f"{project_id}_gen"
+            pointer.generation = generation
         db.add(
             Build(
                 project_id=project_id,
@@ -106,7 +111,7 @@ def seed_project_data(project_id: str, token: str) -> None:
         )
         db.add(
             Conversation(
-                id="old",
+                id=conversation_id,
                 owner_id=owner_id(token),
                 project_id=project_id,
                 title="old",
@@ -117,7 +122,7 @@ def seed_project_data(project_id: str, token: str) -> None:
         )
         db.add(
             Turn(
-                conversation_id="old",
+                conversation_id=conversation_id,
                 sequence=1,
                 question="q",
                 status="succeeded",
@@ -507,3 +512,355 @@ def test_startup_recovery_still_restores_source_for_archived_projects(client):
     project_context.recover_projects()
 
     assert source.exists(), "归档项目的数据应保留并可恢复源目录"
+
+
+def test_reused_project_id_deletes_the_new_project_data(client, monkeypatch):
+    c, admin = client
+    project = create_project(c, admin, "Reused Docs")
+    project_id = project["id"]
+    seed_project_data(project_id, admin)
+    archive(c, admin, project)
+
+    from semantica_dataagent import project_context, project_deletion
+    from semantica_dataagent.db import (
+        Conversation,
+        KnowledgeGeneration,
+        Project,
+        ProjectDeletion,
+        sessions,
+    )
+
+    calls: list[str] = []
+    monkeypatch.setattr(
+        project_deletion, "_delete_neo4j", lambda *args: calls.append("neo4j")
+    )
+    monkeypatch.setattr(
+        project_deletion, "_delete_milvus", lambda *args: calls.append("milvus")
+    )
+    monkeypatch.setattr(
+        project_deletion,
+        "_cleanup_attachments",
+        lambda *args: calls.append("attachments"),
+    )
+
+    first = delete(c, admin, project)
+    assert first.status_code == 204, first.text
+    assert not project_context.project_source_directory(project_id).exists()
+
+    recreated = create_project(c, admin, "Reused Docs")
+    assert recreated["id"] == project_id, "同 id 项目没有被复用，测试前提不成立"
+    seed_project_data(
+        project_id,
+        admin,
+        generation=f"{project_id}_second",
+        conversation_id="second",
+    )
+    source = project_context.project_source_directory(project_id)
+    assert source.exists()
+    archive(c, admin, recreated)
+
+    calls.clear()
+    second = delete(c, admin, recreated)
+    assert second.status_code == 204, second.text
+    assert calls == ["neo4j", "milvus", "attachments"], "第二次删除跳过了真实清理"
+
+    with sessions()() as db:
+        assert db.get(Project, project_id) is None
+        assert db.get(KnowledgeGeneration, f"{project_id}_second") is None
+        assert db.get(Conversation, "second") is None
+        assert (
+            db.query(Conversation).filter(Conversation.project_id == project_id).count()
+            == 0
+        )
+        deletion = db.get(ProjectDeletion, project_id)
+        assert deletion is not None and deletion.status == "completed"
+        steps = json.loads(deletion.steps)
+        assert [step["name"] for step in steps] == [
+            "source",
+            "neo4j",
+            "milvus",
+            "attachments",
+            "database",
+        ], "第二次删除沿用了上一轮的步骤记录"
+        assert all(step["status"] == "succeeded" for step in steps)
+    assert not source.exists(), "第二次删除没有清理新项目的源目录"
+
+
+def test_reused_project_id_still_requires_archive_and_matching_name(
+    client, monkeypatch
+):
+    c, admin = client
+    project = create_project(c, admin, "Guarded Docs")
+    from semantica_dataagent import project_deletion
+
+    for name in ("_delete_neo4j", "_delete_milvus", "_cleanup_attachments"):
+        monkeypatch.setattr(project_deletion, name, lambda *args: None)
+    archive(c, admin, project)
+    assert delete(c, admin, project).status_code == 204
+
+    recreated = create_project(c, admin, "Guarded Docs")
+    assert recreated["id"] == project["id"]
+
+    from semantica_dataagent.db import Project, sessions
+
+    calls: list[str] = []
+    monkeypatch.setattr(
+        project_deletion, "_delete_source", lambda *args: calls.append("source")
+    )
+    monkeypatch.setattr(
+        project_deletion, "_delete_neo4j", lambda *args: calls.append("neo4j")
+    )
+    monkeypatch.setattr(
+        project_deletion, "_delete_milvus", lambda *args: calls.append("milvus")
+    )
+    monkeypatch.setattr(
+        project_deletion,
+        "_cleanup_attachments",
+        lambda *args: calls.append("attachments"),
+    )
+
+    active = delete(c, admin, recreated)
+    assert active.status_code == 409, active.text
+    assert "归档" in active.json()["detail"]
+    with sessions()() as db:
+        assert db.get(Project, recreated["id"]).status == "active"
+
+    archive(c, admin, recreated)
+    wrong = delete(c, admin, recreated, name="别的名字")
+    assert wrong.status_code == 422, wrong.text
+    assert "项目名" in wrong.json()["detail"]
+    with sessions()() as db:
+        assert db.get(Project, recreated["id"]).status == "archived"
+    assert calls == [], "被拒绝的删除请求仍然执行了清理"
+
+    accepted = delete(c, admin, recreated)
+    assert accepted.status_code == 204, accepted.text
+    assert calls == ["source", "neo4j", "milvus", "attachments"]
+
+
+def test_existing_residual_completed_record_does_not_shadow_new_project(
+    client, monkeypatch
+):
+    c, admin = client
+    project = create_project(c, admin, "Legacy Docs")
+    project_id = project["id"]
+    archive(c, admin, project)
+
+    from semantica_dataagent import project_context, project_deletion
+
+    for name in ("_delete_neo4j", "_delete_milvus", "_cleanup_attachments"):
+        monkeypatch.setattr(project_deletion, name, lambda *args: None)
+    assert delete(c, admin, project).status_code == 204
+
+    recreated = create_project(c, admin, "Legacy Docs")
+    assert recreated["id"] == project_id
+
+    from semantica_dataagent.db import Project, ProjectDeletion, sessions
+
+    stale_steps = json.dumps(
+        [
+            {"name": step, "status": "succeeded"}
+            for step in ("source", "neo4j", "milvus", "attachments", "database")
+        ]
+    )
+    with sessions().begin() as db:
+        db.add(
+            ProjectDeletion(
+                project_id=project_id,
+                project_name=project["name"],
+                status="completed",
+                step="done",
+                steps=stale_steps,
+                requested_by="owner",
+            )
+        )
+
+    active = delete(c, admin, recreated)
+    assert active.status_code == 409, active.text
+    assert "归档" in active.json()["detail"]
+    with sessions()() as db:
+        assert db.get(Project, project_id).status == "active"
+
+    archive(c, admin, recreated)
+    wrong = delete(c, admin, recreated, name="别的名字")
+    assert wrong.status_code == 422, wrong.text
+    with sessions()() as db:
+        assert db.get(Project, project_id).status == "archived"
+
+    calls: list[str] = []
+    monkeypatch.setattr(
+        project_deletion, "_delete_neo4j", lambda *args: calls.append("neo4j")
+    )
+    monkeypatch.setattr(
+        project_deletion, "_delete_milvus", lambda *args: calls.append("milvus")
+    )
+    monkeypatch.setattr(
+        project_deletion,
+        "_cleanup_attachments",
+        lambda *args: calls.append("attachments"),
+    )
+    accepted = delete(c, admin, recreated)
+    assert accepted.status_code == 204, accepted.text
+    assert calls == ["neo4j", "milvus", "attachments"], "残留记录遮住了新项目的删除"
+    with sessions()() as db:
+        assert db.get(Project, project_id) is None
+        deletion = db.get(ProjectDeletion, project_id)
+        assert deletion.status == "completed"
+        assert [step["name"] for step in json.loads(deletion.steps)] == [
+            "source",
+            "neo4j",
+            "milvus",
+            "attachments",
+            "database",
+        ]
+    assert not project_context.project_source_directory(project_id).exists()
+
+
+def test_completed_deletion_is_idempotent_only_without_a_project_row(
+    client, monkeypatch
+):
+    c, admin = client
+    project = create_project(c, admin, "Idempotent Docs")
+    from semantica_dataagent import project_deletion
+
+    for name in ("_delete_neo4j", "_delete_milvus", "_cleanup_attachments"):
+        monkeypatch.setattr(project_deletion, name, lambda *args: None)
+    archive(c, admin, project)
+    assert delete(c, admin, project).status_code == 204
+
+    from semantica_dataagent.db import Project, ProjectDeletion, sessions
+
+    with sessions()() as db:
+        assert db.get(Project, project["id"]) is None
+        assert db.get(ProjectDeletion, project["id"]).status == "completed"
+
+    repeated = delete(c, admin, project, name="完全不同的名字")
+    assert repeated.status_code == 204, repeated.text
+
+
+def test_creating_a_project_clears_the_previous_completed_deletion(client, monkeypatch):
+    c, admin = client
+    project = create_project(c, admin, "Cleared Docs")
+    from semantica_dataagent import project_deletion
+
+    for name in ("_delete_neo4j", "_delete_milvus", "_cleanup_attachments"):
+        monkeypatch.setattr(project_deletion, name, lambda *args: None)
+    archive(c, admin, project)
+    assert delete(c, admin, project).status_code == 204
+
+    recreated = create_project(c, admin, "Cleared Docs")
+    assert recreated["id"] == project["id"]
+
+    from semantica_dataagent.db import ProjectDeletion, sessions
+
+    with sessions()() as db:
+        assert db.get(ProjectDeletion, recreated["id"]) is None, (
+            "创建同 id 项目后仍残留上一轮的完成记录"
+        )
+    listing = c.get("/api/v1/projects", headers=headers(admin))
+    assert listing.status_code == 200, listing.text
+    rows = [row for row in listing.json() if row["id"] == recreated["id"]]
+    assert len(rows) == 1
+    assert rows[0]["status"] == "active"
+    assert rows[0]["name"] == "Cleared Docs"
+
+
+def test_recovery_ignores_residual_records_for_a_recreated_project(client, monkeypatch):
+    c, admin = client
+    project = create_project(c, admin, "Recovered Docs")
+    project_id = project["id"]
+    seed_project_data(project_id, admin, conversation_id="kept")
+
+    from semantica_dataagent import project_context, project_deletion
+    from semantica_dataagent.db import (
+        Conversation,
+        GenerationPointer,
+        KnowledgeGeneration,
+        Project,
+        ProjectDeletion,
+        sessions,
+    )
+
+    with sessions().begin() as db:
+        db.add(
+            ProjectDeletion(
+                project_id=project_id,
+                project_name=project["name"],
+                status="completed",
+                step="done",
+                steps=json.dumps(
+                    [
+                        {"name": step, "status": "succeeded"}
+                        for step in (
+                            "source",
+                            "neo4j",
+                            "milvus",
+                            "attachments",
+                            "database",
+                        )
+                    ]
+                ),
+                requested_by="owner",
+            )
+        )
+    resumed: list[str] = []
+    monkeypatch.setattr(
+        project_deletion, "run_deletion", lambda project_id: resumed.append(project_id)
+    )
+    project_deletion.recover_project_deletions()
+    assert resumed == [], "恢复流程处理了已完成记录"
+
+    with sessions().begin() as db:
+        row = db.get(ProjectDeletion, project_id)
+        row.status = "failed"
+        row.step = "milvus"
+        row.steps = json.dumps([{"name": "source", "status": "succeeded"}])
+    resumed.clear()
+    project_deletion.recover_project_deletions()
+    assert resumed == [], "恢复流程处理了新项目的失败残留记录"
+
+    with sessions()() as db:
+        assert db.get(Project, project_id) is not None, "恢复流程删除了新项目"
+        assert db.get(KnowledgeGeneration, f"{project_id}_gen") is not None
+        assert (
+            db.query(GenerationPointer)
+            .filter(GenerationPointer.project_id == project_id)
+            .first()
+            is not None
+        )
+        assert db.get(Conversation, "kept") is not None
+    assert project_context.project_source_directory(project_id).exists()
+
+
+def test_cannot_create_the_same_id_while_the_old_deletion_is_in_progress(
+    client, monkeypatch
+):
+    c, admin = client
+    project = create_project(c, admin, "Race Docs")
+    archive(c, admin, project)
+
+    from semantica_dataagent import project_deletion
+    from semantica_dataagent.db import Project, sessions
+
+    def fail(*args):
+        raise RuntimeError("storage down")
+
+    monkeypatch.setattr(project_deletion, "_delete_source", fail)
+    assert delete(c, admin, project).status_code == 500
+    with sessions()() as db:
+        assert db.get(Project, project["id"]).status == "deleting"
+
+    same_name = c.post(
+        "/api/v1/projects",
+        headers=headers(admin),
+        json={"name": "Race Docs", "type": "document"},
+    )
+    assert same_name.status_code == 409, same_name.text
+
+    variant = c.post(
+        "/api/v1/projects",
+        headers=headers(admin),
+        json={"name": "Race-Docs", "type": "document"},
+    )
+    assert variant.status_code == 201, variant.text
+    assert variant.json()["id"] != project["id"], "旧删除进行中仍复用了项目 id"
