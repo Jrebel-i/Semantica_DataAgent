@@ -9,6 +9,7 @@ import sqlite3
 import time
 from datetime import UTC, datetime, timedelta
 
+import pytest
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
@@ -65,6 +66,14 @@ def build_rows(project_id="default"):
             "FROM builds WHERE project_id = ? ORDER BY id",
             (project_id,),
         ).fetchall()
+
+
+def insert_setting(key, value):
+    with sqlite3.connect(os.environ["DATAAGENT_DB_PATH"]) as db:
+        db.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+            (key, value),
+        )
 
 
 def insert_build(
@@ -576,3 +585,29 @@ def test_auto_build_switch_off_skips_new_project_upload(tmp_path, monkeypatch):
         time.sleep(1.5)
         assert build_rows(project_id) == []
         assert pending_rows(project_id) == []
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (None, 30.0),
+        ("", 30.0),
+        ("   ", 30.0),
+        ("\n\t", 30.0),
+        ("0", 0.0),
+        ("5", 5.0),
+        ("-3", 0.0),
+        ("not-a-number", 30.0),
+        ("nan", 30.0),
+        ("inf", 30.0),
+    ],
+)
+def test_debounce_seconds_reads_setting_values(tmp_path, monkeypatch, value, expected):
+    from semantica_dataagent import auto_build
+    from semantica_dataagent.db import sessions
+
+    configure(tmp_path, monkeypatch)
+    if value is not None:
+        insert_setting(auto_build.DEBOUNCE_KEY, value)
+    with sessions()() as db:
+        assert auto_build.debounce_seconds(db) == expected
