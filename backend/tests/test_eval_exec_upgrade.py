@@ -178,7 +178,9 @@ def service():
         fake.close()
 
 
-def test_eval_exec_defaults_to_dev_and_lists_unconfirmed(service, tmp_path, monkeypatch):
+def test_eval_exec_defaults_to_dev_and_lists_unconfirmed(
+    service, tmp_path, monkeypatch
+):
     service.reset(
         {
             "dev good": [GOOD],
@@ -284,12 +286,12 @@ def test_repeat_majority_volatile_and_tie(service, tmp_path, monkeypatch):
     assert report["metrics"]["wrong"] == 1
     assert report["metrics"]["volatile"] == 2
     conversation_ids = [
-        run["conversation_id"]
-        for entry in report["questions"]
-        for run in entry["runs"]
+        run["conversation_id"] for entry in report["questions"] for run in entry["runs"]
     ]
     assert len(conversation_ids) == len(set(conversation_ids)) == 9
-    assert all(run["tool_calls"] for entry in report["questions"] for run in entry["runs"])
+    assert all(
+        run["tool_calls"] for entry in report["questions"] for run in entry["runs"]
+    )
 
     service.reset({"tie": [GOOD, BAD]})
     args = _args(tmp_path, path, repeat=2, name="tie-report")
@@ -329,7 +331,11 @@ def test_split_is_reproducible_and_stratified(tmp_path):
         "B": 3,
         "C": 3,
     }
-    assert all(item["split"] == "dev" for item in first if item["category"] == "A" and item["split"] != "holdout")
+    assert all(
+        item["split"] == "dev"
+        for item in first
+        if item["category"] == "A" and item["split"] != "holdout"
+    )
 
 
 def test_split_command_writes_reproducible_splits(tmp_path):
@@ -347,7 +353,10 @@ def test_split_command_writes_reproducible_splits(tmp_path):
         )
     except SystemExit:
         pytest.fail("eval-split command is missing")
-    rows = [_question(f"q{index}", f"question {index}", category=index % 2 and "A" or "B") for index in range(10)]
+    rows = [
+        _question(f"q{index}", f"question {index}", category=index % 2 and "A" or "B")
+        for index in range(10)
+    ]
     path = _write_questions(tmp_path, rows)
     args.questions = path
     run_split = getattr(evaluation, "run_split", None)
@@ -420,7 +429,9 @@ def test_failure_categories_merge_back_and_recompute(tmp_path, service, monkeypa
         )
     except SystemExit:
         pytest.fail("eval-report command is missing")
-    run_report = getattr(__import__("semantica_dataagent.eval_exec", fromlist=["x"]), "run_report", None)
+    run_report = getattr(
+        __import__("semantica_dataagent.eval_exec", fromlist=["x"]), "run_report", None
+    )
     assert run_report is not None, "eval_exec.run_report is missing"
     assert run_report(merge_args) == 0
 
@@ -452,7 +463,9 @@ def test_invalid_failure_category_is_rejected(tmp_path):
             str(categories),
         ]
     )
-    run_report = getattr(__import__("semantica_dataagent.eval_exec", fromlist=["x"]), "run_report", None)
+    run_report = getattr(
+        __import__("semantica_dataagent.eval_exec", fromlist=["x"]), "run_report", None
+    )
     assert run_report is not None, "eval_exec.run_report is missing"
     with pytest.raises(SystemExit):
         run_report(merge_args)

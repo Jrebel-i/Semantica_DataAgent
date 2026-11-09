@@ -203,6 +203,31 @@ def _parser() -> argparse.ArgumentParser:
     execution.add_argument("--project")
     execution.add_argument("--max-queries", type=int, default=40)
     execution.add_argument("--skip-reference", action="store_true")
+    execution.add_argument(
+        "--split",
+        choices=("dev", "holdout", "all"),
+        default="dev",
+        help="question set split to run (default: dev; holdout requires explicit opt-in)",
+    )
+    execution.add_argument(
+        "--repeat",
+        type=int,
+        default=1,
+        help="number of independent conversations per question",
+    )
+    split = commands.add_parser(
+        "eval-split", help="write a reproducible stratified dev/holdout split"
+    )
+    split.add_argument("--questions", required=True, type=Path)
+    split.add_argument("--seed", type=int, default=235)
+    split.add_argument("--dev-size", type=int)
+    split.add_argument("--holdout-size", type=int)
+    split.add_argument("--holdout-ratio", type=float, default=0.3)
+    report = commands.add_parser(
+        "eval-report", help="merge human failure categories into an eval-exec report"
+    )
+    report.add_argument("--report", required=True, type=Path)
+    report.add_argument("--categories", required=True, type=Path)
     return parser
 
 
@@ -344,4 +369,12 @@ def main(argv: list[str] | None = None) -> int:
         from .eval_exec import run_cli
 
         return run_cli(args)
+    if args.command == "eval-split":
+        from .eval import run_split
+
+        return run_split(args)
+    if args.command == "eval-report":
+        from .eval_exec import run_report
+
+        return run_report(args)
     return _run_eval(args)
