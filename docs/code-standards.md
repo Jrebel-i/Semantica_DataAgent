@@ -285,6 +285,10 @@ MCP 工具的参数 schema 必须自包含，不含任何层级的 `$ref` 或 `$
 
 `ask_dataagent` 让本地 MCP 用户把完整问题交给在线 agent，并在完成后返回回答、SQL 和引用。默认 agent 是 `pi`，provider 和 model 默认取第一个已配置 provider 及其第一个模型；管理员可用 `assistant_agent`、`assistant_provider_id`、`assistant_model` 设置覆盖，也可用 `DATAAGENT_ASK_AGENT`、`DATAAGENT_ASK_PROVIDER_ID`、`DATAAGENT_ASK_MODEL` 提供部署默认值。`assistant_timeout_seconds`（默认 300，范围 0.1–3600）控制等待时间；超时返回 `unavailable` 和 `conversation_id`，调用者可用该 id 继续同一对话。对话记在调用者 token 名下。
 
+## 应用镜像
+
+应用镜像由 `deploy/k8s/app/Dockerfile` 从仓库根目录构建；新增需要打包进镜像的文件（例如 hatch force-include 的 skill 或 schema）时，必须同时让该 Dockerfile 拷贝到，`tests/test_docker_skills_copy.py` 会检查每个 `../` force-include 源路径被某条 `COPY` 覆盖。
+
 ## 在线 agent 容器
 
 构建镜像：`docker build -t semantica-dataagent-agent-runner:1.2.0 deploy/agent-runner`。默认使用 Docker 沙箱；仅在可信的开发环境排障时设置 `DATAAGENT_AGENT_MODE=local`，此模式没有文件和网络隔离。容器的 CPU 和内存默认分别为 2 核和 2g，可用 `DATAAGENT_AGENT_CPUS`、`DATAAGENT_AGENT_MEMORY` 配置。
