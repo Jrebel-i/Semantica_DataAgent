@@ -7,6 +7,7 @@ import time
 from . import project_context
 
 DEFAULT_PROJECT_ID = "default"
+LOGGER = logging.getLogger(__name__)
 
 
 class Schedule:
@@ -121,9 +122,13 @@ scheduler = Scheduler()
 
 
 def _scheduled_pull(project_id=None):
+    project_id = project_id or DEFAULT_PROJECT_ID
+    if project_context.project_is_frozen(project_id):
+        LOGGER.debug("Skipping scheduled pull for frozen project %s", project_id)
+        return
     from .pull_service import run_pull
 
-    run_pull(project_id or DEFAULT_PROJECT_ID)
+    run_pull(project_id)
 
 
 pull_scheduler = Scheduler(_scheduled_pull)

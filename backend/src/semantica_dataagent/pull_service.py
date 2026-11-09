@@ -33,11 +33,34 @@ def _lock_for(project_id: str) -> threading.Lock:
         return _locks.setdefault(project_id, threading.Lock())
 
 
+def _existing_project_is_frozen(project_id: str) -> bool:
+    """Frozen projects reject pulls; unknown projects keep the old failure path."""
+    if not project_context.project_is_frozen(project_id):
+        return False
+    try:
+        project_context.project_status(project_id)
+    except project_context.ProjectNotFound:
+        return False
+    return True
+
+
+def _frozen_pull_error(project_id: str) -> str:
+    try:
+        status = project_context.project_status(project_id)
+    except project_context.ProjectNotFound:
+        status = None
+    if status == project_context.DELETING_STATUS:
+        return "项目正在删除，拉取未继续"
+    return f"{project_context.ARCHIVED_DETAIL}，拉取未继续"
+
+
 def run_pull(project_id: str = DEFAULT_PROJECT_ID):
     lock = _lock_for(project_id)
     if not lock.acquire(blocking=False):
         raise ValueError("A pull is already running")
     try:
+        if _existing_project_is_frozen(project_id):
+            raise ValueError(project_context.ARCHIVED_DETAIL)
         with sessions().begin() as db:
             record = PullRecord(
                 project_id=project_id,
@@ -137,6 +160,14 @@ def recover_pulls(record_id=None):
             for r in query.all()
         ]
     for ident, directory, operation, project_id in pending:
+        if project_context.project_is_frozen(project_id):
+            with sessions().begin() as db:
+                row = db.get(PullRecord, ident)
+                if row is not None and row.status == "running":
+                    row.status = "failed"
+                    row.error = _frozen_pull_error(project_id)
+                    row.finished_at = datetime.now(UTC)
+            continue
         commit = None
         if directory and operation:
             with repository(directory) as root:
