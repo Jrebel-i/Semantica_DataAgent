@@ -778,6 +778,32 @@ def test_probe_uses_larger_output_budget_for_vision(client, provider_type):
 
 @pytest.mark.parametrize(
     "provider_type",
+    [
+        "anthropic-messages",
+        "openai-completions",
+        "openai-responses",
+        "google-generative-ai",
+    ],
+)
+def test_probe_keeps_effort_output_budget_at_32(client, provider_type):
+    c, token = client
+    with _gateway(provider_type) as (gateway, base_url):
+        provider_id = _create_provider(
+            c, token, provider_type=provider_type, base_url=base_url
+        )
+        response = _probe(c, token, provider_id)
+
+    assert response.status_code == 200, response.text
+    effort_limits = [
+        _output_limit(provider_type, request["body"])
+        for request in gateway.requests
+        if request["kind"] == "effort"
+    ]
+    assert effort_limits == [32] * len(EFFORT_LEVELS)
+
+
+@pytest.mark.parametrize(
+    "provider_type",
     ["openai-completions", "openai-responses", "google-generative-ai"],
 )
 def test_probe_reports_truncated_vision_as_unknown(client, provider_type):
