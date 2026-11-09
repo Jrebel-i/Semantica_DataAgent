@@ -52,6 +52,7 @@ export function PluginsPage({
   const [dimLimit, setDimLimit] = useState("1000");
   const [embedding, setEmbedding] = useState(EMBEDDING_DEFAULTS);
   const [langfuseEnabled, setLangfuseEnabled] = useState(false);
+  const [langfuseCaptureContent, setLangfuseCaptureContent] = useState(false);
   const [langfuseUrl, setLangfuseUrl] = useState("");
   const [langfusePublicKey, setLangfusePublicKey] = useState("");
   const [langfuseSecretKey, setLangfuseSecretKey] = useState("");
@@ -73,6 +74,7 @@ export function PluginsPage({
         setRules((await f.json()) as Rules);
         const data = (await settings.json()) as Record<string, string | null>;
         setLangfuseEnabled(data.langfuse_enabled === "true");
+        setLangfuseCaptureContent(data.langfuse_capture_content === "true");
         setLangfuseUrl(data.langfuse_url || "");
         setLangfusePublicKey(data.langfuse_public_key || "");
         setDimLimit(data.dimension_value_limit || "1000");
@@ -200,6 +202,12 @@ export function PluginsPage({
         >
           {t.langfuseEnabled}
         </Checkbox>
+        <Checkbox
+          checked={langfuseCaptureContent}
+          onChange={(e) => setLangfuseCaptureContent(e.target.checked)}
+        >
+          {t.langfuseCaptureContent}
+        </Checkbox>
         <label>
           {t.langfuseUrl}
           <input
@@ -226,6 +234,7 @@ export function PluginsPage({
           onClick={() => {
             const values: Record<string, string> = {
               langfuse_enabled: String(langfuseEnabled),
+              langfuse_capture_content: String(langfuseCaptureContent),
               langfuse_url: langfuseUrl,
               langfuse_public_key: langfusePublicKey,
             };
