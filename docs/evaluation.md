@@ -66,7 +66,8 @@ semantica-dataagent eval-exec \
   --report "$HOME/wt/sda/scratch/eval/baseline" \
   --base-url http://127.0.0.1:8000 \
   --token DATAAGENT_TOKEN \
-  --agent pi --provider-id <provider> --model <model>
+  --agent pi --provider-id <provider> --model <model> \
+  --max-queries 200
 ```
 
 - `--split dev`：默认；只跑开发集。
@@ -74,7 +75,7 @@ semantica-dataagent eval-exec \
 - `--split all`：调试用；会同时跑两套题。
 - `--repeat 3`：同一道题跑 3 遍，每遍新开一个对话；多数一致算对，平局算错，出现过不一致的题标为波动题。
 - `--only q1,q2`：只跑指定题号，保留部署后的快速冒烟用法；题号必须在当前 `split` 且未被排除。
-- `--max-queries`：按“题数 ×（repeat + 参考 SQL 一遍）”估算，默认 40。
+- `--max-queries`：按“题数 ×（repeat + 参考 SQL 一遍）”估算，默认 40。默认 28 道 dev 题跑 1 遍需要 56，跑 3 遍需要 112；跑完整开发集时要显式提高，例如 `--max-queries 200`。`--only` 冒烟保持默认即可。
 - `--skip-reference`：不执行参考 SQL，此时所有题都是 `uncomparable`。
 
 未确认答案的题先被排除，不计入任何指标，并在报告的 `excluded_unconfirmed` 和 Markdown“未确认答案”一节列出。
