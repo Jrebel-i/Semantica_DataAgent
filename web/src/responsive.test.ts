@@ -4,7 +4,10 @@ import { describe, expect, test } from "vitest";
 
 const css = readFileSync(new URL("./workbench.css", import.meta.url), "utf8");
 const narrowStart = css.indexOf("@media (max-width: 768px)");
-const narrow = narrowStart === -1 ? "" : css.slice(narrowStart, css.length);
+const narrow =
+  narrowStart === -1
+    ? ""
+    : css.slice(css.indexOf("{", narrowStart) + 1, css.length);
 
 function declarations(selector: string) {
   for (const match of narrow.matchAll(/(?:^|\n)\s*([^{}]+)\{([^}]*)\}/g)) {
