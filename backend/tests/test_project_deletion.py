@@ -716,6 +716,78 @@ def test_existing_residual_completed_record_does_not_shadow_new_project(
     assert not project_context.project_source_directory(project_id).exists()
 
 
+def test_reused_project_id_refreshes_stale_deletion_metadata(client, monkeypatch):
+    c, admin = client
+    project = create_project(c, admin, "Meta Docs")
+    project_id = project["id"]
+    archive(c, admin, project)
+
+    from semantica_dataagent import project_deletion
+
+    for name in ("_delete_neo4j", "_delete_milvus", "_cleanup_attachments"):
+        monkeypatch.setattr(project_deletion, name, lambda *args: None)
+    assert delete(c, admin, project).status_code == 204
+
+    recreated = create_project(c, admin, "Meta Docs")
+    assert recreated["id"] == project_id
+    renamed = c.patch(
+        f"/api/v1/projects/{project_id}",
+        headers=headers(admin),
+        json={"name": "Meta Docs Renamed"},
+    )
+    assert renamed.status_code == 200, renamed.text
+    archive(c, admin, renamed.json())
+
+    from semantica_dataagent.db import (
+        Project,
+        ProjectAudit,
+        ProjectDeletion,
+        sessions,
+    )
+
+    stale_steps = json.dumps(
+        [
+            {"name": step, "status": "succeeded"}
+            for step in ("source", "neo4j", "milvus", "attachments", "database")
+        ]
+    )
+    with sessions().begin() as db:
+        db.add(
+            ProjectDeletion(
+                project_id=project_id,
+                project_name="Meta Docs",
+                status="completed",
+                step="done",
+                steps=stale_steps,
+                requested_by="old-owner",
+            )
+        )
+
+    accepted = delete(c, admin, renamed.json())
+    assert accepted.status_code == 204, accepted.text
+    with sessions()() as db:
+        assert db.get(Project, project_id) is None
+        deletion = db.get(ProjectDeletion, project_id)
+        assert deletion is not None and deletion.status == "completed"
+        assert deletion.project_name == "Meta Docs Renamed"
+        assert deletion.requested_by == owner_id(admin)
+        assert [step["name"] for step in json.loads(deletion.steps)] == [
+            "source",
+            "neo4j",
+            "milvus",
+            "attachments",
+            "database",
+        ]
+        actions = [
+            row.action
+            for row in db.query(ProjectAudit)
+            .filter(ProjectAudit.project_id == project_id)
+            .order_by(ProjectAudit.id)
+            .all()
+        ]
+        assert actions.count("project.delete") == 2
+
+
 def test_completed_deletion_is_idempotent_only_without_a_project_row(
     client, monkeypatch
 ):
