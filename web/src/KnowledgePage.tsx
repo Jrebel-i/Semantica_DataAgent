@@ -94,11 +94,13 @@ export function KnowledgePage({
   const treeLoaded = useRef(false);
   const previousSearch = useRef("");
   const previousProject = useRef(project);
+  const projectGeneration = useRef(0);
   const autoSelect = useRef(true);
 
   useEffect(() => {
     if (previousProject.current === project) return;
     previousProject.current = project;
+    projectGeneration.current += 1;
     autoSelect.current = false;
     setTables([]);
     setCategories([]);
@@ -134,6 +136,7 @@ export function KnowledgePage({
       return;
     }
     const controller = new AbortController();
+    const generation = projectGeneration.current;
     const params = new URLSearchParams();
     if (database) params.set("database", database);
     if (search) params.set("search", search);
@@ -148,6 +151,11 @@ export function KnowledgePage({
         return response.json() as Promise<TableSummary[]>;
       })
       .then((data) => {
+        if (
+          controller.signal.aborted ||
+          generation !== projectGeneration.current
+        )
+          return;
         setTables(data);
         setError(false);
         if (autoSelect.current && !readingDoc && data.length > 0) {
@@ -156,7 +164,11 @@ export function KnowledgePage({
         }
       })
       .catch(() => {
-        if (!controller.signal.aborted) setError(true);
+        if (
+          !controller.signal.aborted &&
+          generation === projectGeneration.current
+        )
+          setError(true);
       });
     return () => controller.abort();
     // The selection is intentionally read once when a result set arrives.
@@ -191,6 +203,7 @@ export function KnowledgePage({
 
   useEffect(() => {
     const controller = new AbortController();
+    const generation = projectGeneration.current;
     fetch(`/api/v1/categories?${new URLSearchParams({ project })}`, {
       headers: { Authorization: `Bearer ${token}` },
       signal: controller.signal,
@@ -199,9 +212,19 @@ export function KnowledgePage({
         if (!response.ok) throw new Error();
         return response.json() as Promise<Category[]>;
       })
-      .then(setCategories)
+      .then((data) => {
+        if (
+          !controller.signal.aborted &&
+          generation === projectGeneration.current
+        )
+          setCategories(data);
+      })
       .catch(() => {
-        if (!controller.signal.aborted) setError(true);
+        if (
+          !controller.signal.aborted &&
+          generation === projectGeneration.current
+        )
+          setError(true);
       });
     return () => controller.abort();
   }, [project, token]);
@@ -231,6 +254,7 @@ export function KnowledgePage({
   }, [selected?.ref, readingDoc?.ref, tables.length, categories.length]);
 
   async function openDocument(path: string) {
+    const generation = projectGeneration.current;
     try {
       const response = await fetch(
         `/api/v1/document?${new URLSearchParams({ doc_id: path, project })}`,
@@ -238,11 +262,12 @@ export function KnowledgePage({
       );
       if (!response.ok) throw new Error();
       const document = (await response.json()) as Document;
+      if (generation !== projectGeneration.current) return;
       setReadingDoc(document);
       setSelected(null);
       setError(false);
     } catch {
-      setError(true);
+      if (generation === projectGeneration.current) setError(true);
     }
   }
 
