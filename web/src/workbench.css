@@ -3642,6 +3642,27 @@ code {
   .ant-table-content {
     overflow-x: auto;
   }
+  .ant-table-wrapper .ant-table-content > table {
+    width: max-content;
+    min-width: 100%;
+  }
+  .ant-table-wrapper .ant-table-thead > tr > th,
+  .ant-table-wrapper .ant-table-tbody > tr > td {
+    max-width: 320px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .admin-page .knowledge-table-scroll .data-table th,
+  .admin-page .knowledge-table-scroll .data-table td {
+    white-space: nowrap;
+  }
+  .admin-page .knowledge-table-scroll .data-table td.field-comment,
+  .admin-page .knowledge-table-scroll .data-table td.field-dimension {
+    max-width: 260px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
   .chat-layout,
   .chat-page-host .chat-layout,
   .chat-layout.context-hidden,

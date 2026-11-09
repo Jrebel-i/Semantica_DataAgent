@@ -43,6 +43,36 @@ describe("narrow screen layout", () => {
     expect(declarations(".ant-table-content")).toContain("overflow-x: auto;");
   });
 
+  test("table cells keep their text on one line inside a horizontal scroller", () => {
+    for (const selector of [
+      ".ant-table-wrapper .ant-table-thead > tr > th",
+      ".ant-table-wrapper .ant-table-tbody > tr > td",
+    ]) {
+      const cell = declarations(selector);
+      expect(cell).toContain("white-space: nowrap;");
+      expect(cell).toContain("max-width: 320px;");
+      expect(cell).toContain("overflow: hidden;");
+      expect(cell).toContain("text-overflow: ellipsis;");
+    }
+    const table = declarations(".ant-table-wrapper .ant-table-content > table");
+    expect(table).toContain("width: max-content;");
+    expect(table).toContain("min-width: 100%;");
+  });
+
+  test("the knowledge field table keeps cells on one line and scrolls itself", () => {
+    for (const selector of [
+      ".admin-page .knowledge-table-scroll .data-table th",
+      ".admin-page .knowledge-table-scroll .data-table td",
+    ]) {
+      expect(declarations(selector)).toContain("white-space: nowrap;");
+    }
+    expect(
+      declarations(
+        ".admin-page .knowledge-table-scroll .data-table td.field-comment",
+      ),
+    ).toContain("max-width: 260px;");
+  });
+
   test("wide multi-column layouts collapse to one column", () => {
     for (const selector of [
       ".source-layout",
