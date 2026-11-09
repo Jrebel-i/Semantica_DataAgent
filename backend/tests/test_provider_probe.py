@@ -44,6 +44,7 @@ def _success_body(
     *,
     thinking: bool = False,
     truncated: bool = False,
+    include_text: bool = False,
 ) -> dict:
     if provider_type == "anthropic-messages":
         content: list[dict] = []
@@ -55,7 +56,7 @@ def _success_body(
                     "signature": "sig",
                 }
             )
-        if not truncated:
+        if not truncated or include_text:
             content.append({"type": "text", "text": text})
         return {
             "id": "msg_probe",
@@ -69,7 +70,7 @@ def _success_body(
     if provider_type == "openai-completions":
         message: dict = {
             "role": "assistant",
-            "content": "" if truncated else text,
+            "content": text if not truncated or include_text else "",
         }
         if thinking or truncated:
             message["reasoning_content"] = "图片整体是红色"
@@ -97,7 +98,7 @@ def _success_body(
                     "content": [{"type": "reasoning_text", "text": "图片整体是红色"}],
                 }
             )
-        if not truncated:
+        if not truncated or include_text:
             output.append(
                 {
                     "type": "message",
@@ -127,7 +128,7 @@ def _success_body(
     parts: list[dict] = []
     if thinking or truncated:
         parts.append({"text": "图片整体是红色", "thought": True})
-    if not truncated:
+    if not truncated or include_text:
         parts.append({"text": text})
     return {
         "candidates": [
@@ -316,6 +317,7 @@ class FakeGateway:
         success_body: dict | None = None,
         vision_thinking: bool = False,
         vision_truncated: bool = False,
+        vision_truncated_text: bool = False,
     ):
         self.provider_type = provider_type
         self.vision_status = vision_status
@@ -329,6 +331,7 @@ class FakeGateway:
         self.success_body = success_body
         self.vision_thinking = vision_thinking
         self.vision_truncated = vision_truncated
+        self.vision_truncated_text = vision_truncated_text
         self.requests: list[dict] = []
         self.vision_sizes: list[tuple[int, int]] = []
         self.vision_statuses: list[int] = []
@@ -411,6 +414,7 @@ class _GatewayHandler(BaseHTTPRequestHandler):
                     text,
                     thinking=gateway.vision_thinking,
                     truncated=gateway.vision_truncated,
+                    include_text=gateway.vision_truncated_text,
                 )
             else:
                 payload = _success_body(
@@ -784,6 +788,50 @@ def test_probe_reports_truncated_vision_as_unknown(client, provider_type):
     assert response.json()["vision"] == "unknown"
     assert "截断" in response.json()["notes"]
     assert response.json()["effort"] == {level: "yes" for level in EFFORT_LEVELS}
+
+
+@pytest.mark.parametrize(
+    "provider_type",
+    [
+        "anthropic-messages",
+        "openai-completions",
+        "openai-responses",
+        "google-generative-ai",
+    ],
+)
+def test_probe_accepts_correct_answer_from_truncated_vision(client, provider_type):
+    c, token = client
+    with _gateway(
+        provider_type,
+        vision_truncated=True,
+        vision_truncated_text=True,
+    ) as (_, base_url):
+        provider_id = _create_provider(
+            c, token, provider_type=provider_type, base_url=base_url
+        )
+        response = _probe(c, token, provider_id)
+
+    assert response.status_code == 200, response.text
+    assert response.json()["vision"] == "yes"
+
+
+def test_probe_reports_wrong_answer_from_truncated_vision_as_no(client):
+    c, token = client
+    with _gateway(
+        "anthropic-messages",
+        vision_truncated=True,
+        vision_truncated_text=True,
+        discard_image=True,
+        vision_text="绿色",
+    ) as (_, base_url):
+        provider_id = _create_provider(
+            c, token, provider_type="anthropic-messages", base_url=base_url
+        )
+        response = _probe(c, token, provider_id)
+
+    assert response.status_code == 200, response.text
+    assert response.json()["vision"] == "no"
+    assert "请求被接受但模型未能识别图片内容" in response.json()["notes"]
 
 
 def test_probe_accepts_images_at_least_64_pixels_like_qwen(client):
