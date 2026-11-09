@@ -36,6 +36,7 @@ GOOGLE_BUDGETS = {
 DEFAULT_TOTAL_TIMEOUT_SECONDS = 60.0
 DEFAULT_REQUEST_TIMEOUT_SECONDS = 15.0
 MAX_TOKENS = 32
+VISION_MAX_TOKENS = 1024
 PROBE_PROMPT = "Reply with OK."
 VISION_PROMPT = "这张图片是什么颜色？只回答一个词"
 VISION_IMAGE_SIZE = 64
@@ -44,6 +45,7 @@ VISION_COLORS = (
     ("blue", ("蓝", "blue"), (0, 0, 255)),
 )
 VISION_UNRECOGNIZED = "请求被接受但模型未能识别图片内容"
+VISION_TRUNCATED = "输出被截断，无法判断"
 
 _active_lock = threading.Lock()
 _active_providers: set[str] = set()
@@ -157,7 +159,7 @@ def _vision_payload(provider: ProviderConfig, model: str, image: str) -> dict:
     if provider.type == "anthropic-messages":
         return {
             "model": model,
-            "max_tokens": MAX_TOKENS,
+            "max_tokens": VISION_MAX_TOKENS,
             "stream": False,
             "messages": [
                 {
@@ -179,7 +181,7 @@ def _vision_payload(provider: ProviderConfig, model: str, image: str) -> dict:
     if provider.type == "openai-completions":
         return {
             "model": model,
-            "max_completion_tokens": MAX_TOKENS,
+            "max_completion_tokens": VISION_MAX_TOKENS,
             "stream": False,
             "messages": [
                 {
@@ -197,7 +199,7 @@ def _vision_payload(provider: ProviderConfig, model: str, image: str) -> dict:
     if provider.type == "openai-responses":
         return {
             "model": model,
-            "max_output_tokens": MAX_TOKENS,
+            "max_output_tokens": VISION_MAX_TOKENS,
             "store": False,
             "stream": False,
             "input": [
@@ -223,7 +225,7 @@ def _vision_payload(provider: ProviderConfig, model: str, image: str) -> dict:
                 ],
             }
         ],
-        "generationConfig": {"maxOutputTokens": MAX_TOKENS},
+        "generationConfig": {"maxOutputTokens": VISION_MAX_TOKENS},
     }
 
 
@@ -357,6 +359,31 @@ def _response_text(provider: ProviderConfig, payload: object) -> str:
     )
 
 
+def _response_truncated(provider: ProviderConfig, payload: object) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    if provider.type == "anthropic-messages":
+        return payload.get("stop_reason") == "max_tokens"
+    if provider.type == "openai-completions":
+        choices = payload.get("choices")
+        if not isinstance(choices, list) or not choices:
+            return False
+        choice = choices[0]
+        return isinstance(choice, dict) and choice.get("finish_reason") == "length"
+    if provider.type == "openai-responses":
+        details = payload.get("incomplete_details")
+        return (
+            payload.get("status") == "incomplete"
+            and isinstance(details, dict)
+            and details.get("reason") == "max_output_tokens"
+        )
+    candidates = payload.get("candidates")
+    if not isinstance(candidates, list) or not candidates:
+        return False
+    candidate = candidates[0]
+    return isinstance(candidate, dict) and candidate.get("finishReason") == "MAX_TOKENS"
+
+
 def _error_message(payload: object, secret: str) -> str:
     message = ""
     if isinstance(payload, dict):
@@ -412,6 +439,7 @@ class _WireResult:
     status: int | None = None
     text: str = ""
     detail: str = ""
+    truncated: bool = False
 
 
 def _send_once(
@@ -461,7 +489,12 @@ def _send_once(
                 status,
                 detail=f"HTTP {status} with an unexpected response body",
             )
-        return _WireResult("ok", status, _response_text(provider, payload))
+        return _WireResult(
+            "ok",
+            status,
+            _response_text(provider, payload),
+            truncated=_response_truncated(provider, payload),
+        )
     detail = f"HTTP {status}"
     reason = _error_message(payload, provider.api_key or "")
     if reason:
@@ -506,6 +539,14 @@ def _vision_outcome(
             dict.fromkeys(result.detail for result in unknown if result.detail)
         )
         return "unknown", details or "unknown"
+
+    truncated = [
+        result
+        for result in results
+        if result.kind == "ok" and result.truncated and not result.text.strip()
+    ]
+    if truncated:
+        return "unknown", VISION_TRUNCATED
 
     recognized = all(
         _recognizes_color(result.text, keywords)

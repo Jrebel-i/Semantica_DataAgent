@@ -37,18 +37,44 @@ SECRET = "probe-secret-a7c4e1"
 MIN_IMAGE_SIZE = 64
 
 
-def _success_body(provider_type: str, model: str, text: str = "OK") -> dict:
+def _success_body(
+    provider_type: str,
+    model: str,
+    text: str = "OK",
+    *,
+    thinking: bool = False,
+    truncated: bool = False,
+    include_text: bool = False,
+    incomplete_reason: str = "max_output_tokens",
+) -> dict:
     if provider_type == "anthropic-messages":
+        content: list[dict] = []
+        if thinking or truncated:
+            content.append(
+                {
+                    "type": "thinking",
+                    "thinking": "图片整体是红色",
+                    "signature": "sig",
+                }
+            )
+        if not truncated or include_text:
+            content.append({"type": "text", "text": text})
         return {
             "id": "msg_probe",
             "type": "message",
             "role": "assistant",
             "model": model,
-            "content": [{"type": "text", "text": text}],
-            "stop_reason": "end_turn",
+            "content": content,
+            "stop_reason": "max_tokens" if truncated else "end_turn",
             "usage": {"input_tokens": 8, "output_tokens": 1},
         }
     if provider_type == "openai-completions":
+        message: dict = {
+            "role": "assistant",
+            "content": text if not truncated or include_text else "",
+        }
+        if thinking or truncated:
+            message["reasoning_content"] = "图片整体是红色"
         return {
             "id": "chatcmpl-probe",
             "object": "chat.completion",
@@ -57,19 +83,24 @@ def _success_body(provider_type: str, model: str, text: str = "OK") -> dict:
             "choices": [
                 {
                     "index": 0,
-                    "message": {"role": "assistant", "content": text},
-                    "finish_reason": "stop",
+                    "message": message,
+                    "finish_reason": "length" if truncated else "stop",
                 }
             ],
         }
     if provider_type == "openai-responses":
-        return {
-            "id": "resp_probe",
-            "object": "response",
-            "created_at": int(time.time()),
-            "status": "completed",
-            "model": model,
-            "output": [
+        output: list[dict] = []
+        if thinking or truncated:
+            output.append(
+                {
+                    "type": "reasoning",
+                    "id": "rs_probe",
+                    "summary": [],
+                    "content": [{"type": "reasoning_text", "text": "图片整体是红色"}],
+                }
+            )
+        if not truncated or include_text:
+            output.append(
                 {
                     "type": "message",
                     "id": "msg_probe",
@@ -83,13 +114,28 @@ def _success_body(provider_type: str, model: str, text: str = "OK") -> dict:
                         }
                     ],
                 }
-            ],
+            )
+        body = {
+            "id": "resp_probe",
+            "object": "response",
+            "created_at": int(time.time()),
+            "status": "incomplete" if truncated else "completed",
+            "model": model,
+            "output": output,
         }
+        if truncated:
+            body["incomplete_details"] = {"reason": incomplete_reason}
+        return body
+    parts: list[dict] = []
+    if thinking or truncated:
+        parts.append({"text": "图片整体是红色", "thought": True})
+    if not truncated or include_text:
+        parts.append({"text": text})
     return {
         "candidates": [
             {
-                "content": {"role": "model", "parts": [{"text": text}]},
-                "finishReason": "STOP",
+                "content": {"role": "model", "parts": parts},
+                "finishReason": "MAX_TOKENS" if truncated else "STOP",
             }
         ],
         "modelVersion": model,
@@ -203,6 +249,16 @@ def _prompt_text(provider_type: str, body: dict) -> str:
     )
 
 
+def _output_limit(provider_type: str, body: dict) -> int:
+    if provider_type == "anthropic-messages":
+        return body["max_tokens"]
+    if provider_type == "openai-completions":
+        return body["max_completion_tokens"]
+    if provider_type == "openai-responses":
+        return body["max_output_tokens"]
+    return body["generationConfig"]["maxOutputTokens"]
+
+
 def _classify(provider_type: str, path: str, body: dict) -> tuple[str, str | None]:
     path = path.split("?", 1)[0]
     if provider_type == "anthropic-messages":
@@ -260,6 +316,10 @@ class FakeGateway:
         delay: float = 0.0,
         drip: float | None = None,
         success_body: dict | None = None,
+        vision_thinking: bool = False,
+        vision_truncated: bool = False,
+        vision_truncated_text: bool = False,
+        vision_incomplete_reason: str = "max_output_tokens",
     ):
         self.provider_type = provider_type
         self.vision_status = vision_status
@@ -271,6 +331,10 @@ class FakeGateway:
         self.delay = delay
         self.drip = drip
         self.success_body = success_body
+        self.vision_thinking = vision_thinking
+        self.vision_truncated = vision_truncated
+        self.vision_truncated_text = vision_truncated_text
+        self.vision_incomplete_reason = vision_incomplete_reason
         self.requests: list[dict] = []
         self.vision_sizes: list[tuple[int, int]] = []
         self.vision_statuses: list[int] = []
@@ -344,11 +408,22 @@ class _GatewayHandler(BaseHTTPRequestHandler):
         else:
             status = gateway.status(kind, level)
         if status == 200:
-            payload = (
-                gateway.success_body
-                if gateway.success_body is not None
-                else _success_body(gateway.provider_type, body.get("model") or "", text)
-            )
+            if gateway.success_body is not None:
+                payload = gateway.success_body
+            elif kind == "vision":
+                payload = _success_body(
+                    gateway.provider_type,
+                    body.get("model") or "",
+                    text,
+                    thinking=gateway.vision_thinking,
+                    truncated=gateway.vision_truncated,
+                    include_text=gateway.vision_truncated_text,
+                    incomplete_reason=gateway.vision_incomplete_reason,
+                )
+            else:
+                payload = _success_body(
+                    gateway.provider_type, body.get("model") or "", text
+                )
         else:
             payload = _error_body(
                 gateway.provider_type,
@@ -608,6 +683,238 @@ def test_probe_requires_both_colors_to_be_recognized(client):
     assert response.status_code == 200, response.text
     assert response.json()["vision"] == "no"
     assert "请求被接受但模型未能识别图片内容" in response.json()["notes"]
+
+
+def test_probe_reports_truncated_vision_without_text_as_unknown(client):
+    c, token = client
+    with _gateway("anthropic-messages", vision_truncated=True) as (
+        gateway,
+        base_url,
+    ):
+        provider_id = _create_provider(
+            c, token, provider_type="anthropic-messages", base_url=base_url
+        )
+        response = _probe(c, token, provider_id)
+
+    assert response.status_code == 200, response.text
+    assert response.json()["vision"] == "unknown"
+    assert "截断" in response.json()["notes"]
+    assert response.json()["effort"] == {level: "yes" for level in EFFORT_LEVELS}
+    assert len(gateway.vision_sizes) == 2
+
+
+@pytest.mark.parametrize(
+    "provider_type",
+    [
+        "anthropic-messages",
+        "openai-completions",
+        "openai-responses",
+        "google-generative-ai",
+    ],
+)
+def test_probe_accepts_vision_answer_after_thinking_block(client, provider_type):
+    c, token = client
+    with _gateway(provider_type, vision_thinking=True) as (_, base_url):
+        provider_id = _create_provider(
+            c, token, provider_type=provider_type, base_url=base_url
+        )
+        response = _probe(c, token, provider_id)
+
+    assert response.status_code == 200, response.text
+    assert response.json()["vision"] == "yes"
+
+
+def test_probe_reports_wrong_color_after_thinking_as_no(client):
+    c, token = client
+    with _gateway(
+        "anthropic-messages",
+        vision_thinking=True,
+        discard_image=True,
+        vision_text="绿色",
+    ) as (_, base_url):
+        provider_id = _create_provider(
+            c, token, provider_type="anthropic-messages", base_url=base_url
+        )
+        response = _probe(c, token, provider_id)
+
+    assert response.status_code == 200, response.text
+    assert response.json()["vision"] == "no"
+    assert "请求被接受但模型未能识别图片内容" in response.json()["notes"]
+
+
+@pytest.mark.parametrize(
+    "provider_type",
+    [
+        "anthropic-messages",
+        "openai-completions",
+        "openai-responses",
+        "google-generative-ai",
+    ],
+)
+def test_probe_uses_larger_output_budget_for_vision(client, provider_type):
+    c, token = client
+    with _gateway(provider_type) as (gateway, base_url):
+        provider_id = _create_provider(
+            c, token, provider_type=provider_type, base_url=base_url
+        )
+        response = _probe(c, token, provider_id)
+
+    assert response.status_code == 200, response.text
+    vision_limits = [
+        _output_limit(provider_type, request["body"])
+        for request in gateway.requests
+        if request["kind"] == "vision"
+    ]
+    effort_limits = [
+        _output_limit(provider_type, request["body"])
+        for request in gateway.requests
+        if request["kind"] == "effort"
+    ]
+    assert len(vision_limits) == 2
+    assert all(limit >= 512 for limit in vision_limits), vision_limits
+    assert len(effort_limits) == len(EFFORT_LEVELS)
+    assert all(limit <= 64 for limit in effort_limits), effort_limits
+
+
+@pytest.mark.parametrize(
+    "provider_type",
+    [
+        "anthropic-messages",
+        "openai-completions",
+        "openai-responses",
+        "google-generative-ai",
+    ],
+)
+def test_probe_keeps_effort_output_budget_at_32(client, provider_type):
+    c, token = client
+    with _gateway(provider_type) as (gateway, base_url):
+        provider_id = _create_provider(
+            c, token, provider_type=provider_type, base_url=base_url
+        )
+        response = _probe(c, token, provider_id)
+
+    assert response.status_code == 200, response.text
+    effort_limits = [
+        _output_limit(provider_type, request["body"])
+        for request in gateway.requests
+        if request["kind"] == "effort"
+    ]
+    assert effort_limits == [32] * len(EFFORT_LEVELS)
+
+
+def test_probe_effort_ignores_truncated_success(client):
+    c, token = client
+    truncated_body = _success_body("anthropic-messages", "model-a", truncated=True)
+    with _gateway("anthropic-messages", success_body=truncated_body) as (
+        _,
+        base_url,
+    ):
+        provider_id = _create_provider(
+            c, token, provider_type="anthropic-messages", base_url=base_url
+        )
+        response = _probe(c, token, provider_id)
+
+    assert response.status_code == 200, response.text
+    assert response.json()["vision"] == "unknown"
+    assert response.json()["effort"] == {level: "yes" for level in EFFORT_LEVELS}
+
+
+@pytest.mark.parametrize(
+    "provider_type",
+    ["openai-completions", "openai-responses", "google-generative-ai"],
+)
+def test_probe_reports_truncated_vision_as_unknown(client, provider_type):
+    c, token = client
+    with _gateway(provider_type, vision_truncated=True) as (_, base_url):
+        provider_id = _create_provider(
+            c, token, provider_type=provider_type, base_url=base_url
+        )
+        response = _probe(c, token, provider_id)
+
+    assert response.status_code == 200, response.text
+    assert response.json()["vision"] == "unknown"
+    assert "截断" in response.json()["notes"]
+    assert response.json()["effort"] == {level: "yes" for level in EFFORT_LEVELS}
+
+
+@pytest.mark.parametrize(
+    "provider_type",
+    [
+        "anthropic-messages",
+        "openai-completions",
+        "openai-responses",
+        "google-generative-ai",
+    ],
+)
+def test_probe_accepts_correct_answer_from_truncated_vision(client, provider_type):
+    c, token = client
+    with _gateway(
+        provider_type,
+        vision_truncated=True,
+        vision_truncated_text=True,
+    ) as (_, base_url):
+        provider_id = _create_provider(
+            c, token, provider_type=provider_type, base_url=base_url
+        )
+        response = _probe(c, token, provider_id)
+
+    assert response.status_code == 200, response.text
+    assert response.json()["vision"] == "yes"
+
+
+def test_probe_reports_wrong_answer_from_truncated_vision_as_no(client):
+    c, token = client
+    with _gateway(
+        "anthropic-messages",
+        vision_truncated=True,
+        vision_truncated_text=True,
+        discard_image=True,
+        vision_text="绿色",
+    ) as (_, base_url):
+        provider_id = _create_provider(
+            c, token, provider_type="anthropic-messages", base_url=base_url
+        )
+        response = _probe(c, token, provider_id)
+
+    assert response.status_code == 200, response.text
+    assert response.json()["vision"] == "no"
+    assert "请求被接受但模型未能识别图片内容" in response.json()["notes"]
+
+
+def test_probe_reports_truncated_vision_with_whitespace_text_as_unknown(client):
+    c, token = client
+    with _gateway(
+        "anthropic-messages",
+        vision_truncated=True,
+        vision_truncated_text=True,
+        discard_image=True,
+        vision_text="   ",
+    ) as (_, base_url):
+        provider_id = _create_provider(
+            c, token, provider_type="anthropic-messages", base_url=base_url
+        )
+        response = _probe(c, token, provider_id)
+
+    assert response.status_code == 200, response.text
+    assert response.json()["vision"] == "unknown"
+    assert "截断" in response.json()["notes"]
+
+
+def test_probe_does_not_treat_other_incomplete_reasons_as_truncation(client):
+    c, token = client
+    with _gateway(
+        "openai-responses",
+        vision_truncated=True,
+        vision_incomplete_reason="content_filter",
+    ) as (_, base_url):
+        provider_id = _create_provider(
+            c, token, provider_type="openai-responses", base_url=base_url
+        )
+        response = _probe(c, token, provider_id)
+
+    assert response.status_code == 200, response.text
+    assert response.json()["vision"] == "no"
+    assert "截断" not in response.json()["notes"]
 
 
 def test_probe_accepts_images_at_least_64_pixels_like_qwen(client):
