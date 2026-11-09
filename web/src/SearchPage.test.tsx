@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import {
   cleanup,
   fireEvent,
@@ -9,6 +9,63 @@ import {
 } from "@testing-library/react";
 import { SearchPage } from "./SearchPage";
 import { getMessages } from "./i18n";
+import { PROJECT_STORAGE_KEY } from "./ProjectSelector";
+
+type ProjectRow = {
+  id: string;
+  name: string;
+  type: "warehouse" | "document";
+  status: "active" | "archived" | "deleting";
+  created_at: string;
+  my_role: "admin" | "member";
+};
+
+function project(
+  id: string,
+  name: string,
+  type: ProjectRow["type"] = "warehouse",
+  status: ProjectRow["status"] = "active",
+): ProjectRow {
+  return {
+    id,
+    name,
+    type,
+    status,
+    created_at: "2026-01-01T00:00:00Z",
+    my_role: "admin",
+  };
+}
+
+const projects = [
+  project("default", "业务数据"),
+  project("docs", "Platform Docs", "document"),
+];
+
+beforeEach(() => {
+  localStorage.clear();
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  );
+  Object.defineProperty(window, "matchMedia", {
+    configurable: true,
+    value: () => ({
+      matches: false,
+      addListener() {},
+      removeListener() {},
+      addEventListener() {},
+      removeEventListener() {},
+    }),
+  });
+  Object.defineProperty(window, "getComputedStyle", {
+    configurable: true,
+    value: () => ({ getPropertyValue: () => "" }),
+  });
+});
 
 afterEach(() => {
   cleanup();
@@ -16,8 +73,9 @@ afterEach(() => {
 });
 
 test("searches selected scope and category and displays fusion evidence", async () => {
-  const fetcher = vi.fn(async (url: string) =>
-    url === "/api/v1/categories"
+  const fetcher = vi.fn(async (url: string) => {
+    if (url === "/api/v1/projects") return Response.json(projects);
+    return url.startsWith("/api/v1/categories")
       ? Response.json([
           {
             name: "metrics",
@@ -40,8 +98,8 @@ test("searches selected scope and category and displays fusion evidence", async 
               "document:metrics/b#chunk-1",
             ],
           },
-        ]),
-  );
+        ]);
+  });
   vi.stubGlobal("fetch", fetcher);
   render(<SearchPage token="token" messages={getMessages("zh")} />);
   await screen.findByRole("option", { name: "metrics" });
@@ -70,8 +128,9 @@ test("searches selected scope and category and displays fusion evidence", async 
 });
 
 test("clears category when changing scope and reports search failure", async () => {
-  const fetcher = vi.fn(async (url: string) =>
-    url === "/api/v1/categories"
+  const fetcher = vi.fn(async (url: string) => {
+    if (url === "/api/v1/projects") return Response.json(projects);
+    return url.startsWith("/api/v1/categories")
       ? Response.json([
           {
             name: "metrics",
@@ -80,8 +139,8 @@ test("clears category when changing scope and reports search failure", async () 
             documents: [],
           },
         ])
-      : new Response("failure", { status: 503 }),
-  );
+      : new Response("failure", { status: 503 });
+  });
   vi.stubGlobal("fetch", fetcher);
   render(<SearchPage token="token" messages={getMessages("en")} />);
   await screen.findByRole("option", { name: "metrics" });
@@ -109,4 +168,130 @@ test("clears category when changing scope and reports search failure", async () 
     url.startsWith("/api/v1/search"),
   )?.[0];
   expect(searchUrl).not.toContain("category=");
+});
+
+test("切换项目清空检索结果、类别与范围选项，并给检索请求带项目", async () => {
+  const projectsWithArchive = [
+    ...projects,
+    project("old", "Old Docs", "document", "archived"),
+  ];
+  const fetcher = vi.fn(async (url: string) => {
+    if (url === "/api/v1/projects") return Response.json(projectsWithArchive);
+    if (url.startsWith("/api/v1/categories")) {
+      const projectId =
+        new URL(url, "http://localhost").searchParams.get("project") ?? "";
+      return Response.json([
+        projectId === "docs"
+          ? {
+              name: "平台",
+              ref: "category:platform",
+              description: "",
+              documents: [],
+            }
+          : {
+              name: "metrics",
+              ref: "category:metrics",
+              description: "",
+              documents: [],
+            },
+      ]);
+    }
+    if (url.startsWith("/api/v1/search")) {
+      const projectId =
+        new URL(url, "http://localhost").searchParams.get("project") ?? "";
+      return Response.json([
+        {
+          ref:
+            projectId === "docs"
+              ? "document:platform/a#chunk-1"
+              : "document:metrics/a#chunk-1",
+          type: "document",
+          name: projectId === "docs" ? "平台文档" : "销售额",
+          content: "内容",
+          score: 0.0321,
+          sources: ["fulltext"],
+          confidence: "high",
+          ambiguous: false,
+          ambiguity_refs: [],
+        },
+      ]);
+    }
+    return Response.json({});
+  });
+  vi.stubGlobal("fetch", fetcher);
+  render(<SearchPage token="token" messages={getMessages("zh")} />);
+
+  await screen.findByRole("option", { name: "metrics" });
+  fireEvent.change(screen.getByLabelText("查询内容"), {
+    target: { value: "销售额" },
+  });
+  fireEvent.change(screen.getByLabelText("检索范围"), {
+    target: { value: "tables" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: /检\s*索/ }));
+  expect(await screen.findByText("销售额")).toBeTruthy();
+  expect(screen.getByRole("option", { name: "表" })).toBeTruthy();
+
+  fireEvent.mouseDown(screen.getByRole("combobox", { name: "项目" }));
+  expect(screen.queryByTitle("Old Docs")).toBeNull();
+  fireEvent.click(await screen.findByTitle("Platform Docs"));
+
+  await waitFor(() => expect(screen.queryByText("销售额")).toBeNull());
+  expect(screen.queryByRole("option", { name: "表" })).toBeNull();
+  expect(screen.queryByRole("option", { name: "字段" })).toBeNull();
+  expect(screen.queryByRole("option", { name: "任务" })).toBeNull();
+  expect(screen.getByRole("option", { name: "文档" })).toBeTruthy();
+  expect((screen.getByLabelText("检索范围") as HTMLSelectElement).value).toBe(
+    "all",
+  );
+  expect(await screen.findByRole("option", { name: "平台" })).toBeTruthy();
+
+  fireEvent.click(screen.getByRole("button", { name: /检\s*索/ }));
+  expect(await screen.findByText("平台文档")).toBeTruthy();
+  await waitFor(() => {
+    const urls = fetcher.mock.calls.map(([url]) => String(url));
+    expect(
+      urls.some(
+        (url) =>
+          url.startsWith("/api/v1/search?") &&
+          new URL(url, "http://localhost").searchParams.get("project") ===
+            "docs",
+      ),
+    ).toBe(true);
+    expect(
+      urls.some(
+        (url) =>
+          url.startsWith("/api/v1/categories?") &&
+          new URL(url, "http://localhost").searchParams.get("project") ===
+            "docs",
+      ),
+    ).toBe(true);
+  });
+});
+
+test("只有一个可访问项目时仍显示项目选择器，请求带该项目", async () => {
+  const fetcher = vi.fn(async (url: string) => {
+    if (url === "/api/v1/projects")
+      return Response.json([project("default", "唯一项目")]);
+    if (url.startsWith("/api/v1/categories")) return Response.json([]);
+    return Response.json([]);
+  });
+  vi.stubGlobal("fetch", fetcher);
+  render(<SearchPage token="token" messages={getMessages("zh")} />);
+
+  expect(await screen.findByRole("combobox", { name: "项目" })).toBeTruthy();
+  expect(await screen.findByText("唯一项目")).toBeTruthy();
+  fireEvent.change(screen.getByLabelText("查询内容"), {
+    target: { value: "订单" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: /检\s*索/ }));
+  await waitFor(() =>
+    expect(
+      fetcher.mock.calls.some(
+        ([url]) =>
+          String(url).startsWith("/api/v1/search?") &&
+          String(url).includes("project=default"),
+      ),
+    ).toBe(true),
+  );
 });

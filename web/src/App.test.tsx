@@ -157,14 +157,14 @@ test("browse tables and view field details", async () => {
     "fetch",
     vi.fn(async (url: string) => {
       if (url === "/api/v1/me") return new Response("{}", { status: 200 });
-      if (url === "/api/v1/categories") return Response.json([]);
+      if (url.startsWith("/api/v1/categories")) return Response.json([]);
       if (url.startsWith("/api/v1/document?"))
         return Response.json({ path: "sales.md", content: "订单定义" });
       if (url.startsWith("/api/v1/table-lineage"))
         return Response.json({ upstream: [], downstream: [], tasks: [] });
       if (url.startsWith("/api/v1/column-lineage"))
         return Response.json({ upstream: [], downstream: [] });
-      if (url === "/api/v1/tables/shop/orders")
+      if (url.startsWith("/api/v1/tables/shop/orders?"))
         return new Response(
           JSON.stringify({
             database: "shop",
@@ -227,7 +227,10 @@ test("search debug is accessible from navigation", async () => {
     "fetch",
     vi.fn(async (url: string) => {
       if (url === "/api/v1/me") return Response.json({ role: "user" });
-      if (url === "/api/v1/categories" || url.startsWith("/api/v1/tables"))
+      if (
+        url.startsWith("/api/v1/categories") ||
+        url.startsWith("/api/v1/tables")
+      )
         return Response.json([]);
       return Response.json({});
     }),

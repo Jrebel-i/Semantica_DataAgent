@@ -6,9 +6,11 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { KnowledgePage, warehouseLayer } from "./KnowledgePage";
 import { getMessages } from "./i18n";
+import { PROJECT_STORAGE_KEY } from "./ProjectSelector";
 import { clearTableDetailCache } from "./tableDetail";
 
 type TableRow = {
@@ -31,6 +33,36 @@ type TableRow = {
     partition: boolean;
   }[];
 };
+
+type ProjectRow = {
+  id: string;
+  name: string;
+  type: "warehouse" | "document";
+  status: "active" | "archived" | "deleting";
+  created_at: string;
+  my_role: "admin" | "member";
+};
+
+function project(
+  id: string,
+  name: string,
+  type: ProjectRow["type"] = "warehouse",
+  status: ProjectRow["status"] = "active",
+): ProjectRow {
+  return {
+    id,
+    name,
+    type,
+    status,
+    created_at: "2026-01-01T00:00:00Z",
+    my_role: "admin",
+  };
+}
+
+const projects = [
+  project("default", "业务数据"),
+  project("docs", "Platform Docs", "document"),
+];
 
 function table(database: string, name: string): TableRow {
   return {
@@ -72,21 +104,35 @@ function table(database: string, name: string): TableRow {
 }
 
 function installFetch(
-  tables: TableRow[],
+  tables: TableRow[] | ((project: string) => TableRow[]),
   categories: unknown[] = [],
   detailFailure?: () => boolean,
+  projectRows: ProjectRow[] = projects,
 ) {
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url: string) => {
-      if (url === "/api/v1/categories") return Response.json(categories);
-      if (url.startsWith("/api/v1/tables?")) return Response.json(tables);
-      const detail = url.match(/^\/api\/v1\/tables\/([^/]+)\/([^/]+)$/);
+      if (url === "/api/v1/projects") return Response.json(projectRows);
+      if (url.startsWith("/api/v1/categories"))
+        return Response.json(categories);
+      if (url.startsWith("/api/v1/tables?")) {
+        const projectId =
+          new URL(url, "http://localhost").searchParams.get("project") ?? "";
+        return Response.json(
+          typeof tables === "function" ? tables(projectId) : tables,
+        );
+      }
+      const detail = url.match(
+        /^\/api\/v1\/tables\/([^/?]+)\/([^/?]+)(?:\?.*)?$/,
+      );
       if (detail) {
         if (detailFailure?.()) return new Response("", { status: 500 });
         const database = decodeURIComponent(detail[1]);
         const name = decodeURIComponent(detail[2]);
-        const row = tables.find(
+        const projectId =
+          new URL(url, "http://localhost").searchParams.get("project") ?? "";
+        const rows = typeof tables === "function" ? tables(projectId) : tables;
+        const row = rows.find(
           (item) => item.database === database && item.name === name,
         );
         return row ? Response.json(row) : new Response("", { status: 404 });
@@ -115,6 +161,7 @@ function treeTitles(container: HTMLElement): string[] {
 }
 
 beforeEach(() => {
+  localStorage.clear();
   vi.stubGlobal(
     "ResizeObserver",
     class {
@@ -328,17 +375,22 @@ test("列表请求带 summary 视图，点击表后请求详情并按 ref 缓存
   expect(await screen.findByRole("button", { name: "orders" })).toBeTruthy();
   await waitFor(() =>
     expect(
-      fetcher.mock.calls.some(([url]) =>
-        String(url).includes("/api/v1/tables?view=summary"),
-      ),
+      fetcher.mock.calls.some(([url]) => {
+        if (!String(url).startsWith("/api/v1/tables?")) return false;
+        const params = new URL(String(url), "http://localhost").searchParams;
+        return (
+          params.get("view") === "summary" &&
+          params.get("project") === "default"
+        );
+      }),
     ).toBe(true),
   );
   await screen.findByText("日期分区");
   const detailCalls = () =>
     fetcher.mock.calls.filter(
       ([url]) =>
-        String(url) === "/api/v1/tables/shop/orders" ||
-        String(url) === "/api/v1/tables/shop/customers",
+        String(url).startsWith("/api/v1/tables/shop/orders?") ||
+        String(url).startsWith("/api/v1/tables/shop/customers?"),
     );
   await waitFor(() => expect(detailCalls()).toHaveLength(1));
 
@@ -420,6 +472,175 @@ test("搜索仍按表名过滤，并继续使用 summary 视图", async () => {
           value.includes("search=customer") && value.includes("view=summary")
         );
       }),
+    ).toBe(true),
+  );
+});
+
+test("切换项目后请求带新项目并清空已选表、详情和纠错草稿", async () => {
+  installFetch(
+    (projectId) =>
+      projectId === "finance"
+        ? [table("dwd", "finance_orders")]
+        : [table("shop", "orders")],
+    [],
+    undefined,
+    [project("default", "业务数据"), project("finance", "财务数据")],
+  );
+  const fetcher = fetch as unknown as ReturnType<typeof vi.fn>;
+  render(<KnowledgePage token="token" messages={getMessages("zh")} />);
+
+  expect(await screen.findByRole("button", { name: "orders" })).toBeTruthy();
+  expect(await screen.findByText("日期分区")).toBeTruthy();
+
+  fireEvent.mouseDown(screen.getByRole("combobox", { name: "项目" }));
+  fireEvent.click(await screen.findByTitle("财务数据"));
+
+  expect(await screen.findByText("dwd (1)")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "orders" })).toBeNull();
+  expect(await screen.findByText("从左侧选择一张表或一份文档")).toBeTruthy();
+  expect(screen.queryByText("日期分区")).toBeNull();
+  fireEvent.click(screen.getByText("dwd (1)"));
+  expect(
+    await screen.findByRole("button", { name: "finance_orders" }),
+  ).toBeTruthy();
+
+  await waitFor(() => {
+    const urls = fetcher.mock.calls.map(([url]) => String(url));
+    const tableList = urls.filter((url) => url.startsWith("/api/v1/tables?"));
+    const categories = urls.filter((url) =>
+      url.startsWith("/api/v1/categories"),
+    );
+    expect(tableList.at(-1)).toContain("project=finance");
+    expect(categories.at(-1)).toContain("project=finance");
+  });
+
+  fireEvent.click(screen.getByRole("button", { name: "finance_orders" }));
+  expect(await screen.findByText("日期分区")).toBeTruthy();
+  await waitFor(() =>
+    expect(
+      fetcher.mock.calls.some(
+        ([url]) =>
+          String(url).startsWith("/api/v1/tables/dwd/finance_orders?") &&
+          String(url).includes("project=finance"),
+      ),
+    ).toBe(true),
+  );
+  await waitFor(() =>
+    expect(
+      fetcher.mock.calls.some(
+        ([url]) =>
+          String(url).startsWith("/api/v1/table-lineage?") &&
+          String(url).includes("project=finance"),
+      ),
+    ).toBe(true),
+  );
+  fireEvent.click(
+    screen.getByRole("button", { name: "air_segment_income_cny" }),
+  );
+  await waitFor(() =>
+    expect(
+      fetcher.mock.calls.some(
+        ([url]) =>
+          String(url).startsWith("/api/v1/column-lineage?") &&
+          String(url).includes("project=finance"),
+      ),
+    ).toBe(true),
+  );
+
+  fireEvent.click(screen.getByRole("button", { name: "提出纠错" }));
+  const dialog = await screen.findByRole("dialog");
+  fireEvent.change(within(dialog).getByLabelText("替换后的说明"), {
+    target: { value: "新说明" },
+  });
+  fireEvent.change(within(dialog).getByLabelText("纠错理由"), {
+    target: { value: "项目切换后仍应带项目" },
+  });
+  fireEvent.click(within(dialog).getByRole("button", { name: "提出纠错" }));
+  await waitFor(() =>
+    expect(
+      fetcher.mock.calls.some(
+        ([url, init]) =>
+          String(url) === "/api/v1/corrections?project=finance" &&
+          init?.method === "POST",
+      ),
+    ).toBe(true),
+  );
+});
+
+test("切换项目后重置表分页与树的展开状态", async () => {
+  const many = Array.from({ length: 101 }, (_, index) =>
+    table("quick", `quick_${index}`),
+  );
+  installFetch(
+    (projectId) =>
+      projectId === "finance" ? [table("dwd", "finance_orders")] : many,
+    [],
+    undefined,
+    [project("default", "业务数据"), project("finance", "财务数据")],
+  );
+  render(<KnowledgePage token="token" messages={getMessages("zh")} />);
+
+  expect(await screen.findByText("更多 (1)")).toBeTruthy();
+  fireEvent.click(screen.getByText("更多 (1)"));
+  expect(await screen.findByRole("button", { name: "quick_100" })).toBeTruthy();
+
+  fireEvent.mouseDown(screen.getByRole("combobox", { name: "项目" }));
+  fireEvent.click(await screen.findByTitle("财务数据"));
+  expect(await screen.findByText("dwd (1)")).toBeTruthy();
+
+  fireEvent.mouseDown(screen.getByRole("combobox", { name: "项目" }));
+  fireEvent.click(await screen.findByTitle("业务数据"));
+  expect(await screen.findByText("quick (101)")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "quick_100" })).toBeNull();
+  fireEvent.click(screen.getByText("quick (101)"));
+  expect(await screen.findByText("更多 (1)")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "quick_100" })).toBeNull();
+});
+
+test("文档型项目不渲染数据表，知识文档请求带项目", async () => {
+  localStorage.setItem(PROJECT_STORAGE_KEY, "docs");
+  installFetch(
+    [table("shop", "orders")],
+    [
+      {
+        ref: "category:platform",
+        name: "平台",
+        description: "",
+        documents: [{ ref: "document:platform/a.md", path: "platform/a.md" }],
+      },
+    ],
+  );
+  const fetcher = fetch as unknown as ReturnType<typeof vi.fn>;
+  render(<KnowledgePage token="token" messages={getMessages("zh")} />);
+
+  expect(await screen.findByText("Platform Docs")).toBeTruthy();
+  expect(await screen.findByText("知识文档 (1)")).toBeTruthy();
+  expect(screen.queryByText(/数据表/)).toBeNull();
+  await waitFor(() =>
+    expect(
+      fetcher.mock.calls.some(
+        ([url]) =>
+          String(url).startsWith("/api/v1/categories?") &&
+          String(url).includes("project=docs"),
+      ),
+    ).toBe(true),
+  );
+  expect(
+    fetcher.mock.calls.some(([url]) =>
+      String(url).startsWith("/api/v1/tables?"),
+    ),
+  ).toBe(false);
+
+  fireEvent.click(screen.getByText("平台"));
+  fireEvent.click(await screen.findByRole("button", { name: "platform/a.md" }));
+  expect(await screen.findByText(/订单定义/)).toBeTruthy();
+  await waitFor(() =>
+    expect(
+      fetcher.mock.calls.some(
+        ([url]) =>
+          String(url).startsWith("/api/v1/document?") &&
+          String(url).includes("project=docs"),
+      ),
     ).toBe(true),
   );
 });
