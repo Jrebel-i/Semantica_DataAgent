@@ -6,7 +6,7 @@ def check_default_embedding_settings(ctx):
     response.raise_for_status()
     settings = response.json()
     ctx.require(
-        settings.get("embedding_url") == "http://127.0.0.1:17998",
+        settings.get("embedding_url") == "http://172.16.242.124:31613",
         "expected the local small-model endpoint",
     )
     ctx.require(

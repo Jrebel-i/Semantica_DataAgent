@@ -3,59 +3,6 @@ from pathlib import Path
 import yaml
 
 
-def test_local_embedding_configuration():
-    compose_path = Path('deploy/embedding-compose.yaml')
-    assert compose_path.exists(), 'local embedding compose is missing'
-    services = yaml.safe_load(compose_path.read_text())['services']
-    server = services['embedding']
-    assert server['ports'] == ['127.0.0.1:17997:7997']
-    assert server['mem_limit'] == '4g'
-    assert server['restart'] == 'unless-stopped'
-    assert len(server['command']) == 1, 'shell must receive one complete command argument'
-    assert '--batch-size 2' in server['command'][0]
-    assert 'python /integrity/model.py &&' in server['command'][0]
-    assert server['environment']['HF_HUB_OFFLINE'] == '1'
-    assert server['environment']['TRANSFORMERS_OFFLINE'] == '1'
-    assert server['environment']['DO_NOT_TRACK'] == '1'
-    assert any('${EMBEDDING_MODEL_DIR:-' in volume and volume.endswith(':/model/bge-m3:ro') for volume in server['volumes'])
-    generator = yaml.safe_load(Path('deploy/k8s/kustomization.yaml').read_text())['configMapGenerator'][0]
-    script = generator['files'][0].split('=', 1)[-1]
-    assert any(script in volume for volume in server['volumes'])
-    assert any(script in volume for volume in services['model-download']['volumes'])
-
-
-def test_daily_test_embedding_is_a_separate_small_model():
-    services = yaml.safe_load(Path('deploy/embedding-compose.yaml').read_text())['services']
-    assert {'embedding', 'embedding-small'} <= set(services)
-    server = services['embedding-small']
-    download = services['model-download-small']
-    assert server['ports'] == ['127.0.0.1:17998:7997']
-    assert server['mem_limit'] == '2g'
-    assert server['restart'] == 'unless-stopped'
-    assert len(server['command']) == 1
-    command = server['command'][0]
-    assert '--model bge-small-zh-v1.5' in command
-    assert '--model-id /model/bge-small-zh-v1.5' in command
-    assert '--batch-size 8' in command
-    assert 'python /integrity/model.py' in command
-    assert server['environment']['HF_HUB_OFFLINE'] == '1'
-    assert server['environment']['TRANSFORMERS_OFFLINE'] == '1'
-    assert server['environment']['DO_NOT_TRACK'] == '1'
-    assert any(
-        '${EMBEDDING_SMALL_MODEL_DIR:-' in volume
-        and volume.endswith(':/model/bge-small-zh-v1.5:ro')
-        for volume in server['volumes']
-    )
-    assert download['command'][-2:] == ['--model', 'bge-small-zh-v1.5']
-    assert any(
-        '${EMBEDDING_SMALL_MODEL_DIR:-' in volume
-        and volume.endswith(':/model/bge-small-zh-v1.5')
-        for volume in download['volumes']
-    )
-    assert not any('bge-m3' in volume for volume in server['volumes'])
-    assert not any('bge-small' in volume for volume in services['embedding']['volumes'])
-
-
 def _k8s_documents():
     documents = yaml.safe_load_all(Path('deploy/k8s/embedding.yaml').read_text())
     return {(document['kind'], document['metadata']['name']): document for document in documents if document}
@@ -135,3 +82,73 @@ def test_k8s_embedding_is_a_four_replica_statefulset():
         and term['podAffinityTerm']['labelSelector']['matchLabels'] == {'app': 'embedding'}
         for term in terms
     )
+
+
+def _test_k8s_documents():
+    documents = yaml.safe_load_all(Path('deploy/k8s/embedding-test.yaml').read_text())
+    return {(document['kind'], document['metadata']['name']): document for document in documents if document}
+
+
+def test_test_embedding_small_service_and_statefulset():
+    resources = _test_k8s_documents()
+
+    service = resources[('Service', 'embedding-small')]
+    assert service['metadata']['namespace'] == 'semantica-dataagent-test'
+    assert service['spec']['type'] == 'NodePort'
+    assert service['spec']['ports'][0]['nodePort'] == 31613
+
+    statefulset = resources[('StatefulSet', 'embedding-small')]
+    assert statefulset['metadata']['namespace'] == 'semantica-dataagent-test'
+    spec = statefulset['spec']
+    assert spec['replicas'] == 1
+    pod_spec = spec['template']['spec']
+    init = {container['name']: container for container in pod_spec['initContainers']}['download-and-verify']
+    assert init['command'][-2:] == ['--model', 'bge-small-zh-v1.5']
+    infinity = {container['name']: container for container in pod_spec['containers']}['infinity']
+    command = ' '.join(infinity['command'] + infinity['args'])
+    assert '--model bge-small-zh-v1.5' in command
+    assert '--model-id /model/bge-small-zh-v1.5' in command
+    assert '--batch-size 8' in command
+    assert 'python /integrity/model.py' in command
+    assert infinity['resources']['limits'] == {'memory': '2Gi'}
+    env = {item['name']: item.get('value') for item in infinity['env']}
+    assert env['DO_NOT_TRACK'] == '1'
+    assert env['HF_HUB_OFFLINE'] == '1'
+    assert env['TRANSFORMERS_OFFLINE'] == '1'
+
+    claims = spec['volumeClaimTemplates']
+    assert len(claims) == 1
+    assert claims[0]['spec']['resources']['requests']['storage'] == '2Gi'
+    assert claims[0]['spec']['storageClassName'] == 'local-path'
+
+
+def test_test_embedding_m3_service_and_statefulset():
+    resources = _test_k8s_documents()
+
+    service = resources[('Service', 'embedding-m3')]
+    assert service['metadata']['namespace'] == 'semantica-dataagent-test'
+    assert service['spec']['type'] == 'NodePort'
+    assert service['spec']['ports'][0]['nodePort'] == 31614
+
+    statefulset = resources[('StatefulSet', 'embedding-m3')]
+    assert statefulset['metadata']['namespace'] == 'semantica-dataagent-test'
+    spec = statefulset['spec']
+    assert spec['replicas'] == 1
+    pod_spec = spec['template']['spec']
+    infinity = {container['name']: container for container in pod_spec['containers']}['infinity']
+    command = ' '.join(infinity['command'] + infinity['args'])
+    assert '--batch-size 2' in command
+    assert '--model-id /model/bge-m3' in command
+    assert infinity['resources']['limits'] == {'memory': '4Gi'}
+    requests = infinity['resources']['requests']
+    assert requests['cpu'] == 2
+    assert requests['memory'] == '2Gi'
+
+    claims = spec['volumeClaimTemplates']
+    assert len(claims) == 1
+    assert claims[0]['spec']['resources']['requests']['storage'] == '5Gi'
+
+    small_selector = resources[('Service', 'embedding-small')]['spec']['selector']
+    assert small_selector == {'app': 'embedding-small'}
+    assert service['spec']['selector'] == {'app': 'embedding-m3'}
+    assert small_selector != service['spec']['selector']

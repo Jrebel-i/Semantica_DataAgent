@@ -279,7 +279,7 @@ def main():
     parser.add_argument("--neo4j-uri", default="bolt://172.16.242.124:31611")
     parser.add_argument("--neo4j-user", default="neo4j")
     parser.add_argument("--milvus-uri", default="http://172.16.242.124:31612")
-    parser.add_argument("--embedding-url", default="http://127.0.0.1:17997")
+    parser.add_argument("--embedding-url", default="http://172.16.242.124:31614")
     parser.add_argument("--db", type=Path, default=DEFAULT_DB)
     parser.add_argument("--report", type=Path, default=DEFAULT_REPORT)
     args = parser.parse_args()

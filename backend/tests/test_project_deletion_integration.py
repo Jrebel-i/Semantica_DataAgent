@@ -41,7 +41,7 @@ def _seed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> str:
             "neo4j_user": os.environ["TEST_NEO4J_USER"],
             "milvus_uri": os.environ["TEST_MILVUS_URI"],
             "embedding_url": os.environ.get(
-                "TEST_EMBEDDING_URL", "http://127.0.0.1:17998"
+                "TEST_EMBEDDING_URL", "http://172.16.242.124:31613"
             ),
             "embedding_model": os.environ.get(
                 "TEST_EMBEDDING_MODEL", "model/bge-small-zh-v1.5"
