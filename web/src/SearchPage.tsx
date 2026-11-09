@@ -5,6 +5,7 @@ import type { paths } from "./api";
 import type { Messages } from "./i18n";
 import { safeDecodePath } from "./paths";
 import { citationDisplayName, citationLabel } from "./ChatPage";
+import { ProjectSelector, storedProject, useProjects } from "./ProjectSelector";
 
 type Category =
   paths["/api/v1/categories"]["get"]["responses"][200]["content"]["application/json"][number];
@@ -19,6 +20,10 @@ export function SearchPage({
   token: string;
   messages: Messages;
 }) {
+  const [project, setProject] = useState(storedProject);
+  const { projects } = useProjects(token);
+  const warehouse =
+    projects.find((row) => row.id === project)?.type !== "document";
   const [query, setQuery] = useState("");
   const [scope, setScope] = useState<Scope>("all");
   const [category, setCategory] = useState("");
@@ -30,7 +35,7 @@ export function SearchPage({
   const pending = useRef<AbortController | null>(null);
   useEffect(() => {
     const controller = new AbortController();
-    fetch("/api/v1/categories", {
+    fetch(`/api/v1/categories?${new URLSearchParams({ project })}`, {
       headers: { Authorization: `Bearer ${token}` },
       signal: controller.signal,
     })
@@ -49,7 +54,17 @@ export function SearchPage({
       controller.abort();
       pending.current?.abort();
     };
-  }, [token]);
+  }, [project, token]);
+  useEffect(() => {
+    pending.current?.abort();
+    setResults(null);
+    setCategory("");
+    setError(false);
+    setLoading(false);
+  }, [project]);
+  useEffect(() => {
+    if (!warehouse && scope !== "all" && scope !== "docs") setScope("all");
+  }, [scope, warehouse]);
   async function submit(event: FormEvent) {
     event.preventDefault();
     if (!query.trim()) return;
@@ -59,9 +74,13 @@ export function SearchPage({
     setLoading(true);
     setError(false);
     setResults(null);
-    const params = new URLSearchParams({ query: query.trim(), scope });
+    const params = new URLSearchParams({
+      query: query.trim(),
+      scope,
+    });
     if (category && (scope === "docs" || scope === "all"))
       params.set("category", category);
+    params.set("project", project);
     try {
       const response = await fetch(`/api/v1/search?${params}`, {
         headers: { Authorization: `Bearer ${token}` },
@@ -87,6 +106,18 @@ export function SearchPage({
     medium: t.confidenceMedium,
     low: t.confidenceLow,
   };
+  const scopes: { value: Scope; label: string }[] = warehouse
+    ? [
+        { value: "all", label: t.allScopes },
+        { value: "tables", label: t.scopeTables },
+        { value: "fields", label: t.scopeFields },
+        { value: "tasks", label: t.scopeTasks },
+        { value: "docs", label: t.scopeDocs },
+      ]
+    : [
+        { value: "all", label: t.allScopes },
+        { value: "docs", label: t.scopeDocs },
+      ];
   return (
     <section className="stack admin-page">
       <div className="page-header">
@@ -94,6 +125,12 @@ export function SearchPage({
           <h1 className="page-title">{t.searchDebug}</h1>
           <p className="page-subtitle">{t.searchHint}</p>
         </div>
+        <ProjectSelector
+          token={token}
+          value={project}
+          onChange={setProject}
+          messages={t}
+        />
       </div>
       {categoryError && <Alert type="error" title={t.categoryError} />}
       {error && <Alert type="error" title={t.searchError} />}
@@ -118,11 +155,11 @@ export function SearchPage({
               if (value !== "all" && value !== "docs") setCategory("");
             }}
           >
-            <option value="all">{t.allScopes}</option>
-            <option value="tables">{t.scopeTables}</option>
-            <option value="fields">{t.scopeFields}</option>
-            <option value="tasks">{t.scopeTasks}</option>
-            <option value="docs">{t.scopeDocs}</option>
+            {scopes.map((item) => (
+              <option key={item.value} value={item.value}>
+                {item.label}
+              </option>
+            ))}
           </select>
         </label>
         <label className="field">

@@ -20,10 +20,12 @@ export function ColumnLineage({
   table,
   column,
   token,
+  project,
 }: {
   table: string;
   column: string;
   token: string;
+  project?: string;
 }) {
   const [data, setData] = useState<Data | null>(null);
   const [error, setError] = useState(false);
@@ -31,13 +33,12 @@ export function ColumnLineage({
     const controller = new AbortController();
     setData(null);
     setError(false);
-    fetch(
-      `/api/v1/column-lineage?${new URLSearchParams({ table, column, depth: "2" })}`,
-      {
-        headers: { Authorization: `Bearer ${token}` },
-        signal: controller.signal,
-      },
-    )
+    const params = new URLSearchParams({ table, column, depth: "2" });
+    if (project) params.set("project", project);
+    fetch(`/api/v1/column-lineage?${params}`, {
+      headers: { Authorization: `Bearer ${token}` },
+      signal: controller.signal,
+    })
       .then((response) => {
         if (!response.ok) throw new Error();
         return response.json() as Promise<Data>;
@@ -47,7 +48,7 @@ export function ColumnLineage({
         if (!controller.signal.aborted) setError(true);
       });
     return () => controller.abort();
-  }, [table, column, token]);
+  }, [project, table, column, token]);
   if (error) return <Alert type="error" title="字段血缘加载失败" />;
   if (!data) return null;
   const records = [
