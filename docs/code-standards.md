@@ -35,6 +35,7 @@
 - 默认项目 id 固定为 `default`，类型 `warehouse`，显示名默认“业务数据”，可改名、可归档，但永久删除一律返回 409 `默认项目不可删除`。
 - 项目生命周期状态为 `active`、`archived`、`deleting`（迁移 `0035`）。`POST /api/v1/projects/{id}/archive` 与 `/restore` 仅系统管理员可用；归档不改令牌、成员、会话或存储，只冻结该项目的写入入口。
 - `POST /api/v1/projects/{id}/delete` 仅系统管理员可用，请求体必须是 `{name}` 且与项目显示名完全一致；只允许 `archived` 项目，默认项目与服务端拒绝的情形返回 4xx。成功返回 204，重复调用同样返回 204。
+- 项目 id 可以被复用（中文名的 id 都是 `project`，删除后也可以再建同 id 的项目）。删除状态以当前 `projects` 表为准：只有项目行不存在且 `project_deletions` 是 `completed` 时才幂等返回 204；项目行存在时，同 id 的完成记录是上一轮残留，必须覆盖为新记录（更新项目名、请求人，清空 `steps`、回到 `begin`）后重新校验归档状态与项目名。创建项目时在同一事务内清理同 id 的完成记录；启动恢复只处理 `deleting/failed` 且项目行处于 `deleting` 的记录。
 - 永久删除按 `source → neo4j → milvus → attachments → database` 持久化步骤推进（`project_deletions`）。每一步成功后记录到 `steps`；失败保留 `failed` 状态与步骤错误，可重试；启动时 `recover_project_deletions` 继续未完成的删除。删除只匹配 `<project_id>_` 代名与 `sda_<project_id>_` Milvus 集合，不能误删相似前缀项目。
 - 删除数据库行覆盖构建、知识代、纠错提案、会话与轮次、查询结果、项目设置与成员行；令牌本身保留，令牌项目列表里移除该项目；审计记录保留。附件清理只调用 #188 提供的钩子，钩子不存在时跳过。
 - 归档项目的查看类接口仍可用（例如会话详情、成员、审计、调度间隔），但提问、上传、构建、下载链接、MCP 与沙箱凭据统一返回 409 `项目已归档`，不能退化成“项目不存在”。会话所有者仍可删除自己的会话。
