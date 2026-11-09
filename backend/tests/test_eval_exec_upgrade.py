@@ -331,10 +331,8 @@ def test_split_is_reproducible_and_stratified(tmp_path):
         "B": 3,
         "C": 3,
     }
-    assert all(
-        item["split"] == "dev"
-        for item in first
-        if item["category"] == "A" and item["split"] != "holdout"
+    assert (
+        sum(item["split"] == "dev" for item in first if item["category"] == "A") == 14
     )
 
 
@@ -469,3 +467,13 @@ def test_invalid_failure_category_is_rejected(tmp_path):
     assert run_report is not None, "eval_exec.run_report is missing"
     with pytest.raises(SystemExit):
         run_report(merge_args)
+
+
+def test_split_defaults_to_28_and_12_for_40_questions():
+    assign_splits = getattr(evaluation, "assign_splits", None)
+    assert assign_splits is not None, "eval.assign_splits is missing"
+    rows = [
+        _question(f"q{index}", f"question {index}", category="A") for index in range(40)
+    ]
+    result = assign_splits(rows)
+    assert Counter(item["split"] for item in result) == {"dev": 28, "holdout": 12}

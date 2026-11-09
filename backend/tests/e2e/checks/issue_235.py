@@ -1,0 +1,279 @@
+"""#235 end-to-end check: split and repeat evaluation with a fake ask service."""
+
+from __future__ import annotations
+
+import json
+import os
+from collections import Counter
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from threading import Thread
+
+import yaml
+
+GOOD = "SELECT id FROM shop.orders WHERE dt = '2025-01-01'"
+BAD = "SELECT id FROM shop.orders"
+
+
+class _FakeService:
+    def __init__(self):
+        self.asks = []
+        self.plans = {}
+        self.counts = Counter()
+        self.responses = {
+            "stable": [GOOD, GOOD, GOOD],
+            "volatile": [GOOD, GOOD, BAD],
+            "holdout": [GOOD],
+        }
+        handler = self._handler()
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        self.thread = Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+
+    @property
+    def base_url(self):
+        return f"http://127.0.0.1:{self.server.server_port}"
+
+    def close(self):
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join()
+
+    def _handler(self):
+        service = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+
+            def _json(self, status, payload):
+                body = json.dumps(payload).encode()
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def _sse(self, events):
+                body = "".join(
+                    f"event: {name}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+                    for name, data in events
+                ).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def do_POST(self):
+                body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+                service.asks.append((self.path, body))
+                if self.path == "/api/v1/conversations/ask":
+                    question = body["question"]
+                    service.counts[question] += 1
+                    number = service.counts[question]
+                    choices = service.responses.get(question) or [GOOD]
+                    sql = choices[min(number - 1, len(choices) - 1)]
+                    self._sse(
+                        [
+                            (
+                                "conversation",
+                                {"conversation_id": f"conv-{question}-{number}"},
+                            ),
+                            (
+                                "tool_start",
+                                {"name": "search_knowledge", "summary": "检索"},
+                            ),
+                            (
+                                "tool_start",
+                                {"name": "propose_query", "summary": "生成 SQL"},
+                            ),
+                            ("done", {"text": "", "sql": [{"sql": sql}]}),
+                        ]
+                    )
+                elif self.path == "/api/v1/queries/plan":
+                    query_id = f"query-{len(service.plans)}"
+                    service.plans[query_id] = body["sql"]
+                    self._json(200, {"id": query_id, "execution_limit": 10})
+                elif self.path.startswith("/api/v1/queries/") and self.path.endswith(
+                    "/execute"
+                ):
+                    sql = service.plans[self.path.split("/")[4]]
+                    rows = [[1]] if sql == GOOD else [[1], [2]]
+                    self._json(
+                        200,
+                        {"columns": ["value"], "rows": rows, "row_count": len(rows)},
+                    )
+                else:
+                    self._json(404, {"detail": "not found"})
+
+        return Handler
+
+
+def _row(question_id, question, *, category, split="dev", confirmed=True):
+    return {
+        "id": question_id,
+        "question": question,
+        "expected_tables": ["shop.orders"],
+        "expected_fields": ["id"],
+        "caliber": "订单口径",
+        "reference_sql": GOOD,
+        "category": category,
+        "split": split,
+        "answer_confirmed": confirmed,
+    }
+
+
+def check_eval_tool_upgrade(ctx):
+    from semantica_dataagent.cli import main
+
+    work = Path(ctx.work_dir) / "issue-235"
+    work.mkdir(parents=True, exist_ok=True)
+    questions = work / "questions.yaml"
+    questions.write_text(
+        yaml.safe_dump(
+            [
+                _row("q3", "stable", category="选表"),
+                _row("q2", "volatile", category="口径"),
+                _row("h1", "holdout", category="选表", split="holdout"),
+                _row("u1", "unconfirmed", category="口径", confirmed=False),
+            ],
+            allow_unicode=True,
+        ),
+        encoding="utf-8",
+    )
+    service = _FakeService()
+    old = os.environ.get("SDA_ISSUE_235_E2E_TOKEN")
+    os.environ["SDA_ISSUE_235_E2E_TOKEN"] = "issue-235-e2e-secret"
+    try:
+        code = main(
+            [
+                "eval-exec",
+                "--questions",
+                str(questions),
+                "--report",
+                str(work / "report"),
+                "--base-url",
+                service.base_url,
+                "--token",
+                "SDA_ISSUE_235_E2E_TOKEN",
+                "--agent",
+                "pi",
+                "--provider-id",
+                "fake",
+                "--model",
+                "fake",
+                "--split",
+                "dev",
+                "--repeat",
+                "3",
+            ]
+        )
+        ctx.require(code == 0, f"eval-exec returned {code}")
+        report = json.loads((work / "report.json").read_text(encoding="utf-8"))
+        ctx.require(
+            [entry["id"] for entry in report["questions"]] == ["q3", "q2"],
+            f"default split ran unexpected questions: {report['questions']}",
+        )
+        ctx.require(
+            report["excluded_unconfirmed"] == ["u1"],
+            f"unconfirmed question was not listed: {report['excluded_unconfirmed']}",
+        )
+        by_id = {entry["id"]: entry for entry in report["questions"]}
+        ctx.require(by_id["q3"]["result"] == "correct", "3/3 should be correct")
+        ctx.require(not by_id["q3"]["volatile"], "3/3 should not be volatile")
+        ctx.require(by_id["q2"]["result"] == "correct", "2/3 should be correct")
+        ctx.require(by_id["q2"]["volatile"], "2/3 should be volatile")
+        ctx.require(by_id["q2"]["equal_runs"] == 2, "expected two equal runs")
+        ctx.require(
+            len({run["conversation_id"] for run in by_id["q2"]["runs"]}) == 3,
+            "each repeat must use a new conversation",
+        )
+        ctx.require(
+            all(
+                [call["name"] for call in run["tool_calls"]]
+                == ["search_knowledge", "propose_query"]
+                for entry in report["questions"]
+                for run in entry["runs"]
+            ),
+            "tool call sequence missing from report",
+        )
+        ctx.require(
+            "holdout"
+            not in {
+                body["question"] for _, body in service.asks if body.get("question")
+            },
+            "holdout question ran without --split holdout",
+        )
+        categories = work / "categories.yaml"
+        categories.write_text(
+            yaml.safe_dump({"q3": "选错表", "q2": "口径错"}, allow_unicode=True),
+            encoding="utf-8",
+        )
+        code = main(
+            [
+                "eval-report",
+                "--report",
+                str(work / "report"),
+                "--categories",
+                str(categories),
+            ]
+        )
+        ctx.require(code == 0, f"eval-report returned {code}")
+        merged = json.loads((work / "report.json").read_text(encoding="utf-8"))
+        ctx.require(
+            merged["failure_categories"] == {"选错表": 1, "口径错": 1},
+            f"failure summary wrong: {merged['failure_categories']}",
+        )
+
+        split_questions = work / "split.yaml"
+        split_questions.write_text(
+            yaml.safe_dump(
+                [
+                    _row(
+                        f"s{index}",
+                        f"split {index}",
+                        category="A" if index < 5 else "B",
+                    )
+                    for index in range(10)
+                ],
+                allow_unicode=True,
+            ),
+            encoding="utf-8",
+        )
+        for _ in range(2):
+            code = main(
+                [
+                    "eval-split",
+                    "--questions",
+                    str(split_questions),
+                    "--holdout-size",
+                    "4",
+                    "--seed",
+                    "17",
+                ]
+            )
+            ctx.require(code == 0, f"eval-split returned {code}")
+            payload = yaml.safe_load(split_questions.read_text(encoding="utf-8"))
+            counts = Counter(row["split"] for row in payload)
+            ctx.require(
+                counts == {"dev": 6, "holdout": 4},
+                f"split counts wrong: {counts}",
+            )
+        ctx.require(
+            "issue-235-e2e-secret"
+            not in (work / "report.md").read_text(encoding="utf-8"),
+            "token leaked into the report",
+        )
+        return {
+            "questions": [entry["id"] for entry in report["questions"]],
+            "excluded": report["excluded_unconfirmed"],
+            "failure_categories": merged["failure_categories"],
+            "split_counts": dict(counts),
+        }
+    finally:
+        service.close()
+        if old is None:
+            os.environ.pop("SDA_ISSUE_235_E2E_TOKEN", None)
+        else:
+            os.environ["SDA_ISSUE_235_E2E_TOKEN"] = old
