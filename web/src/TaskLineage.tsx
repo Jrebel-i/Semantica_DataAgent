@@ -44,6 +44,7 @@ export function TaskLineage({
   onSelect,
   onData,
   showTasks = true,
+  project,
 }: {
   table: string;
   token: string;
@@ -51,13 +52,16 @@ export function TaskLineage({
   onSelect?: (name: string) => void;
   onData?: (data: TableLineage) => void;
   showTasks?: boolean;
+  project?: string;
 }) {
   const [data, setData] = useState<TableLineage | null>(null);
   const [error, setError] = useState(false);
   useEffect(() => {
     const controller = new AbortController();
     setData(null);
-    fetch(`/api/v1/table-lineage?${new URLSearchParams({ table })}`, {
+    const params = new URLSearchParams({ table });
+    if (project) params.set("project", project);
+    fetch(`/api/v1/table-lineage?${params}`, {
       headers: { Authorization: `Bearer ${token}` },
       signal: controller.signal,
     })
@@ -76,7 +80,7 @@ export function TaskLineage({
     return () => controller.abort();
     // onData is a stable state setter in the pages that need the raw lineage.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [table, token]);
+  }, [project, table, token]);
   const upstream = data
     ? mergeEdges(
         data.upstream.map((edge) => ({

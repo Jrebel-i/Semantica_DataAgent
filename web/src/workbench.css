@@ -1914,6 +1914,9 @@ button.clarification-option-toggle:hover {
 }
 .knowledge-tree-head {
   flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
   padding: 12px;
   border-bottom: 1px solid var(--line-soft);
 }

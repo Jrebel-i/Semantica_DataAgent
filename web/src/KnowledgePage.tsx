@@ -1,11 +1,13 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Button, Input, Modal, Table, Tree, Typography } from "antd";
+import type { TreeDataNode } from "antd";
 import type { paths } from "./api";
 import { TaskLineage, type TableLineage } from "./TaskLineage";
 import type { Messages } from "./i18n";
 import { ColumnLineage } from "./ColumnLineage";
 import { DimensionStatus } from "./DimensionStatus";
 import { safeDecodePath } from "./paths";
+import { ProjectSelector, storedProject, useProjects } from "./ProjectSelector";
 import {
   loadTableDetail,
   summaryFromDetail,
@@ -63,6 +65,10 @@ export function KnowledgePage({
   token: string;
   messages: Messages;
 }) {
+  const [project, setProject] = useState(storedProject);
+  const { projects, loaded: projectsLoaded } = useProjects(token);
+  const warehouse =
+    projects.find((row) => row.id === project)?.type !== "document";
   const [tables, setTables] = useState<TableSummary[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [selected, setSelected] = useState<TableSummary | null>(null);
@@ -87,6 +93,32 @@ export function KnowledgePage({
   const treeScrollRef = useRef<HTMLDivElement>(null);
   const treeLoaded = useRef(false);
   const previousSearch = useRef("");
+  const previousProject = useRef(project);
+  const projectGeneration = useRef(0);
+  const autoSelect = useRef(true);
+
+  useEffect(() => {
+    if (previousProject.current === project) return;
+    previousProject.current = project;
+    projectGeneration.current += 1;
+    autoSelect.current = false;
+    setTables([]);
+    setCategories([]);
+    setSelected(null);
+    setReadingDoc(null);
+    setDetail(null);
+    setLinkedDocument(null);
+    setLineage(null);
+    setExpandedColumn("");
+    setDatabase("");
+    setExpandedKeys([]);
+    setTableLimits({});
+    setCorrectionOpen(false);
+    setPatch("");
+    setReason("");
+    setProposalStatus("");
+    setError(false);
+  }, [project]);
 
   useEffect(() => {
     setLinkedDocument(null);
@@ -97,11 +129,19 @@ export function KnowledgePage({
   }, [selected]);
 
   useEffect(() => {
+    if (!projectsLoaded) return;
+    if (!warehouse) {
+      setTables([]);
+      setError(false);
+      return;
+    }
     const controller = new AbortController();
+    const generation = projectGeneration.current;
     const params = new URLSearchParams();
     if (database) params.set("database", database);
     if (search) params.set("search", search);
     params.set("view", "summary");
+    params.set("project", project);
     fetch(`/api/v1/tables?${params}`, {
       headers: { Authorization: `Bearer ${token}` },
       signal: controller.signal,
@@ -111,17 +151,29 @@ export function KnowledgePage({
         return response.json() as Promise<TableSummary[]>;
       })
       .then((data) => {
+        if (
+          controller.signal.aborted ||
+          generation !== projectGeneration.current
+        )
+          return;
         setTables(data);
         setError(false);
-        if (!selected && !readingDoc && data.length > 0) setSelected(data[0]);
+        if (autoSelect.current && !readingDoc && data.length > 0) {
+          autoSelect.current = false;
+          setSelected(data[0]);
+        }
       })
       .catch(() => {
-        if (!controller.signal.aborted) setError(true);
+        if (
+          !controller.signal.aborted &&
+          generation === projectGeneration.current
+        )
+          setError(true);
       });
     return () => controller.abort();
     // The selection is intentionally read once when a result set arrives.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token, database, search]);
+  }, [token, project, database, search, projectsLoaded, warehouse]);
 
   useEffect(() => {
     if (!selected) {
@@ -134,7 +186,7 @@ export function KnowledgePage({
     setDetail(null);
     setDetailLoading(true);
     setDetailError(false);
-    loadTableDetail(token, selected.database, selected.name)
+    loadTableDetail(token, selected.database, selected.name, project)
       .then((row) => {
         if (!cancelled) setDetail(row);
       })
@@ -147,11 +199,12 @@ export function KnowledgePage({
     return () => {
       cancelled = true;
     };
-  }, [token, selected?.database, selected?.name, detailRetry]);
+  }, [token, project, selected?.database, selected?.name, detailRetry]);
 
   useEffect(() => {
     const controller = new AbortController();
-    fetch("/api/v1/categories", {
+    const generation = projectGeneration.current;
+    fetch(`/api/v1/categories?${new URLSearchParams({ project })}`, {
       headers: { Authorization: `Bearer ${token}` },
       signal: controller.signal,
     })
@@ -159,12 +212,22 @@ export function KnowledgePage({
         if (!response.ok) throw new Error();
         return response.json() as Promise<Category[]>;
       })
-      .then(setCategories)
+      .then((data) => {
+        if (
+          !controller.signal.aborted &&
+          generation === projectGeneration.current
+        )
+          setCategories(data);
+      })
       .catch(() => {
-        if (!controller.signal.aborted) setError(true);
+        if (
+          !controller.signal.aborted &&
+          generation === projectGeneration.current
+        )
+          setError(true);
       });
     return () => controller.abort();
-  }, [token]);
+  }, [project, token]);
 
   useEffect(() => {
     if (treeLoaded.current || !treeScrollRef.current) return;
@@ -191,32 +254,37 @@ export function KnowledgePage({
   }, [selected?.ref, readingDoc?.ref, tables.length, categories.length]);
 
   async function openDocument(path: string) {
+    const generation = projectGeneration.current;
     try {
       const response = await fetch(
-        `/api/v1/document?${new URLSearchParams({ doc_id: path })}`,
+        `/api/v1/document?${new URLSearchParams({ doc_id: path, project })}`,
         { headers: { Authorization: `Bearer ${token}` } },
       );
       if (!response.ok) throw new Error();
       const document = (await response.json()) as Document;
+      if (generation !== projectGeneration.current) return;
       setReadingDoc(document);
       setSelected(null);
       setError(false);
     } catch {
-      setError(true);
+      if (generation === projectGeneration.current) setError(true);
     }
   }
 
   async function openLinkedDocument(ref: string) {
+    const generation = projectGeneration.current;
     try {
       const response = await fetch(
-        `/api/v1/document?${new URLSearchParams({ doc_id: ref })}`,
+        `/api/v1/document?${new URLSearchParams({ doc_id: ref, project })}`,
         { headers: { Authorization: `Bearer ${token}` } },
       );
       if (!response.ok) throw new Error();
-      setLinkedDocument((await response.json()) as Document);
+      const document = (await response.json()) as Document;
+      if (generation !== projectGeneration.current) return;
+      setLinkedDocument(document);
       setError(false);
     } catch {
-      setError(true);
+      if (generation === projectGeneration.current) setError(true);
     }
   }
 
@@ -229,38 +297,47 @@ export function KnowledgePage({
     }
     const separator = name.indexOf(".");
     if (separator < 1) return;
+    const generation = projectGeneration.current;
     try {
       const row = await loadTableDetail(
         token,
         name.slice(0, separator),
         name.slice(separator + 1),
+        project,
       );
+      if (generation !== projectGeneration.current) return;
       setSelected(summaryFromDetail(row));
       setReadingDoc(null);
       setError(false);
     } catch {
-      setError(true);
+      if (generation === projectGeneration.current) setError(true);
     }
   }
 
   async function submitCorrection() {
     if (!selected) return;
+    const generation = projectGeneration.current;
     try {
-      const response = await fetch("/api/v1/corrections", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
+      const response = await fetch(
+        `/api/v1/corrections?${new URLSearchParams({ project })}`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ target: selected.ref, patch, reason }),
         },
-        body: JSON.stringify({ target: selected.ref, patch, reason }),
-      });
+      );
       if (!response.ok) throw new Error();
+      if (generation !== projectGeneration.current) return;
       setProposalStatus(messages.correctionSubmitted);
       setPatch("");
       setReason("");
       setCorrectionOpen(false);
     } catch {
-      setProposalStatus(messages.error);
+      if (generation === projectGeneration.current)
+        setProposalStatus(messages.error);
     }
   }
 
@@ -346,7 +423,7 @@ export function KnowledgePage({
   );
 
   useEffect(() => {
-    if (!selectedRef) return;
+    if (!selectedRef || !warehouse) return;
     setExpandedKeys((keys) =>
       Array.from(
         new Set([
@@ -357,7 +434,7 @@ export function KnowledgePage({
         ]),
       ),
     );
-  }, [selectedDatabase, selectedLayer, selectedRef]);
+  }, [selectedDatabase, selectedLayer, selectedRef, warehouse]);
 
   useEffect(() => {
     if (!selectedDatabase || selectedIndex < 0) return;
@@ -378,20 +455,26 @@ export function KnowledgePage({
       Array.from(
         new Set([
           ...keys,
-          "group:tables",
-          ...tableLayers.map((layer) => `layer:${layer.id}`),
+          ...(warehouse
+            ? [
+                "group:tables",
+                ...tableLayers.map((layer) => `layer:${layer.id}`),
+              ]
+            : ["group:docs"]),
         ]),
       ),
     );
-  }, [needle, tableLayers]);
+  }, [needle, tableLayers, warehouse]);
 
   useEffect(() => {
     if (needle) {
-      const keys = ["group:tables", "group:docs"];
-      for (const layer of tableLayers) {
-        keys.push(`layer:${layer.id}`);
-        for (const [databaseName] of layer.databases)
-          keys.push(`database:${databaseName}`);
+      const keys = warehouse ? ["group:tables", "group:docs"] : ["group:docs"];
+      if (warehouse) {
+        for (const layer of tableLayers) {
+          keys.push(`layer:${layer.id}`);
+          for (const [databaseName] of layer.databases)
+            keys.push(`database:${databaseName}`);
+        }
       }
       for (const category of visibleCategories) keys.push(category.ref);
       setExpandedKeys(keys);
@@ -399,7 +482,7 @@ export function KnowledgePage({
       setExpandedKeys(defaultExpandedKeys);
     }
     previousSearch.current = needle;
-  }, [defaultExpandedKeys, needle, tableLayers, visibleCategories]);
+  }, [defaultExpandedKeys, needle, tableLayers, visibleCategories, warehouse]);
 
   useEffect(() => {
     const node = treeScrollRef.current;
@@ -496,7 +579,7 @@ export function KnowledgePage({
         ),
       })),
     }));
-    return [
+    const groups: TreeDataNode[] = [
       {
         key: "group:docs",
         title: `${messages.knowledgeDocuments} (${visibleCategories.reduce(
@@ -505,18 +588,22 @@ export function KnowledgePage({
         )})`,
         children: docChildren,
       },
-      {
+    ];
+    if (warehouse) {
+      groups.push({
         key: "group:tables",
         title: `${messages.dataTables} (${visibleTables.length})`,
         children: tableChildren,
-      },
-    ];
+      });
+    }
+    return groups;
   }, [
     messages,
     tableLayers,
     tableLimits,
     visibleCategories,
     visibleTables.length,
+    warehouse,
   ]);
 
   return (
@@ -525,6 +612,12 @@ export function KnowledgePage({
       <div className="knowledge-layout admin-page">
         <aside className="knowledge-tree-panel">
           <div className="knowledge-tree-head">
+            <ProjectSelector
+              token={token}
+              value={project}
+              onChange={setProject}
+              messages={messages}
+            />
             <Input
               allowClear
               aria-label={messages.searchKnowledge}
@@ -678,6 +771,7 @@ export function KnowledgePage({
                                       table={`${selected.database}.${selected.name}`}
                                       column={field.name}
                                       token={token}
+                                      project={project}
                                     />
                                   </td>
                                 </tr>
@@ -695,6 +789,7 @@ export function KnowledgePage({
                     <TaskLineage
                       table={`${selected.database}.${selected.name}`}
                       token={token}
+                      project={project}
                       messages={messages}
                       showTasks={false}
                       onData={setLineage}

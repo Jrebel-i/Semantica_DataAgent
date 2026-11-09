@@ -108,7 +108,7 @@ test("侧栏会话可从搜索页切换且只加载一次列表", async () => {
   const fetcher = vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input);
     if (url === "/api/v1/me") return Response.json({ role: "user" });
-    if (url === "/api/v1/categories") return Response.json([]);
+    if (url.startsWith("/api/v1/categories")) return Response.json([]);
     if (url === "/api/v1/conversations") return Response.json(conversations);
     if (url === "/api/v1/conversations?archived=true") return Response.json([]);
     if (url.startsWith("/api/v1/conversations/")) {

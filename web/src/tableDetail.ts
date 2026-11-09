@@ -10,19 +10,25 @@ export function clearTableDetailCache() {
   detailCache.clear();
 }
 
-export function tableDetailUrl(database: string, name: string): string {
-  return `/api/v1/tables/${encodeURIComponent(database)}/${encodeURIComponent(name)}`;
+export function tableDetailUrl(
+  database: string,
+  name: string,
+  project?: string,
+): string {
+  const url = `/api/v1/tables/${encodeURIComponent(database)}/${encodeURIComponent(name)}`;
+  return project ? `${url}?project=${encodeURIComponent(project)}` : url;
 }
 
 export function loadTableDetail(
   token: string,
   database: string,
   name: string,
+  project?: string,
 ): Promise<TableDetail> {
-  const key = JSON.stringify([token, database, name]);
+  const key = JSON.stringify([token, database, name, project ?? ""]);
   const cached = detailCache.get(key);
   if (cached) return cached;
-  const request = fetch(tableDetailUrl(database, name), {
+  const request = fetch(tableDetailUrl(database, name, project), {
     headers: { Authorization: `Bearer ${token}` },
   }).then((response) => {
     if (!response.ok) throw new Error(`table detail: ${response.status}`);
