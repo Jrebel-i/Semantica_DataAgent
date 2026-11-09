@@ -234,12 +234,16 @@ def test_eval_exec_defaults_to_dev_and_lists_unconfirmed(
     assert entry["answer_confirmed"] is True
     assert entry["reference_sql"] == GOOD
     assert entry["sql"] == GOOD
+    assert entry["actual_sql"] == GOOD
     assert entry["correct"] is True
     assert entry["volatile"] is False
     assert entry["failure_category"] is None
     run = entry["runs"][0]
     assert run["sql"] == GOOD
+    assert run["actual_sql"] == GOOD
     assert run["reference_sql"] == GOOD
+    assert run["consistency"] == "equal"
+    assert run["tool_call_sequence"] == ["search_knowledge", "propose_query"]
     assert run["conversation_id"].startswith("conv-dev good-")
     assert [item["name"] for item in run["tool_calls"]] == [
         "search_knowledge",
