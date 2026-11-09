@@ -52,7 +52,20 @@ export function App() {
       return false;
     }
   });
+  const [narrow, setNarrow] = useState(() => {
+    try {
+      return window.matchMedia("(max-width: 768px)").matches;
+    } catch {
+      return false;
+    }
+  });
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const navigationExpanded = narrow ? drawerOpen : expanded;
   const toggleNavigation = () => {
+    if (narrow) {
+      setDrawerOpen((value) => !value);
+      return;
+    }
     setExpanded((value) => {
       try {
         localStorage.setItem("navigationExpanded", String(!value));
@@ -62,6 +75,26 @@ export function App() {
       return !value;
     });
   };
+  useEffect(() => {
+    let query: MediaQueryList;
+    try {
+      query = window.matchMedia("(max-width: 768px)");
+    } catch {
+      return;
+    }
+    const onChange = (event: MediaQueryListEvent) => {
+      setNarrow(event.matches);
+      if (!event.matches) setDrawerOpen(false);
+    };
+    setNarrow(query.matches);
+    if (query.addEventListener) query.addEventListener("change", onChange);
+    else query.addListener(onChange);
+    return () => {
+      if (query.removeEventListener)
+        query.removeEventListener("change", onChange);
+      else query.removeListener(onChange);
+    };
+  }, []);
   const [sessionTarget, setSessionTarget] = useState<HTMLDivElement | null>(
     null,
   );
@@ -196,6 +229,7 @@ export function App() {
   const navigate = (next: string) => {
     history.pushState(null, "", next);
     setPath(next);
+    setDrawerOpen(false);
   };
   const navigation = [
     { path: "/search", label: t.sidebarSearch, icon: <SearchOutlined /> },
@@ -383,22 +417,60 @@ export function App() {
           </div>
         ) : (
           <div className="workspace">
+            {narrow && !drawerOpen && (
+              <div className="mobile-topbar">
+                <Button
+                  type="text"
+                  className="mobile-nav-toggle"
+                  aria-label={t.openNavigation}
+                  title={t.openNavigation}
+                  icon={<MenuUnfoldOutlined />}
+                  onClick={() => setDrawerOpen(true)}
+                />
+                <span className="mobile-brand">Semantica</span>
+              </div>
+            )}
+            {narrow && drawerOpen && (
+              <button
+                type="button"
+                className="sidebar-scrim"
+                aria-label={t.closeNavigation}
+                onClick={() => setDrawerOpen(false)}
+              />
+            )}
             <nav
-              className={`side-nav ${expanded ? "expanded" : ""}`}
+              className={`side-nav ${navigationExpanded ? "expanded" : ""}${
+                narrow
+                  ? ` side-nav--drawer${drawerOpen ? " side-nav--drawer-open" : ""}`
+                  : ""
+              }`}
               aria-label={t.navigation}
+              aria-hidden={narrow && !drawerOpen ? true : undefined}
             >
               <div className="side-heading">
-                {expanded && <div className="side-brand">Semantica</div>}
+                {navigationExpanded && (
+                  <div className="side-brand">Semantica</div>
+                )}
                 <Button
                   type="text"
                   className="nav-toggle"
                   aria-label={
-                    expanded ? t.collapseNavigation : t.expandNavigation
+                    navigationExpanded
+                      ? t.collapseNavigation
+                      : t.expandNavigation
                   }
-                  title={expanded ? t.collapseNavigation : t.expandNavigation}
+                  title={
+                    navigationExpanded
+                      ? t.collapseNavigation
+                      : t.expandNavigation
+                  }
                   onClick={toggleNavigation}
                 >
-                  {expanded ? <MenuFoldOutlined /> : <MenuUnfoldOutlined />}
+                  {navigationExpanded ? (
+                    <MenuFoldOutlined />
+                  ) : (
+                    <MenuUnfoldOutlined />
+                  )}
                 </Button>
               </div>
               <div ref={setNewTarget} />
@@ -521,7 +593,7 @@ export function App() {
                       icon={<LogoutOutlined />}
                       onClick={logout}
                     >
-                      {expanded && t.logout}
+                      {navigationExpanded && t.logout}
                     </Button>
                   </div>
                 )}
@@ -536,7 +608,7 @@ export function App() {
                     setPersonalOpen(!personalOpen);
                   }}
                 >
-                  {expanded && (
+                  {navigationExpanded && (
                     <span className="account-name">
                       {userName}
                       <small>{role}</small>
