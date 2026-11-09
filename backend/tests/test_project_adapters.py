@@ -753,6 +753,70 @@ def test_archived_project_pull_resumes_after_restore(client, monkeypatch):
         assert record.project_id == project["id"]
 
 
+def test_archiving_one_project_does_not_block_active_or_default_pulls(
+    client, tmp_path, monkeypatch
+):
+    from semantica_dataagent import project_context, pull_service
+    from semantica_dataagent.db import Build, PullRecord, sessions
+    from semantica_dataagent.dtb_puller import DtbPuller
+
+    c, admin = client
+    frozen = _create_project(c, admin, "Frozen neighbor", "warehouse")
+    active = _create_project(c, admin, "Active neighbor", "warehouse")
+    default_source = tmp_path / "default-source"
+    response = c.put(
+        "/api/v1/settings",
+        headers=_headers(admin),
+        json={"values": {"source_directory": str(default_source)}},
+    )
+    assert response.status_code == 200, response.text
+    for project_id, url, token in (
+        ("default", "https://default.dtb.example", "default-token"),
+        (active["id"], "https://active.dtb.example", "active-token"),
+        (frozen["id"], "https://frozen.dtb.example", "frozen-token"),
+    ):
+        _set_pull_config(
+            project_id,
+            url=url,
+            token=token,
+            layer="dimensions",
+            max_tables=1,
+        )
+    calls = []
+
+    def fake_fetch(_client, url, token, _scope=None):
+        calls.append((url, token))
+        return ({"任务信息.json": b"task"}, {"tables": 1, "tasks": 0})
+
+    monkeypatch.setattr(DtbPuller, "fetch", staticmethod(fake_fetch))
+    monkeypatch.setattr(project_context, "wake_build_queue", lambda: None)
+    archived = c.post(
+        f"/api/v1/projects/{frozen['id']}/archive", headers=_headers(admin)
+    )
+    assert archived.status_code == 200, archived.text
+
+    active_record = pull_service.run_pull(active["id"])
+    default_record = pull_service.run_pull("default")
+
+    assert active_record.status == "succeeded", active_record.error
+    assert default_record.status == "succeeded", default_record.error
+    assert calls == [
+        ("https://active.dtb.example", "active-token"),
+        ("https://default.dtb.example", "default-token"),
+    ]
+    with sessions()() as db:
+        assert (
+            db.query(PullRecord).filter(PullRecord.project_id == frozen["id"]).count()
+            == 0
+        )
+        for record, project_id in (
+            (active_record, active["id"]),
+            (default_record, "default"),
+        ):
+            build = db.get(Build, record.build_id)
+            assert build.project_id == project_id
+
+
 def test_adapter_permissions(client):
     c, admin = client
     project = _create_project(c, admin, "Guarded", "warehouse")
