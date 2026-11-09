@@ -33,8 +33,22 @@ export function SearchPage({
   const [loading, setLoading] = useState(false);
   const [results, setResults] = useState<Hit[] | null>(null);
   const pending = useRef<AbortController | null>(null);
+  const previousProject = useRef(project);
+  const projectGeneration = useRef(0);
+  useEffect(() => {
+    if (previousProject.current === project) return;
+    previousProject.current = project;
+    projectGeneration.current += 1;
+    pending.current?.abort();
+    setResults(null);
+    setCategories([]);
+    setCategory("");
+    setError(false);
+    setLoading(false);
+  }, [project]);
   useEffect(() => {
     const controller = new AbortController();
+    const generation = projectGeneration.current;
     fetch(`/api/v1/categories?${new URLSearchParams({ project })}`, {
       headers: { Authorization: `Bearer ${token}` },
       signal: controller.signal,
@@ -44,24 +58,26 @@ export function SearchPage({
         return r.json() as Promise<Category[]>;
       })
       .then((data) => {
+        if (
+          controller.signal.aborted ||
+          generation !== projectGeneration.current
+        )
+          return;
         setCategories(data);
         setCategoryError(false);
       })
       .catch(() => {
-        if (!controller.signal.aborted) setCategoryError(true);
+        if (
+          !controller.signal.aborted &&
+          generation === projectGeneration.current
+        )
+          setCategoryError(true);
       });
     return () => {
       controller.abort();
       pending.current?.abort();
     };
   }, [project, token]);
-  useEffect(() => {
-    pending.current?.abort();
-    setResults(null);
-    setCategory("");
-    setError(false);
-    setLoading(false);
-  }, [project]);
   useEffect(() => {
     if (!warehouse && scope !== "all" && scope !== "docs") setScope("all");
   }, [scope, warehouse]);
@@ -71,6 +87,7 @@ export function SearchPage({
     pending.current?.abort();
     const controller = new AbortController();
     pending.current = controller;
+    const generation = projectGeneration.current;
     setLoading(true);
     setError(false);
     setResults(null);
@@ -88,11 +105,23 @@ export function SearchPage({
       });
       if (!response.ok) throw new Error();
       const hits = (await response.json()) as Hit[];
-      if (!controller.signal.aborted) setResults(hits);
+      if (
+        !controller.signal.aborted &&
+        generation === projectGeneration.current
+      )
+        setResults(hits);
     } catch {
-      if (!controller.signal.aborted) setError(true);
+      if (
+        !controller.signal.aborted &&
+        generation === projectGeneration.current
+      )
+        setError(true);
     } finally {
-      if (!controller.signal.aborted) setLoading(false);
+      if (
+        !controller.signal.aborted &&
+        generation === projectGeneration.current
+      )
+        setLoading(false);
     }
   }
   const sources = {
