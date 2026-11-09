@@ -1,5 +1,6 @@
 """Execute configured metadata pulls and record their outcome."""
 
+import os
 import threading
 import uuid
 from datetime import UTC, datetime
@@ -31,6 +32,15 @@ def intervals() -> dict[str, int]:
 def _lock_for(project_id: str) -> threading.Lock:
     with _locks_guard:
         return _locks.setdefault(project_id, threading.Lock())
+
+
+def _reset_after_fork() -> None:
+    global _locks_guard
+    _locks_guard = threading.Lock()
+    _locks.clear()
+
+
+os.register_at_fork(after_in_child=_reset_after_fork)
 
 
 def _existing_project_is_frozen(project_id: str) -> bool:

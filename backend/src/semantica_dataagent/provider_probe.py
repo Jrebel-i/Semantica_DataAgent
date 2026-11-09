@@ -51,6 +51,15 @@ _active_lock = threading.Lock()
 _active_providers: set[str] = set()
 
 
+def _reset_after_fork() -> None:
+    global _active_lock
+    _active_lock = threading.Lock()
+    _active_providers.clear()
+
+
+os.register_at_fork(after_in_child=_reset_after_fork)
+
+
 @dataclass(frozen=True)
 class ModelProbeResult:
     model: str

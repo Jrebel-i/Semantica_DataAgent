@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import math
+import os
 import threading
 from datetime import UTC, datetime, timedelta
 
@@ -223,6 +224,12 @@ class PendingBuildScheduler:
         self._thread = None
         self._stopping = False
 
+    def fork_child(self):
+        """Drop parent-thread state inherited by a forked child (#231)."""
+        self._condition = threading.Condition()
+        self._thread = None
+        self._stopping = False
+
     def start(self):
         with self._condition:
             if self._thread is not None and self._thread.is_alive():
@@ -261,3 +268,10 @@ class PendingBuildScheduler:
 
 
 pending_build_scheduler = PendingBuildScheduler()
+
+
+def _reset_after_fork() -> None:
+    pending_build_scheduler.fork_child()
+
+
+os.register_at_fork(after_in_child=_reset_after_fork)

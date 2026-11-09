@@ -5,6 +5,7 @@ import signal
 import threading
 import time
 
+import pytest
 from cryptography.fernet import Fernet
 
 CHILD_TIMEOUT_SECONDS = 5
@@ -95,3 +96,109 @@ def test_forked_child_does_not_inherit_knowledge_locks(tmp_path, monkeypatch):
     from semantica_dataagent import knowledge
 
     _fork_and_wait(knowledge._round_trip_lock, knowledge.round_trip_counts)
+
+
+def _embedding_slot():
+    from semantica_dataagent.embedding_client import _LIMITER
+
+    with _LIMITER.slot(1):
+        pass
+
+
+def _project_deletion_lock():
+    from semantica_dataagent import project_deletion
+
+    with project_deletion._lock("fork-test"):
+        pass
+
+
+def _pull_lock():
+    from semantica_dataagent import pull_service
+
+    with pull_service._lock_for("fork-test"):
+        pass
+
+
+def _telemetry_lock():
+    from semantica_dataagent import telemetry
+
+    with telemetry._lock:
+        pass
+
+
+def _provider_probe_lock():
+    from semantica_dataagent import provider_probe
+
+    provider_probe.begin_probe("fork-test")
+    provider_probe.end_probe("fork-test")
+
+
+def _sandbox_lock():
+    from semantica_dataagent import agent_sandbox
+
+    with agent_sandbox.ACTIVE_LOCK:
+        pass
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "build_queue",
+        "pending_builds",
+        "scheduler",
+        "pull_scheduler",
+        "embedding_limiter",
+        "project_deletion",
+        "pull_service",
+        "telemetry",
+        "provider_probe",
+        "agent_sandbox",
+    ],
+)
+def test_forked_child_resets_other_process_global_locks(name):
+    if name == "build_queue":
+        from semantica_dataagent import build_queue
+
+        lock, action = (
+            build_queue.build_queue._condition,
+            build_queue.build_queue.enqueue,
+        )
+    elif name == "pending_builds":
+        from semantica_dataagent import auto_build
+
+        lock = auto_build.pending_build_scheduler._condition
+        action = auto_build.pending_build_scheduler.wake
+    elif name == "scheduler":
+        from semantica_dataagent import scheduler
+
+        lock, action = scheduler.scheduler._condition, scheduler.scheduler.due_projects
+    elif name == "pull_scheduler":
+        from semantica_dataagent import scheduler
+
+        lock = scheduler.pull_scheduler._condition
+        action = scheduler.pull_scheduler.due_projects
+    elif name == "embedding_limiter":
+        from semantica_dataagent.embedding_client import _LIMITER
+
+        lock, action = _LIMITER._condition, _embedding_slot
+    elif name == "project_deletion":
+        from semantica_dataagent import project_deletion
+
+        lock, action = project_deletion._locks_guard, _project_deletion_lock
+    elif name == "pull_service":
+        from semantica_dataagent import pull_service
+
+        lock, action = pull_service._locks_guard, _pull_lock
+    elif name == "telemetry":
+        from semantica_dataagent import telemetry
+
+        lock, action = telemetry._lock, _telemetry_lock
+    elif name == "provider_probe":
+        from semantica_dataagent import provider_probe
+
+        lock, action = provider_probe._active_lock, _provider_probe_lock
+    else:
+        from semantica_dataagent import agent_sandbox
+
+        lock, action = agent_sandbox.ACTIVE_LOCK, _sandbox_lock
+    _fork_and_wait(lock, action)

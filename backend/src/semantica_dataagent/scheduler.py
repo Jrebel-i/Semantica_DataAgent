@@ -1,6 +1,7 @@
 """Schedule incremental builds per project on the shared persisted queue."""
 
 import logging
+import os
 import threading
 import time
 
@@ -46,6 +47,13 @@ class Scheduler:
         project_context.enqueue_build(
             "incremental", "scheduler", project_id=project_id, dedupe=True
         )
+
+    def fork_child(self):
+        """Drop parent-thread state inherited by a forked child (#231)."""
+        self._condition = threading.Condition()
+        self._schedules = {}
+        self._thread = None
+        self._stopping = False
 
     def start(self, interval, project_id=DEFAULT_PROJECT_ID):
         with self._condition:
@@ -132,3 +140,11 @@ def _scheduled_pull(project_id=None):
 
 
 pull_scheduler = Scheduler(_scheduled_pull)
+
+
+def _reset_after_fork() -> None:
+    scheduler.fork_child()
+    pull_scheduler.fork_child()
+
+
+os.register_at_fork(after_in_child=_reset_after_fork)
