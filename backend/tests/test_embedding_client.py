@@ -304,7 +304,7 @@ def test_build_record_includes_embedding_statistics(tmp_path, monkeypatch, serve
     monkeypatch.setenv("DATAAGENT_DB_PATH", str(tmp_path / "app.db"))
     monkeypatch.setenv("DATAAGENT_ENCRYPTION_KEY", Fernet.generate_key().decode())
     initialize()
-    monkeypatch.setattr(knowledge, "configured", list)
+    monkeypatch.setattr(knowledge, "configured", lambda *args, **kwargs: [])
     monkeypatch.setattr(
         knowledge,
         "settings",
@@ -540,7 +540,7 @@ def test_build_counts_and_stage_log_record_embedding_dedupe(
     monkeypatch.setenv("DATAAGENT_DB_PATH", str(tmp_path / "app.db"))
     monkeypatch.setenv("DATAAGENT_ENCRYPTION_KEY", Fernet.generate_key().decode())
     initialize()
-    monkeypatch.setattr(knowledge, "configured", list)
+    monkeypatch.setattr(knowledge, "configured", lambda *args, **kwargs: [])
     monkeypatch.setattr(
         knowledge,
         "settings",

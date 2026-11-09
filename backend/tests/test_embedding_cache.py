@@ -308,7 +308,7 @@ def test_build_succeeds_with_corrupt_cache_file(tmp_path, monkeypatch, caplog):
     cache_path.write_bytes(b"not a database")
     recording = Recorder()
     monkeypatch.setattr(knowledge, "embed", recording)
-    monkeypatch.setattr(knowledge, "configured", list)
+    monkeypatch.setattr(knowledge, "configured", lambda *args, **kwargs: [])
     monkeypatch.setattr(
         knowledge,
         "settings",

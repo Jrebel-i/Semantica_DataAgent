@@ -635,7 +635,7 @@ def test_full_build_applies_field_override_on_reimport(tmp_path, monkeypatch):
             "milvus_uri": "http://localhost",
         },
     )
-    monkeypatch.setattr(knowledge, "configured", list)
+    monkeypatch.setattr(knowledge, "configured", lambda *args, **kwargs: [])
     monkeypatch.setattr(
         knowledge,
         "get_filters",

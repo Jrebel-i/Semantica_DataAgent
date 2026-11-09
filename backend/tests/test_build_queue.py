@@ -133,7 +133,7 @@ def test_build_records_stage_logs_stats_and_utc_times(tmp_path, monkeypatch):
             "milvus_uri": "http://localhost",
         },
     )
-    monkeypatch.setattr(knowledge, "configured", list)
+    monkeypatch.setattr(knowledge, "configured", lambda *args, **kwargs: [])
     monkeypatch.setattr(
         knowledge,
         "get_filters",
@@ -244,7 +244,7 @@ def test_full_build_publication_survives_process_exit(
             "milvus_uri": "http://localhost",
         },
     )
-    monkeypatch.setattr(knowledge, "configured", list)
+    monkeypatch.setattr(knowledge, "configured", lambda *args, **kwargs: [])
     monkeypatch.setattr(
         knowledge,
         "get_filters",
