@@ -1,0 +1,181 @@
+# 测试用 embedding 服务（命名空间 semantica-dataagent-test），供 test 与 test2 共用。
+# 部署前需先在该命名空间创建 ConfigMap embedding-integrity，命令见 docs/infrastructure.md。
+apiVersion: v1
+kind: Service
+metadata:
+  name: embedding-small
+  namespace: semantica-dataagent-test
+spec:
+  type: NodePort
+  selector:
+    app: embedding-small
+  ports:
+  - port: 7997
+    targetPort: 7997
+    nodePort: 31613
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: embedding-m3
+  namespace: semantica-dataagent-test
+spec:
+  type: NodePort
+  selector:
+    app: embedding-m3
+  ports:
+  - port: 7997
+    targetPort: 7997
+    nodePort: 31614
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: embedding-small
+  namespace: semantica-dataagent-test
+spec:
+  serviceName: embedding-small
+  replicas: 1
+  selector:
+    matchLabels:
+      app: embedding-small
+  template:
+    metadata:
+      labels:
+        app: embedding-small
+    spec:
+      initContainers:
+      - name: download-and-verify
+        image: python:3.11-slim
+        command: [python, /integrity/model.py, download, --model, bge-small-zh-v1.5]
+        resources:
+          requests:
+            memory: 128Mi
+          limits:
+            memory: 512Mi
+        volumeMounts:
+        - name: model
+          mountPath: /model
+        - name: integrity
+          mountPath: /integrity
+      containers:
+      - name: infinity
+        image: michaelf34/infinity:0.0.77-cpu
+        command: ["/bin/sh", "-c"]
+        args:
+        - python /integrity/model.py --model bge-small-zh-v1.5 && exec infinity_emb v2 --model-id /model/bge-small-zh-v1.5 --engine torch --batch-size 8 --port 7997 --host 0.0.0.0
+        env:
+        - name: DO_NOT_TRACK
+          value: "1"
+        - name: HF_HUB_OFFLINE
+          value: "1"
+        - name: TRANSFORMERS_OFFLINE
+          value: "1"
+        ports:
+        - containerPort: 7997
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 7997
+          periodSeconds: 10
+        resources:
+          requests:
+            cpu: 1
+            memory: 1Gi
+          limits:
+            memory: 2Gi
+        volumeMounts:
+        - name: model
+          mountPath: /model
+          readOnly: true
+        - name: integrity
+          mountPath: /integrity
+      volumes:
+      - name: integrity
+        configMap:
+          name: embedding-integrity
+  volumeClaimTemplates:
+  - metadata:
+      name: model
+    spec:
+      accessModes: [ReadWriteOnce]
+      storageClassName: local-path
+      resources:
+        requests:
+          storage: 2Gi
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: embedding-m3
+  namespace: semantica-dataagent-test
+spec:
+  serviceName: embedding-m3
+  replicas: 1
+  selector:
+    matchLabels:
+      app: embedding-m3
+  template:
+    metadata:
+      labels:
+        app: embedding-m3
+    spec:
+      initContainers:
+      - name: download-and-verify
+        image: python:3.11-slim
+        command: [python, /integrity/model.py, download]
+        resources:
+          requests:
+            memory: 128Mi
+          limits:
+            memory: 512Mi
+        volumeMounts:
+        - name: model
+          mountPath: /model
+        - name: integrity
+          mountPath: /integrity
+      containers:
+      - name: infinity
+        image: michaelf34/infinity:0.0.77-cpu
+        command: ["/bin/sh", "-c"]
+        args:
+        - python /integrity/model.py && exec infinity_emb v2 --model-id /model/bge-m3 --engine torch --batch-size 2 --port 7997 --host 0.0.0.0
+        env:
+        - name: DO_NOT_TRACK
+          value: "1"
+        - name: HF_HUB_OFFLINE
+          value: "1"
+        - name: TRANSFORMERS_OFFLINE
+          value: "1"
+        ports:
+        - containerPort: 7997
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 7997
+          periodSeconds: 10
+        resources:
+          requests:
+            cpu: 2
+            memory: 2Gi
+          limits:
+            memory: 4Gi
+        volumeMounts:
+        - name: model
+          mountPath: /model
+          readOnly: true
+        - name: integrity
+          mountPath: /integrity
+      volumes:
+      - name: integrity
+        configMap:
+          name: embedding-integrity
+  volumeClaimTemplates:
+  - metadata:
+      name: model
+    spec:
+      accessModes: [ReadWriteOnce]
+      storageClassName: local-path
+      resources:
+        requests:
+          storage: 5Gi
