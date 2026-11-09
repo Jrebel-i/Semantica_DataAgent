@@ -415,3 +415,162 @@ def test_restart_keeps_queued_upload_builds(tmp_path, monkeypatch):
         )
     assert statuses[upload_id] == "queued"
     assert statuses[scheduler_id] == "cancelled"
+
+
+def create_document_project(client, name):
+    response = client.post("/api/v1/projects", json={"name": name, "type": "document"})
+    assert response.status_code == 201, response.text
+    return response.json()["id"]
+
+
+def configure_upload_window(client, tmp_path):
+    response = client.put(
+        "/api/v1/settings",
+        json={
+            "values": {
+                "source_directory": str(tmp_path / "sources"),
+                "auto_build_debounce_seconds": "0",
+            }
+        },
+    )
+    assert response.status_code == 200, response.text
+
+
+def queued_rows(project_id):
+    return [row for row in build_rows(project_id) if row[1] == "queued"]
+
+
+def test_first_upload_in_new_project_queues_full_build(tmp_path, monkeypatch):
+    from semantica_dataagent.app import app
+
+    token = configure(tmp_path, monkeypatch)
+    pause_build_queue(monkeypatch)
+    auth = headers(token)
+    with TestClient(app, headers=auth) as client:
+        configure_upload_window(client, tmp_path)
+        project_id = create_document_project(client, "首次上传全量")
+
+        assert (
+            upload(client, auth, project_id, "first.md", "first\n").status_code == 200
+        )
+        wait_for(
+            lambda: len(queued_rows(project_id)) == 1,
+            message="新项目首次上传后没有入队构建",
+        )
+        assert build_rows(project_id)[0][1:4] == ("queued", "full", "upload")
+        assert pending_rows(project_id) == []
+
+
+def test_failed_full_build_still_queues_full_after_upload(tmp_path, monkeypatch):
+    from semantica_dataagent.app import app
+
+    token = configure(tmp_path, monkeypatch)
+    pause_build_queue(monkeypatch)
+    auth = headers(token)
+    with TestClient(app, headers=auth) as client:
+        configure_upload_window(client, tmp_path)
+        project_id = create_document_project(client, "只有失败全量")
+        insert_build(
+            project_id,
+            "failed",
+            build_type="full",
+            error="A successful full build is required before incremental builds",
+        )
+
+        assert (
+            upload(client, auth, project_id, "again.md", "again\n").status_code == 200
+        )
+        wait_for(
+            lambda: len(queued_rows(project_id)) == 1,
+            message="失败的全量构建被当成了成功全量",
+        )
+        assert queued_rows(project_id)[0][2:4] == ("full", "upload")
+
+
+def test_successful_full_build_keeps_upload_build_incremental(tmp_path, monkeypatch):
+    from semantica_dataagent.app import app
+
+    token = configure(tmp_path, monkeypatch)
+    pause_build_queue(monkeypatch)
+    auth = headers(token)
+    with TestClient(app, headers=auth) as client:
+        configure_upload_window(client, tmp_path)
+        project_id = create_document_project(client, "已有成功全量")
+        insert_build(project_id, "succeeded", build_type="full")
+
+        assert upload(client, auth, project_id, "next.md", "next\n").status_code == 200
+        wait_for(
+            lambda: len(queued_rows(project_id)) == 1,
+            message="已有成功全量后上传没有入队",
+        )
+        assert queued_rows(project_id)[0][2:4] == ("incremental", "upload")
+
+
+def test_full_build_requirement_is_per_project(tmp_path, monkeypatch):
+    from semantica_dataagent.app import app
+
+    token = configure(tmp_path, monkeypatch)
+    pause_build_queue(monkeypatch)
+    auth = headers(token)
+    with TestClient(app, headers=auth) as client:
+        configure_upload_window(client, tmp_path)
+        built = create_document_project(client, "有全量的项目")
+        fresh = create_document_project(client, "没有全量的项目")
+        insert_build(built, "succeeded", build_type="full")
+
+        assert upload(client, auth, built, "b.md", "built\n").status_code == 200
+        assert upload(client, auth, fresh, "f.md", "fresh\n").status_code == 200
+        wait_for(
+            lambda: len(queued_rows(built)) == 1 and len(queued_rows(fresh)) == 1,
+            message="两个项目没有各自入队",
+        )
+        assert queued_rows(built)[0][2:4] == ("incremental", "upload")
+        assert queued_rows(fresh)[0][2:4] == ("full", "upload")
+        assert len(queued_rows(built)) == 1
+        assert len(queued_rows(fresh)) == 1
+
+
+def test_upload_while_first_full_runs_queues_full_followup(tmp_path, monkeypatch):
+    from semantica_dataagent.app import app
+
+    token = configure(tmp_path, monkeypatch)
+    pause_build_queue(monkeypatch)
+    auth = headers(token)
+    with TestClient(app, headers=auth) as client:
+        configure_upload_window(client, tmp_path)
+        project_id = create_document_project(client, "首次全量运行中")
+        insert_build(project_id, "running", build_type="full")
+
+        assert upload(client, auth, project_id, "one.md", "one\n").status_code == 200
+        wait_for(
+            lambda: len(queued_rows(project_id)) == 1,
+            message="运行中的首次全量没有获得后续构建",
+        )
+        assert queued_rows(project_id)[0][2:4] == ("full", "upload"), (
+            "首次全量运行时上传排入了注定失败的增量构建"
+        )
+
+        assert upload(client, auth, project_id, "two.md", "two\n").status_code == 200
+        time.sleep(1.3)
+        assert len(queued_rows(project_id)) == 1, "同一项目重复排了后续构建"
+
+
+def test_auto_build_switch_off_skips_new_project_upload(tmp_path, monkeypatch):
+    from semantica_dataagent.app import app
+
+    token = configure(tmp_path, monkeypatch)
+    pause_build_queue(monkeypatch)
+    auth = headers(token)
+    with TestClient(app, headers=auth) as client:
+        configure_upload_window(client, tmp_path)
+        project_id = create_document_project(client, "关闭自动构建")
+        response = client.put(
+            f"/api/v1/projects/{project_id}/auto-build", json={"enabled": False}
+        )
+        assert response.status_code == 200, response.text
+        assert response.json() == {"enabled": False}
+
+        assert upload(client, auth, project_id, "off.md", "off\n").status_code == 200
+        time.sleep(1.5)
+        assert build_rows(project_id) == []
+        assert pending_rows(project_id) == []
