@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -152,6 +153,14 @@ function installFetch(
       return Response.json({});
     }),
   );
+}
+
+function deferredResponse() {
+  let resolve!: (value: Response) => void;
+  const promise = new Promise<Response>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
 }
 
 function treeTitles(container: HTMLElement): string[] {
@@ -643,4 +652,108 @@ test("文档型项目不渲染数据表，知识文档请求带项目", async ()
       ),
     ).toBe(true),
   );
+});
+
+test("切换项目后丢弃旧项目迟到的文档响应", async () => {
+  const pendingDocument = deferredResponse();
+  const fetcher = vi.fn(async (url: string) => {
+    if (url === "/api/v1/projects")
+      return Response.json([
+        project("docs", "Platform Docs", "document"),
+        project("finance", "财务数据"),
+      ]);
+    if (url.startsWith("/api/v1/categories"))
+      return Response.json([
+        {
+          ref: "category:platform",
+          name: "平台",
+          description: "",
+          documents: [{ ref: "document:platform/a.md", path: "platform/a.md" }],
+        },
+      ]);
+    if (url.startsWith("/api/v1/tables?")) return Response.json([]);
+    if (url.startsWith("/api/v1/document")) return pendingDocument.promise;
+    return Response.json({});
+  });
+  vi.stubGlobal("fetch", fetcher);
+  localStorage.setItem(PROJECT_STORAGE_KEY, "docs");
+  render(<KnowledgePage token="token" messages={getMessages("zh")} />);
+
+  fireEvent.click(await screen.findByText("平台"));
+  fireEvent.click(await screen.findByRole("button", { name: "platform/a.md" }));
+  await waitFor(() =>
+    expect(
+      fetcher.mock.calls.some(([url]) =>
+        String(url).startsWith("/api/v1/document"),
+      ),
+    ).toBe(true),
+  );
+
+  fireEvent.mouseDown(screen.getByRole("combobox", { name: "项目" }));
+  fireEvent.click(await screen.findByTitle("财务数据"));
+
+  await act(async () => {
+    pendingDocument.resolve(
+      Response.json({
+        path: "platform/a.md",
+        category: "platform",
+        content: "旧项目文档",
+        start_line: 1,
+        generated: false,
+      }),
+    );
+    await pendingDocument.promise;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+
+  expect(screen.queryByText("旧项目文档")).toBeNull();
+  expect(screen.getByText("从左侧选择一张表或一份文档")).toBeTruthy();
+});
+
+test("切换项目后丢弃旧项目迟到的表列表响应", async () => {
+  const pendingTables = deferredResponse();
+  const fetcher = vi.fn(async (url: string) => {
+    if (url === "/api/v1/projects")
+      return Response.json([
+        project("default", "业务数据"),
+        project("finance", "财务数据"),
+      ]);
+    if (url.startsWith("/api/v1/categories")) return Response.json([]);
+    if (url.startsWith("/api/v1/tables?")) {
+      const projectId =
+        new URL(url, "http://localhost").searchParams.get("project") ?? "";
+      return projectId === "default"
+        ? pendingTables.promise
+        : Response.json([table("dwd", "finance_orders")]);
+    }
+    return Response.json({});
+  });
+  vi.stubGlobal("fetch", fetcher);
+  render(<KnowledgePage token="token" messages={getMessages("zh")} />);
+
+  await waitFor(() =>
+    expect(
+      fetcher.mock.calls.some(
+        ([url]) =>
+          String(url).startsWith("/api/v1/tables?") &&
+          String(url).includes("project=default"),
+      ),
+    ).toBe(true),
+  );
+  fireEvent.mouseDown(screen.getByRole("combobox", { name: "项目" }));
+  fireEvent.click(await screen.findByTitle("财务数据"));
+  expect(await screen.findByText("dwd (1)")).toBeTruthy();
+  fireEvent.click(screen.getByText("dwd (1)"));
+  expect(
+    await screen.findByRole("button", { name: "finance_orders" }),
+  ).toBeTruthy();
+
+  await act(async () => {
+    pendingTables.resolve(Response.json([table("dwd", "orders")]));
+    await pendingTables.promise;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+
+  expect(screen.queryByRole("button", { name: "orders" })).toBeNull();
+  expect(screen.getByRole("button", { name: "finance_orders" })).toBeTruthy();
 });
