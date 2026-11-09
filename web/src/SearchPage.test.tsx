@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -40,6 +41,14 @@ const projects = [
   project("default", "业务数据"),
   project("docs", "Platform Docs", "document"),
 ];
+
+function deferredResponse() {
+  let resolve!: (value: Response) => void;
+  const promise = new Promise<Response>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
 
 beforeEach(() => {
   localStorage.clear();
@@ -294,4 +303,63 @@ test("只有一个可访问项目时仍显示项目选择器，请求带该项�
       ),
     ).toBe(true),
   );
+});
+
+test("切换项目清空旧类别并丢弃迟到的类别响应", async () => {
+  const pendingCategories = deferredResponse();
+  const fetcher = vi.fn(async (url: string) => {
+    if (url === "/api/v1/projects")
+      return Response.json([
+        project("default", "业务数据"),
+        project("finance", "财务数据"),
+      ]);
+    if (url.startsWith("/api/v1/categories")) {
+      const projectId =
+        new URL(url, "http://localhost").searchParams.get("project") ?? "";
+      return projectId === "default"
+        ? pendingCategories.promise
+        : Response.json([
+            {
+              name: "财务",
+              ref: "category:finance",
+              description: "",
+              documents: [],
+            },
+          ]);
+    }
+    return Response.json([]);
+  });
+  vi.stubGlobal("fetch", fetcher);
+  render(<SearchPage token="token" messages={getMessages("zh")} />);
+
+  await waitFor(() =>
+    expect(
+      fetcher.mock.calls.some(
+        ([url]) =>
+          String(url).startsWith("/api/v1/categories?") &&
+          String(url).includes("project=default"),
+      ),
+    ).toBe(true),
+  );
+  fireEvent.mouseDown(screen.getByRole("combobox", { name: "项目" }));
+  fireEvent.click(await screen.findByTitle("财务数据"));
+  expect(await screen.findByRole("option", { name: "财务" })).toBeTruthy();
+
+  await act(async () => {
+    pendingCategories.resolve(
+      Response.json([
+        {
+          name: "旧类别",
+          ref: "category:old",
+          description: "",
+          documents: [],
+        },
+      ]),
+    );
+    await pendingCategories.promise;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+
+  expect(screen.queryByRole("option", { name: "旧类别" })).toBeNull();
+  expect(screen.getByRole("option", { name: "财务" })).toBeTruthy();
 });
