@@ -832,6 +832,48 @@ def test_recovery_ignores_residual_records_for_a_recreated_project(client, monke
     assert project_context.project_source_directory(project_id).exists()
 
 
+def test_recovery_does_not_delete_a_project_with_a_failed_residual_record(
+    client, monkeypatch
+):
+    c, admin = client
+    project = create_project(c, admin, "Failed Residual Docs")
+    project_id = project["id"]
+    seed_project_data(project_id, admin, conversation_id="survivor")
+
+    from semantica_dataagent import project_context, project_deletion
+    from semantica_dataagent.db import (
+        Conversation,
+        KnowledgeGeneration,
+        Project,
+        ProjectDeletion,
+        sessions,
+    )
+
+    with sessions().begin() as db:
+        db.add(
+            ProjectDeletion(
+                project_id=project_id,
+                project_name=project["name"],
+                status="failed",
+                step="milvus",
+                steps=json.dumps([{"name": "source", "status": "succeeded"}]),
+                requested_by="owner",
+            )
+        )
+
+    for name in ("_delete_neo4j", "_delete_milvus", "_cleanup_attachments"):
+        monkeypatch.setattr(project_deletion, name, lambda *args: None)
+    project_deletion.recover_project_deletions()
+
+    with sessions()() as db:
+        assert db.get(Project, project_id).status == "active"
+        assert db.get(KnowledgeGeneration, f"{project_id}_gen") is not None
+        assert db.get(Conversation, "survivor") is not None
+    assert project_context.project_source_directory(project_id).exists(), (
+        "恢复流程因失败残留记录清理了非删除状态的项目"
+    )
+
+
 def test_cannot_create_the_same_id_while_the_old_deletion_is_in_progress(
     client, monkeypatch
 ):
