@@ -34,7 +34,7 @@ from .db import (
 )
 from .dtb_executor import column_names
 from .plugins import ExecutorAuthenticationError, ExecutorError, configured
-from .project_context import ARCHIVED_DETAIL, FROZEN_STATUSES
+from .project_api import require_query_project_access
 
 router = APIRouter()
 
@@ -527,14 +527,18 @@ async def _execute(
     user: Requester,
     audit_id: str,
 ):
-    plugin, config = _config()
-    limit = body.limit if body.limit is not None else config.get("row_limit", 1000)
-    if limit > config.get("row_limit", 1000):
-        raise HTTPException(422, "超过返回行数上限")
     with sessions().begin() as db:
         row = db.get(QueryExecution, query_id)
         if row is None or row.owner_id != user.id:
             raise HTTPException(404, "查询不存在")
+        saved_plan = json.loads(row.plan_data) if row.plan_data else {}
+        require_query_project_access(
+            db, saved_plan.get("project_id") or "default", user
+        )
+        plugin, config = _config()
+        limit = body.limit if body.limit is not None else config.get("row_limit", 1000)
+        if limit > config.get("row_limit", 1000):
+            raise HTTPException(422, "超过返回行数上限")
         cutoff = datetime.now(UTC) - timedelta(
             seconds=config.get("confirmation_ttl_seconds", 1800)
         )
@@ -545,7 +549,6 @@ async def _execute(
             raise HTTPException(400, "请先在个人设置中保存 DTB token")
         token = decrypt(secret.encrypted_token)
         sql = row.sql
-        saved_plan = json.loads(row.plan_data) if row.plan_data else {}
         claimed = db.execute(
             update(QueryExecution)
             .where(
@@ -718,18 +721,14 @@ def get_result(query_id: str, user: Annotated[Requester, Depends(current_request
         }
 
 
-def _require_query_project_open(db, row) -> None:
-    """Download access follows the conversation's project archive state."""
-    from .db import Conversation, Project
+def _plan_project_id(row) -> str:
+    plan = json.loads(row.plan_data) if row.plan_data else {}
+    return plan.get("project_id") or "default"
 
-    project_id = "default"
-    if row.conversation_id:
-        conversation = db.get(Conversation, row.conversation_id)
-        if conversation is not None:
-            project_id = conversation.project_id
-    project = db.get(Project, project_id)
-    if project is not None and project.status in FROZEN_STATUSES:
-        raise HTTPException(status_code=409, detail=ARCHIVED_DETAIL)
+
+def _require_query_project_access(db, row, user: Requester) -> None:
+    """All query access follows the project recorded on the plan itself."""
+    require_query_project_access(db, _plan_project_id(row), user)
 
 
 DOWNLOAD_LINK_TTL_SECONDS = 30 * 60
@@ -746,7 +745,9 @@ def _download_signature(query_id: str, format: str, expires: int) -> str:
     return hmac.new(key, message, hashlib.sha256).hexdigest()
 
 
-def _audit_download(owner_id: str, query_id: str, format: str, kind: str) -> None:
+def _audit_download(
+    owner_id: str, query_id: str, format: str, kind: str, status="succeeded"
+) -> None:
     with sessions().begin() as db:
         db.add(
             QueryAudit(
@@ -754,7 +755,7 @@ def _audit_download(owner_id: str, query_id: str, format: str, kind: str) -> Non
                 owner_id=owner_id,
                 sql=json.dumps({"query_id": query_id, "format": format}),
                 kind=kind,
-                status="succeeded",
+                status=status,
                 row_count=None,
                 elapsed_ms=0,
             )
@@ -763,11 +764,24 @@ def _audit_download(owner_id: str, query_id: str, format: str, kind: str) -> Non
 
 def _download_links(query_id: str, user: Requester, base: str) -> dict[str, str]:
     _cleanup_expired_conversation_results(query_id, user)
+    denial = None
     with sessions()() as db:
         row = db.get(QueryExecution, query_id)
         if row is None or row.owner_id != user.id or row.status != "succeeded":
             raise HTTPException(404, "查询结果不存在")
-        _require_query_project_open(db, row)
+        try:
+            _require_query_project_access(db, row, user)
+        except HTTPException as exc:
+            denial = exc
+    if denial is not None:
+        _audit_download(
+            user.id,
+            query_id,
+            "all",
+            "download_link_created",
+            f"rejected_{denial.status_code}",
+        )
+        raise denial
     expires = int(time.time()) + DOWNLOAD_LINK_TTL_SECONDS
     links = {}
     for fmt in DOWNLOAD_FORMATS:
@@ -800,12 +814,27 @@ async def download_link(query_id: str, format: str, expires: str, signature: str
         )
     ):
         raise HTTPException(404, "查询结果不存在")
+    denial = None
+    owner_id = None
     with sessions()() as db:
         row = db.get(QueryExecution, query_id)
         if row is None:
             raise HTTPException(404, "查询结果不存在")
-        _require_query_project_open(db, row)
+        owner_id = row.owner_id
         user = Requester(id=row.owner_id, role="user", token="")
+        try:
+            _require_query_project_access(db, row, user)
+        except HTTPException as exc:
+            denial = exc
+    if denial is not None:
+        _audit_download(
+            owner_id,
+            query_id,
+            format,
+            "download_link_used",
+            f"rejected_{denial.status_code}",
+        )
+        raise denial
     response = await download(query_id, user, format)
     _audit_download(user.id, query_id, format, "download_link_used")
     return response
@@ -818,62 +847,77 @@ async def download(
     format: Literal["csv", "xlsx", "json"] = "csv",
 ):
     _cleanup_expired_conversation_results(query_id, user)
+    denial = None
     with sessions()() as db:
         row = db.get(QueryExecution, query_id)
         if row is None or row.owner_id != user.id or row.status != "succeeded":
             raise HTTPException(404, "查询结果不存在")
-        _require_query_project_open(db, row)
-        if row.rows and (
-            row.conversation_id is not None
-            or (row.plan_data and json.loads(row.plan_data).get("source") == "mcp")
-        ):
-            saved = json.loads(row.rows)
-            names = column_names(saved["columns"])
-            values = saved["data"]
-            if format == "json":
-                content = json.dumps(
-                    {"columns": names, "rows": values}, ensure_ascii=False
-                ).encode()
-                content_type = "application/json"
-            elif format == "csv":
-                buffer = io.StringIO(newline="")
-                writer = csv.writer(buffer, lineterminator="\n")
-                writer.writerow(names)
-                writer.writerows(values)
-                content, content_type = buffer.getvalue().encode("utf-8"), "text/csv"
-            else:
-                from openpyxl import Workbook
-                from openpyxl.cell import WriteOnlyCell
+        try:
+            _require_query_project_access(db, row, user)
+        except HTTPException as exc:
+            denial = exc
+        if denial is None:
+            if row.rows and (
+                row.conversation_id is not None
+                or (row.plan_data and json.loads(row.plan_data).get("source") == "mcp")
+            ):
+                saved = json.loads(row.rows)
+                names = column_names(saved["columns"])
+                values = saved["data"]
+                if format == "json":
+                    content = json.dumps(
+                        {"columns": names, "rows": values}, ensure_ascii=False
+                    ).encode()
+                    content_type = "application/json"
+                elif format == "csv":
+                    buffer = io.StringIO(newline="")
+                    writer = csv.writer(buffer, lineterminator="\n")
+                    writer.writerow(names)
+                    writer.writerows(values)
+                    content, content_type = (
+                        buffer.getvalue().encode("utf-8"),
+                        "text/csv",
+                    )
+                else:
+                    from openpyxl import Workbook
+                    from openpyxl.cell import WriteOnlyCell
 
-                workbook = Workbook(write_only=True)
-                sheet = workbook.create_sheet()
-                for values_row in [names, *values]:
-                    cells = []
-                    for value in values_row:
-                        if isinstance(value, (dict, list)):
-                            value = json.dumps(value, ensure_ascii=False)
-                        cell = WriteOnlyCell(sheet, value=value)
-                        if isinstance(value, str):
-                            cell.data_type = "s"
-                        cells.append(cell)
-                    sheet.append(cells)
-                buffer = io.BytesIO()
-                workbook.save(buffer)
-                content = buffer.getvalue()
-                content_type = (
-                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    workbook = Workbook(write_only=True)
+                    sheet = workbook.create_sheet()
+                    for values_row in [names, *values]:
+                        cells = []
+                        for value in values_row:
+                            if isinstance(value, (dict, list)):
+                                value = json.dumps(value, ensure_ascii=False)
+                            cell = WriteOnlyCell(sheet, value=value)
+                            if isinstance(value, str):
+                                cell.data_type = "s"
+                            cells.append(cell)
+                        sheet.append(cells)
+                    buffer = io.BytesIO()
+                    workbook.save(buffer)
+                    content = buffer.getvalue()
+                    content_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                return Response(
+                    content,
+                    media_type=content_type,
+                    headers={
+                        "Content-Disposition": f'attachment; filename="query.{format}"'
+                    },
                 )
-            return Response(
-                content,
-                media_type=content_type,
-                headers={
-                    "Content-Disposition": f'attachment; filename="query.{format}"'
-                },
-            )
-        secret = db.get(PersonalDtbToken, user.id)
-        if secret is None:
-            raise HTTPException(400, "请先在个人设置中保存 DTB token")
-        key, token = row.query_key, decrypt(secret.encrypted_token)
+            secret = db.get(PersonalDtbToken, user.id)
+            if secret is None:
+                raise HTTPException(400, "请先在个人设置中保存 DTB token")
+            key, token = row.query_key, decrypt(secret.encrypted_token)
+    if denial is not None:
+        _audit_download(
+            user.id,
+            query_id,
+            format,
+            "download",
+            f"rejected_{denial.status_code}",
+        )
+        raise denial
     plugin, config = _config()
     try:
         async with asyncio.timeout(config.get("timeout_seconds", 300)):

@@ -162,6 +162,32 @@ def _accessible_project_ids(db, requester: Requester) -> list[str]:
     return [row.id for row in _accessible_projects_query(db, requester)]
 
 
+def require_query_project_access(
+    db,
+    project_id: str,
+    requester: Requester,
+    *,
+    not_found_detail: str = "查询不存在",
+) -> Project:
+    """Recheck a saved query's project against the caller's current authority.
+
+    The project id comes from the query plan itself.  Access requires an
+    existing project, a non-revoked token, and either the system administrator
+    role or a current membership row.  Archived and deleting projects are
+    frozen.  Kept here so REST, conversation, MCP and download entries share
+    one rule.
+    """
+    token = db.query(Token).filter(Token.id == requester.id).one_or_none()
+    project = db.get(Project, project_id)
+    if token is None or token.revoked or project is None:
+        raise HTTPException(status_code=404, detail=not_found_detail)
+    if token.role != "admin" and db.get(ProjectMember, (project_id, token.id)) is None:
+        raise HTTPException(status_code=404, detail=not_found_detail)
+    if project.status in FROZEN_STATUSES:
+        raise HTTPException(status_code=409, detail=ARCHIVED_DETAIL)
+    return project
+
+
 def _resolve_project_context(
     project_id: str | None, requester: Requester, *, allow_frozen: bool = False
 ) -> ProjectContext:
