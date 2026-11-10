@@ -1,11 +1,33 @@
 """Security contract for Kubernetes agent sessions and namespace permissions."""
 
 import importlib.util
+import shutil
+import subprocess
 from pathlib import Path
 
+import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+def _docker_available():
+    if shutil.which("docker") is None:
+        return False
+    try:
+        return (
+            subprocess.run(
+                ["docker", "info"], capture_output=True, check=False
+            ).returncode
+            == 0
+        )
+    except OSError:
+        return False
+
+
+def _require_docker():
+    if not _docker_available():
+        pytest.skip("Docker daemon is required")
 
 
 def pod_spec():
@@ -211,14 +233,9 @@ def test_pod_rejects_workspace_traversal_and_credentialed_urls():
 
 
 def test_session_upload_extracts_into_existing_root_owned_mounts(tmp_path):
-    import subprocess
-
-    import pytest
-
     from semantica_dataagent.k8s_sandbox import KubernetesSessionSandbox
 
-    if subprocess.run(["docker", "info"], capture_output=True, check=False).returncode:
-        pytest.skip("Docker daemon is required")
+    _require_docker()
     (tmp_path / "work" / "config").mkdir(parents=True)
     (tmp_path / "sessions").mkdir()
     (tmp_path / "work" / "config" / "models.json").write_text("{}")
@@ -261,6 +278,76 @@ def test_session_upload_extracts_into_existing_root_owned_mounts(tmp_path):
 
     runtime._transfer = extract
     runtime._upload()
+
+
+def test_session_upload_skips_when_docker_command_is_missing(monkeypatch, tmp_path):
+    calls = []
+    original_run = subprocess.run
+
+    def record(*args, **kwargs):
+        calls.append(args)
+        return original_run(*args, **kwargs)
+
+    monkeypatch.setattr(shutil, "which", lambda command: None)
+    monkeypatch.setattr(subprocess, "run", record)
+    with pytest.raises(pytest.skip.Exception, match="Docker daemon is required"):
+        test_session_upload_extracts_into_existing_root_owned_mounts(tmp_path)
+    assert calls == []
+
+
+def test_session_upload_skips_when_docker_daemon_is_unavailable(monkeypatch, tmp_path):
+    calls = []
+
+    def unavailable(argv, **kwargs):
+        calls.append(argv)
+        return subprocess.CompletedProcess(argv, 1, stderr=b"daemon unavailable")
+
+    monkeypatch.setattr(shutil, "which", lambda command: "/usr/bin/docker")
+    monkeypatch.setattr(subprocess, "run", unavailable)
+    with pytest.raises(pytest.skip.Exception, match="Docker daemon is required"):
+        test_session_upload_extracts_into_existing_root_owned_mounts(tmp_path)
+    assert calls == [["docker", "info"]]
+
+
+def test_session_upload_uses_docker_run_when_docker_is_available(monkeypatch, tmp_path):
+    calls = []
+
+    def available(argv, **kwargs):
+        calls.append((argv, kwargs))
+        return subprocess.CompletedProcess(argv, 0, stderr=b"")
+
+    monkeypatch.setattr(shutil, "which", lambda command: "/usr/bin/docker")
+    monkeypatch.setattr(subprocess, "run", available)
+    test_session_upload_extracts_into_existing_root_owned_mounts(tmp_path)
+    assert [argv for argv, _ in calls] == [
+        ["docker", "info"],
+        [
+            "docker",
+            "run",
+            "--rm",
+            "-i",
+            "--network",
+            "none",
+            "--user",
+            "65534:65534",
+            "--tmpfs",
+            "/workspace:rw,mode=1777",
+            "--tmpfs",
+            "/sessions:rw,mode=1777",
+            "--entrypoint",
+            "tar",
+            "semantica-dataagent-agent-runner:1.2.0",
+            "--no-overwrite-dir",
+            "--no-same-owner",
+            "-xf",
+            "-",
+            "-C",
+            "/",
+        ],
+    ]
+    payload = calls[1][1]["input"]
+    assert b"workspace/config/models.json" in payload
+    assert b"sessions/saved.jsonl" in payload
 
 
 def test_session_upload_preserves_mount_root_and_nested_files(tmp_path):
