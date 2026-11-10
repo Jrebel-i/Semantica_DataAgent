@@ -202,7 +202,20 @@ def _parser() -> argparse.ArgumentParser:
     execution.add_argument("--only")
     execution.add_argument("--project")
     execution.add_argument("--max-queries", type=int, default=40)
-    execution.add_argument("--skip-reference", action="store_true")
+    execution.add_argument(
+        "--skip-reference",
+        action="store_true",
+        help="skip executing reference SQL; required with --collect-unconfirmed",
+    )
+    execution.add_argument(
+        "--collect-unconfirmed",
+        "--collect-only",
+        dest="collect_unconfirmed",
+        action="store_true",
+        help="collect trajectories for answer_confirmed=false questions; requires "
+        "--skip-reference and never counts toward accuracy, consistency, or the "
+        "comparable-question denominator",
+    )
     execution.add_argument(
         "--web-url",
         help="external browser origin used for conversation links, for example "
@@ -235,10 +248,18 @@ def _parser() -> argparse.ArgumentParser:
     split.add_argument("--holdout-size", type=int)
     split.add_argument("--holdout-ratio", type=float, default=0.3)
     report = commands.add_parser(
-        "eval-report", help="merge human failure categories into an eval-exec report"
+        "eval-report",
+        help="merge verified failure categories or evidence-backed collect-only "
+        "observations into an eval-exec report",
     )
     report.add_argument("--report", required=True, type=Path)
-    report.add_argument("--categories", required=True, type=Path)
+    report.add_argument(
+        "--categories",
+        required=True,
+        type=Path,
+        help="YAML mapping/object list; collect-only entries accept an optional "
+        "evidence string and are reported as unverified human observations",
+    )
     report.add_argument(
         "--web-url",
         help="external browser origin used to add or refresh conversation links; "

@@ -85,6 +85,111 @@ def _detail(response):
     return text[:DETAIL_LIMIT]
 
 
+def _is_collect_only(entry):
+    """True for an answer_confirmed=false question collected without a reference."""
+    return bool(entry.get("collect_only"))
+
+
+def _observed_failure_summary(entries):
+    """Human observations for collect-only questions; never a verified verdict."""
+    counts = Counter(
+        entry["observed_failure_category"]
+        for entry in entries
+        if _is_collect_only(entry) and entry.get("observed_failure_category")
+    )
+    return dict(sorted(counts.items()))
+
+
+def _volatility_state(entry):
+    """Return (state, reason) from repeated comparison evidence.
+
+    Stability needs comparable evidence. A proven disagreement is volatile even
+    when other runs are uncomparable; a single comparable value cannot establish
+    stability while comparable evidence is missing from the other runs.
+    """
+    runs = entry.get("runs")
+    if isinstance(runs, list) and runs:
+        comparisons = [
+            run.get("comparison") if isinstance(run, dict) else None for run in runs
+        ]
+    else:
+        counts = entry.get("comparison_counts")
+        if isinstance(counts, dict) and counts:
+            comparisons = [
+                key
+                for key, value in counts.items()
+                for _ in range(value if isinstance(value, int) and value > 0 else 0)
+            ]
+        else:
+            comparisons = None
+    if comparisons is not None:
+        comparable = [item for item in comparisons if item in ("equal", "different")]
+        if not comparable:
+            return "unknown", "no_comparable_runs"
+        if len(set(comparable)) > 1:
+            return "volatile", "comparable_runs_disagree"
+        if len(comparable) == len(comparisons):
+            return "stable", "comparable_runs_agree"
+        return "unknown", "incomplete_comparisons"
+    if (
+        entry.get("result") == "uncomparable"
+        or entry.get("comparison") == "uncomparable"
+    ):
+        return "unknown", "no_comparable_runs"
+    state = entry.get("volatility")
+    if state == "volatile":
+        return state, "legacy_volatile"
+    if state == "stable":
+        return state, "legacy_stable"
+    if state == "unknown":
+        return state, "legacy_unknown"
+    volatile = entry.get("volatile")
+    if volatile is None:
+        return "unknown", "no_comparison_evidence"
+    if volatile:
+        return "volatile", "legacy_volatile"
+    return "stable", "legacy_stable"
+
+
+def _apply_volatility(entry):
+    """Store tri-state volatility while retaining comparison evidence in runs."""
+    state, reason = _volatility_state(entry)
+    entry["volatility"] = state
+    entry["volatile"] = None if state == "unknown" else state == "volatile"
+    entry["volatility_reason"] = reason
+
+
+def _normalize_attribution(entry):
+    """Keep verified and collect-only human observations in separate fields."""
+    if _is_collect_only(entry):
+        previous = entry.get("failure_category")
+        if previous and not entry.get("observed_failure_category"):
+            entry["observed_failure_category"] = previous
+        entry["failure_category"] = None
+        entry["observed_failure_category"] = (
+            entry.get("observed_failure_category") or None
+        )
+        entry["observed_failure_evidence"] = (
+            entry.get("observed_failure_evidence") or None
+        )
+    else:
+        entry["observed_failure_category"] = None
+        entry["observed_failure_evidence"] = None
+
+
+def _volatility_label(entry):
+    state = entry.get("volatility")
+    if state == "volatile":
+        return "是"
+    if state == "stable":
+        return "否"
+    if state == "unknown":
+        if entry.get("volatility_reason") == "no_comparable_runs":
+            return "未知（无可比较结果）"
+        return "未知（比较结果不完整）"
+    return "未知（缺少比较证据）"
+
+
 def _sql(value):
     if isinstance(value, str):
         return value if value.strip() else None
@@ -196,7 +301,7 @@ def _execute(client, sql):
         return failure("DTB 或服务错误")
 
 
-def _answer(client, question, args):
+def _answer(client, question, args, *, collect_only=False):
     first = _ask(
         client,
         {
@@ -208,19 +313,34 @@ def _answer(client, question, args):
         project=getattr(args, "project", None),
     )
     tool_calls = list(first["tool_calls"])
+    clarification_received = bool(first["clarification"])
     if first["sql"]:
         return {
             "sql": first["sql"],
-            "clarified": False,
+            "clarified": clarification_received,
+            "clarification_received": clarification_received,
+            "clarification_followed_up": False,
             "via_plan": first["via_plan"],
             "conversation_id": first["conversation_id"],
             "tool_calls": tool_calls,
         }
     conversation_id = first["conversation_id"]
-    if not first["clarification"] or not conversation_id:
+    if not clarification_received or not conversation_id:
         return {
             "sql": None,
-            "clarified": False,
+            "clarified": clarification_received,
+            "clarification_received": clarification_received,
+            "clarification_followed_up": False,
+            "via_plan": False,
+            "conversation_id": conversation_id,
+            "tool_calls": tool_calls,
+        }
+    if collect_only:
+        return {
+            "sql": None,
+            "clarified": True,
+            "clarification_received": True,
+            "clarification_followed_up": False,
             "via_plan": False,
             "conversation_id": conversation_id,
             "tool_calls": tool_calls,
@@ -237,6 +357,8 @@ def _answer(client, question, args):
     return {
         "sql": second["sql"],
         "clarified": True,
+        "clarification_received": True,
+        "clarification_followed_up": True,
         "via_plan": second["via_plan"],
         "conversation_id": conversation_id,
         "tool_calls": tool_calls,
@@ -424,31 +546,47 @@ def _coverage(entries):
                 "tie": 0,
                 "uncomparable": 0,
                 "volatile": 0,
+                "volatility_unknown": 0,
                 "failure_categories": {},
+                "observed_failure_categories": {},
             },
         )
         item["total"] += 1
         item[entry["result"]] += 1
-        if entry["volatile"]:
+        if entry.get("volatile") is True:
             item["volatile"] += 1
+        if entry.get("volatility") == "unknown":
+            item["volatility_unknown"] += 1
         failure_category = entry.get("failure_category")
-        if failure_category:
+        if failure_category and not _is_collect_only(entry):
             item["failure_categories"][failure_category] = (
                 item["failure_categories"].get(failure_category, 0) + 1
             )
+        observed = entry.get("observed_failure_category")
+        if observed and _is_collect_only(entry):
+            observed_categories = item["observed_failure_categories"]
+            observed_categories[observed] = observed_categories.get(observed, 0) + 1
+        if _is_collect_only(entry):
+            item["collect_only"] = item.get("collect_only", 0) + 1
     return dict(sorted(coverage.items()))
 
 
 def _failure_summary(entries):
     counts = Counter(
-        entry["failure_category"] for entry in entries if entry.get("failure_category")
+        entry["failure_category"]
+        for entry in entries
+        if entry.get("failure_category") and not _is_collect_only(entry)
     )
     return dict(sorted(counts.items()))
 
 
 def _recompute_summaries(report):
     entries = report.get("questions") or []
+    for entry in entries:
+        _normalize_attribution(entry)
+        _apply_volatility(entry)
     report["failure_categories"] = _failure_summary(entries)
+    report["observed_failure_categories"] = _observed_failure_summary(entries)
     coverage = _coverage(entries)
     report["coverage"] = coverage
     report["evaluation_coverage"] = _coverage(entries)
@@ -485,9 +623,21 @@ def _recompute_summaries(report):
                 or None
             )
     metrics = report.setdefault("metrics", {})
-    classified = sum(bool(entry.get("failure_category")) for entry in entries)
+    metrics["volatile"] = sum(entry.get("volatile") is True for entry in entries)
+    metrics["volatility_unknown"] = sum(
+        entry.get("volatility") == "unknown" for entry in entries
+    )
+    scorable = [entry for entry in entries if not _is_collect_only(entry)]
+    classified = sum(bool(entry.get("failure_category")) for entry in scorable)
     metrics["classified"] = classified
-    metrics["unclassified"] = len(entries) - classified
+    metrics["unclassified"] = len(scorable) - classified
+    collect_only = [entry for entry in entries if _is_collect_only(entry)]
+    if collect_only or report.get("collect_unconfirmed"):
+        metrics["confirmed_questions"] = len(scorable)
+        metrics["collected_only_questions"] = len(collect_only)
+        metrics["collected_only_runs"] = sum(
+            entry.get("run_count", 0) for entry in collect_only
+        )
     return report
 
 
@@ -505,10 +655,20 @@ def render_report(report):
     ]
     lines += [f"- {key}: {value}" for key, value in metrics.items()]
     lines += ["", "## 未确认答案（不参与评测）", ""]
+    collected = report.get("collected_unconfirmed") or []
     excluded = report.get("excluded_unconfirmed") or []
+    if collected:
+        lines += [
+            (
+                "仅采集，不计入正确率、结果一致率或可比较分母；参考 SQL 未执行，"
+                "缺少参考依据的条件列比较与失败归因不作为已验证结论："
+            )
+        ]
+        lines += [f"- {question_id}" for question_id in collected]
     if excluded:
+        lines += ["按默认规则排除："] if collected else []
         lines += [f"- {question_id}" for question_id in excluded]
-    else:
+    if not collected and not excluded:
         lines.append("无。")
     lines += ["", "## 不可比题目（不计入一致率分母）", ""]
     uncomparable = report.get("excluded_uncomparable") or []
@@ -529,7 +689,7 @@ def render_report(report):
     lines += [f"- {key}: {value}" for key, value in failures.items()]
     if not failures:
         lines.append("无。")
-    lines += ["", "## 失败分类汇总", ""]
+    lines += ["", "## 已确认题失败分类汇总", ""]
     categories = report.get("failure_categories") or {}
     if categories:
         lines += ["| 分类 | 题数 |", "| --- | --- |"]
@@ -538,6 +698,30 @@ def render_report(report):
         lines.append(
             "尚未填写。用 `eval-report --report <报告前缀> --categories <分类文件>` 合并。"
         )
+    lines.append("仅统计 `answer_confirmed=true` 且进入评测的题。")
+
+    observed_entries = [
+        entry for entry in entries if entry.get("observed_failure_category")
+    ]
+    lines += ["", "## 仅采集题人工观察（答案未验证）", ""]
+    lines.append(
+        "以下分类是对执行轨迹的人工分析，不是参考 SQL 验证出的结果判定；"
+        "不可据此宣称答案正确或错误，不进入正确率、结果一致率、可比较题或"
+        "已确认题分母。"
+    )
+    if observed_entries:
+        lines += [
+            "",
+            "| 题号 | 人工观察分类 | 依据 |",
+            "| --- | --- | --- |",
+        ]
+        lines += [
+            f"| {entry['id']} | {_cell(entry['observed_failure_category'])} | "
+            f"{_cell(entry.get('observed_failure_evidence')) or '未提供（仅依据人工复核）'} |"
+            for entry in observed_entries
+        ]
+    else:
+        lines.append("无。")
     question_set = report.get("question_set_coverage") or {}
     legacy_report = question_set.get("source") == "report_questions"
     lines += [
@@ -611,21 +795,35 @@ def render_report(report):
     )
     if coverage:
         lines += [
-            "| category | 题数 | 答对 | 答错 | 平局 | 不可比 | 波动 | 失败分类 |",
-            "| --- | --- | --- | --- | --- | --- | --- | --- |",
+            (
+                "| category | 题数 | 答对 | 答错 | 平局 | 不可比 | 波动 | 波动未知 | "
+                "已验证失败分类 | 仅采集人工观察 |"
+            ),
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
         ]
         for category, item in coverage.items():
             detail = ", ".join(
                 f"{key}: {value}"
                 for key, value in item.get("failure_categories", {}).items()
             )
+            observed_detail = ", ".join(
+                f"{key}: {value}"
+                for key, value in item.get("observed_failure_categories", {}).items()
+            )
             lines.append(
                 f"| {_cell(category)} | {item['total']} | {item['correct']} | "
                 f"{item['wrong']} | {item['tie']} | {item.get('uncomparable', 0)} | "
-                f"{item['volatile']} | {_cell(detail) or '—'} |"
+                f"{item['volatile']} | {item.get('volatility_unknown', 0)} | "
+                f"{_cell(detail) or '—'} | {_cell(observed_detail) or '—'} |"
             )
     else:
         lines.append("无已评测题目。")
+    collected_in_scope = sum(item.get("collect_only", 0) for item in coverage.values())
+    if collected_in_scope:
+        lines.append(
+            f"- 其中仅采集题：{collected_in_scope}"
+            "（计入运行范围，不参与答对、结果一致率或可比较分母）"
+        )
     scope_gaps = report.get("scope_coverage_gaps") or []
     lines += [
         (
@@ -637,16 +835,23 @@ def render_report(report):
     lines += [
         "",
         (
-            "| 题号 | 有 SQL | 澄清 | 查询计划 | agent 执行 | 参考执行 | 一致性 | "
+            "| 题号 | 有 SQL | 收到澄清 | 自动追问 | 查询计划 | agent 执行 | 参考执行 | 一致性 | "
             "缺失条件列 | agent 列数 | 参考列数 | agent detail | 参考 detail |"
         ),
-        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for entry in entries:
         missing = entry["missing_condition_columns"]
         missing_text = "—" if missing is None else ", ".join(missing) or "—"
+        clarification_received = entry.get(
+            "clarification_received", entry.get("clarified", False)
+        )
+        clarification_followed_up = entry.get(
+            "clarification_followed_up", entry.get("clarified", False)
+        )
         lines.append(
-            f"| {entry['id']} | {entry['agent_sql']} | {entry['clarified']} | "
+            f"| {entry['id']} | {entry['agent_sql']} | "
+            f"{clarification_received} | {clarification_followed_up} | "
             f"{entry['via_plan']} | {entry['agent']} | {entry['reference']} | "
             f"{entry['comparison']} | {_cell(missing_text)} | "
             f"{entry['agent_column_count'] if entry['agent_column_count'] is not None else '—'} | "
@@ -656,6 +861,12 @@ def render_report(report):
         )
     lines += ["", "## 逐题明细", ""]
     for entry in entries:
+        clarification_received = entry.get(
+            "clarification_received", entry.get("clarified", False)
+        )
+        clarification_followed_up = entry.get(
+            "clarification_followed_up", entry.get("clarified", False)
+        )
         lines += [
             f"### {entry['id']}（{entry.get('category') or DEFAULT_CATEGORY} · {entry.get('split', 'dev')}）",
             "",
@@ -665,9 +876,42 @@ def render_report(report):
                 f"- 判定：{entry['result']}（{entry['equal_runs']}/{entry['run_count']} 遍一致，"
                 f"{entry.get('comparable_runs', 0)} 遍可比较）"
             ),
-            f"- 波动题：{'是' if entry['volatile'] else '否'}",
-            f"- failure_category：{entry.get('failure_category') or '未填写'}",
+            (
+                "- 收到澄清："
+                f"{'是' if clarification_received else '否'}（"
+                f"{entry.get('clarification_received_runs', entry.get('clarified_runs', 0))}"
+                f"/{entry['run_count']} 遍）"
+            ),
+            (
+                "- 自动追问："
+                f"{'是' if clarification_followed_up else '否'}（"
+                f"{entry.get('clarification_followed_up_runs', 0)}"
+                f"/{entry['run_count']} 遍）"
+            ),
+            f"- 波动题：{_volatility_label(entry)}",
+            (
+                "- failure_category：不适用（仅采集题不使用已验证分类）"
+                if entry.get("collect_only")
+                else f"- failure_category：{entry.get('failure_category') or '未填写'}"
+            ),
         ]
+        if entry.get("collect_only"):
+            lines += [
+                (
+                    "- 人工观察分类："
+                    f"{entry.get('observed_failure_category') or '未填写'}"
+                ),
+                (
+                    "- 人工观察证据："
+                    f"{entry.get('observed_failure_evidence') or '未提供（仅依据人工复核）'}"
+                ),
+                (
+                    "- 仅采集：是（answer_confirmed=false；人工观察是对执行轨迹的分析，"
+                    "答案仍未验证，不可据此宣称结果正确或错误，不进入正确率、结果一致率、"
+                    "可比较题或已确认题分母；参考 SQL 未执行；收到澄清后不自动发送题集"
+                    "口径，保留会话与已有轨迹）"
+                ),
+            ]
         if entry.get("uncomparable_reason"):
             lines.append(f"- 不可比原因：{entry['uncomparable_reason']}")
         for run in entry["runs"]:
@@ -693,6 +937,12 @@ def render_report(report):
                 f"- 参考 SQL：`{_cell(run.get('reference_sql'))}`",
                 f"- 工具调用：{calls or '无'}",
                 f"- 一致性：{run['comparison']}",
+                (
+                    "- 收到澄清："
+                    f"{run.get('clarification_received', run.get('clarified', False))}；"
+                    "自动追问："
+                    f"{run.get('clarification_followed_up', run.get('clarified', False))}"
+                ),
             ]
         lines.append("")
     return "\n".join(lines).rstrip() + "\n"
@@ -720,16 +970,42 @@ def _load_categories(path):
         for row in payload:
             if not isinstance(row, dict) or not row.get("id"):
                 raise SystemExit("分类文件里的每一项都必须包含 id")
-            items.append((row["id"], row.get("failure_category")))
+            items.append(
+                (
+                    row["id"],
+                    {
+                        "failure_category": row.get("failure_category"),
+                        "evidence": row.get("evidence"),
+                    },
+                )
+            )
     else:
         raise SystemExit("分类文件必须是 id 到分类的映射或对象列表")
-    for question_id, category in items:
+    for question_id, value in items:
+        if isinstance(value, dict):
+            category = value.get("failure_category")
+            evidence = value.get("evidence")
+        else:
+            category = value
+            evidence = None
         if category in (None, ""):
-            mapping[str(question_id)] = None
-            continue
-        if not isinstance(category, str) or category not in FAILURE_CATEGORIES:
+            category = None
+        elif not isinstance(category, str) or category not in FAILURE_CATEGORIES:
             raise SystemExit(f"未知失败分类：{category}")
-        mapping[str(question_id)] = category
+        if evidence in (None, ""):
+            evidence = None
+        elif not isinstance(evidence, str):
+            raise SystemExit(f"{question_id} 的 evidence 必须是非空字符串")
+        else:
+            evidence = evidence.strip() or None
+        if evidence and not category:
+            raise SystemExit(
+                f"{question_id} 的 evidence 必须与 failure_category 一起提供"
+            )
+        mapping[str(question_id)] = {
+            "failure_category": category,
+            "evidence": evidence,
+        }
     return mapping
 
 
@@ -751,8 +1027,21 @@ def run_report(args):
         raise SystemExit(f"分类文件包含未知题号：{', '.join(unknown)}")
     for entry in report["questions"]:
         question_id = str(entry.get("id"))
-        if question_id in mapping:
-            entry["failure_category"] = mapping[question_id]
+        if question_id not in mapping:
+            continue
+        item = mapping[question_id]
+        category = item["failure_category"]
+        evidence = item["evidence"]
+        if _is_collect_only(entry):
+            entry["failure_category"] = None
+            entry["observed_failure_category"] = category
+            entry["observed_failure_evidence"] = evidence if category else None
+        else:
+            if evidence:
+                raise SystemExit(
+                    f"{question_id} 是已确认题，evidence 只用于仅采集题的人工观察归因"
+                )
+            entry["failure_category"] = category
     _recompute_summaries(report)
     write_report(args.report, report)
     return 0
@@ -763,6 +1052,13 @@ def run_cli(args):
     if not token:
         raise SystemExit("指定的 token 环境变量为空或不存在")
     web_url = _normalize_web_url(getattr(args, "web_url", None))
+    collect_unconfirmed = bool(getattr(args, "collect_unconfirmed", False))
+    skip_reference = bool(getattr(args, "skip_reference", False))
+    if collect_unconfirmed and not skip_reference:
+        raise SystemExit(
+            "--collect-unconfirmed 必须与 --skip-reference 一起使用："
+            "未确认参考答案只采集，不能发送执行接口"
+        )
     questions = load_questions(args.questions)
     question_set = _question_set_coverage(questions)
     repeat = getattr(args, "repeat", 1)
@@ -779,8 +1075,9 @@ def run_cli(args):
     )
     unconfirmed = [question for question in questions if not question.answer_confirmed]
     confirmed = [question for question in questions if question.answer_confirmed]
+    candidates = questions if collect_unconfirmed else confirmed
     selected = (
-        confirmed if split == "all" else [q for q in confirmed if q.split == split]
+        candidates if split == "all" else [q for q in candidates if q.split == split]
     )
     if args.only:
         only = set(args.only.split(","))
@@ -791,9 +1088,7 @@ def run_cli(args):
                 raise SystemExit("--only 的题号不在所选 split 或已被排除")
             raise SystemExit("--only 包含未知题号")
         selected = [question for question in selected if question.id in only]
-    needed = len(selected) * (
-        repeat + (0 if getattr(args, "skip_reference", False) else 1)
-    )
+    needed = len(selected) * (repeat + (0 if skip_reference else 1))
     if args.max_queries < 0 or needed > args.max_queries:
         raise SystemExit("题目可能超过 --max-queries 上限")
     entries = []
@@ -803,17 +1098,18 @@ def run_cli(args):
         timeout=600,
     ) as client:
         for question in selected:
+            collect_only = not question.answer_confirmed
             reference = (
-                _execute(client, question.reference_sql)
-                if not getattr(args, "skip_reference", False)
-                else {"status": "skipped"}
+                {"status": "skipped"}
+                if skip_reference or collect_only
+                else _execute(client, question.reference_sql)
             )
             reference_truncated = bool(
                 reference.get("result", {}).get("truncated", False)
             )
             runs = []
             for run_number in range(1, repeat + 1):
-                answer = _answer(client, question, args)
+                answer = _answer(client, question, args, collect_only=collect_only)
                 sql = answer["sql"]
                 agent = (
                     _execute(client, sql)
@@ -821,17 +1117,25 @@ def run_cli(args):
                     else {"status": "no_sql", "detail": None}
                 )
                 comparison = "uncomparable"
-                if agent["status"] == reference["status"] == "succeeded":
+                if (
+                    not collect_only
+                    and agent["status"] == reference["status"] == "succeeded"
+                ):
                     comparison = compare_results(agent["result"], reference["result"])
                 truncated = (
                     bool(agent.get("result", {}).get("truncated", False))
                     or reference_truncated
                 )
-                missing = missing_condition_columns(
-                    question.reference_sql, sql, question.dialect
+                missing = (
+                    None
+                    if collect_only
+                    else missing_condition_columns(
+                        question.reference_sql, sql, question.dialect
+                    )
                 )
                 record = {
                     "run": run_number,
+                    "collect_only": collect_only,
                     "conversation_id": answer["conversation_id"],
                     "tool_calls": answer["tool_calls"],
                     "tool_call_sequence": [
@@ -841,6 +1145,8 @@ def run_cli(args):
                     "actual_sql": sql,
                     "agent_sql": bool(sql),
                     "clarified": answer["clarified"],
+                    "clarification_received": answer["clarification_received"],
+                    "clarification_followed_up": answer["clarification_followed_up"],
                     "via_plan": answer["via_plan"],
                     "agent": agent,
                     "reference_status": reference["status"],
@@ -857,12 +1163,23 @@ def run_cli(args):
                 agent.pop("result", None)
                 runs.append(record)
             reference.pop("result", None)
-            equal_runs = sum(run["comparison"] == "equal" for run in runs)
-            result, comparable_runs = _verdict(runs)
-            comparison = _majority_comparison(result)
+            if collect_only:
+                equal_runs = 0
+                result = "uncomparable"
+                comparable_runs = 0
+                comparison = "uncomparable"
+                uncomparable_reason = "answer_confirmed=false"
+            else:
+                equal_runs = sum(run["comparison"] == "equal" for run in runs)
+                result, comparable_runs = _verdict(runs)
+                comparison = _majority_comparison(result)
+                uncomparable_reason = _uncomparable_reason(result, reference)
             display = _display_run(runs, comparison)
             comparisons = dict(Counter(run["comparison"] for run in runs))
-            clarified_runs = sum(run["clarified"] for run in runs)
+            clarified_runs = sum(run["clarification_received"] for run in runs)
+            clarification_followed_up_runs = sum(
+                run["clarification_followed_up"] for run in runs
+            )
             via_plan_runs = sum(run["via_plan"] for run in runs)
             no_sql_runs = sum(not run["agent_sql"] for run in runs)
             condition_incomplete_runs = sum(
@@ -875,6 +1192,7 @@ def run_cli(args):
                     "category": question.category,
                     "split": question.split,
                     "answer_confirmed": question.answer_confirmed,
+                    "collect_only": collect_only,
                     "reference_sql": question.reference_sql,
                     "sql": display["sql"],
                     "actual_sql": display["sql"],
@@ -884,6 +1202,10 @@ def run_cli(args):
                     "tool_call_sequence": display["tool_call_sequence"],
                     "clarified": clarified_runs > 0,
                     "clarified_runs": clarified_runs,
+                    "clarification_received": clarified_runs > 0,
+                    "clarification_received_runs": clarified_runs,
+                    "clarification_followed_up": clarification_followed_up_runs > 0,
+                    "clarification_followed_up_runs": clarification_followed_up_runs,
                     "via_plan": via_plan_runs > 0,
                     "via_plan_runs": via_plan_runs,
                     "no_sql": no_sql_runs > 0,
@@ -910,12 +1232,18 @@ def run_cli(args):
                     "majority_result": result,
                     "correct": result == "correct",
                     "volatile": len(comparisons) > 1,
-                    "uncomparable_reason": _uncomparable_reason(result, reference),
+                    "volatility": None,
+                    "volatility_reason": None,
+                    "uncomparable_reason": uncomparable_reason,
                     "failure_category": None,
+                    "observed_failure_category": None,
+                    "observed_failure_evidence": None,
                 }
             )
-    comparable = sum(entry["result"] != "uncomparable" for entry in entries)
-    equal = sum(entry["result"] == "correct" for entry in entries)
+    scored_entries = [entry for entry in entries if not _is_collect_only(entry)]
+    collect_only_entries = [entry for entry in entries if _is_collect_only(entry)]
+    comparable = sum(entry["result"] != "uncomparable" for entry in scored_entries)
+    equal = sum(entry["result"] == "correct" for entry in scored_entries)
     execution_total = sum(
         run["agent_sql"] for entry in entries for run in entry["runs"]
     )
@@ -929,8 +1257,22 @@ def run_cli(args):
         "runs": sum(entry["run_count"] for entry in entries),
         "no_sql": sum(entry["no_sql"] for entry in entries),
         "no_sql_runs": sum(entry["no_sql_runs"] for entry in entries),
-        "clarified": sum(entry["clarified"] for entry in entries),
-        "clarified_runs": sum(entry["clarified_runs"] for entry in entries),
+        "clarified": sum(entry["clarification_received"] for entry in entries),
+        "clarified_runs": sum(
+            entry["clarification_received_runs"] for entry in entries
+        ),
+        "clarification_received": sum(
+            entry["clarification_received"] for entry in entries
+        ),
+        "clarification_received_runs": sum(
+            entry["clarification_received_runs"] for entry in entries
+        ),
+        "clarification_followed_up": sum(
+            entry["clarification_followed_up"] for entry in entries
+        ),
+        "clarification_followed_up_runs": sum(
+            entry["clarification_followed_up_runs"] for entry in entries
+        ),
         "via_plan": sum(entry["via_plan"] for entry in entries),
         "via_plan_runs": sum(entry["via_plan_runs"] for entry in entries),
         "execution_success": execution_success,
@@ -953,8 +1295,15 @@ def run_cli(args):
         "correct": equal,
         "wrong": sum(entry["result"] == "wrong" for entry in entries),
         "tie": sum(entry["result"] == "tie" for entry in entries),
-        "volatile": sum(entry["volatile"] for entry in entries),
+        "volatile": sum(entry["volatile"] is True for entry in entries),
+        "volatility_unknown": 0,
     }
+    if collect_unconfirmed:
+        metrics["confirmed_questions"] = len(scored_entries)
+        metrics["collected_only_questions"] = len(collect_only_entries)
+        metrics["collected_only_runs"] = sum(
+            entry["run_count"] for entry in collect_only_entries
+        )
     failures = dict(
         Counter(
             entry["agent"]["reason"]
@@ -970,6 +1319,15 @@ def run_cli(args):
             if run["agent"]["status"] == "failed"
         )
     )
+    collected_unconfirmed = [
+        question.id for question in selected if not question.answer_confirmed
+    ]
+    collected_unconfirmed_ids = set(collected_unconfirmed)
+    excluded_unconfirmed_questions = [
+        question
+        for question in unconfirmed
+        if question.id not in collected_unconfirmed_ids
+    ]
     excluded = [
         {
             "id": question.id,
@@ -977,7 +1335,7 @@ def run_cli(args):
             "split": question.split,
             "reason": "answer_confirmed=false",
         }
-        for question in unconfirmed
+        for question in excluded_unconfirmed_questions
     ]
     excluded_uncomparable = [
         {
@@ -997,13 +1355,17 @@ def run_cli(args):
         "split": split,
         "only": only_ids,
         "repeat": repeat,
+        "collect_unconfirmed": collect_unconfirmed,
         "web_url": web_url,
         "question_set": question_set,
         "expected_categories": expected_categories,
         "metrics": metrics,
         "failure_reasons": failures,
         "run_failure_reasons": run_failures,
-        "excluded_unconfirmed": [question.id for question in unconfirmed],
+        "excluded_unconfirmed": [
+            question.id for question in excluded_unconfirmed_questions
+        ],
+        "collected_unconfirmed": collected_unconfirmed,
         "excluded": excluded,
         "excluded_uncomparable": excluded_uncomparable,
         "questions": entries,
