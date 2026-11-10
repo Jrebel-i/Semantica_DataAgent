@@ -100,7 +100,7 @@ The script performs Cypher, creates and deletes a uniquely named Milvus collecti
 
 首次安装在有 SSH 授权的机器运行 `uv run --directory backend python ../deploy/k8s/langfuse/initialize.py`。脚本在已有命名空间保留 Secret 并重用现有项目；首次通过标准输入创建 Secret，先初始化 `dataagent-test`，再初始化 `dataagent-dev`。不要把 Secret 内容写入文件或日志。项目密钥分别保存在命名空间内的 `langfuse-test-keys` 与 `langfuse-dev-keys`；初始登录密码保存在 `langfuse-config`。常规更新使用 `kubectl apply -f deploy/k8s/langfuse/langfuse.yaml`，保留 PVC 和 Secret。删除 PVC 会删除观测数据；重新初始化前应备份并明确处理已有命名空间。
 
-管理员可在插件设置页开启 Langfuse 并填写地址和项目公钥、私钥；私钥加密存储且界面不回显，留空保留已有值。上报使用锁文件固定的 httpx，通过有界队列异步发送，超时或发送失败不会中断请求。允许上报的应用字段集中列在 `telemetry.py` 的 `ALLOWED_FIELDS`，包括追踪标识、agent、provider、模型、工具名称、参数、结果摘要、耗时、SQL 校验和回答；其他字段会被丢弃。
+管理员可在插件设置页开启 Langfuse 并填写地址和项目公钥、私钥；私钥加密存储且界面不回显，留空保留已有值。启用后默认只上报元数据：工具名、耗时、状态、模型、provider、表名、是否出错、错误类别和 SQL 指纹；管理员显式开启 `langfuse_capture_content` 后才会上报问题、回答、工具入参与结果、SQL 原文、结果行和错误原文，未设置与显式关闭等价。SQL 指纹解析失败时为空，不回退为原文。上报使用锁文件固定的 httpx，通过有界队列异步发送，超时或发送失败不会中断请求。允许上报的应用字段集中列在 `telemetry.py` 的 `ALLOWED_FIELDS`，内容字段另由 `CONTENT_FIELDS` 控制；其他字段会被丢弃。
 
 同一 Pod 内 ClickHouse 原生协议监听 9001，MinIO 监听 9000；六个容器的启动和就绪检查只使用 TCP 或 HTTP，不依赖容器内 exec。启动脚本通过 NodePort 健康端点等待 Web 初始化。
 
