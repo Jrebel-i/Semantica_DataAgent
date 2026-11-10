@@ -16,6 +16,8 @@ from semantica_dataagent.eval_exec import run_cli
 
 GOOD = "SELECT id FROM shop.orders WHERE dt = '2025-01-01'"
 BAD = "SELECT id FROM shop.orders"
+BROKEN = "SELECT broken FROM shop.orders"
+TRUNCATED = "SELECT id FROM shop.orders WHERE dt = '2025-01-02'"
 
 
 class FakeQuestionService:
@@ -27,6 +29,10 @@ class FakeQuestionService:
         self.plans = {}
         self.counts = Counter()
         self.responses = {}
+        self.fail_sqls = set()
+        self.truncated_sqls = set()
+        self.clarify_questions = set()
+        self.clarify_sql = {}
         handler = self._handler()
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
         self.thread = Thread(target=self.server.serve_forever, daemon=True)
@@ -36,12 +42,23 @@ class FakeQuestionService:
     def base_url(self):
         return f"http://127.0.0.1:{self.server.server_port}"
 
-    def reset(self, responses=None):
+    def reset(
+        self,
+        responses=None,
+        *,
+        fail_sqls=None,
+        truncated_sqls=None,
+        clarify=None,
+    ):
         self.asks.clear()
         self.executed.clear()
         self.plans.clear()
         self.counts.clear()
+        self.clarify_sql.clear()
         self.responses = dict(responses or {})
+        self.fail_sqls = set(fail_sqls or ())
+        self.truncated_sqls = set(truncated_sqls or ())
+        self.clarify_questions = set(clarify or ())
 
     def close(self):
         self.server.shutdown()
@@ -79,13 +96,49 @@ class FakeQuestionService:
                 service.asks.append((self.path, body))
                 if self.path == "/api/v1/conversations/ask":
                     question = body["question"]
+                    conversation_id = body.get("conversation_id")
+                    if conversation_id in service.clarify_sql:
+                        sql = service.clarify_sql.pop(conversation_id)
+                        self._sse(
+                            [
+                                (
+                                    "done",
+                                    {
+                                        "text": "已按口径生成 SQL",
+                                        "sql": [{"sql": sql}] if sql else [],
+                                    },
+                                ),
+                            ]
+                        )
+                        return
                     service.counts[question] += 1
                     run_number = service.counts[question]
-                    conversation_id = body.get("conversation_id") or (
-                        f"conv-{question}-{run_number}"
-                    )
+                    conversation_id = conversation_id or f"conv-{question}-{run_number}"
                     choices = service.responses.get(question) or [GOOD]
                     sql = choices[min(run_number - 1, len(choices) - 1)]
+                    if question in service.clarify_questions:
+                        service.clarify_sql[conversation_id] = sql
+                        self._sse(
+                            [
+                                (
+                                    "conversation",
+                                    {"conversation_id": conversation_id},
+                                ),
+                                (
+                                    "clarification",
+                                    {
+                                        "questions": [
+                                            {
+                                                "question": "用哪个口径？",
+                                                "options": [{"label": "订单口径"}],
+                                            }
+                                        ]
+                                    },
+                                ),
+                                ("done", {"text": "", "sql": []}),
+                            ]
+                        )
+                        return
                     self._sse(
                         [
                             ("conversation", {"conversation_id": conversation_id}),
@@ -97,10 +150,19 @@ class FakeQuestionService:
                                 "tool_start",
                                 {"name": "propose_query", "summary": "生成 SQL"},
                             ),
-                            ("done", {"text": "已生成 SQL", "sql": [{"sql": sql}]}),
+                            (
+                                "done",
+                                {
+                                    "text": "已生成 SQL",
+                                    "sql": [{"sql": sql}] if sql else [],
+                                },
+                            ),
                         ]
                     )
                 elif self.path == "/api/v1/queries/plan":
+                    if body["sql"] in service.fail_sqls:
+                        self._json(422, {"detail": "参考 SQL 无法执行"})
+                        return
                     query_id = f"query-{len(service.plans)}"
                     service.plans[query_id] = body["sql"]
                     self._json(200, {"id": query_id, "execution_limit": 10})
@@ -111,12 +173,15 @@ class FakeQuestionService:
                     sql = service.plans[query_id]
                     service.executed.append(sql)
                     rows = [[1]] if sql == GOOD else [[1], [2]]
+                    row_count = (
+                        len(rows) + 1 if sql in service.truncated_sqls else len(rows)
+                    )
                     self._json(
                         200,
                         {
                             "columns": ["value"],
                             "rows": rows,
-                            "row_count": len(rows),
+                            "row_count": row_count,
                         },
                     )
                 else:
@@ -125,14 +190,16 @@ class FakeQuestionService:
         return Handler
 
 
-def _question(question_id, question, *, category="选表", split="dev", confirmed=True):
+def _question(
+    question_id, question, *, category="选表", split="dev", confirmed=True, reference_sql=GOOD
+):
     row = {
         "id": question_id,
         "question": question,
         "expected_tables": ["shop.orders"],
         "expected_fields": ["id"],
         "caliber": "按订单口径",
-        "reference_sql": GOOD,
+        "reference_sql": reference_sql,
         "category": category,
         "split": split,
     }
@@ -159,6 +226,7 @@ def _args(tmp_path, path, *, split="dev", repeat=1, only=None, name="report"):
             "project": "eval",
             "split": split,
             "repeat": repeat,
+            "expected_categories": None,
         },
     )()
 
@@ -255,7 +323,13 @@ def test_eval_exec_defaults_to_dev_and_lists_unconfirmed(
     assert report["metrics"]["wrong"] == 1
     assert report["coverage"]["选表"]["total"] == 1
     assert report["coverage"]["口径"]["total"] == 1
-    assert report["coverage_gaps"] == ["口径"]
+    assert report["coverage_gaps"] == [
+        "维度值筛选",
+        "时间语义",
+        "口径歧义",
+        "合法空结果",
+        "多表 Join",
+    ]
     markdown = (tmp_path / "report.md").read_text()
     assert "参考 SQL" in markdown
     assert "工具调用" in markdown
@@ -524,3 +598,230 @@ def test_only_smoke_still_works_inside_the_selected_split(
     blocked.base_url = service.base_url
     with pytest.raises(SystemExit):
         run_cli(blocked)
+
+
+def test_majority_verdict_and_displayed_sql(service, tmp_path, monkeypatch):
+    service.reset(
+        {
+            "late": [BAD, GOOD, GOOD],
+            "early": [GOOD, BAD, BAD],
+        }
+    )
+    path = _write_questions(
+        tmp_path,
+        [
+            _question("late", "late"),
+            _question("early", "early"),
+        ],
+    )
+    monkeypatch.setenv("EVAL_EXEC_TOKEN", "secret")
+    args = _args(tmp_path, path, repeat=3)
+    args.base_url = service.base_url
+    assert run_cli(args) == 0
+
+    report = json.loads((tmp_path / "report.json").read_text())
+    by_id = {entry["id"]: entry for entry in report["questions"]}
+    late = by_id["late"]
+    assert late["equal_runs"] == 2
+    assert late["result"] == "correct"
+    assert late["comparison"] == "equal"
+    assert late["consistency"] == "equal"
+    assert late["summary"] == "行数、列数及结果一致"
+    assert late["sql"] == GOOD
+    assert late["actual_sql"] == GOOD
+    assert late["conversation_id"] == "conv-late-2"
+    assert late["runs"][0]["sql"] == BAD
+
+    early = by_id["early"]
+    assert early["equal_runs"] == 1
+    assert early["result"] == "wrong"
+    assert early["comparison"] == "different"
+    assert early["consistency"] == "different"
+    assert early["summary"] == "行数、列数或结果不同"
+    assert early["sql"] == BAD
+    assert early["actual_sql"] == BAD
+    assert early["conversation_id"] == "conv-early-2"
+    assert early["runs"][0]["sql"] == GOOD
+
+    metrics = report["metrics"]
+    assert metrics["equal"] == 1
+    assert metrics["comparable"] == 2
+    assert metrics["consistency_rate"] == 0.5
+    assert metrics["correct"] == 1
+    assert metrics["wrong"] == 1
+    assert "majority_consistency_rate" not in metrics
+
+
+def test_reference_failure_and_majority_uncomparable_are_excluded(
+    service, tmp_path, monkeypatch
+):
+    service.reset(
+        {
+            "good": [GOOD, GOOD, GOOD],
+            "reference broken": [GOOD, GOOD, GOOD],
+            "mostly truncated": [GOOD, TRUNCATED, TRUNCATED],
+        },
+        fail_sqls={BROKEN},
+        truncated_sqls={TRUNCATED},
+    )
+    path = _write_questions(
+        tmp_path,
+        [
+            _question("good", "good"),
+            _question("qref", "reference broken", reference_sql=BROKEN),
+            _question("qtrunc", "mostly truncated"),
+        ],
+    )
+    monkeypatch.setenv("EVAL_EXEC_TOKEN", "secret")
+    args = _args(tmp_path, path, repeat=3)
+    args.base_url = service.base_url
+    assert run_cli(args) == 0
+
+    report = json.loads((tmp_path / "report.json").read_text())
+    by_id = {entry["id"]: entry for entry in report["questions"]}
+    assert by_id["good"]["result"] == "correct"
+    for question_id in ("qref", "qtrunc"):
+        entry = by_id[question_id]
+        assert entry["result"] == "uncomparable"
+        assert entry["comparison"] == "uncomparable"
+        assert entry["correct"] is False
+        assert entry["summary"] is None
+    assert by_id["qref"]["reference"]["status"] == "failed"
+
+    metrics = report["metrics"]
+    assert metrics["equal"] == 1
+    assert metrics["comparable"] == 1
+    assert metrics["consistency_rate"] == 1.0
+    assert metrics["correct"] == 1
+    assert metrics["wrong"] == 0
+    assert metrics["tie"] == 0
+    assert metrics["uncomparable"] == 2
+    assert metrics["reference_failures"] == 1
+    reasons = {item["id"]: item["reason"] for item in report["excluded_uncomparable"]}
+    assert reasons == {
+        "qref": "reference_failed",
+        "qtrunc": "majority_uncomparable",
+    }
+    markdown = (tmp_path / "report.md").read_text()
+    assert "不可比题目" in markdown
+    assert "qref" in markdown and "qtrunc" in markdown
+
+
+def test_repeat_one_metrics_keep_previous_numbers(service, tmp_path, monkeypatch):
+    service.reset({"good": [GOOD], "bad": [BAD]})
+    path = _write_questions(
+        tmp_path,
+        [_question("good", "good"), _question("bad", "bad")],
+    )
+    monkeypatch.setenv("EVAL_EXEC_TOKEN", "secret")
+    args = _args(tmp_path, path)
+    args.base_url = service.base_url
+    assert run_cli(args) == 0
+
+    metrics = json.loads((tmp_path / "report.json").read_text())["metrics"]
+    assert metrics["questions"] == 2
+    assert metrics["runs"] == 2
+    assert metrics["equal"] == 1
+    assert metrics["comparable"] == 2
+    assert metrics["consistency_rate"] == 0.5
+    assert metrics["correct"] == 1
+    assert metrics["wrong"] == 1
+    assert metrics["tie"] == 0
+    assert metrics["uncomparable"] == 0
+    assert "majority_consistency_rate" not in metrics
+
+
+def test_coverage_gaps_use_expected_categories(service, tmp_path, monkeypatch):
+    service.reset({"wrong": [BAD], "good": [GOOD]})
+    path = _write_questions(
+        tmp_path,
+        [
+            _question("wrong", "wrong", category="多表 Join"),
+            _question("good", "good", category="选表"),
+        ],
+    )
+    monkeypatch.setenv("EVAL_EXEC_TOKEN", "secret")
+    args = _args(tmp_path, path)
+    args.base_url = service.base_url
+    assert run_cli(args) == 0
+
+    report = json.loads((tmp_path / "report.json").read_text())
+    assert report["coverage"]["多表 Join"]["total"] == 1
+    assert report["coverage"]["多表 Join"]["correct"] == 0
+    assert report["coverage_gaps"] == [
+        "维度值筛选",
+        "时间语义",
+        "口径歧义",
+        "合法空结果",
+    ]
+    assert "多表 Join" not in report["coverage_gaps"]
+
+    args = _args(tmp_path, path, name="override")
+    args.base_url = service.base_url
+    args.expected_categories = "多表 Join,选表,时间语义"
+    assert run_cli(args) == 0
+    override = json.loads((tmp_path / "override.json").read_text())
+    assert override["expected_categories"] == ["多表 Join", "选表", "时间语义"]
+    assert override["coverage_gaps"] == ["时间语义"]
+
+    parsed = _parser().parse_args(
+        [
+            "eval-exec",
+            "--questions",
+            str(path),
+            "--report",
+            str(tmp_path / "parsed"),
+            "--base-url",
+            service.base_url,
+            "--token",
+            "EVAL_EXEC_TOKEN",
+            "--agent",
+            "pi",
+            "--provider-id",
+            "fake",
+            "--model",
+            "fake",
+            "--expected-categories",
+            "A, B ,A",
+        ]
+    )
+    assert parsed.expected_categories == "A, B ,A"
+
+
+def test_run_level_metrics_and_question_flags(service, tmp_path, monkeypatch):
+    service.reset(
+        {
+            "mixed": [None, GOOD, BAD],
+            "clarify": [GOOD, GOOD, GOOD],
+        },
+        clarify={"clarify"},
+    )
+    path = _write_questions(
+        tmp_path,
+        [_question("mixed", "mixed"), _question("clarify", "clarify")],
+    )
+    monkeypatch.setenv("EVAL_EXEC_TOKEN", "secret")
+    args = _args(tmp_path, path, repeat=3)
+    args.base_url = service.base_url
+    assert run_cli(args) == 0
+
+    report = json.loads((tmp_path / "report.json").read_text())
+    by_id = {entry["id"]: entry for entry in report["questions"]}
+    assert by_id["mixed"]["result"] == "tie"
+    assert by_id["mixed"]["clarified"] is False
+    assert by_id["mixed"]["clarified_runs"] == 0
+    assert by_id["clarify"]["result"] == "correct"
+    assert by_id["clarify"]["clarified"] is True
+    assert by_id["clarify"]["clarified_runs"] == 3
+
+    metrics = report["metrics"]
+    assert metrics["execution_total"] == 5
+    assert metrics["execution_success"] == 5
+    assert metrics["clarified"] == 1
+    assert metrics["clarified_runs"] == 3
+    assert metrics["no_sql"] == 1
+    assert metrics["no_sql_runs"] == 1
+    assert metrics["via_plan"] == 0
+    assert metrics["via_plan_runs"] == 0
+    assert metrics["condition_incomplete"] == 1
+    assert metrics["condition_incomplete_runs"] == 1
