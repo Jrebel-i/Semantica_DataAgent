@@ -176,3 +176,62 @@ def check_telemetry_survives_unavailable_receiver(ctx):
         result.get("tools"), "MCP capabilities were empty while telemetry was down"
     )
     return {"tools": len(result.get("tools", []))}
+
+
+def check_telemetry_ignores_untrusted_metadata(ctx):
+    prompt = "issue-234-ignore-natural-language prompt"
+    literal = "issue-234-ignore-sql-literal"
+    forged_code = "issue-234-forged-code"
+    sql = f"SELECT id FROM shop.orders WHERE id = '{literal}'"
+    receiver = Receiver().start()
+    try:
+        _configure(ctx, receiver, "false")
+        ctx.mcp_call("find_join_path", {"tables": [ctx.token, prompt]})
+        ctx.mcp_call("validate_sql", {"sql": sql, "dialect": "hive"})
+        ctx.mcp_call("find_join_path", {"tables": ["shop.orders"]}, allow_error=True)
+
+        join_spans = receiver.wait_spans("find_join_path", 2)
+        sql_span = receiver.wait_spans("validate_sql", 1)[0]
+        for span in (*join_spans, sql_span):
+            encoded = json.dumps(span, ensure_ascii=False)
+            ctx.require(
+                encoded.count(ctx.token) == 0,
+                "credential leaked through telemetry metadata",
+            )
+            ctx.require(
+                prompt not in encoded,
+                "natural-language argument leaked through telemetry metadata",
+            )
+            ctx.require(
+                forged_code not in encoded,
+                "forged error code leaked through telemetry metadata",
+            )
+            ctx.require(
+                literal not in encoded,
+                "SQL literal leaked through telemetry metadata",
+            )
+        ctx.require(
+            "table" not in join_spans[0] and "tables" not in join_spans[0],
+            "untrusted table arguments were promoted to metadata",
+        )
+        ctx.require(
+            join_spans[0].get("status") == "ok"
+            and join_spans[0].get("is_error") is False,
+            "untrusted nested status changed the telemetry status",
+        )
+        ctx.require(
+            sql_span.get("table") == "shop.orders",
+            f"trusted SQL table metadata missing: {sql_span}",
+        )
+        error_span = next(span for span in join_spans if span.get("is_error") is True)
+        ctx.require(
+            error_span.get("error_category") == "invalid_input",
+            f"trusted error category missing: {error_span}",
+        )
+        ctx.require(
+            "Provide two to four tables" not in json.dumps(error_span),
+            "raw error message leaked through telemetry metadata",
+        )
+        return {"join_spans": len(join_spans)}
+    finally:
+        receiver.close()

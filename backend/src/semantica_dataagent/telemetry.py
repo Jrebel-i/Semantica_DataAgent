@@ -126,6 +126,41 @@ CONTENT_FIELDS = frozenset(
 )
 
 _SQL_DIALECTS = ("doris", "hive", "spark", "presto", "")
+_TOOL_NAME = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+_TABLE_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]*(?:\.[A-Za-z_][A-Za-z0-9_$]*){0,2}$")
+_ERROR_CATEGORIES = frozenset(
+    {"unavailable", "invalid_input", "internal_error", "tool_error"}
+)
+_SQL_TOOLS = frozenset({"validate_sql", "propose_query", "execute_query"})
+_TABLE_ARGUMENTS = {
+    "describe_tables": ("names",),
+    "lookup_dim_values": ("table",),
+    "get_lineage": ("table",),
+    "find_join_path": ("tables",),
+    "sample_table_data": ("table",),
+}
+_METADATA_KEYS = frozenset(
+    {"duration_ms", "agent", "provider", "model", "source", "token_name"}
+)
+_ENVELOPE_FIELDS = frozenset(
+    {
+        "id",
+        "traceId",
+        "parentObservationId",
+        "name",
+        "startTime",
+        "endTime",
+        "started_at",
+        "ended_at",
+        "metadata",
+        "agent",
+        "provider",
+        "model",
+        "source",
+        "token_name",
+        "duration_ms",
+    }
+)
 
 
 def _fingerprint_literal(node):
@@ -173,80 +208,108 @@ def sql_fingerprint(sql, dialect=None):
     return ""
 
 
-def _walk_dicts(value):
-    if isinstance(value, dict):
-        yield value
-        for item in value.values():
-            yield from _walk_dicts(item)
-    elif isinstance(value, list):
-        for item in value:
-            yield from _walk_dicts(item)
+def _trusted_tool_name(event, secrets=()):
+    name = event.get("name") if isinstance(event, dict) else None
+    if not isinstance(name, str) or not _TOOL_NAME.fullmatch(name):
+        return None
+    return name if _scrub(name, secrets) == name else None
 
 
-def _table_names(event):
-    """Return table names reachable from caller-provided tool input or output."""
+def _input_arguments(event):
+    arguments = event.get("input") if isinstance(event, dict) else None
+    return arguments if isinstance(arguments, dict) else None
+
+
+def _sql_from_arguments(event, name):
+    if name not in _SQL_TOOLS:
+        return "", None
+    arguments = _input_arguments(event)
+    sql = arguments.get("sql") if arguments else None
+    if not isinstance(sql, str) or not sql.strip():
+        return "", None
+    dialect = arguments.get("dialect")
+    return sql, dialect if dialect in ("hive", "spark", "doris") else None
+
+
+def _safe_table_name(value, secrets):
+    if (
+        not isinstance(value, str)
+        or not 0 < len(value) <= 512
+        or not _TABLE_NAME.fullmatch(value)
+    ):
+        return None
+    scrubbed = _scrub(value, secrets)
+    if scrubbed != value or not _TABLE_NAME.fullmatch(scrubbed):
+        return None
+    return scrubbed
+
+
+def _sql_table_names(sql, dialect, secrets):
+    tree = _parse_for_fingerprint(sql, dialect)
+    if tree is None:
+        return []
+    ctes = {cte.alias_or_name.lower() for cte in tree.find_all(exp.CTE)}
     names = []
-
-    def add(value):
-        if (
-            isinstance(value, str)
-            and value.strip()
-            and len(value) <= 512
-            and value not in names
-        ):
-            names.append(value)
-
-    for node in _walk_dicts(event):
-        add(node.get("table"))
-        tables = node.get("tables")
-        if isinstance(tables, str):
-            add(tables)
-        elif isinstance(tables, list):
-            for item in tables:
-                add(item)
-                if isinstance(item, dict):
-                    add(item.get("name"))
-    return names[:64]
+    for table in tree.find_all(exp.Table):
+        if table.name.lower() in ctes:
+            continue
+        name = ".".join(part for part in (table.db, table.name) if part)
+        safe = _safe_table_name(name, secrets)
+        if safe and safe not in names:
+            names.append(safe)
+            if len(names) == 64:
+                break
+    return names
 
 
-def _metadata_summary(event):
-    """Extract literal-free metadata that should survive content filtering."""
-    sqls = []
-    error_codes = []
-    is_error = None
-    if isinstance(event, dict):
-        for key in ("is_error", "isError"):
-            if isinstance(event.get(key), bool):
-                is_error = event[key]
-        for node in _walk_dicts(event):
-            sql = node.get("sql")
-            if isinstance(sql, str) and sql.strip() and sql not in sqls:
-                sqls.append(sql)
-            for key in ("is_error", "isError"):
-                if isinstance(node.get(key), bool):
-                    is_error = node[key]
-            code = node.get("code")
-            if (
-                isinstance(code, str)
-                and code
-                and (is_error is True or "retryable" in node or "next_action" in node)
-                and code not in error_codes
-            ):
-                error_codes.append(code)
-                is_error = True
-    summary = {}
-    if sqls:
-        fingerprints = [sql_fingerprint(sql) for sql in sqls]
-        if "" in fingerprints:
-            summary["sql_fingerprint"] = ""
-        elif len(set(fingerprints)) == 1:
-            summary["sql_fingerprint"] = fingerprints[0]
+def _table_names(event, name, secrets):
+    """Return only table names from the tool's declared argument positions."""
+    if name in _SQL_TOOLS:
+        sql, dialect = _sql_from_arguments(event, name)
+        return _sql_table_names(sql, dialect, secrets) if sql else []
+    keys = _TABLE_ARGUMENTS.get(name)
+    arguments = _input_arguments(event)
+    if not keys or not arguments:
+        return []
+    names = []
+    for key in keys:
+        value = arguments.get(key)
+        if isinstance(value, str):
+            candidates = [value]
+        elif isinstance(value, list) and key in ("names", "tables"):
+            candidates = value
         else:
-            joined = "|".join(sorted(set(fingerprints)))
-            summary["sql_fingerprint"] = hashlib.sha256(joined.encode()).hexdigest()
-        if len(sqls) > 1:
-            summary["sql_fingerprints"] = fingerprints
-    tables = _table_names(event)
+            continue
+        for item in candidates:
+            safe = _safe_table_name(item, secrets)
+            if safe and safe not in names:
+                names.append(safe)
+                if len(names) == 64:
+                    return names
+    return names
+
+
+def _error_category(event, is_error):
+    """Accept only the fixed error codes emitted by the tool boundary."""
+    if is_error is not True:
+        return None
+    output = event.get("output") if isinstance(event, dict) else None
+    code = output.get("code") if isinstance(output, dict) else None
+    return code if isinstance(code, str) and code in _ERROR_CATEGORIES else None
+
+
+def _metadata_summary(event, secrets=()):
+    """Extract metadata from declared protocol positions, never by key name."""
+    summary = {}
+    if not isinstance(event, dict):
+        return summary
+    name = _trusted_tool_name(event, secrets)
+    is_error = event.get("is_error")
+    is_error = is_error if isinstance(is_error, bool) else None
+    sql, dialect = _sql_from_arguments(event, name)
+    if sql:
+        summary["sql_fingerprint"] = sql_fingerprint(sql, dialect)
+    tables = _table_names(event, name, secrets)
     if len(tables) == 1:
         summary["table"] = tables[0]
     elif tables:
@@ -254,26 +317,20 @@ def _metadata_summary(event):
     if is_error is not None:
         summary["is_error"] = is_error
         summary["status"] = "error" if is_error else "ok"
-    if error_codes:
-        summary["error_category"] = error_codes[0]
-    elif is_error:
-        summary["error_category"] = "tool_error"
-    return summary
+    if is_error:
+        summary["error_category"] = _error_category(event, is_error) or "tool_error"
+    return _scrub(summary, secrets)
 
 
 def trace_id(conversation_id, turn_id):
     return hashlib.sha256(f"{conversation_id}:{turn_id}".encode()).hexdigest()[:32]
 
 
-def _filtered(value, secrets=(), capture_content=False):
+def _scrub(value, secrets=()):
     if isinstance(value, dict):
-        return {
-            key: _filtered(item, secrets, capture_content)
-            for key, item in value.items()
-            if key in ALLOWED_FIELDS and (capture_content or key not in CONTENT_FIELDS)
-        }
+        return {key: _scrub(item, secrets) for key, item in value.items()}
     if isinstance(value, list):
-        return [_filtered(item, secrets, capture_content) for item in value]
+        return [_scrub(item, secrets) for item in value]
     if isinstance(value, str):
         for secret in secrets:
             if secret:
@@ -288,6 +345,59 @@ def _filtered(value, secrets=(), capture_content=False):
         )
         value = re.sub(r"(?i)\bsk-[A-Za-z0-9_-]+", "[REDACTED]", value)
         return value[:12000]
+    if value is None or isinstance(value, (int, float, bool)):
+        return value
+    return None
+
+
+def _default_metadata(metadata, secrets):
+    if not isinstance(metadata, dict):
+        return None
+    clean = {}
+    for key in _METADATA_KEYS:
+        value = metadata.get(key)
+        if key == "duration_ms":
+            if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                clean[key] = value
+        elif isinstance(value, str) and value:
+            clean[key] = _scrub(value, secrets)[:200]
+    return clean
+
+
+def _default_envelope(event, secrets):
+    """Keep only protocol envelope fields and trusted metadata keys."""
+    if not isinstance(event, dict):
+        return {}
+    payload = {}
+    for key in _ENVELOPE_FIELDS - {"metadata", "name"}:
+        value = event.get(key)
+        if key == "duration_ms":
+            if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                payload[key] = value
+        elif isinstance(value, str) and value:
+            payload[key] = _scrub(value, secrets)[:256]
+    name = _trusted_tool_name(event, secrets)
+    if name:
+        payload["name"] = name
+    metadata = _default_metadata(event.get("metadata"), secrets)
+    if metadata:
+        payload["metadata"] = metadata
+    return payload
+
+
+def _filtered(value, secrets=(), capture_content=False):
+    if not capture_content:
+        return _default_envelope(value, secrets)
+    if isinstance(value, dict):
+        return {
+            key: _filtered(item, secrets, True)
+            for key, item in value.items()
+            if key in ALLOWED_FIELDS
+        }
+    if isinstance(value, list):
+        return [_filtered(item, secrets, True) for item in value]
+    if isinstance(value, str):
+        return _scrub(value, secrets)
     if value is None or isinstance(value, (int, float, bool)):
         return value
     return None
@@ -389,12 +499,13 @@ def submit(kind, event, secrets=()):
         if config is None:
             return
         capture_content = bool(config[4]) if len(config) > 4 else False
-        payload = _filtered(event, (*secrets, *config[1:4]), capture_content)
+        all_secrets = (*secrets, *config[1:4])
+        payload = _filtered(event, all_secrets, capture_content)
         if not capture_content:
             payload.update(
                 {
                     key: value
-                    for key, value in _metadata_summary(event).items()
+                    for key, value in _metadata_summary(event, all_secrets).items()
                     if key not in payload
                 }
             )

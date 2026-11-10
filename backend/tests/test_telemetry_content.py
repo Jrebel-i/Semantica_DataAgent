@@ -17,6 +17,10 @@ QUESTION = "issue-234-question"
 PROMPT = "issue-234-prompt"
 RESULT_ROW = "issue-234-result-row"
 ERROR_MESSAGE = "issue-234-error-message"
+FORGED_TABLE = "issue-234-forged-table"
+FORGED_NAME = "issue-234-forged-name"
+FORGED_CODE = "issue-234-forged-code"
+FORGED_PROMPT = "issue-234-forged natural language prompt"
 
 
 class Receiver:
@@ -96,6 +100,80 @@ def client(tmp_path, monkeypatch):
     token = initialize()
     with TestClient(app) as test_client:
         yield test_client, token
+
+
+@pytest.fixture
+def forged_result_client(tmp_path, monkeypatch):
+    """A real MCP server with one tool that returns caller-controlled rows."""
+    import semantica_dataagent.app as app_module
+    from semantica_dataagent.mcp_contract import install_contract
+
+    original_create_mcp = app_module.create_mcp
+
+    def create_mcp_with_forged_result():
+        server = original_create_mcp()
+
+        def forged_result(query: str) -> dict:
+            return {
+                "rows": [
+                    {
+                        "table": FORGED_TABLE,
+                        "tables": [FORGED_TABLE],
+                        "name": FORGED_NAME,
+                        "code": FORGED_CODE,
+                        "retryable": True,
+                        "nested": {
+                            "table": FORGED_TABLE,
+                            "tables": [FORGED_TABLE],
+                            "name": FORGED_NAME,
+                            "code": FORGED_CODE,
+                            "is_error": True,
+                        },
+                    }
+                ],
+                "message": FORGED_PROMPT,
+            }
+
+        server.tool()(forged_result)
+        install_contract(server)
+        return server
+
+    monkeypatch.setattr(app_module, "create_mcp", create_mcp_with_forged_result)
+    monkeypatch.setenv("DATAAGENT_DB_PATH", str(tmp_path / "app.db"))
+    monkeypatch.setenv("DATAAGENT_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    monkeypatch.setenv("DATAAGENT_AGENT_ROOT", str(tmp_path / "agents"))
+    from semantica_dataagent.app import app
+    from semantica_dataagent.cli import initialize
+
+    token = initialize()
+    with TestClient(app) as test_client:
+        yield test_client, token
+
+
+def _rpc(client, token, name, arguments):
+    response = client.post(
+        "/mcp/",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/json, text/event-stream",
+            "Host": "localhost:8000",
+            "Content-Type": "application/json",
+        },
+        json={
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {"name": name, "arguments": arguments},
+        },
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert "result" in body, body
+    return body["result"]
+
+
+def _span(payloads, name):
+    return next(body for body in payloads if body.get("name") == name)
 
 
 def configure(client, receiver, capture=None):
@@ -209,14 +287,19 @@ def test_error_messages_are_reduced_to_a_category_by_default(client):
 
 def test_table_names_survive_metadata_only_mode(client):
     telemetry._queue.join()
+    sql = (
+        "SELECT id FROM shop.orders JOIN shop.payments "
+        "ON shop.orders.id = shop.payments.order_id "
+        "WHERE dt = '2025-01-01' AND customer = 'issue-234-literal'"
+    )
     event = {
         "name": "validate_sql",
         "input": {
-            "sql": SQL,
+            "sql": sql,
             "dialect": "hive",
         },
         "output": {
-            "tables": [{"name": "shop.orders"}, {"name": "shop.payments"}],
+            "tables": [{"name": "shop.forged"}],
             "issues": [{"message": ERROR_MESSAGE}],
         },
         "metadata": {"duration_ms": 4},
@@ -233,9 +316,200 @@ def test_table_names_survive_metadata_only_mode(client):
     assert body["status"] == "ok"
     assert body["is_error"] is False
     encoded = json.dumps(body)
+    assert "shop.forged" not in encoded
     assert SQL not in encoded
     assert "2025-01-01" not in encoded
     assert ERROR_MESSAGE not in encoded
+
+
+def test_default_filter_keeps_only_trusted_metadata_fields():
+    event = {
+        "name": "validate_sql",
+        "table": FORGED_TABLE,
+        "tables": [FORGED_TABLE],
+        "code": FORGED_CODE,
+        "is_error": True,
+        "status": "error",
+        "metadata": {
+            "duration_ms": 3,
+            "provider": "provider-a",
+            "table": FORGED_TABLE,
+            "code": FORGED_CODE,
+            "is_error": True,
+            "message": FORGED_PROMPT,
+        },
+    }
+
+    assert telemetry._filtered(event) == {
+        "name": "validate_sql",
+        "metadata": {"duration_ms": 3, "provider": "provider-a"},
+    }
+
+
+def test_tool_name_uses_the_same_credential_filter():
+    credential_shaped_name = "credentialtoken" + "123"
+
+    assert (
+        telemetry._filtered({"name": credential_shaped_name}, (credential_shaped_name,))
+        == {}
+    )
+    assert telemetry._filtered({"name": "validate_sql"}, (credential_shaped_name,)) == {
+        "name": "validate_sql"
+    }
+
+
+def test_extracted_metadata_uses_the_same_credential_filter(client):
+    secret = "issue234CredentialAbc123"
+    event = {"name": "get_lineage", "input": {"table": secret}}
+
+    telemetry._queue.join()
+    with Receiver() as receiver:
+        configure(client, receiver)
+        telemetry.submit("span-create", event, (secret,))
+        receiver.wait()
+        body = receiver.payloads()[0]
+
+    assert "table" not in body
+    assert secret not in json.dumps(body)
+
+
+def test_mcp_arguments_with_credentials_and_prompts_stay_out_of_telemetry(
+    client, monkeypatch
+):
+    from semantica_dataagent import sql_validation
+
+    monkeypatch.setattr(
+        sql_validation,
+        "load_snapshot",
+        lambda *args, **kwargs: sql_validation.Snapshot([], [], []),
+    )
+    test_client, token = client
+    telemetry._queue.join()
+    with Receiver() as receiver:
+        configure(client, receiver)
+        _rpc(
+            test_client,
+            token,
+            "find_join_path",
+            {"tables": [token, FORGED_PROMPT, "sk-issue234-untracked-credential"]},
+        )
+        receiver.wait(count=2)
+        payloads = receiver.payloads()
+
+    encoded = json.dumps(payloads, ensure_ascii=False)
+    assert encoded.count(token) == 0, "credential leaked in telemetry metadata"
+    assert FORGED_PROMPT not in encoded
+    assert "sk-issue234-untracked-credential" not in encoded
+    span = _span(payloads, "find_join_path")
+    assert span["status"] == "ok"
+    assert span["is_error"] is False
+    assert "table" not in span and "tables" not in span
+
+
+def test_mcp_result_rows_cannot_forge_tables_status_or_error_code(forged_result_client):
+    test_client, token = forged_result_client
+    telemetry._queue.join()
+    with Receiver() as receiver:
+        configure(forged_result_client, receiver)
+        _rpc(
+            test_client, token, "forged_result", {"query": "SELECT id FROM shop.orders"}
+        )
+        receiver.wait(count=2)
+        payloads = receiver.payloads()
+
+    encoded = json.dumps(payloads, ensure_ascii=False)
+    for marker in (FORGED_TABLE, FORGED_NAME, FORGED_CODE, FORGED_PROMPT):
+        assert marker not in encoded, f"result-row metadata leaked: {marker}"
+    span = _span(payloads, "forged_result")
+    assert span["status"] == "ok"
+    assert span["is_error"] is False
+    assert "table" not in span and "tables" not in span
+    assert span.get("error_category") != FORGED_CODE
+
+
+def test_content_capture_still_sends_forged_result_rows_when_enabled(
+    forged_result_client,
+):
+    test_client, token = forged_result_client
+    telemetry._queue.join()
+    with Receiver() as receiver:
+        configure(forged_result_client, receiver, "true")
+        _rpc(
+            test_client, token, "forged_result", {"query": "SELECT id FROM shop.orders"}
+        )
+        receiver.wait(count=2)
+        payloads = receiver.payloads()
+
+    span = _span(payloads, "forged_result")
+    assert span["input"]["query"] == "SELECT id FROM shop.orders"
+    assert span["output"]["rows"][0]["table"] == FORGED_TABLE
+
+
+def test_real_tools_keep_trusted_table_and_error_metadata(client, monkeypatch):
+    from semantica_dataagent import sql_validation
+
+    monkeypatch.setattr(
+        sql_validation,
+        "load_snapshot",
+        lambda *args, **kwargs: sql_validation.Snapshot([], [], []),
+    )
+    test_client, token = client
+    telemetry._queue.join()
+    with Receiver() as receiver:
+        configure(client, receiver)
+        _rpc(
+            test_client,
+            token,
+            "find_join_path",
+            {"tables": ["shop.orders", "shop.payments"]},
+        )
+        _rpc(test_client, token, "find_join_path", {"tables": ["shop.orders"]})
+        receiver.wait(count=4)
+        payloads = receiver.payloads()
+
+    spans = [body for body in payloads if body.get("name") == "find_join_path"]
+    ok_span = next(body for body in spans if body.get("is_error") is False)
+    error_span = next(body for body in spans if body.get("is_error") is True)
+    assert ok_span["tables"] == ["shop.orders", "shop.payments"]
+    assert error_span["status"] == "error"
+    assert error_span["error_category"] == "invalid_input"
+    assert "Provide two to four tables" not in json.dumps(payloads)
+
+
+def test_validate_sql_uses_sql_ast_for_tables_and_never_sends_literals(
+    client, monkeypatch
+):
+    from semantica_dataagent import sql_validation
+
+    monkeypatch.setattr(
+        sql_validation,
+        "load_snapshot",
+        lambda *args, **kwargs: sql_validation.Snapshot([], [], []),
+    )
+    test_client, token = client
+    literal = "issue-234-sql-literal"
+    sql = (
+        "SELECT id FROM shop.orders JOIN shop.payments "
+        f"ON shop.orders.id = shop.payments.order_id WHERE id = '{literal}'"
+    )
+    telemetry._queue.join()
+    with Receiver() as receiver:
+        configure(client, receiver)
+        _rpc(
+            test_client,
+            token,
+            "validate_sql",
+            {"sql": sql, "dialect": "hive"},
+        )
+        receiver.wait(count=2)
+        payloads = receiver.payloads()
+
+    encoded = json.dumps(payloads, ensure_ascii=False)
+    assert literal not in encoded
+    assert "SELECT" not in encoded
+    span = _span(payloads, "validate_sql")
+    assert span["tables"] == ["shop.orders", "shop.payments"]
+    assert span["sql_fingerprint"] == telemetry.sql_fingerprint(sql)
 
 
 def test_sql_fingerprint_ignores_literals_but_tracks_structure():
