@@ -113,6 +113,7 @@ def seed_history(token: str, project_id: str) -> tuple[str, str]:
                 conversation_id="history",
                 sql="select 1",
                 status="succeeded",
+                plan_data=json.dumps({"project_id": project_id}),
                 rows=json.dumps({"columns": ["x"], "data": [[1]]}),
                 row_count=1,
             )
