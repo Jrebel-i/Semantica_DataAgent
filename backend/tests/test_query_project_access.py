@@ -12,7 +12,6 @@ import uuid
 import pytest
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
-
 from test_mcp_contract import call_registered
 
 
@@ -92,6 +91,16 @@ def create_member(c, admin: str, project_id: str) -> dict:
             "role": "user",
             "projects": [{"project_id": project_id, "role": "member"}],
         },
+    )
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
+def create_admin(c, admin: str) -> dict:
+    response = c.post(
+        "/api/v1/tokens",
+        headers=headers(admin),
+        json={"name": "other-admin", "role": "admin"},
     )
     assert response.status_code == 201, response.text
     return response.json()
@@ -247,6 +256,13 @@ def query_status(query_id: str) -> str:
         return db.get(QueryExecution, query_id).status
 
 
+def turn_status(turn_id: int) -> str:
+    from semantica_dataagent.db import Turn, sessions
+
+    with sessions()() as db:
+        return db.get(Turn, turn_id).status
+
+
 def set_project_status(project_id: str, status: str) -> None:
     from semantica_dataagent.db import Project, sessions
 
@@ -262,7 +278,10 @@ def remove_member(c, admin: str, project_id: str, token_id: str) -> None:
 
 
 def revoke_token(c, admin: str, token_id: str) -> None:
-    assert c.delete(f"/api/v1/tokens/{token_id}", headers=headers(admin)).status_code == 204
+    assert (
+        c.delete(f"/api/v1/tokens/{token_id}", headers=headers(admin)).status_code
+        == 204
+    )
 
 
 def assert_rejected_audit(kind: str, status: str) -> None:
@@ -291,10 +310,18 @@ def prepare(c, admin: str, scenario: str, executor, conversation_runner):
     )
     mcp_id = add_query(member["id"], project_id)
     download_id = add_query(
-        member["id"], project_id, status="succeeded", source="mcp", rows=succeeded_rows()
+        member["id"],
+        project_id,
+        status="succeeded",
+        source="mcp",
+        rows=succeeded_rows(),
     )
     link_id = add_query(
-        member["id"], project_id, status="succeeded", source="mcp", rows=succeeded_rows()
+        member["id"],
+        project_id,
+        status="succeeded",
+        source="mcp",
+        rows=succeeded_rows(),
     )
     links = c.post(
         f"/api/v1/queries/{link_id}/download-links", headers=headers(member["token"])
@@ -368,7 +395,11 @@ def test_permission_revocation_rejects_all_entrances(
     assert response.status_code == rest_status, response.text
 
     mcp_result = mcp_execute(
-        member["id"], member["role"], member["token"], state["project_id"], state["mcp_id"]
+        member["id"],
+        member["role"],
+        member["token"],
+        state["project_id"],
+        state["mcp_id"],
     )
     assert mcp_result.isError, mcp_result
     assert mcp_detail in mcp_result.structuredContent["message"]
@@ -389,6 +420,7 @@ def test_permission_revocation_rejects_all_entrances(
         state["mcp_id"],
     ):
         assert query_status(query_id) == "planned"
+    assert turn_status(state["turn_id"]) == "awaiting_confirmation"
 
     if scenario != "revoked":
         assert_rejected_audit("query", f"rejected_{rest_status}")
@@ -423,7 +455,11 @@ def test_active_member_keeps_all_entrances_working(
     assert response.status_code == 200, response.text
 
     mcp_result = mcp_execute(
-        member["id"], member["role"], member["token"], state["project_id"], state["mcp_id"]
+        member["id"],
+        member["role"],
+        member["token"],
+        state["project_id"],
+        state["mcp_id"],
     )
     assert not mcp_result.isError, mcp_result
     assert mcp_result.structuredContent["row_count"] == 1
@@ -446,4 +482,49 @@ def test_active_member_keeps_all_entrances_working(
     assert ("query", "succeeded") in audit_rows()
     assert ("mcp", "succeeded") in audit_rows()
     assert ("download_link_created", "succeeded") in audit_rows()
+    assert ("download_link_used", "succeeded") in audit_rows()
+
+
+def test_system_admin_keeps_access_without_membership(client, executor):
+    c, boot_admin = client
+    project = create_project(c, boot_admin)
+    project_id = project["id"]
+    admin = create_admin(c, boot_admin)
+    assert (
+        c.put(
+            "/api/v1/me/dtb-token",
+            headers=headers(admin["token"]),
+            json={"token": "fake-dtb"},
+        ).status_code
+        == 200
+    )
+
+    planned = add_query(admin["id"], project_id)
+    response = c.post(
+        f"/api/v1/queries/{planned}/execute",
+        headers=headers(admin["token"]),
+        json={},
+    )
+    assert response.status_code == 200, response.text
+
+    succeeded = add_query(
+        admin["id"], project_id, status="succeeded", source="mcp", rows=succeeded_rows()
+    )
+    response = c.get(
+        f"/api/v1/queries/{succeeded}/download",
+        headers=headers(admin["token"]),
+    )
+    assert response.status_code == 200, response.text
+    assert response.content == b"v\n1\n"
+
+    links = c.post(
+        f"/api/v1/queries/{succeeded}/download-links",
+        headers=headers(admin["token"]),
+    )
+    assert links.status_code == 200, links.text
+    response = c.get(links.json()["csv"])
+    assert response.status_code == 200, response.text
+    assert response.content == b"v\n1\n"
+
+    assert ("query", "succeeded") in audit_rows()
     assert ("download_link_used", "succeeded") in audit_rows()
