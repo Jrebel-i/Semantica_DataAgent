@@ -73,7 +73,7 @@ semantica-dataagent eval-exec \
 - `--split dev`：默认；只跑开发集。
 - `--split holdout`：显式跑留出集，只在发版验收时使用。
 - `--split all`：调试用；会同时跑两套题。
-- `--repeat 3`：同一道题跑 3 遍，每遍新开一个对话。判对错只看多数判定：可比较遍数（`equal` 或 `different`）必须超过总遍数的一半；其中 `equal` 超过可比较遍数的一半算对，正好一半算平局（按答错计入 `tie`），否则算错。出现不同结果的题标为波动题。`--repeat 1` 的指标与升级前一致。
+- `--repeat 3`：同一道题跑 3 遍，每遍新开一个对话。判对错只看多数判定：可比较遍数（`equal` 或 `different`）必须超过总遍数的一半；其中 `equal` 超过可比较遍数的一半算对，正好一半算平局（按答错计入 `tie`），否则算错。出现不同结果的题标为波动题。参考 SQL 正常执行时，`--repeat 1` 的 `equal`、`comparable` 和 `consistency_rate` 与升级前一致；参考 SQL 失败、跳过或可比较遍数不足一半的题在任何 repeat 下都归为 `uncomparable`。
 - `--only q1,q2`：只跑指定题号，保留部署后的快速冒烟用法；题号必须在当前 `split` 且未被排除。
 - `--expected-categories a,b,c`：覆盖默认的期望题型列表（维度值筛选、时间语义、口径歧义、合法空结果、多表 Join）。题集里某个期望题型题数为 0 时，列进报告“覆盖缺口”一节。
 - `--max-queries`：按“题数 ×（repeat + 参考 SQL 一遍）”估算，默认 40。默认 28 道 dev 题跑 1 遍需要 56，跑 3 遍需要 112；跑完整开发集时要显式提高，例如 `--max-queries 200`。`--only` 冒烟保持默认即可。
