@@ -12,7 +12,7 @@ import yaml
 
 from semantica_dataagent import eval as evaluation
 from semantica_dataagent.cli import _parser
-from semantica_dataagent.eval_exec import run_cli
+from semantica_dataagent.eval_exec import run_cli, run_report
 
 GOOD = "SELECT id FROM shop.orders WHERE dt = '2025-01-01'"
 BAD = "SELECT id FROM shop.orders"
@@ -1154,3 +1154,264 @@ def test_run_level_metrics_and_question_flags(service, tmp_path, monkeypatch):
     assert metrics["via_plan_runs"] == 0
     assert metrics["condition_incomplete"] == 1
     assert metrics["condition_incomplete_runs"] == 1
+
+
+def test_collect_unconfirmed_requires_skip_reference_before_any_request(
+    service, tmp_path, monkeypatch
+):
+    reference = "SELECT reference FROM shop.orders WHERE status = 'paid'"
+    service.reset({"unconfirmed": [GOOD]})
+    path = _write_questions(
+        tmp_path,
+        [_question("u1", "unconfirmed", confirmed=False, reference_sql=reference)],
+    )
+    monkeypatch.setenv("EVAL_EXEC_TOKEN", "secret")
+    args = _parser().parse_args(
+        [
+            "eval-exec",
+            "--questions",
+            str(path),
+            "--report",
+            str(tmp_path / "report"),
+            "--base-url",
+            service.base_url,
+            "--token",
+            "EVAL_EXEC_TOKEN",
+            "--agent",
+            "pi",
+            "--provider-id",
+            "fake",
+            "--model",
+            "fake",
+            "--collect-unconfirmed",
+        ]
+    )
+
+    with pytest.raises(SystemExit) as raised:
+        run_cli(args)
+
+    message = str(raised.value)
+    assert "--collect-unconfirmed" in message
+    assert "--skip-reference" in message
+    assert service.asks == []
+    assert service.plans == {}
+    assert service.executed == []
+    assert not (tmp_path / "report.json").exists()
+    assert not (tmp_path / "report.md").exists()
+
+
+def test_collect_unconfirmed_keeps_runs_and_excludes_them_from_denominators(
+    service, tmp_path, monkeypatch
+):
+    dev_reference = "SELECT reference_dev FROM shop.orders WHERE dt = '2025-01-01'"
+    unconfirmed_reference = (
+        "SELECT reference_unconfirmed FROM shop.orders WHERE status = 'paid'"
+    )
+    holdout_reference = "SELECT reference_holdout FROM shop.hidden"
+    service.reset(
+        {
+            "dev confirmed": [GOOD, GOOD],
+            "dev unconfirmed": [GOOD, BAD],
+            "holdout confirmed": [GOOD],
+            "holdout unconfirmed": [GOOD],
+        }
+    )
+    path = _write_questions(
+        tmp_path,
+        [
+            _question(
+                "d1", "dev confirmed", category="选表", reference_sql=dev_reference
+            ),
+            _question(
+                "u1",
+                "dev unconfirmed",
+                category="维度值筛选",
+                confirmed=False,
+                reference_sql=unconfirmed_reference,
+            ),
+            _question(
+                "h1",
+                "holdout unconfirmed",
+                category="时间语义",
+                split="holdout",
+                confirmed=False,
+                reference_sql=holdout_reference,
+            ),
+            _question(
+                "h2",
+                "holdout confirmed",
+                category="多表 Join",
+                split="holdout",
+                reference_sql=holdout_reference,
+            ),
+        ],
+    )
+    monkeypatch.setenv("EVAL_EXEC_TOKEN", "secret")
+    args = _parser().parse_args(
+        [
+            "eval-exec",
+            "--questions",
+            str(path),
+            "--report",
+            str(tmp_path / "report"),
+            "--base-url",
+            service.base_url,
+            "--token",
+            "EVAL_EXEC_TOKEN",
+            "--agent",
+            "pi",
+            "--provider-id",
+            "fake",
+            "--model",
+            "fake",
+            "--repeat",
+            "2",
+            "--collect-unconfirmed",
+            "--skip-reference",
+        ]
+    )
+    assert run_cli(args) == 0
+
+    report = json.loads((tmp_path / "report.json").read_text())
+    asked = [
+        body["question"]
+        for path, body in service.asks
+        if path.endswith("/conversations/ask")
+    ]
+    assert asked == [
+        "dev confirmed",
+        "dev confirmed",
+        "dev unconfirmed",
+        "dev unconfirmed",
+    ]
+    planned = list(service.plans.values())
+    assert dev_reference not in planned
+    assert unconfirmed_reference not in planned
+    assert holdout_reference not in planned
+    assert dev_reference not in service.executed
+    assert unconfirmed_reference not in service.executed
+    assert holdout_reference not in service.executed
+
+    assert report["collect_unconfirmed"] is True
+    assert report["collected_unconfirmed"] == ["u1"]
+    assert report["excluded_unconfirmed"] == ["h1"]
+    assert [entry["id"] for entry in report["questions"]] == ["d1", "u1"]
+
+    by_id = {entry["id"]: entry for entry in report["questions"]}
+    confirmed = by_id["d1"]
+    collected = by_id["u1"]
+    assert collected["answer_confirmed"] is False
+    assert collected["collect_only"] is True
+    assert collected["result"] == "uncomparable"
+    assert collected["uncomparable_reason"] == "answer_confirmed=false"
+    assert collected["correct"] is False
+    assert collected["equal_runs"] == 0
+    assert collected["comparable_runs"] == 0
+    assert collected["condition_incomplete"] is False
+    assert collected["missing_condition_columns"] is None
+    assert collected["reference_column_count"] is None
+    assert collected["reference"]["status"] == "skipped"
+    assert collected["run_count"] == 2
+    assert confirmed["result"] == "uncomparable"
+    assert confirmed["uncomparable_reason"] == "reference_skipped"
+    assert confirmed["missing_condition_columns"] == []
+
+    collected_runs = collected["runs"]
+    assert len(collected_runs) == 2
+    assert len({run["conversation_id"] for run in collected_runs}) == 2
+    assert all(run["conversation_id"] for run in collected_runs)
+    assert all(run["tool_calls"] for run in collected_runs)
+    assert all(run["sql"] in {GOOD, BAD} for run in collected_runs)
+    assert all(run["agent"]["status"] == "succeeded" for run in collected_runs)
+    assert all(run["reference_status"] == "skipped" for run in collected_runs)
+    assert all(run["comparison"] == "uncomparable" for run in collected_runs)
+    assert all(run["missing_condition_columns"] is None for run in collected_runs)
+    assert all(run["collect_only"] is True for run in collected_runs)
+
+    metrics = report["metrics"]
+    assert metrics["questions"] == 2
+    assert metrics["runs"] == 4
+    assert metrics["confirmed_questions"] == 1
+    assert metrics["collected_only_questions"] == 1
+    assert metrics["collected_only_runs"] == 2
+    assert metrics["equal"] == 0
+    assert metrics["comparable"] == 0
+    assert metrics["consistency_rate"] is None
+    assert metrics["correct"] == 0
+    assert metrics["wrong"] == 0
+    assert metrics["uncomparable"] == 2
+    assert metrics["execution_total"] == 4
+    assert metrics["execution_success"] == 4
+    assert metrics["condition_incomplete"] == 0
+
+    assert report["coverage"]["维度值筛选"]["collect_only"] == 1
+    assert report["coverage"]["维度值筛选"]["uncomparable"] == 1
+    assert report["coverage"]["选表"]["total"] == 1
+    question_set = report["question_set_coverage"]
+    assert (
+        question_set["total"],
+        question_set["confirmed"],
+        question_set["unconfirmed"],
+    ) == (4, 2, 2)
+    assert question_set["splits"] == {"dev": 2, "holdout": 2}
+    reasons = {item["id"]: item["reason"] for item in report["excluded_uncomparable"]}
+    assert reasons == {"d1": "reference_skipped", "u1": "answer_confirmed=false"}
+
+    serialized = (tmp_path / "report.json").read_text()
+    markdown = (tmp_path / "report.md").read_text()
+    assert holdout_reference not in serialized
+    assert holdout_reference not in markdown
+    assert "仅采集" in markdown
+    assert "answer_confirmed=false" in markdown
+    assert "不可比原因：answer_confirmed=false" in markdown
+    assert "其中仅采集题：1" in markdown
+
+    service.reset({"holdout confirmed": [GOOD], "holdout unconfirmed": [GOOD]})
+    holdout_args = _args(tmp_path, path, split="holdout", name="holdout-report")
+    holdout_args.base_url = service.base_url
+    holdout_args.collect_unconfirmed = True
+    holdout_args.skip_reference = True
+    assert run_cli(holdout_args) == 0
+    holdout_asked = [
+        body["question"]
+        for path, body in service.asks
+        if path.endswith("/conversations/ask")
+    ]
+    assert holdout_asked == ["holdout unconfirmed", "holdout confirmed"]
+    assert dev_reference not in service.plans.values()
+    assert unconfirmed_reference not in service.plans.values()
+    holdout = json.loads((tmp_path / "holdout-report.json").read_text())
+    assert [entry["id"] for entry in holdout["questions"]] == ["h1", "h2"]
+
+
+def test_eval_report_rejects_failure_category_for_collected_unconfirmed(
+    service, tmp_path, monkeypatch
+):
+    service.reset({"unconfirmed": [GOOD]})
+    path = _write_questions(
+        tmp_path,
+        [_question("u1", "unconfirmed", confirmed=False)],
+    )
+    monkeypatch.setenv("EVAL_EXEC_TOKEN", "secret")
+    args = _args(tmp_path, path, name="collect-report")
+    args.base_url = service.base_url
+    args.collect_unconfirmed = True
+    args.skip_reference = True
+    assert run_cli(args) == 0
+
+    categories = tmp_path / "categories.yaml"
+    categories.write_text(yaml.safe_dump({"u1": "口径错"}), encoding="utf-8")
+    report_args = _parser().parse_args(
+        [
+            "eval-report",
+            "--report",
+            str(tmp_path / "collect-report"),
+            "--categories",
+            str(categories),
+        ]
+    )
+    with pytest.raises(SystemExit) as raised:
+        run_report(report_args)
+
+    assert "只采集" in str(raised.value)
+    assert "u1" in str(raised.value)

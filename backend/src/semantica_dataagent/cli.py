@@ -202,7 +202,20 @@ def _parser() -> argparse.ArgumentParser:
     execution.add_argument("--only")
     execution.add_argument("--project")
     execution.add_argument("--max-queries", type=int, default=40)
-    execution.add_argument("--skip-reference", action="store_true")
+    execution.add_argument(
+        "--skip-reference",
+        action="store_true",
+        help="skip executing reference SQL; required with --collect-unconfirmed",
+    )
+    execution.add_argument(
+        "--collect-unconfirmed",
+        "--collect-only",
+        dest="collect_unconfirmed",
+        action="store_true",
+        help="collect trajectories for answer_confirmed=false questions; requires "
+        "--skip-reference and never counts toward accuracy, consistency, or the "
+        "comparable-question denominator",
+    )
     execution.add_argument(
         "--web-url",
         help="external browser origin used for conversation links, for example "

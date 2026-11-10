@@ -85,6 +85,11 @@ def _detail(response):
     return text[:DETAIL_LIMIT]
 
 
+def _is_collect_only(entry):
+    """True for an answer_confirmed=false question collected without a reference."""
+    return bool(entry.get("collect_only"))
+
+
 def _sql(value):
     if isinstance(value, str):
         return value if value.strip() else None
@@ -432,16 +437,20 @@ def _coverage(entries):
         if entry["volatile"]:
             item["volatile"] += 1
         failure_category = entry.get("failure_category")
-        if failure_category:
+        if failure_category and not _is_collect_only(entry):
             item["failure_categories"][failure_category] = (
                 item["failure_categories"].get(failure_category, 0) + 1
             )
+        if _is_collect_only(entry):
+            item["collect_only"] = item.get("collect_only", 0) + 1
     return dict(sorted(coverage.items()))
 
 
 def _failure_summary(entries):
     counts = Counter(
-        entry["failure_category"] for entry in entries if entry.get("failure_category")
+        entry["failure_category"]
+        for entry in entries
+        if entry.get("failure_category") and not _is_collect_only(entry)
     )
     return dict(sorted(counts.items()))
 
@@ -485,9 +494,17 @@ def _recompute_summaries(report):
                 or None
             )
     metrics = report.setdefault("metrics", {})
-    classified = sum(bool(entry.get("failure_category")) for entry in entries)
+    scorable = [entry for entry in entries if not _is_collect_only(entry)]
+    classified = sum(bool(entry.get("failure_category")) for entry in scorable)
     metrics["classified"] = classified
-    metrics["unclassified"] = len(entries) - classified
+    metrics["unclassified"] = len(scorable) - classified
+    collect_only = [entry for entry in entries if _is_collect_only(entry)]
+    if collect_only or report.get("collect_unconfirmed"):
+        metrics["confirmed_questions"] = len(scorable)
+        metrics["collected_only_questions"] = len(collect_only)
+        metrics["collected_only_runs"] = sum(
+            entry.get("run_count", 0) for entry in collect_only
+        )
     return report
 
 
@@ -505,10 +522,20 @@ def render_report(report):
     ]
     lines += [f"- {key}: {value}" for key, value in metrics.items()]
     lines += ["", "## 未确认答案（不参与评测）", ""]
+    collected = report.get("collected_unconfirmed") or []
     excluded = report.get("excluded_unconfirmed") or []
+    if collected:
+        lines += [
+            (
+                "仅采集，不计入正确率、结果一致率或可比较分母；参考 SQL 未执行，"
+                "缺少参考依据的条件列比较与失败归因不作为已验证结论："
+            )
+        ]
+        lines += [f"- {question_id}" for question_id in collected]
     if excluded:
+        lines += ["按默认规则排除："] if collected else []
         lines += [f"- {question_id}" for question_id in excluded]
-    else:
+    if not collected and not excluded:
         lines.append("无。")
     lines += ["", "## 不可比题目（不计入一致率分母）", ""]
     uncomparable = report.get("excluded_uncomparable") or []
@@ -626,6 +653,12 @@ def render_report(report):
             )
     else:
         lines.append("无已评测题目。")
+    collected_in_scope = sum(item.get("collect_only", 0) for item in coverage.values())
+    if collected_in_scope:
+        lines.append(
+            f"- 其中仅采集题：{collected_in_scope}"
+            "（计入运行范围，不参与答对、结果一致率或可比较分母）"
+        )
     scope_gaps = report.get("scope_coverage_gaps") or []
     lines += [
         (
@@ -668,6 +701,12 @@ def render_report(report):
             f"- 波动题：{'是' if entry['volatile'] else '否'}",
             f"- failure_category：{entry.get('failure_category') or '未填写'}",
         ]
+        if entry.get("collect_only"):
+            lines.append(
+                "- 仅采集：是（answer_confirmed=false；不参与正确率、结果一致率或"
+                "可比较分母；参考 SQL 未执行，缺少参考依据的条件列比较与失败归因"
+                "不作为已验证结论）"
+            )
         if entry.get("uncomparable_reason"):
             lines.append(f"- 不可比原因：{entry['uncomparable_reason']}")
         for run in entry["runs"]:
@@ -749,6 +788,19 @@ def run_report(args):
     unknown = sorted(set(mapping) - known)
     if unknown:
         raise SystemExit(f"分类文件包含未知题号：{', '.join(unknown)}")
+    collect_only_ids = {
+        str(entry.get("id")) for entry in report["questions"] if _is_collect_only(entry)
+    }
+    classified_collect_only = sorted(
+        question_id
+        for question_id, category in mapping.items()
+        if category and question_id in collect_only_ids
+    )
+    if classified_collect_only:
+        raise SystemExit(
+            "未确认答案题只采集，缺少已验证参考答案，不能填写失败分类："
+            + ", ".join(classified_collect_only)
+        )
     for entry in report["questions"]:
         question_id = str(entry.get("id"))
         if question_id in mapping:
@@ -763,6 +815,13 @@ def run_cli(args):
     if not token:
         raise SystemExit("指定的 token 环境变量为空或不存在")
     web_url = _normalize_web_url(getattr(args, "web_url", None))
+    collect_unconfirmed = bool(getattr(args, "collect_unconfirmed", False))
+    skip_reference = bool(getattr(args, "skip_reference", False))
+    if collect_unconfirmed and not skip_reference:
+        raise SystemExit(
+            "--collect-unconfirmed 必须与 --skip-reference 一起使用："
+            "未确认参考答案只采集，不能发送执行接口"
+        )
     questions = load_questions(args.questions)
     question_set = _question_set_coverage(questions)
     repeat = getattr(args, "repeat", 1)
@@ -779,8 +838,9 @@ def run_cli(args):
     )
     unconfirmed = [question for question in questions if not question.answer_confirmed]
     confirmed = [question for question in questions if question.answer_confirmed]
+    candidates = questions if collect_unconfirmed else confirmed
     selected = (
-        confirmed if split == "all" else [q for q in confirmed if q.split == split]
+        candidates if split == "all" else [q for q in candidates if q.split == split]
     )
     if args.only:
         only = set(args.only.split(","))
@@ -791,9 +851,7 @@ def run_cli(args):
                 raise SystemExit("--only 的题号不在所选 split 或已被排除")
             raise SystemExit("--only 包含未知题号")
         selected = [question for question in selected if question.id in only]
-    needed = len(selected) * (
-        repeat + (0 if getattr(args, "skip_reference", False) else 1)
-    )
+    needed = len(selected) * (repeat + (0 if skip_reference else 1))
     if args.max_queries < 0 or needed > args.max_queries:
         raise SystemExit("题目可能超过 --max-queries 上限")
     entries = []
@@ -803,10 +861,11 @@ def run_cli(args):
         timeout=600,
     ) as client:
         for question in selected:
+            collect_only = not question.answer_confirmed
             reference = (
-                _execute(client, question.reference_sql)
-                if not getattr(args, "skip_reference", False)
-                else {"status": "skipped"}
+                {"status": "skipped"}
+                if skip_reference or collect_only
+                else _execute(client, question.reference_sql)
             )
             reference_truncated = bool(
                 reference.get("result", {}).get("truncated", False)
@@ -821,17 +880,25 @@ def run_cli(args):
                     else {"status": "no_sql", "detail": None}
                 )
                 comparison = "uncomparable"
-                if agent["status"] == reference["status"] == "succeeded":
+                if (
+                    not collect_only
+                    and agent["status"] == reference["status"] == "succeeded"
+                ):
                     comparison = compare_results(agent["result"], reference["result"])
                 truncated = (
                     bool(agent.get("result", {}).get("truncated", False))
                     or reference_truncated
                 )
-                missing = missing_condition_columns(
-                    question.reference_sql, sql, question.dialect
+                missing = (
+                    None
+                    if collect_only
+                    else missing_condition_columns(
+                        question.reference_sql, sql, question.dialect
+                    )
                 )
                 record = {
                     "run": run_number,
+                    "collect_only": collect_only,
                     "conversation_id": answer["conversation_id"],
                     "tool_calls": answer["tool_calls"],
                     "tool_call_sequence": [
@@ -857,9 +924,17 @@ def run_cli(args):
                 agent.pop("result", None)
                 runs.append(record)
             reference.pop("result", None)
-            equal_runs = sum(run["comparison"] == "equal" for run in runs)
-            result, comparable_runs = _verdict(runs)
-            comparison = _majority_comparison(result)
+            if collect_only:
+                equal_runs = 0
+                result = "uncomparable"
+                comparable_runs = 0
+                comparison = "uncomparable"
+                uncomparable_reason = "answer_confirmed=false"
+            else:
+                equal_runs = sum(run["comparison"] == "equal" for run in runs)
+                result, comparable_runs = _verdict(runs)
+                comparison = _majority_comparison(result)
+                uncomparable_reason = _uncomparable_reason(result, reference)
             display = _display_run(runs, comparison)
             comparisons = dict(Counter(run["comparison"] for run in runs))
             clarified_runs = sum(run["clarified"] for run in runs)
@@ -875,6 +950,7 @@ def run_cli(args):
                     "category": question.category,
                     "split": question.split,
                     "answer_confirmed": question.answer_confirmed,
+                    "collect_only": collect_only,
                     "reference_sql": question.reference_sql,
                     "sql": display["sql"],
                     "actual_sql": display["sql"],
@@ -910,12 +986,14 @@ def run_cli(args):
                     "majority_result": result,
                     "correct": result == "correct",
                     "volatile": len(comparisons) > 1,
-                    "uncomparable_reason": _uncomparable_reason(result, reference),
+                    "uncomparable_reason": uncomparable_reason,
                     "failure_category": None,
                 }
             )
-    comparable = sum(entry["result"] != "uncomparable" for entry in entries)
-    equal = sum(entry["result"] == "correct" for entry in entries)
+    scored_entries = [entry for entry in entries if not _is_collect_only(entry)]
+    collect_only_entries = [entry for entry in entries if _is_collect_only(entry)]
+    comparable = sum(entry["result"] != "uncomparable" for entry in scored_entries)
+    equal = sum(entry["result"] == "correct" for entry in scored_entries)
     execution_total = sum(
         run["agent_sql"] for entry in entries for run in entry["runs"]
     )
@@ -955,6 +1033,12 @@ def run_cli(args):
         "tie": sum(entry["result"] == "tie" for entry in entries),
         "volatile": sum(entry["volatile"] for entry in entries),
     }
+    if collect_unconfirmed:
+        metrics["confirmed_questions"] = len(scored_entries)
+        metrics["collected_only_questions"] = len(collect_only_entries)
+        metrics["collected_only_runs"] = sum(
+            entry["run_count"] for entry in collect_only_entries
+        )
     failures = dict(
         Counter(
             entry["agent"]["reason"]
@@ -970,6 +1054,15 @@ def run_cli(args):
             if run["agent"]["status"] == "failed"
         )
     )
+    collected_unconfirmed = [
+        question.id for question in selected if not question.answer_confirmed
+    ]
+    collected_unconfirmed_ids = set(collected_unconfirmed)
+    excluded_unconfirmed_questions = [
+        question
+        for question in unconfirmed
+        if question.id not in collected_unconfirmed_ids
+    ]
     excluded = [
         {
             "id": question.id,
@@ -977,7 +1070,7 @@ def run_cli(args):
             "split": question.split,
             "reason": "answer_confirmed=false",
         }
-        for question in unconfirmed
+        for question in excluded_unconfirmed_questions
     ]
     excluded_uncomparable = [
         {
@@ -997,13 +1090,17 @@ def run_cli(args):
         "split": split,
         "only": only_ids,
         "repeat": repeat,
+        "collect_unconfirmed": collect_unconfirmed,
         "web_url": web_url,
         "question_set": question_set,
         "expected_categories": expected_categories,
         "metrics": metrics,
         "failure_reasons": failures,
         "run_failure_reasons": run_failures,
-        "excluded_unconfirmed": [question.id for question in unconfirmed],
+        "excluded_unconfirmed": [
+            question.id for question in excluded_unconfirmed_questions
+        ],
+        "collected_unconfirmed": collected_unconfirmed,
         "excluded": excluded,
         "excluded_uncomparable": excluded_uncomparable,
         "questions": entries,
