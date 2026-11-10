@@ -495,8 +495,12 @@ def test_repeat_majority_volatile_and_tie(service, tmp_path, monkeypatch):
     by_id = {entry["id"]: entry for entry in report["questions"]}
     assert (by_id["q3"]["equal_runs"], by_id["q3"]["correct"]) == (3, True)
     assert by_id["q3"]["volatile"] is False
+    assert by_id["q3"]["volatility"] == "stable"
+    assert by_id["q3"]["volatility_reason"] == "comparable_runs_agree"
     assert (by_id["q2"]["equal_runs"], by_id["q2"]["correct"]) == (2, True)
     assert by_id["q2"]["volatile"] is True
+    assert by_id["q2"]["volatility"] == "volatile"
+    assert by_id["q2"]["volatility_reason"] == "comparable_runs_disagree"
     assert (by_id["q1"]["equal_runs"], by_id["q1"]["correct"]) == (1, False)
     assert by_id["q1"]["volatile"] is True
     assert by_id["q2"]["result"] == "correct"
@@ -505,6 +509,7 @@ def test_repeat_majority_volatile_and_tie(service, tmp_path, monkeypatch):
     assert report["metrics"]["correct"] == 2
     assert report["metrics"]["wrong"] == 1
     assert report["metrics"]["volatile"] == 2
+    assert report["metrics"]["volatility_unknown"] == 0
     conversation_ids = [
         run["conversation_id"] for entry in report["questions"] for run in entry["runs"]
     ]
@@ -1265,7 +1270,7 @@ def test_collect_unconfirmed_keeps_runs_and_excludes_them_from_denominators(
             "--model",
             "fake",
             "--repeat",
-            "2",
+            "3",
             "--collect-unconfirmed",
             "--skip-reference",
         ]
@@ -1281,6 +1286,8 @@ def test_collect_unconfirmed_keeps_runs_and_excludes_them_from_denominators(
     assert asked == [
         "dev confirmed",
         "dev confirmed",
+        "dev confirmed",
+        "dev unconfirmed",
         "dev unconfirmed",
         "dev unconfirmed",
     ]
@@ -1311,14 +1318,19 @@ def test_collect_unconfirmed_keeps_runs_and_excludes_them_from_denominators(
     assert collected["missing_condition_columns"] is None
     assert collected["reference_column_count"] is None
     assert collected["reference"]["status"] == "skipped"
-    assert collected["run_count"] == 2
+    assert collected["run_count"] == 3
+    assert collected["volatility"] == "unknown"
+    assert collected["volatile"] is None
+    assert collected["volatility_reason"] == "no_comparable_runs"
     assert confirmed["result"] == "uncomparable"
     assert confirmed["uncomparable_reason"] == "reference_skipped"
     assert confirmed["missing_condition_columns"] == []
+    assert confirmed["volatility"] == "unknown"
+    assert confirmed["volatile"] is None
 
     collected_runs = collected["runs"]
-    assert len(collected_runs) == 2
-    assert len({run["conversation_id"] for run in collected_runs}) == 2
+    assert len(collected_runs) == 3
+    assert len({run["conversation_id"] for run in collected_runs}) == 3
     assert all(run["conversation_id"] for run in collected_runs)
     assert all(run["tool_calls"] for run in collected_runs)
     assert all(run["sql"] in {GOOD, BAD} for run in collected_runs)
@@ -1330,23 +1342,28 @@ def test_collect_unconfirmed_keeps_runs_and_excludes_them_from_denominators(
 
     metrics = report["metrics"]
     assert metrics["questions"] == 2
-    assert metrics["runs"] == 4
+    assert metrics["runs"] == 6
     assert metrics["confirmed_questions"] == 1
     assert metrics["collected_only_questions"] == 1
-    assert metrics["collected_only_runs"] == 2
+    assert metrics["collected_only_runs"] == 3
     assert metrics["equal"] == 0
     assert metrics["comparable"] == 0
     assert metrics["consistency_rate"] is None
     assert metrics["correct"] == 0
     assert metrics["wrong"] == 0
     assert metrics["uncomparable"] == 2
-    assert metrics["execution_total"] == 4
-    assert metrics["execution_success"] == 4
+    assert metrics["execution_total"] == 6
+    assert metrics["execution_success"] == 6
     assert metrics["condition_incomplete"] == 0
+    assert metrics["volatile"] == 0
+    assert metrics["volatility_unknown"] == 2
 
     assert report["coverage"]["维度值筛选"]["collect_only"] == 1
     assert report["coverage"]["维度值筛选"]["uncomparable"] == 1
+    assert report["coverage"]["维度值筛选"]["volatile"] == 0
+    assert report["coverage"]["维度值筛选"]["volatility_unknown"] == 1
     assert report["coverage"]["选表"]["total"] == 1
+    assert report["coverage"]["选表"]["volatility_unknown"] == 1
     question_set = report["question_set_coverage"]
     assert (
         question_set["total"],
@@ -1365,6 +1382,8 @@ def test_collect_unconfirmed_keeps_runs_and_excludes_them_from_denominators(
     assert "answer_confirmed=false" in markdown
     assert "不可比原因：answer_confirmed=false" in markdown
     assert "其中仅采集题：1" in markdown
+    assert "波动题：未知（无可比较结果）" in markdown
+    assert "波动题：否" not in markdown
 
     service.reset({"holdout confirmed": [GOOD], "holdout unconfirmed": [GOOD]})
     holdout_args = _args(tmp_path, path, split="holdout", name="holdout-report")
@@ -1384,23 +1403,43 @@ def test_collect_unconfirmed_keeps_runs_and_excludes_them_from_denominators(
     assert [entry["id"] for entry in holdout["questions"]] == ["h1", "h2"]
 
 
-def test_eval_report_rejects_failure_category_for_collected_unconfirmed(
+def test_eval_report_separates_evidence_backed_observation_for_collected_unconfirmed(
     service, tmp_path, monkeypatch
 ):
-    service.reset({"unconfirmed": [GOOD]})
+    service.reset({"confirmed": [GOOD], "unconfirmed": [GOOD]})
     path = _write_questions(
         tmp_path,
-        [_question("u1", "unconfirmed", confirmed=False)],
+        [
+            _question("d1", "confirmed", category="选表"),
+            _question("u1", "unconfirmed", category="维度值筛选", confirmed=False),
+        ],
     )
     monkeypatch.setenv("EVAL_EXEC_TOKEN", "secret")
-    args = _args(tmp_path, path, name="collect-report")
+    args = _args(tmp_path, path, repeat=3, name="collect-report")
     args.base_url = service.base_url
     args.collect_unconfirmed = True
     args.skip_reference = True
     assert run_cli(args) == 0
 
+    evidence = (
+        "第 2 遍 agent status=succeeded，工具调用显示生成了不带分区条件的 SQL；"
+        "依据轨迹人工复核，未使用参考 SQL"
+    )
     categories = tmp_path / "categories.yaml"
-    categories.write_text(yaml.safe_dump({"u1": "口径错"}), encoding="utf-8")
+    categories.write_text(
+        yaml.safe_dump(
+            [
+                {"id": "d1", "failure_category": "选错表"},
+                {
+                    "id": "u1",
+                    "failure_category": "口径错",
+                    "evidence": evidence,
+                },
+            ],
+            allow_unicode=True,
+        ),
+        encoding="utf-8",
+    )
     report_args = _parser().parse_args(
         [
             "eval-report",
@@ -1410,8 +1449,66 @@ def test_eval_report_rejects_failure_category_for_collected_unconfirmed(
             str(categories),
         ]
     )
-    with pytest.raises(SystemExit) as raised:
-        run_report(report_args)
+    assert run_report(report_args) == 0
 
-    assert "只采集" in str(raised.value)
-    assert "u1" in str(raised.value)
+    report = json.loads((tmp_path / "collect-report.json").read_text())
+    by_id = {entry["id"]: entry for entry in report["questions"]}
+    confirmed = by_id["d1"]
+    collected = by_id["u1"]
+
+    assert confirmed["failure_category"] == "选错表"
+    assert confirmed["observed_failure_category"] is None
+    assert confirmed["observed_failure_evidence"] is None
+    assert collected["failure_category"] is None
+    assert collected["observed_failure_category"] == "口径错"
+    assert collected["observed_failure_evidence"] == evidence
+    assert report["failure_categories"] == {"选错表": 1}
+    assert report["observed_failure_categories"] == {"口径错": 1}
+
+    metrics = report["metrics"]
+    assert metrics["confirmed_questions"] == 1
+    assert metrics["collected_only_questions"] == 1
+    assert metrics["classified"] == 1
+    assert metrics["unclassified"] == 0
+    assert metrics["equal"] == 0
+    assert metrics["correct"] == 0
+    assert metrics["wrong"] == 0
+    assert metrics["comparable"] == 0
+    assert metrics["consistency_rate"] is None
+    assert metrics["volatile"] == 0
+    assert metrics["volatility_unknown"] == 2
+
+    confirmed_coverage = report["coverage"]["选表"]
+    collected_coverage = report["coverage"]["维度值筛选"]
+    assert confirmed_coverage["failure_categories"] == {"选错表": 1}
+    assert confirmed_coverage["observed_failure_categories"] == {}
+    assert collected_coverage["failure_categories"] == {}
+    assert collected_coverage["observed_failure_categories"] == {"口径错": 1}
+    assert collected_coverage["volatility_unknown"] == 1
+
+    markdown = (tmp_path / "collect-report.md").read_text()
+    assert "仅采集题人工观察（答案未验证）" in markdown
+    assert "不可据此宣称答案正确或错误" in markdown
+    assert "不进入正确率、结果一致率、可比较题或已确认题分母" in markdown
+    assert "人工观察分类：口径错" in markdown
+    assert f"人工观察证据：{evidence}" in markdown
+    assert "failure_category：不适用" in markdown
+    assert "波动题：未知（无可比较结果）" in markdown
+    assert "波动题：否" not in markdown
+
+    categories.write_text(yaml.safe_dump({"u1": None}), encoding="utf-8")
+    assert run_report(report_args) == 0
+    report = json.loads((tmp_path / "collect-report.json").read_text())
+    cleared = {entry["id"]: entry for entry in report["questions"]}["u1"]
+    assert cleared["observed_failure_category"] is None
+    assert cleared["observed_failure_evidence"] is None
+    assert report["observed_failure_categories"] == {}
+    assert report["failure_categories"] == {"选错表": 1}
+
+    categories.write_text(yaml.safe_dump({"u1": "口径错"}), encoding="utf-8")
+    assert run_report(report_args) == 0
+    report = json.loads((tmp_path / "collect-report.json").read_text())
+    observed_only = {entry["id"]: entry for entry in report["questions"]}["u1"]
+    assert observed_only["observed_failure_category"] == "口径错"
+    assert observed_only["observed_failure_evidence"] is None
+    assert report["observed_failure_categories"] == {"口径错": 1}
