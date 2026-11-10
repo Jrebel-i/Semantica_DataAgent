@@ -86,11 +86,11 @@ semantica-dataagent eval-exec \
 
 未确认答案的题默认被排除，不计入任何指标，并在报告的 `excluded_unconfirmed` 和 Markdown“未确认答案”一节列出。它们仍会出现在“全部题集”覆盖统计里，用来判断题型是否存在；报告用 `question_set_coverage.includes_unconfirmed=true` 明确标注这一点，同时用 `confirmed_coverage_gaps` 单独给出已确认题缺失的题型。
 
-开启 `--collect-unconfirmed --skip-reference` 后，所选 `split` 内的未确认题会实际运行，但题目保留 `answer_confirmed=false` 并标记 `collect_only=true`、`uncomparable_reason=answer_confirmed=false`。它们计入 `questions`、`runs`、`question_set_coverage`、`coverage` 和运行范围统计，但不进入 `equal`、`comparable`、`consistency_rate`、正确率或已确认题分母，`comparable_runs` 恒为 0。未确认题的参考 SQL 不发送到执行接口，因此不计算 `missing_condition_columns`、`condition_incomplete` 或参考列数。允许在 `eval-report` 中依据执行轨迹、工具调用等独立证据填写人工观察分类，但它写入独立的 `observed_failure_category` / `observed_failure_evidence`，不写入 `failure_category`，不进入已验证失败分类汇总，也不代表答案正确或错误。留出集仍要显式 `--split holdout`，只采集开发集时不会运行或泄露留出题内容。
+开启 `--collect-unconfirmed --skip-reference` 后，所选 `split` 内的未确认题会实际运行，但题目保留 `answer_confirmed=false` 并标记 `collect_only=true`、`uncomparable_reason=answer_confirmed=false`。它们计入 `questions`、`runs`、`question_set_coverage`、`coverage` 和运行范围统计，但不进入 `equal`、`comparable`、`consistency_rate`、正确率或已确认题分母，`comparable_runs` 恒为 0。未确认题的参考 SQL 不发送到执行接口，因此不计算 `missing_condition_columns`、`condition_incomplete` 或参考列数。仅采集的未确认题收到澄清时不会自动把题集的 `caliber` 发回 agent：该口径尚未经过业务确认，回传会缩小题意并污染真实基线。报告仍保留该遍收到澄清的事实、`conversation_id`、已有 `tool_calls` 和无 SQL 状态。已确认题保持原有行为，收到澄清后自动发送经确认的口径追问。允许在 `eval-report` 中依据执行轨迹、工具调用等独立证据填写人工观察分类，但它写入独立的 `observed_failure_category` / `observed_failure_evidence`，不写入 `failure_category`，不进入已验证失败分类汇总，也不代表答案正确或错误。留出集仍要显式 `--split holdout`，只采集开发集时不会运行或泄露留出题内容。
 
 参考 SQL 本身失败、或可比较遍数没有超过一半的题，`result` 为 `uncomparable`：不算错题，不进 `equal` / `comparable` / `consistency_rate` 的分母，并在 `excluded_uncomparable` 和 Markdown“不可比题目”一节单独列出。
 
-报告同时写 `<report>.json` 和 `<report>.md`。JSON 顶层包含 `split`、`only`、`repeat`、`collect_unconfirmed`、`collected_unconfirmed`、`web_url`、`expected_categories`、`metrics`、`excluded_unconfirmed`、`excluded`、`excluded_uncomparable`、`failure_reasons`、`failure_categories`、`observed_failure_categories`、`coverage`、`evaluation_coverage`、`question_set`、`question_set_coverage`、`coverage_gaps`、`confirmed_coverage_gaps`、`scope_coverage_gaps`、`unconfirmed_only_categories` 和 `questions`。每道题包含 `answer_confirmed`、`collect_only`、实际 SQL、参考 SQL、逐遍的 `runs`（对话 id、外部链接 `conversation_url`、工具调用序列、实际 SQL、agent 与参考执行状态、一致性结果），以及 `equal_runs`、`comparable_runs`、`result`（`correct` / `wrong` / `tie` / `uncomparable`）、`correct`、`volatility`（`stable` / `volatile` / `unknown`）、`volatile`（未知时为 `null`）、`volatility_reason`、`uncomparable_reason`、`failure_category` 和 `observed_failure_category` / `observed_failure_evidence`。题目级的 `comparison` / `consistency` / `summary` 和展示用 SQL 取多数判定对应的第一遍，不再固定取第一遍。
+报告同时写 `<report>.json` 和 `<report>.md`。JSON 顶层包含 `split`、`only`、`repeat`、`collect_unconfirmed`、`collected_unconfirmed`、`web_url`、`expected_categories`、`metrics`、`excluded_unconfirmed`、`excluded`、`excluded_uncomparable`、`failure_reasons`、`failure_categories`、`observed_failure_categories`、`coverage`、`evaluation_coverage`、`question_set`、`question_set_coverage`、`coverage_gaps`、`confirmed_coverage_gaps`、`scope_coverage_gaps`、`unconfirmed_only_categories` 和 `questions`。每道题包含 `answer_confirmed`、`collect_only`、实际 SQL、参考 SQL、逐遍的 `runs`（对话 id、外部链接 `conversation_url`、工具调用序列、实际 SQL、agent 与参考执行状态、一致性结果），以及 `equal_runs`、`comparable_runs`、`result`（`correct` / `wrong` / `tie` / `uncomparable`）、`correct`、`volatility`（`stable` / `volatile` / `unknown`）、`volatile`（未知时为 `null`）、`volatility_reason`、`uncomparable_reason`、`failure_category`、`observed_failure_category` / `observed_failure_evidence`、`clarification_received` / `clarification_received_runs` 和 `clarification_followed_up` / `clarification_followed_up_runs`。每遍 `runs` 也分别记录 `clarification_received` 与 `clarification_followed_up`。题目级的 `comparison` / `consistency` / `summary` 和展示用 SQL 取多数判定对应的第一遍，不再固定取第一遍。
 
 核心指标只有一套多数口径：
 
@@ -104,11 +104,15 @@ semantica-dataagent eval-exec \
 执行与澄清类指标的单位写进字段名或在本节固定：
 
 - `execution_success` / `execution_total` / `execution_success_rate`：按遍统计，分母是实际发起了执行的遍数（有 SQL 的遍）。
-- `clarified`：至少一遍发生澄清的题数；`clarified_runs`：发生澄清的遍数。
+- `clarified` / `clarified_runs`：兼容旧报告保留的字段，语义等同“收到澄清”，不要据此推断是否真的发送了自动追问；新代码和报告请优先使用下面的显式字段。
+- `clarification_received` / `clarification_received_runs`：至少一遍收到澄清的题数 / 收到澄清的遍数。
+- `clarification_followed_up` / `clarification_followed_up_runs`：至少一遍实际发送了自动追问的题数 / 实际发送自动追问的遍数。仅采集的未确认题收到澄清后不自动回传题集口径，因此为 0；已确认题保持旧的自动追问行为。
 - `via_plan` / `via_plan_runs`：至少一遍走查询计划的题数 / 走查询计划的遍数。
 - `no_sql` / `no_sql_runs`：至少一遍没有 SQL 的题数 / 没有 SQL 的遍数。
 - `condition_incomplete` / `condition_incomplete_runs`：至少一遍缺参考 SQL 条件列的题数 / 缺条件列的遍数；仅采集的未确认题恒为 0。
 - `confirmed_questions` / `collected_only_questions` / `collected_only_runs`：仅在开启 `--collect-unconfirmed` 时出现，分别表示参与计分的已确认题数、仅采集题数和仅采集遍数；`questions` 与 `runs` 包含仅采集部分。
+
+Markdown 主表的“收到澄清”和“自动追问”两列分别对应上述字段，逐题明细和逐遍明细也分开显示，不会把收到澄清写成已追问。旧报告没有显式字段时，渲染回退到旧 `clarified` 的追问语义。
 
 覆盖统计分成三层，避免 `--only` 或只跑一个 split 时把别的题误报成缺失：
 

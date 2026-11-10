@@ -301,7 +301,7 @@ def _execute(client, sql):
         return failure("DTB 或服务错误")
 
 
-def _answer(client, question, args):
+def _answer(client, question, args, *, collect_only=False):
     first = _ask(
         client,
         {
@@ -313,19 +313,34 @@ def _answer(client, question, args):
         project=getattr(args, "project", None),
     )
     tool_calls = list(first["tool_calls"])
+    clarification_received = bool(first["clarification"])
     if first["sql"]:
         return {
             "sql": first["sql"],
-            "clarified": False,
+            "clarified": clarification_received,
+            "clarification_received": clarification_received,
+            "clarification_followed_up": False,
             "via_plan": first["via_plan"],
             "conversation_id": first["conversation_id"],
             "tool_calls": tool_calls,
         }
     conversation_id = first["conversation_id"]
-    if not first["clarification"] or not conversation_id:
+    if not clarification_received or not conversation_id:
         return {
             "sql": None,
-            "clarified": False,
+            "clarified": clarification_received,
+            "clarification_received": clarification_received,
+            "clarification_followed_up": False,
+            "via_plan": False,
+            "conversation_id": conversation_id,
+            "tool_calls": tool_calls,
+        }
+    if collect_only:
+        return {
+            "sql": None,
+            "clarified": True,
+            "clarification_received": True,
+            "clarification_followed_up": False,
             "via_plan": False,
             "conversation_id": conversation_id,
             "tool_calls": tool_calls,
@@ -342,6 +357,8 @@ def _answer(client, question, args):
     return {
         "sql": second["sql"],
         "clarified": True,
+        "clarification_received": True,
+        "clarification_followed_up": True,
         "via_plan": second["via_plan"],
         "conversation_id": conversation_id,
         "tool_calls": tool_calls,
@@ -818,16 +835,23 @@ def render_report(report):
     lines += [
         "",
         (
-            "| 题号 | 有 SQL | 澄清 | 查询计划 | agent 执行 | 参考执行 | 一致性 | "
+            "| 题号 | 有 SQL | 收到澄清 | 自动追问 | 查询计划 | agent 执行 | 参考执行 | 一致性 | "
             "缺失条件列 | agent 列数 | 参考列数 | agent detail | 参考 detail |"
         ),
-        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for entry in entries:
         missing = entry["missing_condition_columns"]
         missing_text = "—" if missing is None else ", ".join(missing) or "—"
+        clarification_received = entry.get(
+            "clarification_received", entry.get("clarified", False)
+        )
+        clarification_followed_up = entry.get(
+            "clarification_followed_up", entry.get("clarified", False)
+        )
         lines.append(
-            f"| {entry['id']} | {entry['agent_sql']} | {entry['clarified']} | "
+            f"| {entry['id']} | {entry['agent_sql']} | "
+            f"{clarification_received} | {clarification_followed_up} | "
             f"{entry['via_plan']} | {entry['agent']} | {entry['reference']} | "
             f"{entry['comparison']} | {_cell(missing_text)} | "
             f"{entry['agent_column_count'] if entry['agent_column_count'] is not None else '—'} | "
@@ -837,6 +861,12 @@ def render_report(report):
         )
     lines += ["", "## 逐题明细", ""]
     for entry in entries:
+        clarification_received = entry.get(
+            "clarification_received", entry.get("clarified", False)
+        )
+        clarification_followed_up = entry.get(
+            "clarification_followed_up", entry.get("clarified", False)
+        )
         lines += [
             f"### {entry['id']}（{entry.get('category') or DEFAULT_CATEGORY} · {entry.get('split', 'dev')}）",
             "",
@@ -845,6 +875,18 @@ def render_report(report):
             (
                 f"- 判定：{entry['result']}（{entry['equal_runs']}/{entry['run_count']} 遍一致，"
                 f"{entry.get('comparable_runs', 0)} 遍可比较）"
+            ),
+            (
+                "- 收到澄清："
+                f"{'是' if clarification_received else '否'}（"
+                f"{entry.get('clarification_received_runs', entry.get('clarified_runs', 0))}"
+                f"/{entry['run_count']} 遍）"
+            ),
+            (
+                "- 自动追问："
+                f"{'是' if clarification_followed_up else '否'}（"
+                f"{entry.get('clarification_followed_up_runs', 0)}"
+                f"/{entry['run_count']} 遍）"
             ),
             f"- 波动题：{_volatility_label(entry)}",
             (
@@ -866,7 +908,8 @@ def render_report(report):
                 (
                     "- 仅采集：是（answer_confirmed=false；人工观察是对执行轨迹的分析，"
                     "答案仍未验证，不可据此宣称结果正确或错误，不进入正确率、结果一致率、"
-                    "可比较题或已确认题分母；参考 SQL 未执行）"
+                    "可比较题或已确认题分母；参考 SQL 未执行；收到澄清后不自动发送题集"
+                    "口径，保留会话与已有轨迹）"
                 ),
             ]
         if entry.get("uncomparable_reason"):
@@ -894,6 +937,12 @@ def render_report(report):
                 f"- 参考 SQL：`{_cell(run.get('reference_sql'))}`",
                 f"- 工具调用：{calls or '无'}",
                 f"- 一致性：{run['comparison']}",
+                (
+                    "- 收到澄清："
+                    f"{run.get('clarification_received', run.get('clarified', False))}；"
+                    "自动追问："
+                    f"{run.get('clarification_followed_up', run.get('clarified', False))}"
+                ),
             ]
         lines.append("")
     return "\n".join(lines).rstrip() + "\n"
@@ -1060,7 +1109,7 @@ def run_cli(args):
             )
             runs = []
             for run_number in range(1, repeat + 1):
-                answer = _answer(client, question, args)
+                answer = _answer(client, question, args, collect_only=collect_only)
                 sql = answer["sql"]
                 agent = (
                     _execute(client, sql)
@@ -1096,6 +1145,8 @@ def run_cli(args):
                     "actual_sql": sql,
                     "agent_sql": bool(sql),
                     "clarified": answer["clarified"],
+                    "clarification_received": answer["clarification_received"],
+                    "clarification_followed_up": answer["clarification_followed_up"],
                     "via_plan": answer["via_plan"],
                     "agent": agent,
                     "reference_status": reference["status"],
@@ -1125,7 +1176,10 @@ def run_cli(args):
                 uncomparable_reason = _uncomparable_reason(result, reference)
             display = _display_run(runs, comparison)
             comparisons = dict(Counter(run["comparison"] for run in runs))
-            clarified_runs = sum(run["clarified"] for run in runs)
+            clarified_runs = sum(run["clarification_received"] for run in runs)
+            clarification_followed_up_runs = sum(
+                run["clarification_followed_up"] for run in runs
+            )
             via_plan_runs = sum(run["via_plan"] for run in runs)
             no_sql_runs = sum(not run["agent_sql"] for run in runs)
             condition_incomplete_runs = sum(
@@ -1148,6 +1202,10 @@ def run_cli(args):
                     "tool_call_sequence": display["tool_call_sequence"],
                     "clarified": clarified_runs > 0,
                     "clarified_runs": clarified_runs,
+                    "clarification_received": clarified_runs > 0,
+                    "clarification_received_runs": clarified_runs,
+                    "clarification_followed_up": clarification_followed_up_runs > 0,
+                    "clarification_followed_up_runs": clarification_followed_up_runs,
                     "via_plan": via_plan_runs > 0,
                     "via_plan_runs": via_plan_runs,
                     "no_sql": no_sql_runs > 0,
@@ -1199,8 +1257,22 @@ def run_cli(args):
         "runs": sum(entry["run_count"] for entry in entries),
         "no_sql": sum(entry["no_sql"] for entry in entries),
         "no_sql_runs": sum(entry["no_sql_runs"] for entry in entries),
-        "clarified": sum(entry["clarified"] for entry in entries),
-        "clarified_runs": sum(entry["clarified_runs"] for entry in entries),
+        "clarified": sum(entry["clarification_received"] for entry in entries),
+        "clarified_runs": sum(
+            entry["clarification_received_runs"] for entry in entries
+        ),
+        "clarification_received": sum(
+            entry["clarification_received"] for entry in entries
+        ),
+        "clarification_received_runs": sum(
+            entry["clarification_received_runs"] for entry in entries
+        ),
+        "clarification_followed_up": sum(
+            entry["clarification_followed_up"] for entry in entries
+        ),
+        "clarification_followed_up_runs": sum(
+            entry["clarification_followed_up_runs"] for entry in entries
+        ),
         "via_plan": sum(entry["via_plan"] for entry in entries),
         "via_plan_runs": sum(entry["via_plan_runs"] for entry in entries),
         "execution_success": execution_success,

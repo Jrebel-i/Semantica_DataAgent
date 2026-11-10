@@ -125,6 +125,13 @@ class FakeQuestionService:
                                     {"conversation_id": conversation_id},
                                 ),
                                 (
+                                    "tool_start",
+                                    {
+                                        "name": "search_knowledge",
+                                        "summary": "检索知识",
+                                    },
+                                ),
+                                (
                                     "clarification",
                                     {
                                         "questions": [
@@ -198,13 +205,14 @@ def _question(
     split="dev",
     confirmed=True,
     reference_sql=GOOD,
+    caliber="按订单口径",
 ):
     row = {
         "id": question_id,
         "question": question,
         "expected_tables": ["shop.orders"],
         "expected_fields": ["id"],
-        "caliber": "按订单口径",
+        "caliber": caliber,
         "reference_sql": reference_sql,
         "category": category,
         "split": split,
@@ -1144,15 +1152,36 @@ def test_run_level_metrics_and_question_flags(service, tmp_path, monkeypatch):
     assert by_id["mixed"]["result"] == "tie"
     assert by_id["mixed"]["clarified"] is False
     assert by_id["mixed"]["clarified_runs"] == 0
+    assert by_id["mixed"]["clarification_received"] is False
+    assert by_id["mixed"]["clarification_followed_up"] is False
     assert by_id["clarify"]["result"] == "correct"
     assert by_id["clarify"]["clarified"] is True
     assert by_id["clarify"]["clarified_runs"] == 3
+    assert by_id["clarify"]["clarification_received"] is True
+    assert by_id["clarify"]["clarification_received_runs"] == 3
+    assert by_id["clarify"]["clarification_followed_up"] is True
+    assert by_id["clarify"]["clarification_followed_up_runs"] == 3
+    assert all(
+        run["clarification_received"] is True
+        and run["clarification_followed_up"] is True
+        for run in by_id["clarify"]["runs"]
+    )
+    ask_bodies = [
+        body for path, body in service.asks if path == "/api/v1/conversations/ask"
+    ]
+    follow_ups = [body for body in ask_bodies if body.get("conversation_id")]
+    assert len(follow_ups) == 3
+    assert all("按订单口径" in body["question"] for body in follow_ups)
 
     metrics = report["metrics"]
     assert metrics["execution_total"] == 5
     assert metrics["execution_success"] == 5
     assert metrics["clarified"] == 1
     assert metrics["clarified_runs"] == 3
+    assert metrics["clarification_received"] == 1
+    assert metrics["clarification_received_runs"] == 3
+    assert metrics["clarification_followed_up"] == 1
+    assert metrics["clarification_followed_up_runs"] == 3
     assert metrics["no_sql"] == 1
     assert metrics["no_sql_runs"] == 1
     assert metrics["via_plan"] == 0
@@ -1401,6 +1430,85 @@ def test_collect_unconfirmed_keeps_runs_and_excludes_them_from_denominators(
     assert unconfirmed_reference not in service.plans.values()
     holdout = json.loads((tmp_path / "holdout-report.json").read_text())
     assert [entry["id"] for entry in holdout["questions"]] == ["h1", "h2"]
+
+
+def test_collect_unconfirmed_clarification_keeps_trace_without_caliber_follow_up(
+    service, tmp_path, monkeypatch
+):
+    question_text = "unconfirmed clarify"
+    caliber = "未审定口径-绝不应发送"
+    service.reset({question_text: [GOOD, GOOD]}, clarify={question_text})
+    path = _write_questions(
+        tmp_path,
+        [
+            _question(
+                "u1",
+                question_text,
+                category="口径歧义",
+                confirmed=False,
+                caliber=caliber,
+            )
+        ],
+    )
+    monkeypatch.setenv("EVAL_EXEC_TOKEN", "secret")
+    args = _args(tmp_path, path, repeat=2, name="clarify-collect-report")
+    args.base_url = service.base_url
+    args.collect_unconfirmed = True
+    args.skip_reference = True
+    assert run_cli(args) == 0
+
+    ask_bodies = [
+        body for path, body in service.asks if path == "/api/v1/conversations/ask"
+    ]
+    assert len(ask_bodies) == 2
+    assert all(body["question"] == question_text for body in ask_bodies)
+    assert all(not body.get("conversation_id") for body in ask_bodies)
+    serialized_requests = json.dumps(service.asks, ensure_ascii=False)
+    assert caliber not in serialized_requests
+    assert "请按以下口径回答并给出 SQL" not in serialized_requests
+
+    report = json.loads((tmp_path / "clarify-collect-report.json").read_text())
+    entry = report["questions"][0]
+    assert entry["collect_only"] is True
+    assert entry["result"] == "uncomparable"
+    assert entry["correct"] is False
+    assert entry["comparable_runs"] == 0
+    assert entry["clarified"] is True
+    assert entry["clarified_runs"] == 2
+    assert entry["clarification_received"] is True
+    assert entry["clarification_received_runs"] == 2
+    assert entry["clarification_followed_up"] is False
+    assert entry["clarification_followed_up_runs"] == 0
+    assert entry["no_sql"] is True
+    assert entry["no_sql_runs"] == 2
+    assert entry["sql"] is None
+    assert entry["agent_sql"] is False
+
+    runs = entry["runs"]
+    assert len(runs) == 2
+    assert all(run["clarification_received"] is True for run in runs)
+    assert all(run["clarification_followed_up"] is False for run in runs)
+    assert all(run["agent"]["status"] == "no_sql" for run in runs)
+    assert all(run["sql"] is None and run["agent_sql"] is False for run in runs)
+    assert all(run["tool_calls"] for run in runs)
+    conversation_ids = [run["conversation_id"] for run in runs]
+    assert len(conversation_ids) == len(set(conversation_ids)) == 2
+
+    metrics = report["metrics"]
+    assert metrics["clarified"] == 1
+    assert metrics["clarified_runs"] == 2
+    assert metrics["clarification_received"] == 1
+    assert metrics["clarification_received_runs"] == 2
+    assert metrics["clarification_followed_up"] == 0
+    assert metrics["clarification_followed_up_runs"] == 0
+    assert metrics["no_sql"] == 1
+    assert metrics["no_sql_runs"] == 2
+
+    markdown = (tmp_path / "clarify-collect-report.md").read_text()
+    assert "收到澄清：是（2/2 遍）" in markdown
+    assert "自动追问：否（0/2 遍）" in markdown
+    assert "收到澄清后不自动发送题集口径" in markdown
+    assert caliber not in markdown
 
 
 def test_eval_report_separates_evidence_backed_observation_for_collected_unconfirmed(
