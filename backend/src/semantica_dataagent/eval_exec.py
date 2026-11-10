@@ -252,10 +252,10 @@ def _summary(comparison):
 
 
 def _normalize_web_url(value):
-    """Return a validated external UI base URL, or None when it was not supplied."""
+    """Return a validated external UI origin, or None when it was not supplied."""
     if value in (None, ""):
         return None
-    text = str(value).strip().rstrip("/")
+    text = str(value).strip()
     parsed = urlsplit(text)
     if (
         parsed.scheme not in ("http", "https")
@@ -265,9 +265,14 @@ def _normalize_web_url(value):
         or "@" in parsed.netloc
     ):
         raise SystemExit(
-            "--web-url 必须是浏览器可访问的 http(s) 地址，且不能包含凭据、查询参数或片段"
+            "--web-url 必须是浏览器可访问的 http(s) 站点根地址，且不能包含凭据、查询参数或片段"
         )
-    return text
+    if parsed.path not in ("", "/"):
+        raise SystemExit(
+            f"--web-url 不支持路径前缀（收到 {parsed.path!r}）：当前前端只支持根路径 "
+            "/chat/<id>，不能部署在反向代理子路径下；请使用 http(s)://host[:port]"
+        )
+    return f"{parsed.scheme}://{parsed.netloc}"
 
 
 def _conversation_url(web_url, conversation_id):
@@ -462,7 +467,11 @@ def _recompute_summaries(report):
         for category, item in question_set_categories.items()
         if item.get("total", 0) > 0 and item.get("confirmed", 0) == 0
     )
-    web_url = report.get("web_url")
+    try:
+        web_url = _normalize_web_url(report.get("web_url"))
+    except SystemExit as exc:
+        raise SystemExit(f"报告中的 web_url 不可用：{exc}") from None
+    report["web_url"] = web_url
     for entry in entries:
         entry["conversation_url"] = (
             _conversation_url(web_url, entry.get("conversation_id"))

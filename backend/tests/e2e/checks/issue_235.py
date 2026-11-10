@@ -194,7 +194,7 @@ def check_eval_tool_upgrade(ctx):
                 "--base-url",
                 service.base_url,
                 "--web-url",
-                "https://eval.example.test/workbench",
+                "https://eval.example.test",
                 "--token",
                 "SDA_ISSUE_235_E2E_TOKEN",
                 "--agent",
@@ -293,7 +293,7 @@ def check_eval_tool_upgrade(ctx):
             and report["question_set_coverage"]["unconfirmed"] == 1,
             f"question-set coverage did not label unconfirmed questions: {report['question_set_coverage']}",
         )
-        expected_link = "https://eval.example.test/workbench/chat/conv-stable-1"
+        expected_link = "https://eval.example.test/chat/conv-stable-1"
         ctx.require(
             by_id["q3"]["conversation_url"] == expected_link
             and by_id["q3"]["runs"][0]["conversation_url"] == expected_link,

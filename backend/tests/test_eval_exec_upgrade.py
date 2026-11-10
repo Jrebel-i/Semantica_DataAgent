@@ -353,8 +353,16 @@ def test_eval_exec_defaults_to_dev_and_lists_unconfirmed(
     assert [entry["id"] for entry in held["questions"]] == ["h1"]
 
 
+@pytest.mark.parametrize(
+    ("web_url", "normalized"),
+    [
+        ("https://analytics.example.test", "https://analytics.example.test"),
+        ("https://analytics.example.test/", "https://analytics.example.test"),
+        ("http://127.0.0.1:8080/", "http://127.0.0.1:8080"),
+    ],
+)
 def test_conversation_links_use_the_configured_external_web_url(
-    service, tmp_path, monkeypatch
+    service, tmp_path, monkeypatch, web_url, normalized
 ):
     service.reset({"linked": [GOOD]})
     path = _write_questions(tmp_path, [_question("linked", "linked")])
@@ -369,7 +377,7 @@ def test_conversation_links_use_the_configured_external_web_url(
             "--base-url",
             service.base_url,
             "--web-url",
-            "https://analytics.example.test/workbench/",
+            web_url,
             "--token",
             "EVAL_EXEC_TOKEN",
             "--agent",
@@ -383,8 +391,8 @@ def test_conversation_links_use_the_configured_external_web_url(
     assert run_cli(args) == 0
 
     report = json.loads((tmp_path / "linked-report.json").read_text())
-    expected = "https://analytics.example.test/workbench/chat/conv-linked-1"
-    assert report["web_url"] == "https://analytics.example.test/workbench"
+    expected = f"{normalized}/chat/conv-linked-1"
+    assert report["web_url"] == normalized
     entry = report["questions"][0]
     assert entry["conversation_url"] == expected
     assert entry["runs"][0]["conversation_url"] == expected
@@ -392,6 +400,54 @@ def test_conversation_links_use_the_configured_external_web_url(
     assert expected in markdown
     assert "打开对话" in markdown
     assert service.base_url not in markdown
+
+
+@pytest.mark.parametrize(
+    "web_url",
+    [
+        "https://analytics.example.test/workbench",
+        "https://analytics.example.test/workbench/",
+        "https://analytics.example.test/a/b",
+        "https://analytics.example.test///",
+    ],
+)
+def test_web_url_rejects_a_path_prefix_before_running(
+    service, tmp_path, monkeypatch, web_url
+):
+    service.reset({"linked": [GOOD]})
+    path = _write_questions(tmp_path, [_question("linked", "linked")])
+    monkeypatch.setenv("EVAL_EXEC_TOKEN", "secret")
+    args = _parser().parse_args(
+        [
+            "eval-exec",
+            "--questions",
+            str(path),
+            "--report",
+            str(tmp_path / "prefix-report"),
+            "--base-url",
+            service.base_url,
+            "--web-url",
+            web_url,
+            "--token",
+            "EVAL_EXEC_TOKEN",
+            "--agent",
+            "pi",
+            "--provider-id",
+            "fake",
+            "--model",
+            "fake",
+        ]
+    )
+
+    with pytest.raises(SystemExit) as raised:
+        run_cli(args)
+
+    message = str(raised.value)
+    assert "--web-url" in message
+    assert "路径" in message
+    assert "根" in message
+    assert not (tmp_path / "prefix-report.json").exists()
+    assert service.asks == []
 
 
 def test_conversation_links_do_not_guess_an_internal_base_url(
@@ -989,6 +1045,76 @@ def test_eval_report_falls_back_when_a_legacy_report_has_no_question_set(
     markdown = (tmp_path / "report.md").read_text()
     assert "是否计入未确认题：否" in markdown
     assert "旧报告：仅已评测题目" in markdown
+
+
+def test_eval_report_rejects_a_legacy_web_url_with_a_path_prefix(
+    service, tmp_path, monkeypatch
+):
+    service.reset({"good": [GOOD]})
+    path = _write_questions(tmp_path, [_question("good", "good")])
+    monkeypatch.setenv("EVAL_EXEC_TOKEN", "secret")
+    args = _args(tmp_path, path)
+    args.base_url = service.base_url
+    assert run_cli(args) == 0
+
+    report = json.loads((tmp_path / "report.json").read_text())
+    report["web_url"] = "https://analytics.example.test/workbench"
+    (tmp_path / "report.json").write_text(json.dumps(report), encoding="utf-8")
+    categories = tmp_path / "categories.yaml"
+    categories.write_text(yaml.safe_dump({}), encoding="utf-8")
+
+    from semantica_dataagent.eval_exec import run_report
+
+    merge_args = _parser().parse_args(
+        [
+            "eval-report",
+            "--report",
+            str(tmp_path / "report"),
+            "--categories",
+            str(categories),
+        ]
+    )
+    with pytest.raises(SystemExit) as raised:
+        run_report(merge_args)
+    message = str(raised.value)
+    assert "web_url" in message
+    assert "路径" in message
+    assert "根" in message
+
+    rejected = _parser().parse_args(
+        [
+            "eval-report",
+            "--report",
+            str(tmp_path / "report"),
+            "--categories",
+            str(categories),
+            "--web-url",
+            "https://analytics.example.test/workbench",
+        ]
+    )
+    with pytest.raises(SystemExit) as raised:
+        run_report(rejected)
+    assert "--web-url" in str(raised.value)
+    assert "路径" in str(raised.value)
+
+    corrected = _parser().parse_args(
+        [
+            "eval-report",
+            "--report",
+            str(tmp_path / "report"),
+            "--categories",
+            str(categories),
+            "--web-url",
+            "https://analytics.example.test/",
+        ]
+    )
+    assert run_report(corrected) == 0
+    updated = json.loads((tmp_path / "report.json").read_text())
+    assert updated["web_url"] == "https://analytics.example.test"
+    assert (
+        updated["questions"][0]["conversation_url"]
+        == "https://analytics.example.test/chat/conv-good-1"
+    )
 
 
 def test_run_level_metrics_and_question_flags(service, tmp_path, monkeypatch):

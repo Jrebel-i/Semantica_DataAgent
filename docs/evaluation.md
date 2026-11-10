@@ -65,7 +65,7 @@ semantica-dataagent eval-exec \
   --questions data/eval/questions.yaml \
   --report "$HOME/wt/sda/scratch/eval/baseline" \
   --base-url http://127.0.0.1:8000 \
-  --web-url https://dataagent.example.com/workbench \
+  --web-url https://dataagent.example.com \
   --token DATAAGENT_TOKEN \
   --agent pi --provider-id <provider> --model <model> \
   --max-queries 200
@@ -76,12 +76,12 @@ semantica-dataagent eval-exec \
 - `--split all`：调试用；会同时跑两套题。
 - `--repeat 3`：同一道题跑 3 遍，每遍新开一个对话。判对错只看多数判定：可比较遍数（`equal` 或 `different`）必须超过总遍数的一半；其中 `equal` 超过可比较遍数的一半算对，正好一半算平局（按答错计入 `tie`），否则算错。出现不同结果的题标为波动题。参考 SQL 正常执行时，`--repeat 1` 的 `equal`、`comparable` 和 `consistency_rate` 与升级前一致；参考 SQL 失败、跳过或可比较遍数不足一半的题在任何 repeat 下都归为 `uncomparable`。
 - `--only q1,q2`：只跑指定题号，保留部署后的快速冒烟用法；题号必须在当前 `split` 且未被排除。
-- `--web-url https://dataagent.example.com/workbench`：浏览器可访问的外部前端基址，用于生成 `/chat/<conversation_id>` 会话深链接。它是独立参数，不从 `--base-url`、`DATAAGENT_PUBLIC_URL` 或监听地址推导；省略时报告仍写对话 id，但不会猜测链接。`eval-report` 也接受 `--web-url`，可给旧报告补链接。
+- `--web-url https://dataagent.example.com`：浏览器可访问的外部前端**站点根地址**，用于生成根路径 `/chat/<conversation_id>` 会话深链接。它只接受 `http(s)://host[:port]`（可带一个结尾 `/`），不能包含路径前缀、凭据、查询参数或片段。当前前端只识别根路径 `/chat/<id>`，没有验证过的反向代理子路径部署支持，因此 `https://dataagent.example.com/workbench` 会被明确拒绝，不会静默生成打不开的 `/workbench/chat/<id>`。它是独立参数，不从 `--base-url`、`DATAAGENT_PUBLIC_URL` 或监听地址推导；省略时报告仍写对话 id，但不会猜测链接。`eval-report` 也接受 `--web-url`，可给旧报告补链接；旧报告里的 `web_url` 若带路径前缀，重算时会明确报错，需要传入站点根地址修正。
 - `--expected-categories a,b,c`：覆盖默认的期望题型列表（维度值筛选、时间语义、口径歧义、合法空结果、多表 Join）。
 - `--max-queries`：按“题数 ×（repeat + 参考 SQL 一遍）”估算，默认 40。默认 28 道 dev 题跑 1 遍需要 56，跑 3 遍需要 112；跑完整开发集时要显式提高，例如 `--max-queries 200`。`--only` 冒烟保持默认即可。
 - `--skip-reference`：不执行参考 SQL，此时所有题都是 `uncomparable`，不进一致率分母。
 
-会话深链接使用 `/chat/<conversation_id>`。页面用当前登录身份请求 `/api/v1/conversations/{id}`，后端继续校验会话所有权，项目访问沿用现有规则；未登录时先登录，无权限的会话不会显示。打开 `/` 或 `/chat` 仍是新对话，行为不变。
+会话深链接使用站点根路径下的 `/chat/<conversation_id>`；当前前端只识别根路径，不支持带路径前缀的反向代理部署。页面用当前登录身份请求 `/api/v1/conversations/{id}`，后端继续校验会话所有权，项目访问沿用现有规则；未登录时先登录，无权限的会话不会显示。打开 `/` 或 `/chat` 仍是新对话，行为不变。
 
 未确认答案的题先被排除，不计入任何指标，并在报告的 `excluded_unconfirmed` 和 Markdown“未确认答案”一节列出。它们仍会出现在“全部题集”覆盖统计里，用来判断题型是否存在；报告用 `question_set_coverage.includes_unconfirmed=true` 明确标注这一点，同时用 `confirmed_coverage_gaps` 单独给出已确认题缺失的题型。
 

@@ -205,8 +205,9 @@ def _parser() -> argparse.ArgumentParser:
     execution.add_argument("--skip-reference", action="store_true")
     execution.add_argument(
         "--web-url",
-        help="external browser base URL used for conversation links, for example "
-        "https://dataagent.example.com/workbench; no link is emitted when omitted",
+        help="external browser origin used for conversation links, for example "
+        "https://dataagent.example.com; path prefixes are rejected because the UI "
+        "serves /chat/<id> at the site root; no link is emitted when omitted",
     )
     execution.add_argument(
         "--split",
@@ -240,7 +241,8 @@ def _parser() -> argparse.ArgumentParser:
     report.add_argument("--categories", required=True, type=Path)
     report.add_argument(
         "--web-url",
-        help="external browser base URL used to add or refresh conversation links",
+        help="external browser origin used to add or refresh conversation links; "
+        "path prefixes are rejected because the UI serves /chat/<id> at the site root",
     )
     return parser
 

@@ -383,6 +383,36 @@ test("conversation deep links open the addressed conversation with the current t
   history.replaceState(null, "", "/");
 });
 
+test("a path-prefixed chat URL is not treated as a supported deep link", async () => {
+  const conversation = conversationFixture(
+    "conv-prefix",
+    "前缀会话",
+    "前缀问题",
+  );
+  history.replaceState(null, "", "/workbench/chat/conv-prefix");
+  localStorage.setItem("token", "deep-token");
+  const fetcher = conversationAppFetcher([conversation.row], () =>
+    Response.json(conversation.detail),
+  );
+  vi.stubGlobal("fetch", fetcher);
+
+  render(<App />);
+  await waitFor(() =>
+    expect(fetcher).toHaveBeenCalledWith("/api/v1/me", expect.anything()),
+  );
+
+  expect(
+    fetcher.mock.calls.some(([input]) =>
+      String(input).startsWith("/api/v1/conversations/conv-prefix"),
+    ),
+  ).toBe(false);
+  expect(
+    document.querySelector(".chat-page-host")?.hasAttribute("hidden"),
+  ).toBe(true);
+  expect(screen.queryByText("前缀问题")).toBeNull();
+  history.replaceState(null, "", "/");
+});
+
 test("browser back reopens a deep link after the user selected another conversation", async () => {
   const first = conversationFixture("conv-a", "会话 A", "问题 A");
   const second = conversationFixture("conv-b", "会话 B", "问题 B");
