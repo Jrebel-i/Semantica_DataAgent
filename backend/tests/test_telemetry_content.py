@@ -207,6 +207,37 @@ def test_error_messages_are_reduced_to_a_category_by_default(client):
     assert ERROR_MESSAGE not in json.dumps(body)
 
 
+def test_table_names_survive_metadata_only_mode(client):
+    telemetry._queue.join()
+    event = {
+        "name": "validate_sql",
+        "input": {
+            "sql": SQL,
+            "dialect": "hive",
+        },
+        "output": {
+            "tables": [{"name": "shop.orders"}, {"name": "shop.payments"}],
+            "issues": [{"message": ERROR_MESSAGE}],
+        },
+        "metadata": {"duration_ms": 4},
+        "is_error": False,
+    }
+    with Receiver() as receiver:
+        configure(client, receiver)
+        telemetry.submit("span-create", event)
+        receiver.wait()
+        body = receiver.payloads()[0]
+
+    assert body["tables"] == ["shop.orders", "shop.payments"]
+    assert body["metadata"] == {"duration_ms": 4}
+    assert body["status"] == "ok"
+    assert body["is_error"] is False
+    encoded = json.dumps(body)
+    assert SQL not in encoded
+    assert "2025-01-01" not in encoded
+    assert ERROR_MESSAGE not in encoded
+
+
 def test_sql_fingerprint_ignores_literals_but_tracks_structure():
     first = telemetry.sql_fingerprint(
         "SELECT id FROM shop.orders WHERE dt = '2025-01-01' LIMIT 10"

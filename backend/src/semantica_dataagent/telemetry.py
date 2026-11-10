@@ -183,10 +183,34 @@ def _walk_dicts(value):
             yield from _walk_dicts(item)
 
 
-def _metadata_summary(event, capture_content):
+def _table_names(event):
+    """Return table names reachable from caller-provided tool input or output."""
+    names = []
+
+    def add(value):
+        if (
+            isinstance(value, str)
+            and value.strip()
+            and len(value) <= 512
+            and value not in names
+        ):
+            names.append(value)
+
+    for node in _walk_dicts(event):
+        add(node.get("table"))
+        tables = node.get("tables")
+        if isinstance(tables, str):
+            add(tables)
+        elif isinstance(tables, list):
+            for item in tables:
+                add(item)
+                if isinstance(item, dict):
+                    add(item.get("name"))
+    return names[:64]
+
+
+def _metadata_summary(event):
     """Extract literal-free metadata that should survive content filtering."""
-    if capture_content:
-        return {}
     sqls = []
     error_codes = []
     is_error = None
@@ -205,7 +229,7 @@ def _metadata_summary(event, capture_content):
             if (
                 isinstance(code, str)
                 and code
-                and ("retryable" in node or "next_action" in node)
+                and (is_error is True or "retryable" in node or "next_action" in node)
                 and code not in error_codes
             ):
                 error_codes.append(code)
@@ -222,6 +246,11 @@ def _metadata_summary(event, capture_content):
             summary["sql_fingerprint"] = hashlib.sha256(joined.encode()).hexdigest()
         if len(sqls) > 1:
             summary["sql_fingerprints"] = fingerprints
+    tables = _table_names(event)
+    if len(tables) == 1:
+        summary["table"] = tables[0]
+    elif tables:
+        summary["tables"] = sorted(tables)
     if is_error is not None:
         summary["is_error"] = is_error
         summary["status"] = "error" if is_error else "ok"
@@ -236,7 +265,7 @@ def trace_id(conversation_id, turn_id):
     return hashlib.sha256(f"{conversation_id}:{turn_id}".encode()).hexdigest()[:32]
 
 
-def _filtered(value, secrets=(), capture_content=True):
+def _filtered(value, secrets=(), capture_content=False):
     if isinstance(value, dict):
         return {
             key: _filtered(item, secrets, capture_content)
@@ -365,7 +394,7 @@ def submit(kind, event, secrets=()):
             payload.update(
                 {
                     key: value
-                    for key, value in _metadata_summary(event, capture_content).items()
+                    for key, value in _metadata_summary(event).items()
                     if key not in payload
                 }
             )

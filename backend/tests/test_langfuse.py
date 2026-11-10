@@ -58,6 +58,7 @@ def test_filter_removes_nested_fields_and_known_secrets():
             "output": "private-credential",
         },
         ("private-credential",),
+        capture_content=True,
     )
     assert filtered == {"input": {"query": "lookup [REDACTED]"}, "output": "[REDACTED]"}
 
@@ -73,6 +74,7 @@ def test_application_secrets_and_common_credentials_are_redacted():
             "session_file": "contents",
         },
         ("neo4j-secret",),
+        capture_content=True,
     )
     assert result == {
         "text": "Bearer [REDACTED] [REDACTED] password=[REDACTED] api_key=[REDACTED] token=[REDACTED] [REDACTED] ordinary"
@@ -82,6 +84,24 @@ def test_application_secrets_and_common_credentials_are_redacted():
 def test_header_values_embedded_in_text_are_redacted():
     module = telemetry()
     result = module._filtered(
-        {"text": "Authorization: Bearer header-secret\nCookie: session=private\nnormal"}
+        {
+            "text": "Authorization: Bearer header-secret\nCookie: session=private\nnormal"
+        },
+        capture_content=True,
     )
     assert result["text"] == "Authorization: [REDACTED]\nCookie: [REDACTED]\nnormal"
+
+
+def test_filter_drops_content_fields_unless_capture_is_explicitly_enabled():
+    module = telemetry()
+    event = {
+        "name": "validate_sql",
+        "input": {"sql": "SELECT secret FROM shop.orders"},
+        "output": {"rows": [["secret"]]},
+        "metadata": {"duration_ms": 3},
+    }
+
+    assert module._filtered(event) == {
+        "name": "validate_sql",
+        "metadata": {"duration_ms": 3},
+    }
