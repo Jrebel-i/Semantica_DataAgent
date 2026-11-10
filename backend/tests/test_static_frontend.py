@@ -27,6 +27,10 @@ def test_frontend_serves_assets_without_hiding_api(tmp_path):
         == "<html>frontend</html>"
     )
     assert (
+        client.get("/chat/conv-deep", headers={"Accept": "text/html"}).text
+        == "<html>frontend</html>"
+    )
+    assert (
         client.get("/api/v1/missing", headers={"Accept": "text/html"}).status_code
         == 404
     )

@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -10,6 +11,73 @@ import {
 } from "@testing-library/react";
 import { App } from "./App";
 import { clearTableDetailCache } from "./tableDetail";
+
+function conversationFixture(id: string, title: string, question: string) {
+  const row = {
+    id,
+    project_id: "default",
+    project_name: "业务数据",
+    title,
+    agent: "pi",
+    provider_id: "provider-1",
+    model: "model-1",
+    created_at: "2026-11-05T00:00:00Z",
+    updated_at: "2026-11-05T00:00:00Z",
+    turn_count: 1,
+    resumable: true,
+    pinned: false,
+    archived: false,
+  };
+  return {
+    row,
+    detail: {
+      ...row,
+      turns: [
+        {
+          id: 1,
+          sequence: 1,
+          question,
+          status: "completed",
+          answer: `${title}回答`,
+          sql: [],
+          citations: [],
+          error: null,
+          started_at: row.created_at,
+          finished_at: row.updated_at,
+          events: [],
+        },
+      ],
+    },
+  };
+}
+
+function conversationAppFetcher(
+  rows: { id: string; title: string }[],
+  detail: (id: string) => Response | Promise<Response>,
+) {
+  return vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url === "/api/v1/me") return Response.json({ role: "user" });
+    if (url === "/api/v1/agents") return Response.json([]);
+    if (url === "/api/v1/providers") return Response.json([]);
+    if (url === "/api/v1/assistant-defaults") return Response.json({});
+    if (url === "/api/v1/projects")
+      return Response.json([
+        {
+          id: "default",
+          name: "业务数据",
+          status: "active",
+          my_role: "member",
+        },
+      ]);
+    if (url === "/api/v1/conversations") return Response.json(rows);
+    if (url === "/api/v1/conversations?archived=true") return Response.json([]);
+    const match = url.match(/^\/api\/v1\/conversations\/([^/?]+)$/);
+    if (match) return detail(decodeURIComponent(match[1]));
+    if (url === "/healthz") return Response.json({});
+    return Response.json({});
+  });
+}
 
 beforeEach(() => {
   vi.stubGlobal(
@@ -240,6 +308,257 @@ test("search debug is accessible from navigation", async () => {
   fireEvent.click(await screen.findByRole("link", { name: "检索调试" }));
   expect(screen.getByRole("heading", { name: "检索调试" })).toBeTruthy();
   expect(screen.getByLabelText("查询内容")).toBeTruthy();
+});
+
+test("conversation deep links open the addressed conversation with the current token", async () => {
+  const conversation = {
+    id: "conv-deep",
+    project_id: "default",
+    project_name: "业务数据",
+    title: "深链接会话",
+    agent: "pi",
+    provider_id: "provider-1",
+    model: "model-1",
+    created_at: "2026-11-05T00:00:00Z",
+    updated_at: "2026-11-05T00:00:00Z",
+    turn_count: 1,
+    resumable: true,
+    pinned: false,
+    archived: false,
+  };
+  const detail = {
+    ...conversation,
+    turns: [
+      {
+        id: 1,
+        sequence: 1,
+        question: "深链接问题",
+        status: "completed",
+        answer: "深链接回答",
+        sql: [],
+        citations: [],
+        error: null,
+        started_at: conversation.created_at,
+        finished_at: conversation.updated_at,
+        events: [],
+      },
+    ],
+  };
+  history.replaceState(null, "", "/chat/conv-deep");
+  localStorage.setItem("token", "deep-token");
+  const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url === "/api/v1/me") return Response.json({ role: "user" });
+    if (url === "/api/v1/agents") return Response.json([]);
+    if (url === "/api/v1/providers") return Response.json([]);
+    if (url === "/api/v1/assistant-defaults") return Response.json({});
+    if (url === "/api/v1/projects")
+      return Response.json([
+        {
+          id: "default",
+          name: "业务数据",
+          status: "active",
+          my_role: "member",
+        },
+      ]);
+    if (url === "/api/v1/conversations") return Response.json([conversation]);
+    if (url === "/api/v1/conversations?archived=true") return Response.json([]);
+    if (url === "/api/v1/conversations/conv-deep") return Response.json(detail);
+    if (url === "/healthz") return Response.json({});
+    return Response.json({});
+  });
+  vi.stubGlobal("fetch", fetcher);
+  render(<App />);
+
+  expect(
+    await screen.findByText("深链接会话", {
+      selector: ".chat-header-title strong",
+    }),
+  ).toBeTruthy();
+  expect(await screen.findByText("深链接问题")).toBeTruthy();
+  expect(fetcher).toHaveBeenCalledWith("/api/v1/conversations/conv-deep", {
+    headers: { Authorization: "Bearer deep-token" },
+  });
+  expect(window.location.pathname).toBe("/chat/conv-deep");
+  history.replaceState(null, "", "/");
+});
+
+test("a path-prefixed chat URL is not treated as a supported deep link", async () => {
+  const conversation = conversationFixture(
+    "conv-prefix",
+    "前缀会话",
+    "前缀问题",
+  );
+  history.replaceState(null, "", "/workbench/chat/conv-prefix");
+  localStorage.setItem("token", "deep-token");
+  const fetcher = conversationAppFetcher([conversation.row], () =>
+    Response.json(conversation.detail),
+  );
+  vi.stubGlobal("fetch", fetcher);
+
+  render(<App />);
+  await waitFor(() =>
+    expect(fetcher).toHaveBeenCalledWith("/api/v1/me", expect.anything()),
+  );
+
+  expect(
+    fetcher.mock.calls.some(([input]) =>
+      String(input).startsWith("/api/v1/conversations/conv-prefix"),
+    ),
+  ).toBe(false);
+  expect(
+    document.querySelector(".chat-page-host")?.hasAttribute("hidden"),
+  ).toBe(true);
+  expect(screen.queryByText("前缀问题")).toBeNull();
+  history.replaceState(null, "", "/");
+});
+
+test("browser back reopens a deep link after the user selected another conversation", async () => {
+  const first = conversationFixture("conv-a", "会话 A", "问题 A");
+  const second = conversationFixture("conv-b", "会话 B", "问题 B");
+  history.replaceState(null, "", "/chat/conv-a");
+  localStorage.setItem("token", "deep-token");
+  vi.stubGlobal(
+    "fetch",
+    conversationAppFetcher([first.row, second.row], (id) =>
+      Response.json(id === first.row.id ? first.detail : second.detail),
+    ),
+  );
+
+  render(<App />);
+  expect(
+    await screen.findByText("会话 A", {
+      selector: ".chat-header-title strong",
+    }),
+  ).toBeTruthy();
+
+  fireEvent.click(await screen.findByRole("button", { name: "会话 B" }));
+  expect(
+    await screen.findByText("会话 B", {
+      selector: ".chat-header-title strong",
+    }),
+  ).toBeTruthy();
+  expect(window.location.pathname).toBe("/chat");
+
+  act(() => window.history.back());
+
+  await waitFor(() => expect(window.location.pathname).toBe("/chat/conv-a"));
+  expect(
+    await screen.findByText("会话 A", {
+      selector: ".chat-header-title strong",
+    }),
+  ).toBeTruthy();
+  expect(await screen.findByText("问题 A")).toBeTruthy();
+  expect(screen.queryByText("问题 B")).toBeNull();
+  history.replaceState(null, "", "/");
+});
+
+test("a late conversation response cannot replace the conversation restored by browser back", async () => {
+  const first = conversationFixture("conv-a", "会话 A", "问题 A");
+  const second = conversationFixture("conv-b", "会话 B", "问题 B");
+  let resolveSecond!: (response: Response) => void;
+  const secondResponse = new Promise<Response>((resolve) => {
+    resolveSecond = resolve;
+  });
+  history.replaceState(null, "", "/chat/conv-a");
+  localStorage.setItem("token", "deep-token");
+  vi.stubGlobal(
+    "fetch",
+    conversationAppFetcher([first.row, second.row], (id) =>
+      id === first.row.id ? Response.json(first.detail) : secondResponse,
+    ),
+  );
+
+  render(<App />);
+  expect(
+    await screen.findByText("会话 A", {
+      selector: ".chat-header-title strong",
+    }),
+  ).toBeTruthy();
+
+  fireEvent.click(await screen.findByRole("button", { name: "会话 B" }));
+  await waitFor(() => expect(window.location.pathname).toBe("/chat"));
+  act(() => window.history.back());
+  await waitFor(() => expect(window.location.pathname).toBe("/chat/conv-a"));
+
+  await act(async () => {
+    resolveSecond(Response.json(second.detail));
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
+  });
+
+  expect(
+    screen.getByText("会话 A", { selector: ".chat-header-title strong" }),
+  ).toBeTruthy();
+  expect(screen.queryByText("问题 B")).toBeNull();
+  history.replaceState(null, "", "/");
+});
+
+test("a rejected stored token does not load a deep link before the login retry", async () => {
+  const conversation = conversationFixture(
+    "conv-retry",
+    "登录重试会话",
+    "登录重试问题",
+  );
+  const detailTokens: string[] = [];
+  history.replaceState(null, "", "/chat/conv-retry");
+  localStorage.setItem("token", "expired-token");
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const authorization =
+        (init?.headers as Record<string, string> | undefined)?.Authorization ??
+        "";
+      if (url === "/api/v1/me") {
+        return authorization === "Bearer fresh-token"
+          ? Response.json({ role: "user" })
+          : new Response("", { status: 401 });
+      }
+      const match = url.match(/^\/api\/v1\/conversations\/([^/?]+)$/);
+      if (match) {
+        detailTokens.push(authorization);
+        return authorization === "Bearer fresh-token"
+          ? Response.json(conversation.detail)
+          : new Response("", { status: 401 });
+      }
+      if (url === "/api/v1/agents") return Response.json([]);
+      if (url === "/api/v1/providers") return Response.json([]);
+      if (url === "/api/v1/assistant-defaults") return Response.json({});
+      if (url === "/api/v1/projects")
+        return Response.json([
+          {
+            id: "default",
+            name: "业务数据",
+            status: "active",
+            my_role: "member",
+          },
+        ]);
+      if (url === "/api/v1/conversations")
+        return Response.json([conversation.row]);
+      if (url === "/api/v1/conversations?archived=true")
+        return Response.json([]);
+      if (url === "/healthz") return Response.json({});
+      return Response.json({});
+    }),
+  );
+
+  render(<App />);
+  expect(await screen.findByRole("button", { name: /登\s*录/ })).toBeTruthy();
+  expect(detailTokens).toEqual([]);
+
+  fireEvent.change(screen.getByLabelText("粘贴个人令牌"), {
+    target: { value: "fresh-token" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: /登\s*录/ }));
+
+  expect(
+    await screen.findByText("登录重试会话", {
+      selector: ".chat-header-title strong",
+    }),
+  ).toBeTruthy();
+  expect(await screen.findByText("登录重试问题")).toBeTruthy();
+  expect(detailTokens).toEqual(["Bearer fresh-token"]);
+  history.replaceState(null, "", "/");
 });
 
 test("MCP access page is reachable from navigation", async () => {

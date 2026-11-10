@@ -44,6 +44,7 @@ export function ChatPage({
   settingsOnly = false,
   sessionTarget,
   newTarget,
+  initialConversationId = "",
   onNavigateChat,
   refreshKey = 0,
 }: {
@@ -53,12 +54,16 @@ export function ChatPage({
   settingsOnly?: boolean;
   sessionTarget?: HTMLElement | null;
   newTarget?: HTMLElement | null;
+  initialConversationId?: string;
   onNavigateChat?: () => void;
   language?: Language;
   onChangeLanguage?: () => void;
   refreshKey?: number;
 }) {
   const askSequence = useRef(0);
+  const deepLinkLoaded = useRef("");
+  const deepLinkTarget = useRef(initialConversationId);
+  const conversationLoad = useRef({ sequence: 0, id: "" });
   const [turns, setTurns] = useState<Turn[]>([]);
   const [live, setLive] = useState<LiveTurn | null>(null);
   const [expiredPlans, setExpiredPlans] = useState<string[]>([]);
@@ -267,7 +272,9 @@ export function ChatPage({
     }
   }
 
-  async function openConversation(id: string) {
+  async function openConversation(id: string, fromDeepLink = false) {
+    const sequence = conversationLoad.current.sequence + 1;
+    conversationLoad.current = { sequence, id };
     setLoadingConversation(true);
     setError("");
     try {
@@ -276,11 +283,17 @@ export function ChatPage({
       });
       if (!response.ok) throw new Error();
       const detail = (await response.json()) as ConversationDetail;
+      if (conversationLoad.current.sequence !== sequence) return;
+      if (fromDeepLink && deepLinkTarget.current !== id) return;
       applyConversation(detail);
     } catch {
-      setError(t.askError);
+      if (conversationLoad.current.sequence === sequence) {
+        setError(t.askError);
+      }
     } finally {
-      setLoadingConversation(false);
+      if (conversationLoad.current.sequence === sequence) {
+        setLoadingConversation(false);
+      }
     }
   }
 
@@ -309,6 +322,10 @@ export function ChatPage({
         if (!response.ok) return;
         const detail = (await response.json()) as ConversationDetail;
         if (sequence !== askSequence.current) return;
+        if (deepLinkTarget.current && deepLinkTarget.current !== id) return;
+        if (conversationLoad.current.id && conversationLoad.current.id !== id) {
+          return;
+        }
         const last = detail.turns.at(-1);
         if (last && last.status !== "running") {
           applyConversation(detail);
@@ -323,7 +340,35 @@ export function ChatPage({
     }
   }
 
+  useEffect(() => {
+    deepLinkTarget.current = initialConversationId;
+    if (!initialConversationId) {
+      deepLinkLoaded.current = "";
+      return;
+    }
+    if (!token) return;
+    if (initialConversationId === currentConversationId) {
+      deepLinkLoaded.current = initialConversationId;
+      if (conversationLoad.current.id !== initialConversationId) {
+        conversationLoad.current = {
+          sequence: conversationLoad.current.sequence + 1,
+          id: "",
+        };
+        setLoadingConversation(false);
+      }
+      return;
+    }
+    if (deepLinkLoaded.current === initialConversationId) return;
+    deepLinkLoaded.current = initialConversationId;
+    void openConversation(initialConversationId, true);
+  }, [initialConversationId, token, currentConversationId]);
+
   function newConversation() {
+    conversationLoad.current = {
+      sequence: conversationLoad.current.sequence + 1,
+      id: "",
+    };
+    setLoadingConversation(false);
     selectionTouched.current = true;
     setCurrentConversationId("");
     setAgentId(defaults.agent);
@@ -444,7 +489,6 @@ export function ChatPage({
                 onSaveTitle={saveTitle}
                 onDeleteConversation={(id) => void deleteConversation(id)}
                 onToggleArchived={() => setShowArchived(!showArchived)}
-                onNavigateChat={onNavigateChat}
               />,
               sessionTarget,
             )
@@ -485,7 +529,6 @@ export function ChatPage({
               onSaveTitle={saveTitle}
               onDeleteConversation={(id) => void deleteConversation(id)}
               onToggleArchived={() => setShowArchived(!showArchived)}
-              onNavigateChat={onNavigateChat}
             />
           )}
           <div className="chat-conversation">

@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
+import random
 import time
 import uuid
 from collections.abc import Callable
@@ -29,6 +31,21 @@ from .agent_types import (
 )
 
 DIALECTS = ("hive", "spark", "doris")
+SPLITS = ("dev", "holdout")
+DEFAULT_CATEGORY = "未分类"
+DEFAULT_SPLIT_SEED = 235
+DEFAULT_HOLDOUT_RATIO = 0.3
+FAILURE_CATEGORIES = (
+    "选错表",
+    "选错字段",
+    "口径错",
+    "取值错",
+    "时间语义错",
+    "Join / 粒度错",
+    "该澄清没澄清",
+    "不该澄清却澄清",
+    "题目本身有问题",
+)
 CLARIFY_MARKERS = (
     "澄清",
     "请确认",
@@ -132,6 +149,9 @@ class Question:
     notes: str = ""
     dialect: str = "hive"
     clarify: bool = False
+    category: str = DEFAULT_CATEGORY
+    split: str = "dev"
+    answer_confirmed: bool = True
 
 
 def _required(mapping: dict[str, Any], key: str, where: str):
@@ -182,6 +202,15 @@ def load_questions(path: str | Path, *, text: str | None = None) -> list[Questio
         dialect = str(row.get("dialect") or "hive").lower()
         if dialect not in DIALECTS:
             raise ValueError(f"{where}.dialect must be one of {', '.join(DIALECTS)}")
+        split = str(row.get("split") or "dev").strip().lower()
+        if split not in SPLITS:
+            raise ValueError(f"{where}.split must be one of {', '.join(SPLITS)}")
+        category = str(row.get("category") or DEFAULT_CATEGORY).strip()
+        if not category:
+            category = DEFAULT_CATEGORY
+        confirmed = row.get("answer_confirmed", True)
+        if not isinstance(confirmed, bool):
+            raise TypeError(f"{where}.answer_confirmed must be a boolean")
         questions.append(
             Question(
                 id=question_id,
@@ -193,9 +222,105 @@ def load_questions(path: str | Path, *, text: str | None = None) -> list[Questio
                 notes=str(row.get("notes") or "").strip(),
                 dialect=dialect,
                 clarify=bool(row.get("clarify", False)),
+                category=category,
+                split=split,
+                answer_confirmed=confirmed,
             )
         )
     return questions
+
+
+def load_question_payload(path: str | Path) -> Any:
+    """Load the raw YAML document so a split can be written back in place."""
+    source = Path(path)
+    try:
+        return yaml.safe_load(source.read_text(encoding="utf-8"))
+    except yaml.YAMLError as exc:
+        raise ValueError(f"invalid question YAML: {exc}") from None
+
+
+def save_question_payload(path: str | Path, payload: Any) -> None:
+    target = Path(path)
+    text = yaml.safe_dump(payload, allow_unicode=True, sort_keys=False)
+    _atomic_write(target, text)
+
+
+def assign_splits(
+    rows: list[dict[str, Any]],
+    *,
+    dev_size: int | None = None,
+    holdout_size: int | None = None,
+    holdout_ratio: float = DEFAULT_HOLDOUT_RATIO,
+    seed: int = DEFAULT_SPLIT_SEED,
+) -> list[dict[str, Any]]:
+    """Assign a reproducible, category-stratified dev/holdout split in place."""
+    total = len(rows)
+    if total == 0:
+        raise ValueError("question set is empty")
+    if holdout_size is None and dev_size is None:
+        if not 0 < holdout_ratio < 1:
+            raise ValueError("holdout ratio must be between 0 and 1")
+        holdout_size = min(total, max(0, round(total * holdout_ratio)))
+    elif holdout_size is None:
+        holdout_size = total - int(dev_size)
+    elif dev_size is None:
+        dev_size = total - int(holdout_size)
+    else:
+        dev_size = int(dev_size)
+        holdout_size = int(holdout_size)
+    if dev_size is None:
+        dev_size = total - holdout_size
+    if holdout_size is None:
+        holdout_size = total - dev_size
+    if dev_size < 0 or holdout_size < 0 or dev_size + holdout_size != total:
+        raise ValueError("dev and holdout sizes must add up to the number of questions")
+
+    buckets: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        category = str(row.get("category") or DEFAULT_CATEGORY).strip()
+        buckets.setdefault(category or DEFAULT_CATEGORY, []).append(row)
+
+    exact: list[tuple[float, str]] = []
+    quotas: dict[str, int] = {}
+    for category, items in buckets.items():
+        value = len(items) * holdout_size / total
+        quota = int(value)
+        quotas[category] = quota
+        exact.append((value - quota, category))
+    missing = holdout_size - sum(quotas.values())
+    for _, category in sorted(exact, key=lambda item: (-item[0], item[1]))[:missing]:
+        quotas[category] += 1
+
+    for category in sorted(buckets):
+        items = buckets[category]
+        digest = hashlib.sha256(f"{seed}:{category}".encode()).digest()
+        rng = random.Random(int.from_bytes(digest[:8], "big"))
+        shuffled = list(items)
+        rng.shuffle(shuffled)
+        for index, row in enumerate(shuffled):
+            row["split"] = "holdout" if index < quotas[category] else "dev"
+    return rows
+
+
+def run_split(args: Any) -> int:
+    source = Path(args.questions)
+    payload = load_question_payload(source)
+    rows = _question_rows(payload)
+    if not all(isinstance(row, dict) for row in rows):
+        raise SystemExit("question set rows must be objects")
+    load_questions(source)
+    try:
+        assign_splits(
+            rows,
+            dev_size=getattr(args, "dev_size", None),
+            holdout_size=getattr(args, "holdout_size", None),
+            holdout_ratio=getattr(args, "holdout_ratio", DEFAULT_HOLDOUT_RATIO),
+            seed=getattr(args, "seed", DEFAULT_SPLIT_SEED),
+        )
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from None
+    save_question_payload(source, payload)
+    return 0
 
 
 def _full_name(value: str) -> str:
