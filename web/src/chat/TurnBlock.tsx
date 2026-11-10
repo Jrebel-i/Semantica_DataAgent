@@ -117,7 +117,11 @@ export function TurnBlock({
           )}
           {result && (
             <div className="card query-result-preview">
-              <ResultTable result={result} limit={20} />
+              <ResultTable
+                result={result}
+                limit={20}
+                label={messages.queryResults}
+              />
               <p>{resultCountText(messages, result.row_count)}</p>
               {plan &&
                 result.row_count >=

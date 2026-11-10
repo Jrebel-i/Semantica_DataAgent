@@ -72,6 +72,8 @@ const messages = {
     collapseMessage: "收起",
     expandNavigation: "展开导航",
     collapseNavigation: "收起导航",
+    openNavigation: "打开导航",
+    closeNavigation: "关闭导航",
     agentSettings: "Agent 配置",
     agentSettingsHint:
       "为每个 agent 固定可用的 provider 与默认模型；新会话会从这里取默认值。",
@@ -588,6 +590,8 @@ const messages = {
     collapseMessage: "Show less",
     expandNavigation: "Expand navigation",
     collapseNavigation: "Collapse navigation",
+    openNavigation: "Open navigation",
+    closeNavigation: "Close navigation",
     agentSettings: "Agent configuration",
     agentSettingsHint:
       "Pin the providers and default model available to each agent. New conversations start from these defaults.",

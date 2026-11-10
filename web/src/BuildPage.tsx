@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Alert, Button, Descriptions, Input, Table, Tag } from "antd";
 import type { components } from "./api";
 import type { Messages } from "./i18n";
+import { TableScroll } from "./TableScroll";
 
 type Build = components["schemas"]["BuildView"];
 type Generations = components["schemas"]["GenerationsView"];
@@ -213,68 +214,74 @@ export function BuildPage({
                 </Button>
               </div>
             </div>
-            <Table
-              rowKey="id"
-              dataSource={builds}
-              locale={{ emptyText: t.noBuilds }}
-              pagination={false}
-              onRow={(row) => ({ onClick: () => setSelectedId(row.id) })}
-              columns={[
-                { title: t.buildId, dataIndex: "id" },
-                {
-                  title: t.buildStatus,
-                  render: (_, row) => (
-                    <Tag color={statusColors[row.status]}>{t[row.status]}</Tag>
-                  ),
-                },
-                {
-                  title: t.buildType,
-                  render: (_, row) => t[row.build_type],
-                },
-                { title: t.buildTriggeredBy, dataIndex: "triggered_by" },
-                {
-                  title: t.buildStartedAt,
-                  render: (_, row) => displayTime(row.started_at),
-                },
-                {
-                  title: t.buildFinishedAt,
-                  render: (_, row) => displayTime(row.finished_at),
-                },
-              ]}
-            />
+            <TableScroll label={t.builds}>
+              <Table
+                rowKey="id"
+                dataSource={builds}
+                locale={{ emptyText: t.noBuilds }}
+                pagination={false}
+                onRow={(row) => ({ onClick: () => setSelectedId(row.id) })}
+                columns={[
+                  { title: t.buildId, dataIndex: "id" },
+                  {
+                    title: t.buildStatus,
+                    render: (_, row) => (
+                      <Tag color={statusColors[row.status]}>
+                        {t[row.status]}
+                      </Tag>
+                    ),
+                  },
+                  {
+                    title: t.buildType,
+                    render: (_, row) => t[row.build_type],
+                  },
+                  { title: t.buildTriggeredBy, dataIndex: "triggered_by" },
+                  {
+                    title: t.buildStartedAt,
+                    render: (_, row) => displayTime(row.started_at),
+                  },
+                  {
+                    title: t.buildFinishedAt,
+                    render: (_, row) => displayTime(row.finished_at),
+                  },
+                ]}
+              />
+            </TableScroll>
           </section>
           <section className="card section-card">
             <div className="card-title-row">
               <h2 className="card-title">{t.generations}</h2>
             </div>
-            <Table
-              rowKey="name"
-              pagination={false}
-              dataSource={generations?.generations ?? []}
-              columns={[
-                { title: t.generationName, dataIndex: "name" },
-                {
-                  title: t.buildStartedAt,
-                  render: (_, row) => displayTime(row.created_at),
-                },
-                { title: t.generationCommit, dataIndex: "source_commit" },
-                {
-                  title: t.generationCounts,
-                  render: (_, row) => JSON.stringify(row.counts),
-                },
-                {
-                  title: t.generationCurrent,
-                  render: (_, row) =>
-                    row.current ? (
-                      t.generationCurrent
-                    ) : (
-                      <Button onClick={() => void switchGeneration(row.name)}>
-                        {t.generationSwitch}
-                      </Button>
-                    ),
-                },
-              ]}
-            />
+            <TableScroll label={t.generations}>
+              <Table
+                rowKey="name"
+                pagination={false}
+                dataSource={generations?.generations ?? []}
+                columns={[
+                  { title: t.generationName, dataIndex: "name" },
+                  {
+                    title: t.buildStartedAt,
+                    render: (_, row) => displayTime(row.created_at),
+                  },
+                  { title: t.generationCommit, dataIndex: "source_commit" },
+                  {
+                    title: t.generationCounts,
+                    render: (_, row) => JSON.stringify(row.counts),
+                  },
+                  {
+                    title: t.generationCurrent,
+                    render: (_, row) =>
+                      row.current ? (
+                        t.generationCurrent
+                      ) : (
+                        <Button onClick={() => void switchGeneration(row.name)}>
+                          {t.generationSwitch}
+                        </Button>
+                      ),
+                  },
+                ]}
+              />
+            </TableScroll>
           </section>
         </div>
         <div className="build-stack">
@@ -330,51 +337,58 @@ export function BuildPage({
               <h3 className="card-title" style={{ marginTop: 16 }}>
                 {t.buildStats}
               </h3>
-              <Table
-                rowKey="key"
-                pagination={false}
-                dataSource={Object.entries(selected.counts)
-                  .sort(([left], [right]) => left.localeCompare(right))
-                  .map(([key, value]) => ({ key, value }))}
-                columns={[
-                  {
-                    title: t.buildStats,
-                    render: (_, row) =>
-                      countLabels[row.key] ? t[countLabels[row.key]] : row.key,
-                  },
-                  { title: "", dataIndex: "value" },
-                ]}
-              />
+              <TableScroll label={t.buildStats}>
+                <Table
+                  rowKey="key"
+                  pagination={false}
+                  dataSource={Object.entries(selected.counts)
+                    .sort(([left], [right]) => left.localeCompare(right))
+                    .map(([key, value]) => ({ key, value }))}
+                  columns={[
+                    {
+                      title: t.buildStats,
+                      render: (_, row) =>
+                        countLabels[row.key]
+                          ? t[countLabels[row.key]]
+                          : row.key,
+                    },
+                    { title: "", dataIndex: "value" },
+                  ]}
+                />
+              </TableScroll>
               <h3 className="card-title" style={{ marginTop: 16 }}>
                 {t.buildLogs}
               </h3>
-              <Table
-                rowKey="index"
-                pagination={false}
-                dataSource={selected.logs.map((log, index) => ({
-                  ...log,
-                  index,
-                }))}
-                columns={[
-                  {
-                    title: t.buildLogTime,
-                    render: (_, row) => displayTime(row.timestamp),
-                  },
-                  { title: t.buildStage, dataIndex: "stage" },
-                  {
-                    title: t.buildLogs,
-                    render: (_, row) => (
-                      <span
-                        style={{
-                          color: row.level === "error" ? "#cf1322" : undefined,
-                        }}
-                      >
-                        {row.message}
-                      </span>
-                    ),
-                  },
-                ]}
-              />
+              <TableScroll label={t.buildLogs}>
+                <Table
+                  rowKey="index"
+                  pagination={false}
+                  dataSource={selected.logs.map((log, index) => ({
+                    ...log,
+                    index,
+                  }))}
+                  columns={[
+                    {
+                      title: t.buildLogTime,
+                      render: (_, row) => displayTime(row.timestamp),
+                    },
+                    { title: t.buildStage, dataIndex: "stage" },
+                    {
+                      title: t.buildLogs,
+                      render: (_, row) => (
+                        <span
+                          style={{
+                            color:
+                              row.level === "error" ? "#cf1322" : undefined,
+                          }}
+                        >
+                          {row.message}
+                        </span>
+                      ),
+                    },
+                  ]}
+                />
+              </TableScroll>
             </section>
           )}
         </div>

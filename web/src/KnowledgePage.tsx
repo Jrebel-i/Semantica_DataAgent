@@ -702,7 +702,12 @@ export function KnowledgePage({
                       {messages.fields}
                       <span className="count">{detail.fields.length}</span>
                     </h2>
-                    <div className="knowledge-table-scroll">
+                    <div
+                      className="knowledge-table-scroll"
+                      tabIndex={0}
+                      role="region"
+                      aria-label={messages.fields}
+                    >
                       <table className="data-table">
                         <thead>
                           <tr>
@@ -740,25 +745,11 @@ export function KnowledgePage({
                                     {field.name}
                                   </button>
                                 </td>
-                                <td className="field-type" title={field.type}>
-                                  {field.type}
-                                </td>
-                                <td
-                                  className="field-comment"
-                                  title={field.comment}
-                                >
+                                <td className="field-type">{field.type}</td>
+                                <td className="field-comment">
                                   {field.comment}
                                 </td>
-                                <td
-                                  className="field-dimension"
-                                  title={
-                                    field.dimension_too_many
-                                      ? messages.dimTooMany
-                                      : field.dimension_count != null
-                                        ? `${messages.dimCount}: ${field.dimension_count}`
-                                        : undefined
-                                  }
-                                >
+                                <td className="field-dimension">
                                   <DimensionStatus
                                     count={field.dimension_count}
                                     tooMany={field.dimension_too_many}

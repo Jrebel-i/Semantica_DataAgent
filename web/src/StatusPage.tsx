@@ -1,6 +1,7 @@
 import { Button, Card, Table } from "antd";
 import type { paths } from "./api";
 import type { Messages } from "./i18n";
+import { TableScroll } from "./TableScroll";
 
 export type Health =
   paths["/healthz"]["get"]["responses"][200]["content"]["application/json"];
@@ -18,19 +19,24 @@ export function StatusPage({
       <div className="page-actions" style={{ marginBottom: 12 }}>
         <Button onClick={onRefresh}>{messages.refresh}</Button>
       </div>
-      <Table
-        pagination={false}
-        rowKey="name"
-        dataSource={Object.entries(health || {}).map(([name, value]) => ({
-          name,
-          ...value,
-        }))}
-        columns={[
-          { title: messages.service, dataIndex: "name" },
-          { title: messages.status, render: (_, row) => messages[row.status] },
-          { title: messages.time, dataIndex: "elapsed_ms" },
-        ]}
-      />
+      <TableScroll label={messages.statusPage}>
+        <Table
+          pagination={false}
+          rowKey="name"
+          dataSource={Object.entries(health || {}).map(([name, value]) => ({
+            name,
+            ...value,
+          }))}
+          columns={[
+            { title: messages.service, dataIndex: "name" },
+            {
+              title: messages.status,
+              render: (_, row) => messages[row.status],
+            },
+            { title: messages.time, dataIndex: "elapsed_ms" },
+          ]}
+        />
+      </TableScroll>
     </Card>
   );
 }

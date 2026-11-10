@@ -12,6 +12,7 @@ import {
 } from "antd";
 import type { components } from "./api";
 import type { Messages } from "./i18n";
+import { TableScroll } from "./TableScroll";
 
 type ProjectRow = components["schemas"]["ProjectView"];
 type ProjectRole = "admin" | "member";
@@ -615,45 +616,51 @@ export function ProjectsPage({
                 {t.addMember}
               </Button>
             </Space>
-            <Table
-              rowKey="id"
-              dataSource={members}
-              pagination={false}
-              locale={{ emptyText: t.noMembers }}
-              columns={[
-                { title: t.name, dataIndex: "name" },
-                {
-                  title: t.role,
-                  render: (_, member) => (
-                    <Select
-                      aria-label={`${t.selectProjectRole}: ${member.name}`}
-                      value={member.role}
-                      disabled={lastAdmin(member)}
-                      title={lastAdmin(member) ? t.lastProjectAdmin : undefined}
-                      onChange={(role) => void putRole(member, role)}
-                      options={[
-                        { value: "member", label: t.projectMemberRole },
-                        { value: "admin", label: t.projectAdminRole },
-                      ]}
-                    />
-                  ),
-                },
-                {
-                  title: t.actions,
-                  render: (_, member) => (
-                    <Button
-                      autoInsertSpace={false}
-                      danger
-                      disabled={lastAdmin(member)}
-                      title={lastAdmin(member) ? t.lastProjectAdmin : undefined}
-                      onClick={() => setConfirmMember(member)}
-                    >
-                      {t.removeMember}
-                    </Button>
-                  ),
-                },
-              ]}
-            />
+            <TableScroll label={t.projectMembers}>
+              <Table
+                rowKey="id"
+                dataSource={members}
+                pagination={false}
+                locale={{ emptyText: t.noMembers }}
+                columns={[
+                  { title: t.name, dataIndex: "name" },
+                  {
+                    title: t.role,
+                    render: (_, member) => (
+                      <Select
+                        aria-label={`${t.selectProjectRole}: ${member.name}`}
+                        value={member.role}
+                        disabled={lastAdmin(member)}
+                        title={
+                          lastAdmin(member) ? t.lastProjectAdmin : undefined
+                        }
+                        onChange={(role) => void putRole(member, role)}
+                        options={[
+                          { value: "member", label: t.projectMemberRole },
+                          { value: "admin", label: t.projectAdminRole },
+                        ]}
+                      />
+                    ),
+                  },
+                  {
+                    title: t.actions,
+                    render: (_, member) => (
+                      <Button
+                        autoInsertSpace={false}
+                        danger
+                        disabled={lastAdmin(member)}
+                        title={
+                          lastAdmin(member) ? t.lastProjectAdmin : undefined
+                        }
+                        onClick={() => setConfirmMember(member)}
+                      >
+                        {t.removeMember}
+                      </Button>
+                    ),
+                  },
+                ]}
+              />
+            </TableScroll>
           </div>
         )}
         {confirmMember !== null && (
@@ -702,120 +709,122 @@ export function ProjectsPage({
       </div>
       {error && <Alert type="error" title={error} />}
       <div className="card section-card token-table-card">
-        <Table
-          rowKey="id"
-          dataSource={visibleRows}
-          pagination={false}
-          onRow={(row) => ({
-            onClick: () => void openProject(row),
-            className:
-              row.status === "archived" ? "project-archived-row" : undefined,
-            style: { cursor: "pointer" },
-          })}
-          columns={[
-            {
-              title: t.name,
-              render: (_, row) => (
-                <a
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    void openProject(row);
-                  }}
-                >
-                  {row.name}
-                </a>
-              ),
-            },
-            {
-              title: t.projectType,
-              render: (_, row) =>
-                row.type === "document"
-                  ? t.projectTypeDocument
-                  : t.projectTypeWarehouse,
-            },
-            {
-              title: t.role,
-              render: (_, row) =>
-                row.my_role === "admin"
-                  ? t.projectAdminRole
-                  : t.projectMemberRole,
-            },
-            {
-              title: t.status,
-              render: (_, row) =>
-                row.status === "active" ? (
-                  <Tag color="green">{t.active}</Tag>
-                ) : row.status === "deleting" ? (
-                  <Tag color="red">{t.projectDeleting}</Tag>
-                ) : (
-                  <Tag>{t.archived}</Tag>
-                ),
-            },
-            {
-              title: t.created,
-              render: (_, row) => localTime(row.created_at),
-            },
-            {
-              title: t.actions,
-              render: (_, row) => (
-                <Space
-                  wrap
-                  onClick={(event) => {
-                    event.stopPropagation();
-                  }}
-                >
-                  <Button
-                    autoInsertSpace={false}
-                    onClick={() => {
+        <TableScroll label={t.projects}>
+          <Table
+            rowKey="id"
+            dataSource={visibleRows}
+            pagination={false}
+            onRow={(row) => ({
+              onClick: () => void openProject(row),
+              className:
+                row.status === "archived" ? "project-archived-row" : undefined,
+              style: { cursor: "pointer" },
+            })}
+            columns={[
+              {
+                title: t.name,
+                render: (_, row) => (
+                  <a
+                    onClick={(event) => {
+                      event.stopPropagation();
                       void openProject(row);
                     }}
                   >
-                    {t.projectMembers}
-                  </Button>
-                  {canCreate && row.status === "active" && (
+                    {row.name}
+                  </a>
+                ),
+              },
+              {
+                title: t.projectType,
+                render: (_, row) =>
+                  row.type === "document"
+                    ? t.projectTypeDocument
+                    : t.projectTypeWarehouse,
+              },
+              {
+                title: t.role,
+                render: (_, row) =>
+                  row.my_role === "admin"
+                    ? t.projectAdminRole
+                    : t.projectMemberRole,
+              },
+              {
+                title: t.status,
+                render: (_, row) =>
+                  row.status === "active" ? (
+                    <Tag color="green">{t.active}</Tag>
+                  ) : row.status === "deleting" ? (
+                    <Tag color="red">{t.projectDeleting}</Tag>
+                  ) : (
+                    <Tag>{t.archived}</Tag>
+                  ),
+              },
+              {
+                title: t.created,
+                render: (_, row) => localTime(row.created_at),
+              },
+              {
+                title: t.actions,
+                render: (_, row) => (
+                  <Space
+                    wrap
+                    onClick={(event) => {
+                      event.stopPropagation();
+                    }}
+                  >
                     <Button
                       autoInsertSpace={false}
                       onClick={() => {
-                        setArchiveTarget(row);
-                        setError("");
+                        void openProject(row);
                       }}
                     >
-                      {t.archiveProject}
+                      {t.projectMembers}
                     </Button>
-                  )}
-                  {canCreate && row.status === "archived" && (
-                    <>
+                    {canCreate && row.status === "active" && (
                       <Button
                         autoInsertSpace={false}
-                        disabled={lifecycleBusy}
-                        onClick={() => void restoreProject(row)}
-                      >
-                        {t.restoreProject}
-                      </Button>
-                      <Button
-                        autoInsertSpace={false}
-                        danger
-                        disabled={lifecycleBusy || row.id === "default"}
-                        title={
-                          row.id === "default"
-                            ? t.defaultProjectUndeletable
-                            : undefined
-                        }
                         onClick={() => {
-                          setDeleteName("");
-                          setDeleteTarget(row);
+                          setArchiveTarget(row);
                           setError("");
                         }}
                       >
-                        {t.deleteProject}
+                        {t.archiveProject}
                       </Button>
-                    </>
-                  )}
-                </Space>
-              ),
-            },
-          ]}
-        />
+                    )}
+                    {canCreate && row.status === "archived" && (
+                      <>
+                        <Button
+                          autoInsertSpace={false}
+                          disabled={lifecycleBusy}
+                          onClick={() => void restoreProject(row)}
+                        >
+                          {t.restoreProject}
+                        </Button>
+                        <Button
+                          autoInsertSpace={false}
+                          danger
+                          disabled={lifecycleBusy || row.id === "default"}
+                          title={
+                            row.id === "default"
+                              ? t.defaultProjectUndeletable
+                              : undefined
+                          }
+                          onClick={() => {
+                            setDeleteName("");
+                            setDeleteTarget(row);
+                            setError("");
+                          }}
+                        >
+                          {t.deleteProject}
+                        </Button>
+                      </>
+                    )}
+                  </Space>
+                ),
+              },
+            ]}
+          />
+        </TableScroll>
       </div>
       {open && (
         <Modal
