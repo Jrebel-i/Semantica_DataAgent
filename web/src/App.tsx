@@ -36,6 +36,17 @@ function formatGenerationTime(value: string | null | undefined) {
   )}:${pad(date.getMinutes())}`;
 }
 
+function conversationIdFromPath(pathname: string) {
+  if (!pathname.startsWith("/chat/")) return "";
+  const encoded = pathname.slice("/chat/".length).replace(/\/+$/, "");
+  if (!encoded) return "";
+  try {
+    return decodeURIComponent(encoded);
+  } catch {
+    return encoded;
+  }
+}
+
 export function App() {
   const [lang, setLang] = useState<Language>(() =>
     localStorage.getItem("language") === "en" ? "en" : "zh",
@@ -296,7 +307,8 @@ export function App() {
   const generationLabel = generationTime
     ? `${shortGeneration} · ${generationTime}`
     : shortGeneration;
-  const isChat = path === "/chat" || path === "/";
+  const conversationId = conversationIdFromPath(path);
+  const isChat = path === "/chat" || path === "/" || path.startsWith("/chat/");
   const isFill = path === "/knowledge";
   const content =
     path === "/knowledge-gaps" ? (
@@ -650,6 +662,7 @@ export function App() {
                     refreshKey={refreshKey}
                     sessionTarget={sessionTarget}
                     newTarget={newTarget}
+                    initialConversationId={conversationId}
                     onNavigateChat={() => navigate("/chat")}
                   />
                 </div>

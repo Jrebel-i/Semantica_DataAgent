@@ -44,6 +44,7 @@ export function ChatPage({
   settingsOnly = false,
   sessionTarget,
   newTarget,
+  initialConversationId = "",
   onNavigateChat,
   refreshKey = 0,
 }: {
@@ -53,12 +54,14 @@ export function ChatPage({
   settingsOnly?: boolean;
   sessionTarget?: HTMLElement | null;
   newTarget?: HTMLElement | null;
+  initialConversationId?: string;
   onNavigateChat?: () => void;
   language?: Language;
   onChangeLanguage?: () => void;
   refreshKey?: number;
 }) {
   const askSequence = useRef(0);
+  const deepLinkLoaded = useRef("");
   const [turns, setTurns] = useState<Turn[]>([]);
   const [live, setLive] = useState<LiveTurn | null>(null);
   const [expiredPlans, setExpiredPlans] = useState<string[]>([]);
@@ -322,6 +325,14 @@ export function ChatPage({
       );
     }
   }
+
+  useEffect(() => {
+    if (!initialConversationId || !token) return;
+    if (initialConversationId === currentConversationId) return;
+    if (deepLinkLoaded.current === initialConversationId) return;
+    deepLinkLoaded.current = initialConversationId;
+    void openConversation(initialConversationId);
+  }, [initialConversationId, token, currentConversationId]);
 
   function newConversation() {
     selectionTouched.current = true;

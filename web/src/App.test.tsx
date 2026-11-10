@@ -242,6 +242,79 @@ test("search debug is accessible from navigation", async () => {
   expect(screen.getByLabelText("查询内容")).toBeTruthy();
 });
 
+test("conversation deep links open the addressed conversation with the current token", async () => {
+  const conversation = {
+    id: "conv-deep",
+    project_id: "default",
+    project_name: "业务数据",
+    title: "深链接会话",
+    agent: "pi",
+    provider_id: "provider-1",
+    model: "model-1",
+    created_at: "2026-11-05T00:00:00Z",
+    updated_at: "2026-11-05T00:00:00Z",
+    turn_count: 1,
+    resumable: true,
+    pinned: false,
+    archived: false,
+  };
+  const detail = {
+    ...conversation,
+    turns: [
+      {
+        id: 1,
+        sequence: 1,
+        question: "深链接问题",
+        status: "completed",
+        answer: "深链接回答",
+        sql: [],
+        citations: [],
+        error: null,
+        started_at: conversation.created_at,
+        finished_at: conversation.updated_at,
+        events: [],
+      },
+    ],
+  };
+  history.replaceState(null, "", "/chat/conv-deep");
+  localStorage.setItem("token", "deep-token");
+  const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url === "/api/v1/me") return Response.json({ role: "user" });
+    if (url === "/api/v1/agents") return Response.json([]);
+    if (url === "/api/v1/providers") return Response.json([]);
+    if (url === "/api/v1/assistant-defaults") return Response.json({});
+    if (url === "/api/v1/projects")
+      return Response.json([
+        {
+          id: "default",
+          name: "业务数据",
+          status: "active",
+          my_role: "member",
+        },
+      ]);
+    if (url === "/api/v1/conversations") return Response.json([conversation]);
+    if (url === "/api/v1/conversations?archived=true") return Response.json([]);
+    if (url === "/api/v1/conversations/conv-deep") return Response.json(detail);
+    if (url === "/healthz") return Response.json({});
+    return Response.json({});
+  });
+  vi.stubGlobal("fetch", fetcher);
+  render(<App />);
+
+  expect(
+    await screen.findByText("深链接会话", {
+      selector: ".chat-header-title strong",
+    }),
+  ).toBeTruthy();
+  expect(await screen.findByText("深链接问题")).toBeTruthy();
+  expect(fetcher).toHaveBeenCalledWith("/api/v1/conversations/conv-deep", {
+    headers: { Authorization: "Bearer deep-token" },
+  });
+  expect(window.location.pathname).toBe("/chat/conv-deep");
+  history.replaceState(null, "", "/");
+});
+
 test("MCP access page is reachable from navigation", async () => {
   history.replaceState(null, "", "/");
   localStorage.setItem("token", "user");

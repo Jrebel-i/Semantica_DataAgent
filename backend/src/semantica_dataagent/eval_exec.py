@@ -5,6 +5,7 @@ import os
 import time
 from collections import Counter
 from pathlib import Path
+from urllib.parse import quote, urlsplit
 
 import httpx
 import sqlglot
@@ -250,6 +251,115 @@ def _summary(comparison):
     return None
 
 
+def _normalize_web_url(value):
+    """Return a validated external UI base URL, or None when it was not supplied."""
+    if value in (None, ""):
+        return None
+    text = str(value).strip().rstrip("/")
+    parsed = urlsplit(text)
+    if (
+        parsed.scheme not in ("http", "https")
+        or not parsed.netloc
+        or parsed.query
+        or parsed.fragment
+        or "@" in parsed.netloc
+    ):
+        raise SystemExit(
+            "--web-url 必须是浏览器可访问的 http(s) 地址，且不能包含凭据、查询参数或片段"
+        )
+    return text
+
+
+def _conversation_url(web_url, conversation_id):
+    if not web_url or not conversation_id:
+        return None
+    return f"{web_url}/chat/{quote(str(conversation_id), safe='')}"
+
+
+def _new_question_set_coverage():
+    return {
+        "source": "question_set",
+        "includes_unconfirmed": True,
+        "total": 0,
+        "confirmed": 0,
+        "unconfirmed": 0,
+        "splits": {},
+        "categories": {},
+    }
+
+
+def _add_question_set_item(summary, *, category, split, confirmed):
+    category = category or DEFAULT_CATEGORY
+    split = split or "dev"
+    item = summary["categories"].setdefault(
+        category,
+        {
+            "total": 0,
+            "confirmed": 0,
+            "unconfirmed": 0,
+            "dev": 0,
+            "holdout": 0,
+        },
+    )
+    item["total"] += 1
+    item["confirmed" if confirmed else "unconfirmed"] += 1
+    item[split] = item.get(split, 0) + 1
+    summary["total"] += 1
+    summary["confirmed" if confirmed else "unconfirmed"] += 1
+    summary["splits"][split] = summary["splits"].get(split, 0) + 1
+
+
+def _question_set_coverage(questions):
+    summary = _new_question_set_coverage()
+    for question in questions:
+        _add_question_set_item(
+            summary,
+            category=getattr(question, "category", None),
+            split=getattr(question, "split", None),
+            confirmed=bool(getattr(question, "answer_confirmed", True)),
+        )
+    summary["splits"] = dict(sorted(summary["splits"].items()))
+    summary["categories"] = dict(sorted(summary["categories"].items()))
+    return summary
+
+
+def _question_set_from_entries(entries):
+    """Best-effort metadata for reports written before question-set coverage existed."""
+    summary = _new_question_set_coverage()
+    summary["source"] = "report_questions"
+    summary["includes_unconfirmed"] = False
+    summary["note"] = "旧报告没有题集元数据；覆盖范围只包含报告中的已评测题目"
+    for entry in entries:
+        _add_question_set_item(
+            summary,
+            category=entry.get("category"),
+            split=entry.get("split"),
+            confirmed=bool(entry.get("answer_confirmed", True)),
+        )
+    summary["splits"] = dict(sorted(summary["splits"].items()))
+    summary["categories"] = dict(sorted(summary["categories"].items()))
+    return summary
+
+
+def _question_set_for_report(report):
+    value = report.get("question_set")
+    if (
+        isinstance(value, dict)
+        and isinstance(value.get("categories"), dict)
+        and isinstance(value.get("total"), int)
+    ):
+        return value
+    return _question_set_from_entries(report.get("questions") or [])
+
+
+def _coverage_gaps(expected, categories, key="total"):
+    return [
+        category
+        for category in expected
+        if categories.get(category, {}).get(key, 0) == 0
+    ]
+
+
 def _expected_categories(value):
     if value is None:
         return list(DEFAULT_EXPECTED_CATEGORIES)
@@ -334,15 +444,37 @@ def _failure_summary(entries):
 def _recompute_summaries(report):
     entries = report.get("questions") or []
     report["failure_categories"] = _failure_summary(entries)
-    report["coverage"] = _coverage(entries)
+    coverage = _coverage(entries)
+    report["coverage"] = coverage
+    report["evaluation_coverage"] = _coverage(entries)
     expected = _expected_categories(report.get("expected_categories"))
     report["expected_categories"] = expected
-    coverage = report["coverage"]
-    report["coverage_gaps"] = [
+    question_set = _question_set_for_report(report)
+    report["question_set_coverage"] = question_set
+    question_set_categories = question_set.get("categories") or {}
+    report["coverage_gaps"] = _coverage_gaps(expected, question_set_categories)
+    report["confirmed_coverage_gaps"] = _coverage_gaps(
+        expected, question_set_categories, "confirmed"
+    )
+    report["scope_coverage_gaps"] = _coverage_gaps(expected, coverage)
+    report["unconfirmed_only_categories"] = sorted(
         category
-        for category in expected
-        if coverage.get(category, {}).get("total", 0) == 0
-    ]
+        for category, item in question_set_categories.items()
+        if item.get("total", 0) > 0 and item.get("confirmed", 0) == 0
+    )
+    web_url = report.get("web_url")
+    for entry in entries:
+        entry["conversation_url"] = (
+            _conversation_url(web_url, entry.get("conversation_id"))
+            or entry.get("conversation_url")
+            or None
+        )
+        for run in entry.get("runs") or []:
+            run["conversation_url"] = (
+                _conversation_url(web_url, run.get("conversation_id"))
+                or run.get("conversation_url")
+                or None
+            )
     metrics = report.setdefault("metrics", {})
     classified = sum(bool(entry.get("failure_category")) for entry in entries)
     metrics["classified"] = classified
@@ -397,8 +529,77 @@ def render_report(report):
         lines.append(
             "尚未填写。用 `eval-report --report <报告前缀> --categories <分类文件>` 合并。"
         )
-    lines += ["", "## 覆盖情况", ""]
+    question_set = report.get("question_set_coverage") or {}
+    legacy_report = question_set.get("source") == "report_questions"
+    lines += [
+        "",
+        (
+            "## 题集覆盖（旧报告：仅已评测题目）"
+            if legacy_report
+            else "## 题集覆盖（全部题集，含留出集与未确认答案）"
+        ),
+        "",
+    ]
+    if question_set:
+        lines += [
+            (
+                f"- 题集题数：{question_set.get('total', 0)}"
+                f"（已确认 {question_set.get('confirmed', 0)}，"
+                f"未确认 {question_set.get('unconfirmed', 0)}；"
+                f"留出集 {question_set.get('splits', {}).get('holdout', 0)}）"
+            ),
+            (
+                "- 是否计入未确认题："
+                + (
+                    "是；未确认题只用于判断题型是否存在，不参与指标，"
+                    "也不代表已有可用参考答案。"
+                    if question_set.get("includes_unconfirmed")
+                    else "否；这里的覆盖只来自报告中的已评测题目。"
+                )
+            ),
+        ]
+        categories = question_set.get("categories") or {}
+        if categories:
+            lines += [
+                "| category | 题数 | 已确认 | 未确认 | dev | holdout |",
+                "| --- | --- | --- | --- | --- | --- |",
+            ]
+            for category, item in categories.items():
+                lines.append(
+                    f"| {_cell(category)} | {item.get('total', 0)} | "
+                    f"{item.get('confirmed', 0)} | {item.get('unconfirmed', 0)} | "
+                    f"{item.get('dev', 0)} | {item.get('holdout', 0)} |"
+                )
+        if question_set.get("source") == "report_questions":
+            lines.append(f"- 来源：{question_set.get('note')}")
+    else:
+        lines.append("无题集覆盖信息。")
+    expected = report.get("expected_categories") or []
+    if expected:
+        lines += [f"- 期望题型：{', '.join(expected)}"]
+    gaps = report.get("coverage_gaps") or []
+    confirmed_gaps = report.get("confirmed_coverage_gaps") or []
+    unconfirmed_only = report.get("unconfirmed_only_categories") or []
+    lines += [
+        (
+            "- 题集覆盖缺口（"
+            + ("旧报告题目" if legacy_report else "全部题集")
+            + f"中题数为 0）：{', '.join(gaps) if gaps else '无'}"
+        ),
+        (
+            "- 可用题集覆盖缺口（已确认题中题数为 0）："
+            f"{', '.join(confirmed_gaps) if confirmed_gaps else '无'}"
+        ),
+    ]
+    if unconfirmed_only:
+        lines.append(f"- 仅由未确认题提供的题型：{', '.join(unconfirmed_only)}")
+
+    lines += ["", "## 本次评测覆盖", ""]
     coverage = report.get("coverage") or {}
+    lines.append(
+        f"- 范围：split={report.get('split', 'dev')}，"
+        f"only={','.join(report.get('only') or []) or '全部'}"
+    )
     if coverage:
         lines += [
             "| category | 题数 | 答对 | 答错 | 平局 | 不可比 | 波动 | 失败分类 |",
@@ -416,12 +617,14 @@ def render_report(report):
             )
     else:
         lines.append("无已评测题目。")
-    lines += ["", "## 覆盖缺口", ""]
-    expected = report.get("expected_categories") or []
-    if expected:
-        lines += [f"- 期望题型：{', '.join(expected)}"]
-    gaps = report.get("coverage_gaps") or []
-    lines += [f"- 缺失题型：{', '.join(gaps) if gaps else '无'}"]
+    scope_gaps = report.get("scope_coverage_gaps") or []
+    lines += [
+        (
+            "- 本次评测范围未覆盖的期望题型："
+            f"{', '.join(scope_gaps) if scope_gaps else '无'}"
+        ),
+        "- 本次评测范围未覆盖不等于题集缺少该题型。",
+    ]
     lines += [
         "",
         (
@@ -469,7 +672,14 @@ def render_report(report):
                 "",
                 f"#### {entry['id']} 第 {run['run']} 遍",
                 "",
-                f"- 对话：`{run.get('conversation_id') or '—'}`",
+                (
+                    f"- 对话：`{run.get('conversation_id') or '—'}`"
+                    + (
+                        f" · [打开对话]({run['conversation_url']})"
+                        if run.get("conversation_url")
+                        else "（未配置外部 --web-url，无法生成链接）"
+                    )
+                ),
                 f"- 实际 SQL：`{_cell(run.get('sql')) or '—'}`",
                 f"- 参考 SQL：`{_cell(run.get('reference_sql'))}`",
                 f"- 工具调用：{calls or '无'}",
@@ -522,6 +732,9 @@ def run_report(args):
         raise SystemExit(f"无法读取评测报告：{exc}") from None
     if not isinstance(report, dict) or not isinstance(report.get("questions"), list):
         raise SystemExit("评测报告缺少 questions")
+    web_url = getattr(args, "web_url", None)
+    if web_url is not None:
+        report["web_url"] = _normalize_web_url(web_url)
     mapping = _load_categories(args.categories)
     known = {str(entry.get("id")) for entry in report["questions"]}
     unknown = sorted(set(mapping) - known)
@@ -540,13 +753,18 @@ def run_cli(args):
     token = os.environ.get(args.token)
     if not token:
         raise SystemExit("指定的 token 环境变量为空或不存在")
+    web_url = _normalize_web_url(getattr(args, "web_url", None))
     questions = load_questions(args.questions)
+    question_set = _question_set_coverage(questions)
     repeat = getattr(args, "repeat", 1)
     if not isinstance(repeat, int) or repeat < 1:
         raise SystemExit("--repeat 必须是大于等于 1 的整数")
     split = getattr(args, "split", "dev") or "dev"
     if split not in ("dev", "holdout", "all"):
         raise SystemExit("--split 只能是 dev、holdout 或 all")
+    only_ids = []
+    if args.only:
+        only_ids = [item.strip() for item in args.only.split(",") if item.strip()]
     expected_categories = _expected_categories(
         getattr(args, "expected_categories", None)
     )
@@ -768,7 +986,10 @@ def run_cli(args):
     report = {
         "project": getattr(args, "project", None),
         "split": split,
+        "only": only_ids,
         "repeat": repeat,
+        "web_url": web_url,
+        "question_set": question_set,
         "expected_categories": expected_categories,
         "metrics": metrics,
         "failure_reasons": failures,

@@ -204,6 +204,11 @@ def _parser() -> argparse.ArgumentParser:
     execution.add_argument("--max-queries", type=int, default=40)
     execution.add_argument("--skip-reference", action="store_true")
     execution.add_argument(
+        "--web-url",
+        help="external browser base URL used for conversation links, for example "
+        "https://dataagent.example.com/workbench; no link is emitted when omitted",
+    )
+    execution.add_argument(
         "--split",
         choices=("dev", "holdout", "all"),
         default="dev",
@@ -233,6 +238,10 @@ def _parser() -> argparse.ArgumentParser:
     )
     report.add_argument("--report", required=True, type=Path)
     report.add_argument("--categories", required=True, type=Path)
+    report.add_argument(
+        "--web-url",
+        help="external browser base URL used to add or refresh conversation links",
+    )
     return parser
 
 

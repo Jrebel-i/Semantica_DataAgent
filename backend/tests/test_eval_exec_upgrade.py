@@ -233,6 +233,7 @@ def _args(tmp_path, path, *, split="dev", repeat=1, only=None, name="report"):
             "split": split,
             "repeat": repeat,
             "expected_categories": None,
+            "web_url": None,
         },
     )()
 
@@ -350,6 +351,67 @@ def test_eval_exec_defaults_to_dev_and_lists_unconfirmed(
     assert run_cli(args) == 0
     held = json.loads((tmp_path / "holdout-report.json").read_text())
     assert [entry["id"] for entry in held["questions"]] == ["h1"]
+
+
+def test_conversation_links_use_the_configured_external_web_url(
+    service, tmp_path, monkeypatch
+):
+    service.reset({"linked": [GOOD]})
+    path = _write_questions(tmp_path, [_question("linked", "linked")])
+    monkeypatch.setenv("EVAL_EXEC_TOKEN", "secret")
+    args = _parser().parse_args(
+        [
+            "eval-exec",
+            "--questions",
+            str(path),
+            "--report",
+            str(tmp_path / "linked-report"),
+            "--base-url",
+            service.base_url,
+            "--web-url",
+            "https://analytics.example.test/workbench/",
+            "--token",
+            "EVAL_EXEC_TOKEN",
+            "--agent",
+            "pi",
+            "--provider-id",
+            "fake",
+            "--model",
+            "fake",
+        ]
+    )
+    assert run_cli(args) == 0
+
+    report = json.loads((tmp_path / "linked-report.json").read_text())
+    expected = "https://analytics.example.test/workbench/chat/conv-linked-1"
+    assert report["web_url"] == "https://analytics.example.test/workbench"
+    entry = report["questions"][0]
+    assert entry["conversation_url"] == expected
+    assert entry["runs"][0]["conversation_url"] == expected
+    markdown = (tmp_path / "linked-report.md").read_text()
+    assert expected in markdown
+    assert "打开对话" in markdown
+    assert service.base_url not in markdown
+
+
+def test_conversation_links_do_not_guess_an_internal_base_url(
+    service, tmp_path, monkeypatch
+):
+    service.reset({"unlinked": [GOOD]})
+    path = _write_questions(tmp_path, [_question("unlinked", "unlinked")])
+    monkeypatch.setenv("EVAL_EXEC_TOKEN", "secret")
+    args = _args(tmp_path, path, name="unlinked-report")
+    args.base_url = service.base_url
+    assert run_cli(args) == 0
+
+    report = json.loads((tmp_path / "unlinked-report.json").read_text())
+    entry = report["questions"][0]
+    assert report["web_url"] is None
+    assert entry["conversation_url"] is None
+    assert entry["runs"][0]["conversation_url"] is None
+    markdown = (tmp_path / "unlinked-report.md").read_text()
+    assert service.base_url not in markdown
+    assert "未配置外部" in markdown
 
 
 def test_repeat_majority_volatile_and_tie(service, tmp_path, monkeypatch):
@@ -792,6 +854,141 @@ def test_coverage_gaps_use_expected_categories(service, tmp_path, monkeypatch):
         ]
     )
     assert parsed.expected_categories == "A, B ,A"
+
+
+def test_coverage_separates_the_whole_question_set_from_the_current_scope(
+    service, tmp_path, monkeypatch
+):
+    holdout_sql = "SELECT holdout_answer FROM shop.hidden"
+    service.reset({"dev only": [GOOD]})
+    path = _write_questions(
+        tmp_path,
+        [
+            _question("r01", "dev only", category="选表"),
+            _question(
+                "h1",
+                "holdout time",
+                category="时间语义",
+                split="holdout",
+                reference_sql=holdout_sql,
+            ),
+            _question(
+                "h2",
+                "holdout join",
+                category="多表 Join",
+                split="holdout",
+                reference_sql=holdout_sql,
+            ),
+            _question(
+                "u1",
+                "unconfirmed dimension",
+                category="维度值筛选",
+                confirmed=False,
+            ),
+        ],
+    )
+    monkeypatch.setenv("EVAL_EXEC_TOKEN", "secret")
+    args = _args(tmp_path, path, only="r01")
+    args.base_url = service.base_url
+    args.expected_categories = "选表,时间语义,维度值筛选,多表 Join,口径歧义,合法空结果"
+    assert run_cli(args) == 0
+
+    report = json.loads((tmp_path / "report.json").read_text())
+    assert report["coverage_gaps"] == ["口径歧义", "合法空结果"]
+    assert report["confirmed_coverage_gaps"] == [
+        "维度值筛选",
+        "口径歧义",
+        "合法空结果",
+    ]
+    assert report["scope_coverage_gaps"] == [
+        "时间语义",
+        "维度值筛选",
+        "多表 Join",
+        "口径歧义",
+        "合法空结果",
+    ]
+    assert report["unconfirmed_only_categories"] == ["维度值筛选"]
+    assert set(report["coverage"]) == {"选表"}
+    question_set = report["question_set_coverage"]
+    assert question_set["includes_unconfirmed"] is True
+    assert (
+        question_set["total"],
+        question_set["confirmed"],
+        question_set["unconfirmed"],
+    ) == (
+        4,
+        3,
+        1,
+    )
+    assert question_set["splits"] == {"dev": 2, "holdout": 2}
+    assert question_set["categories"]["维度值筛选"] == {
+        "total": 1,
+        "confirmed": 0,
+        "unconfirmed": 1,
+        "dev": 1,
+        "holdout": 0,
+    }
+    assert question_set["categories"]["时间语义"]["holdout"] == 1
+    serialized = (tmp_path / "report.json").read_text()
+    markdown = (tmp_path / "report.md").read_text()
+    assert holdout_sql not in serialized
+    assert holdout_sql not in markdown
+    assert "全部题集" in markdown
+    assert "本次评测范围" in markdown
+    assert "未确认" in markdown
+
+
+def test_eval_report_falls_back_when_a_legacy_report_has_no_question_set(
+    service, tmp_path, monkeypatch
+):
+    service.reset({"good": [GOOD], "bad": [BAD]})
+    path = _write_questions(
+        tmp_path,
+        [
+            _question("good", "good", category="选表"),
+            _question("bad", "bad", category="口径"),
+        ],
+    )
+    monkeypatch.setenv("EVAL_EXEC_TOKEN", "secret")
+    args = _args(tmp_path, path)
+    args.base_url = service.base_url
+    assert run_cli(args) == 0
+
+    report = json.loads((tmp_path / "report.json").read_text())
+    report.pop("question_set")
+    report["questions"][0]["conversation_url"] = "https://old.example.test/chat/old"
+    (tmp_path / "report.json").write_text(json.dumps(report), encoding="utf-8")
+    categories = tmp_path / "categories.yaml"
+    categories.write_text(yaml.safe_dump({}), encoding="utf-8")
+    merge_args = _parser().parse_args(
+        [
+            "eval-report",
+            "--report",
+            str(tmp_path / "report"),
+            "--categories",
+            str(categories),
+        ]
+    )
+    from semantica_dataagent.eval_exec import run_report
+
+    assert run_report(merge_args) == 0
+    updated = json.loads((tmp_path / "report.json").read_text())
+    assert updated["question_set_coverage"]["source"] == "report_questions"
+    assert updated["question_set_coverage"]["includes_unconfirmed"] is False
+    assert (
+        updated["questions"][0]["conversation_url"]
+        == "https://old.example.test/chat/old"
+    )
+    assert updated["coverage_gaps"] == [
+        "维度值筛选",
+        "时间语义",
+        "口径歧义",
+        "合法空结果",
+        "多表 Join",
+    ]
+    markdown = (tmp_path / "report.md").read_text()
+    assert "是否计入未确认题：否" in markdown
+    assert "旧报告：仅已评测题目" in markdown
 
 
 def test_run_level_metrics_and_question_flags(service, tmp_path, monkeypatch):

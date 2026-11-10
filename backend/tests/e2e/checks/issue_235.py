@@ -14,6 +14,7 @@ import yaml
 GOOD = "SELECT id FROM shop.orders WHERE dt = '2025-01-01'"
 BAD = "SELECT id FROM shop.orders"
 BROKEN = "SELECT broken FROM shop.orders"
+HOLDOUT = "SELECT holdout_answer FROM shop.hidden"
 
 
 class _FakeService:
@@ -161,8 +162,19 @@ def check_eval_tool_upgrade(ctx):
                     category="选表",
                     reference_sql=BROKEN,
                 ),
-                _row("h1", "holdout", category="选表", split="holdout"),
-                _row("u1", "unconfirmed", category="口径", confirmed=False),
+                _row(
+                    "h1",
+                    "holdout",
+                    category="时间语义",
+                    split="holdout",
+                    reference_sql=HOLDOUT,
+                ),
+                _row(
+                    "u1",
+                    "unconfirmed",
+                    category="维度值筛选",
+                    confirmed=False,
+                ),
             ],
             allow_unicode=True,
         ),
@@ -181,6 +193,8 @@ def check_eval_tool_upgrade(ctx):
                 str(work / "report"),
                 "--base-url",
                 service.base_url,
+                "--web-url",
+                "https://eval.example.test/workbench",
                 "--token",
                 "SDA_ISSUE_235_E2E_TOKEN",
                 "--agent",
@@ -257,9 +271,33 @@ def check_eval_tool_upgrade(ctx):
             "legacy majority metric should be removed",
         )
         ctx.require(
-            report["coverage_gaps"]
-            == ["维度值筛选", "时间语义", "口径歧义", "合法空结果"],
+            report["coverage_gaps"] == ["口径歧义", "合法空结果"],
             f"coverage gaps wrong: {report['coverage_gaps']}",
+        )
+        ctx.require(
+            report["confirmed_coverage_gaps"]
+            == ["维度值筛选", "口径歧义", "合法空结果"],
+            f"confirmed coverage gaps wrong: {report['confirmed_coverage_gaps']}",
+        )
+        ctx.require(
+            report["scope_coverage_gaps"]
+            == ["维度值筛选", "时间语义", "口径歧义", "合法空结果"],
+            f"scope coverage gaps wrong: {report['scope_coverage_gaps']}",
+        )
+        ctx.require(
+            report["unconfirmed_only_categories"] == ["维度值筛选"],
+            f"unconfirmed-only categories wrong: {report['unconfirmed_only_categories']}",
+        )
+        ctx.require(
+            report["question_set_coverage"]["includes_unconfirmed"] is True
+            and report["question_set_coverage"]["unconfirmed"] == 1,
+            f"question-set coverage did not label unconfirmed questions: {report['question_set_coverage']}",
+        )
+        expected_link = "https://eval.example.test/workbench/chat/conv-stable-1"
+        ctx.require(
+            by_id["q3"]["conversation_url"] == expected_link
+            and by_id["q3"]["runs"][0]["conversation_url"] == expected_link,
+            f"conversation link missing or wrong: {by_id['q3'].get('conversation_url')}",
         )
         ctx.require(
             report["coverage"]["多表 Join"]["total"] == 1
@@ -313,7 +351,8 @@ def check_eval_tool_upgrade(ctx):
         override = json.loads((work / "override.json").read_text(encoding="utf-8"))
         ctx.require(
             override["expected_categories"] == ["选表", "时间语义"]
-            and override["coverage_gaps"] == ["时间语义"],
+            and override["coverage_gaps"] == []
+            and override["scope_coverage_gaps"] == ["时间语义"],
             f"expected categories override wrong: {override.get('coverage_gaps')}",
         )
         categories = work / "categories.yaml"
@@ -378,8 +417,20 @@ def check_eval_tool_upgrade(ctx):
         )
         markdown = (work / "report.md").read_text(encoding="utf-8")
         ctx.require(
-            "不可比题目" in markdown and "覆盖缺口" in markdown and "qref" in markdown,
+            "不可比题目" in markdown
+            and "覆盖缺口" in markdown
+            and "本次评测覆盖" in markdown
+            and "qref" in markdown,
             "report markdown lacks rework sections",
+        )
+        ctx.require(
+            expected_link in markdown,
+            "report markdown lacks the external conversation link",
+        )
+        ctx.require(
+            HOLDOUT not in markdown
+            and HOLDOUT not in (work / "report.json").read_text(encoding="utf-8"),
+            "holdout reference SQL leaked into the development report",
         )
         return {
             "questions": [entry["id"] for entry in report["questions"]],
