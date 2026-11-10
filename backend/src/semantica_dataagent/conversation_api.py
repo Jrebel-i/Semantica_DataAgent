@@ -47,6 +47,7 @@ from .db import (
 )
 from .project_api import accessible_projects, resolve_project_scope
 from .provider_api import EFFORT_LEVELS, EffortLevel, provider_config
+from .query_api import query_requester
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -772,7 +773,7 @@ async def confirm_query(
     turn_id: int,
     query_id: str,
     request: Request,
-    requester: Annotated[Requester, Depends(current_requester)],
+    requester: Annotated[Requester, Depends(query_requester)],
 ):
     from .query_api import _config, execute_for_turn
 

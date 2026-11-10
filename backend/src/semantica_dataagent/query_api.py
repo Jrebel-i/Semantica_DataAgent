@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import io
 import json
+import logging
 import os
 import time
 import uuid
@@ -16,20 +17,23 @@ from urllib.parse import urlsplit
 import sqlglot
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
+from fastapi.security import HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field
 from sqlalchemy import update
 from sqlglot import exp
 from sqlglot.optimizer.scope import traverse_scope
 
 from . import knowledge
-from .auth import Requester, admin, current_requester
+from .auth import Requester, _authenticated, admin, bearer, current_requester
 from .crypto import decrypt
 from .db import (
     Conversation,
     PersonalDtbToken,
     QueryAudit,
     QueryExecution,
+    Token,
     Turn,
+    digest,
     sessions,
 )
 from .dtb_executor import column_names
@@ -37,6 +41,7 @@ from .plugins import ExecutorAuthenticationError, ExecutorError, configured
 from .project_api import require_query_project_access
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 class PlanInput(BaseModel):
@@ -359,11 +364,16 @@ def _cleanup_expired_conversation_results(query_id: str, user: Requester) -> Non
         with sessions().begin() as db:
             row = db.get(QueryExecution, query_id)
             cutoff = retention_cutoff(db)
+            plan = {}
+            if row is not None and row.owner_id == user.id and row.plan_data:
+                try:
+                    parsed = json.loads(row.plan_data)
+                except (TypeError, ValueError):
+                    parsed = None
+                if isinstance(parsed, dict):
+                    plan = parsed
             if (
-                row is not None
-                and row.owner_id == user.id
-                and row.plan_data
-                and json.loads(row.plan_data).get("source") == "mcp"
+                plan.get("source") == "mcp"
                 and row.created_at.replace(tzinfo=UTC) < cutoff
             ):
                 db.delete(row)
@@ -506,12 +516,12 @@ async def execute_query(
                 or row.conversation_id is not None
             ):
                 raise HTTPException(404, "查询不存在")
-            if project_id is not None:
-                planned = json.loads(row.plan_data) if row.plan_data else {}
-                if planned.get("project_id", "default") != project_id:
-                    raise HTTPException(404, "查询不存在")
         result = await _execute_with_audit(
-            confirmation_id, ExecuteInput(), user, kind="mcp"
+            confirmation_id,
+            ExecuteInput(),
+            user,
+            kind="mcp",
+            expected_project_id=project_id,
         )
         result["download_urls"] = _download_links(
             confirmation_id, user, public_base_url()
@@ -526,15 +536,17 @@ async def _execute(
     body: ExecuteInput,
     user: Requester,
     audit_id: str,
+    *,
+    expected_project_id: str | None = None,
 ):
     with sessions().begin() as db:
         row = db.get(QueryExecution, query_id)
         if row is None or row.owner_id != user.id:
             raise HTTPException(404, "查询不存在")
-        saved_plan = json.loads(row.plan_data) if row.plan_data else {}
-        require_query_project_access(
-            db, saved_plan.get("project_id") or "default", user
-        )
+        saved_plan, project_id = _resolved_plan_project(db, row)
+        if expected_project_id is not None and project_id != expected_project_id:
+            raise HTTPException(404, "查询不存在")
+        require_query_project_access(db, project_id, user)
         plugin, config = _config()
         limit = body.limit if body.limit is not None else config.get("row_limit", 1000)
         if limit > config.get("row_limit", 1000):
@@ -565,7 +577,7 @@ async def _execute(
     status, result, key = "failed", None, None
     try:
         tree = _validate_sql(sql)
-        _tables_and_partitions(tree, project_id=saved_plan.get("project_id", "default"))
+        _tables_and_partitions(tree, project_id=project_id)
         cap = min(
             config.get("download_limit", 100000),
             saved_plan.get("execution_limit", config.get("download_limit", 100000)),
@@ -614,11 +626,64 @@ async def _execute(
                 row.query_key = key
 
 
+def _audit_revoked_query_attempt(
+    credentials: HTTPAuthorizationCredentials | None, kind: str, query_id: str
+) -> None:
+    """Audit a saved-query entry rejected because the bearer token was revoked.
+
+    Unknown credentials are not audited: there is no real identity to attach
+    the attempt to.  Only the token digest is looked up; the credential itself
+    is never stored or logged.
+    """
+    if credentials is None or credentials.scheme.lower() != "bearer":
+        return
+    with sessions().begin() as db:
+        token = db.get(Token, digest(credentials.credentials))
+        if token is None or not token.revoked:
+            return
+        db.add(
+            QueryAudit(
+                id=uuid.uuid4().hex,
+                owner_id=token.id,
+                sql=json.dumps(
+                    {"query_id": query_id, "entry": kind}, ensure_ascii=False
+                ),
+                kind=kind,
+                status="rejected_401",
+                row_count=None,
+                elapsed_ms=0,
+            )
+        )
+
+
+def _query_requester_dependency(kind: str):
+    def dependency(
+        query_id: str,
+        credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)],
+    ) -> Requester:
+        try:
+            return _authenticated(credentials)
+        except HTTPException as exc:
+            if exc.status_code == 401:
+                try:
+                    _audit_revoked_query_attempt(credentials, kind, query_id)
+                except Exception:
+                    logger.exception("failed to audit a revoked token attempt")
+            raise
+
+    return dependency
+
+
+query_requester = _query_requester_dependency("query")
+download_requester = _query_requester_dependency("download")
+download_link_requester = _query_requester_dependency("download_link_created")
+
+
 @router.post("/api/v1/queries/{query_id}/execute")
 async def execute(
     query_id: str,
     body: ExecuteInput,
-    user: Annotated[Requester, Depends(current_requester)],
+    user: Annotated[Requester, Depends(query_requester)],
 ):
     with sessions()() as db:
         row = db.get(QueryExecution, query_id)
@@ -645,7 +710,12 @@ async def execute_for_turn(
 
 
 async def _execute_with_audit(
-    query_id: str, body: ExecuteInput, user: Requester, kind="query"
+    query_id: str,
+    body: ExecuteInput,
+    user: Requester,
+    kind="query",
+    *,
+    expected_project_id: str | None = None,
 ):
     with sessions()() as db:
         row = db.get(QueryExecution, query_id)
@@ -668,7 +738,13 @@ async def _execute_with_audit(
         )
     status, count = "failed", None
     try:
-        result = await _execute(query_id, body, user, audit_id)
+        result = await _execute(
+            query_id,
+            body,
+            user,
+            audit_id,
+            expected_project_id=expected_project_id,
+        )
         status, count = "succeeded", result["row_count"]
         return result
     except HTTPException as exc:
@@ -721,14 +797,93 @@ def get_result(query_id: str, user: Annotated[Requester, Depends(current_request
         }
 
 
-def _plan_project_id(row) -> str:
-    plan = json.loads(row.plan_data) if row.plan_data else {}
-    return plan.get("project_id") or "default"
+_MISSING_PLAN_PROJECT = object()
+
+
+def _plan_dict(row, *, not_found_detail: str) -> dict:
+    if row.plan_data is None:
+        return {}
+    try:
+        plan = json.loads(row.plan_data)
+    except (TypeError, ValueError):
+        raise HTTPException(404, not_found_detail) from None
+    if not isinstance(plan, dict):
+        raise HTTPException(404, not_found_detail)
+    return plan
+
+
+def _bound_conversation_project(db, row, *, not_found_detail: str) -> str | None:
+    if row.conversation_id is None:
+        return None
+    conversation = db.get(Conversation, row.conversation_id)
+    if conversation is None or conversation.owner_id != row.owner_id:
+        raise HTTPException(404, not_found_detail)
+    project_id = conversation.project_id
+    if (
+        not isinstance(project_id, str)
+        or not project_id
+        or project_id != project_id.strip()
+    ):
+        raise HTTPException(404, not_found_detail)
+    return project_id
+
+
+def _resolved_plan_project(
+    db, row, *, not_found_detail: str = "查询不存在"
+) -> tuple[dict, str]:
+    """Return the plan's own project, failing closed when it is not provable.
+
+    ``plan_data.project_id`` is the only authorization source (#232).  The
+    field arrived with project scoping in #178 (4be73d2); every later writer
+    stores it unconditionally.  A plan without it therefore predates project
+    scoping, when REST, conversation and MCP plan creation all targeted the
+    default project.  That code history is the only compatibility path.
+
+    A bound conversation is an integrity check, never an authorization source.
+    A non-default conversation on a plan without ``project_id`` cannot have
+    been produced by a known writer, so it is denied instead of being used to
+    grant access to the conversation's project.  Invalid JSON, a non-object
+    plan, a malformed project id, an unknown source or a conflicting
+    conversation also fail closed.
+    """
+    plan = _plan_dict(row, not_found_detail=not_found_detail)
+    planned_project = plan.get("project_id", _MISSING_PLAN_PROJECT)
+    if planned_project is not _MISSING_PLAN_PROJECT:
+        if (
+            not isinstance(planned_project, str)
+            or not planned_project
+            or planned_project != planned_project.strip()
+        ):
+            raise HTTPException(404, not_found_detail)
+        bound_project = _bound_conversation_project(
+            db, row, not_found_detail=not_found_detail
+        )
+        if bound_project is not None and bound_project != planned_project:
+            raise HTTPException(404, not_found_detail)
+        return plan, planned_project
+
+    # #81 introduced conversation_id and plan_data together.  A bound row with
+    # no plan cannot come from that writer and is treated as damaged.
+    if row.plan_data is None and row.conversation_id is not None:
+        raise HTTPException(404, not_found_detail)
+    if plan.get("source") not in (None, "", "mcp"):
+        raise HTTPException(404, not_found_detail)
+    bound_project = _bound_conversation_project(
+        db, row, not_found_detail=not_found_detail
+    )
+    if bound_project is not None and bound_project != "default":
+        raise HTTPException(404, not_found_detail)
+    return plan, "default"
+
+
+def _plan_project_id(db, row, *, not_found_detail: str = "查询不存在") -> str:
+    _, project_id = _resolved_plan_project(db, row, not_found_detail=not_found_detail)
+    return project_id
 
 
 def _require_query_project_access(db, row, user: Requester) -> None:
     """All query access follows the project recorded on the plan itself."""
-    require_query_project_access(db, _plan_project_id(row), user)
+    require_query_project_access(db, _plan_project_id(db, row), user)
 
 
 DOWNLOAD_LINK_TTL_SECONDS = 30 * 60
@@ -795,7 +950,7 @@ def _download_links(query_id: str, user: Requester, base: str) -> dict[str, str]
 
 @router.post("/api/v1/queries/{query_id}/download-links")
 def create_download_links(
-    query_id: str, user: Annotated[Requester, Depends(current_requester)]
+    query_id: str, user: Annotated[Requester, Depends(download_link_requester)]
 ):
     return _download_links(query_id, user, "")
 
@@ -843,7 +998,7 @@ async def download_link(query_id: str, format: str, expires: str, signature: str
 @router.get("/api/v1/queries/{query_id}/download")
 async def download(
     query_id: str,
-    user: Annotated[Requester, Depends(current_requester)],
+    user: Annotated[Requester, Depends(download_requester)],
     format: Literal["csv", "xlsx", "json"] = "csv",
 ):
     _cleanup_expired_conversation_results(query_id, user)

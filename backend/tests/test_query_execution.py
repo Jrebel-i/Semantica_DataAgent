@@ -861,7 +861,7 @@ def test_mcp_and_online_use_same_execution_service(client, monkeypatch):
 
     calls = []
 
-    async def service(query_id, body, user, kind="query"):
+    async def service(query_id, body, user, kind="query", **kwargs):
         calls.append((query_id, user.id, kind))
         with sessions().begin() as db:
             db.get(QueryExecution, query_id).status = "succeeded"
