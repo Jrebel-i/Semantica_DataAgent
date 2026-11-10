@@ -129,8 +129,10 @@ def classify_error(exc):
 def install_contract(server):
     from .mcp_context import current_project_type
     from .project_types import ensure_tool_supported, supports_tool
+    from .telemetry import register_tool_names
 
     tools = {tool.name: tool for tool in server._tool_manager.list_tools()}
+    register_tool_names(tools)
     for tool in tools.values():
         tool.parameters["additionalProperties"] = False
         tool.parameters.setdefault("properties", {})["cursor"] = {"type": "string"}
@@ -290,11 +292,12 @@ def install_contract(server):
             current_requester,
             current_turn_id,
         )
-        from .telemetry import submit, trace_id
+        from .telemetry import UNKNOWN_TOOL_NAME, submit, trace_id
 
         started = datetime.now(UTC)
         clock = time.monotonic()
         result = await call_impl(name, arguments)
+        trusted_name = name if name in tools else UNKNOWN_TOOL_NAME
         try:
             requester = current_requester()
             conversation_id = current_conversation_id()
@@ -353,11 +356,13 @@ def install_contract(server):
                 {
                     "id": uuid.uuid4().hex[:16],
                     "traceId": current_trace,
-                    "name": name,
+                    "name": trusted_name,
                     "startTime": started.isoformat(),
                     "endTime": datetime.now(UTC).isoformat(),
                     "input": arguments,
                     "output": data,
+                    "is_error": bool(getattr(result, "isError", False)),
+                    "status": "error" if getattr(result, "isError", False) else "ok",
                     "metadata": {"duration_ms": int((time.monotonic() - clock) * 1000)},
                 },
                 secrets,

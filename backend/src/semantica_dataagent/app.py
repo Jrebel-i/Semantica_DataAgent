@@ -201,6 +201,7 @@ KEYS = (
         "langfuse_url",
         "langfuse_public_key",
         "langfuse_secret_key",
+        "langfuse_capture_content",
     }
     | {auto_build.DEBOUNCE_KEY}
     | set(project_context.PROJECT_SETTING_KEYS)
@@ -468,6 +469,8 @@ def put_settings(
             raise HTTPException(status_code=422, detail="Invalid assistant timeout")
     if body.values.get("langfuse_enabled") not in (None, "", "true", "false"):
         raise HTTPException(status_code=422, detail="Invalid Langfuse switch")
+    if body.values.get("langfuse_capture_content") not in (None, "", "true", "false"):
+        raise HTTPException(status_code=422, detail="Invalid Langfuse content switch")
     for key in ("neo4j_uri", "milvus_uri", "embedding_url", "langfuse_url"):
         value = body.values.get(key)
         if value:

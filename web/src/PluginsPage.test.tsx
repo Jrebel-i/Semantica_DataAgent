@@ -72,6 +72,13 @@ test("renders schema, reports validation errors and saves enabled state", async 
   expect(
     (screen.getByLabelText("Dimension value limit") as HTMLInputElement).value,
   ).toBe("7");
+  expect(
+    (
+      screen.getByLabelText(
+        "Send question and result content",
+      ) as HTMLInputElement
+    ).checked,
+  ).toBe(false);
   fireEvent.change(screen.getByLabelText("Dimension value limit"), {
     target: { value: "2" },
   });
@@ -125,4 +132,42 @@ test("renders schema, reports validation errors and saves enabled state", async 
     count: 2,
     mode: 2,
   });
+});
+
+test("loads and saves the explicit content capture switch", async () => {
+  const requests: Record<string, unknown>[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string, options?: RequestInit) => {
+      if (url === "/api/v1/settings") {
+        if (!options?.method)
+          return Response.json({ langfuse_capture_content: "true" });
+        requests.push(
+          JSON.parse(String(options.body)) as Record<string, unknown>,
+        );
+        return Response.json({});
+      }
+      if (url === "/api/v1/filters")
+        return Response.json({
+          database_include: [],
+          database_exclude: [],
+          task_include: [],
+          task_exclude: [],
+        });
+      return Response.json([]);
+    }),
+  );
+  render(<PluginsPage token="token" messages={getMessages("en")} />);
+  const checkbox = (await screen.findByLabelText(
+    "Send question and result content",
+  )) as HTMLInputElement;
+  await waitFor(() => expect(checkbox.checked).toBe(true));
+  fireEvent.click(checkbox);
+  const section = checkbox.closest("section") as HTMLElement;
+  fireEvent.click(section.querySelector("button") as HTMLButtonElement);
+  await waitFor(() =>
+    expect(requests).toContainEqual({
+      values: expect.objectContaining({ langfuse_capture_content: "false" }),
+    }),
+  );
 });
