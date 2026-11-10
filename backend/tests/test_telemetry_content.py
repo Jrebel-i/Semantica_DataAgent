@@ -21,6 +21,7 @@ FORGED_TABLE = "issue-234-forged-table"
 FORGED_NAME = "issue-234-forged-name"
 FORGED_CODE = "issue-234-forged-code"
 FORGED_PROMPT = "issue-234-forged natural language prompt"
+UNREGISTERED_TOOL_NAME = "issue_234_private_customer_record_123"
 
 
 class Receiver:
@@ -348,6 +349,7 @@ def test_default_filter_keeps_only_trusted_metadata_fields():
 
 def test_tool_name_uses_the_same_credential_filter():
     credential_shaped_name = "credentialtoken" + "123"
+    telemetry.register_tool_names({"validate_sql"})
 
     assert (
         telemetry._filtered({"name": credential_shaped_name}, (credential_shaped_name,))
@@ -356,6 +358,86 @@ def test_tool_name_uses_the_same_credential_filter():
     assert telemetry._filtered({"name": "validate_sql"}, (credential_shaped_name,)) == {
         "name": "validate_sql"
     }
+
+
+def test_unregistered_tool_names_are_dropped_by_the_default_filter():
+    telemetry.register_tool_names({"validate_sql"})
+
+    assert telemetry._filtered({"name": UNREGISTERED_TOOL_NAME}) == {}
+    assert telemetry._filtered({"name": "validate_sql"}) == {"name": "validate_sql"}
+
+
+@pytest.mark.parametrize("name", ["online-conversation", "local-mcp"])
+def test_fixed_trace_names_survive_the_default_filter(name):
+    assert telemetry._filtered({"name": name}) == {"name": name}
+
+
+def test_unregistered_mcp_tool_name_never_reaches_default_telemetry(client):
+    test_client, token = client
+    telemetry._queue.join()
+    with Receiver() as receiver:
+        configure(client, receiver)
+        result = _rpc(test_client, token, UNREGISTERED_TOOL_NAME, {})
+        receiver.wait(count=2)
+        payloads = receiver.payloads()
+
+    assert result.get("isError") is True
+    encoded = json.dumps(payloads, ensure_ascii=False)
+    assert UNREGISTERED_TOOL_NAME not in encoded
+    span = next(body for body in payloads if body.get("status") == "error")
+    assert span["is_error"] is True
+    assert span["error_category"] == "invalid_input"
+    assert span.get("name") in {None, "unknown_tool"}
+
+
+def test_mcp_boundary_replaces_unregistered_tool_name(client, monkeypatch):
+    test_client, token = client
+    events = []
+    monkeypatch.setattr(
+        telemetry,
+        "submit",
+        lambda kind, event, secrets=(): events.append((kind, event)),
+    )
+
+    result = _rpc(test_client, token, UNREGISTERED_TOOL_NAME, {})
+
+    assert result.get("isError") is True
+    spans = [event for kind, event in events if kind == "span-create"]
+    assert len(spans) == 1
+    assert spans[0]["name"] == "unknown_tool"
+
+
+def test_unregistered_mcp_tool_name_stays_out_when_content_capture_is_enabled(client):
+    test_client, token = client
+    telemetry._queue.join()
+    with Receiver() as receiver:
+        configure(client, receiver, "true")
+        result = _rpc(test_client, token, UNREGISTERED_TOOL_NAME, {})
+        receiver.wait(count=2)
+        payloads = receiver.payloads()
+
+    assert result.get("isError") is True
+    encoded = json.dumps(payloads, ensure_ascii=False)
+    assert UNREGISTERED_TOOL_NAME not in encoded
+    span = next(body for body in payloads if body.get("status") == "error")
+    assert span.get("name") in {None, "unknown_tool"}
+
+
+def test_unregistered_top_level_name_is_dropped_when_capture_is_enabled():
+    telemetry.register_tool_names({"validate_sql"})
+
+    payload = telemetry._filtered(
+        {
+            "name": UNREGISTERED_TOOL_NAME,
+            "input": {"query": "keep-this-content"},
+            "output": {"rows": [{"name": "nested-row-name"}]},
+        },
+        capture_content=True,
+    )
+
+    assert "name" not in payload
+    assert payload["input"]["query"] == "keep-this-content"
+    assert payload["output"]["rows"][0]["name"] == "nested-row-name"
 
 
 def test_extracted_metadata_uses_the_same_credential_filter(client):

@@ -126,7 +126,12 @@ CONTENT_FIELDS = frozenset(
 )
 
 _SQL_DIALECTS = ("doris", "hive", "spark", "presto", "")
-_TOOL_NAME = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+UNKNOWN_TOOL_NAME = "unknown_tool"
+_FIXED_OBSERVATION_NAMES = frozenset(
+    {"online-conversation", "local-mcp", UNKNOWN_TOOL_NAME}
+)
+# Replaced as one atomic snapshot at startup; readers never mutate it.
+_trusted_tool_names = frozenset()
 _TABLE_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]*(?:\.[A-Za-z_][A-Za-z0-9_$]*){0,2}$")
 _ERROR_CATEGORIES = frozenset(
     {"unavailable", "invalid_input", "internal_error", "tool_error"}
@@ -161,6 +166,14 @@ _ENVELOPE_FIELDS = frozenset(
         "duration_ms",
     }
 )
+
+
+def register_tool_names(names):
+    """Replace the trusted tool names with the server's actual registry."""
+    global _trusted_tool_names
+    _trusted_tool_names = frozenset(
+        name for name in names if isinstance(name, str) and name
+    )
 
 
 def _fingerprint_literal(node):
@@ -210,9 +223,11 @@ def sql_fingerprint(sql, dialect=None):
 
 def _trusted_tool_name(event, secrets=()):
     name = event.get("name") if isinstance(event, dict) else None
-    if not isinstance(name, str) or not _TOOL_NAME.fullmatch(name):
+    if not isinstance(name, str) or _scrub(name, secrets) != name:
         return None
-    return name if _scrub(name, secrets) == name else None
+    if name in _FIXED_OBSERVATION_NAMES:
+        return name
+    return name if name in _trusted_tool_names else None
 
 
 def _input_arguments(event):
@@ -385,17 +400,22 @@ def _default_envelope(event, secrets):
     return payload
 
 
-def _filtered(value, secrets=(), capture_content=False):
+def _filtered(value, secrets=(), capture_content=False, _top_level=True):
     if not capture_content:
         return _default_envelope(value, secrets)
     if isinstance(value, dict):
         return {
-            key: _filtered(item, secrets, True)
+            key: _filtered(item, secrets, True, False)
             for key, item in value.items()
             if key in ALLOWED_FIELDS
+            and not (
+                _top_level
+                and key == "name"
+                and _trusted_tool_name(value, secrets) is None
+            )
         }
     if isinstance(value, list):
-        return [_filtered(item, secrets, True) for item in value]
+        return [_filtered(item, secrets, True, False) for item in value]
     if isinstance(value, str):
         return _scrub(value, secrets)
     if value is None or isinstance(value, (int, float, bool)):

@@ -11,6 +11,7 @@ def telemetry():
 
 def test_report_discards_fields_outside_the_allowlist():
     module = telemetry()
+    module.register_tool_names({"validate_sql"})
     sent = []
     module.report(
         True,
@@ -28,6 +29,7 @@ def test_report_discards_fields_outside_the_allowlist():
 
 def test_disabled_reporting_does_not_call_sender():
     module = telemetry()
+    module.register_tool_names({"validate_sql"})
     sent = []
     module.report(False, {"name": "validate_sql"}, sent.append)
     assert sent == []
@@ -35,6 +37,7 @@ def test_disabled_reporting_does_not_call_sender():
 
 def test_reporting_failure_does_not_interrupt_caller():
     module = telemetry()
+    module.register_tool_names({"validate_sql"})
 
     def failed(_payload):
         raise TimeoutError("telemetry unavailable")
@@ -94,6 +97,7 @@ def test_header_values_embedded_in_text_are_redacted():
 
 def test_filter_drops_content_fields_unless_capture_is_explicitly_enabled():
     module = telemetry()
+    module.register_tool_names({"validate_sql"})
     event = {
         "name": "validate_sql",
         "input": {"sql": "SELECT secret FROM shop.orders"},
