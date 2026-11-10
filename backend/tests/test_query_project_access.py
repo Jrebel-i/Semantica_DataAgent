@@ -259,7 +259,9 @@ def add_conversation(
         return conversation_id, turn.id
 
 
-def add_running_turn(owner_id: str) -> tuple[str, int]:
+def add_running_turn(
+    owner_id: str, project_id: str = DEFAULT_PROJECT_ID
+) -> tuple[str, int]:
     from datetime import UTC, datetime
 
     from semantica_dataagent.db import Conversation, Turn, sessions
@@ -270,7 +272,7 @@ def add_running_turn(owner_id: str) -> tuple[str, int]:
             Conversation(
                 id=conversation_id,
                 owner_id=owner_id,
-                project_id=DEFAULT_PROJECT_ID,
+                project_id=project_id,
                 title="query",
                 agent="pi",
                 provider_id="provider",
@@ -1312,3 +1314,431 @@ def test_mcp_redirect_audits_revoked_token_without_changing_401(client):
     assert len(records) == 1, records
     assert records[0]["owner_id"] == member["id"]
     assert records[0]["status"] == "rejected_401"
+
+
+def mcp_execute_call(confirmation_id: str, **arguments: object) -> dict:
+    values = {"confirmation_id": confirmation_id, **arguments}
+    return {
+        "jsonrpc": "2.0",
+        "id": 7,
+        "method": "tools/call",
+        "params": {"name": "execute_query", "arguments": values},
+    }
+
+
+def freeze_project(c, admin: str, project_id: str, state: str) -> None:
+    if state == "archived":
+        response = c.post(
+            f"/api/v1/projects/{project_id}/archive", headers=headers(admin)
+        )
+        assert response.status_code == 200, response.text
+    else:
+        assert state == "deleting"
+        set_project_status(project_id, "deleting")
+
+
+@pytest.mark.parametrize("state", ["archived", "deleting"])
+def test_mcp_transport_audits_frozen_agent_credential(client, executor, state):
+    from semantica_dataagent.auth import issue_agent_credential
+    from semantica_dataagent.db import digest
+
+    c, admin = client
+    project = create_project(c, admin)
+    project_id = project["id"]
+    member = create_member(c, admin, project_id)
+    conversation_id, turn_id = add_running_turn(member["id"], project_id)
+    credential = issue_agent_credential(
+        member["id"], conversation_id, turn_id, project_id
+    )
+    query_id = add_query(member["id"], project_id)
+    freeze_project(c, admin, project_id, state)
+
+    response = c.post(
+        "/mcp/",
+        headers=mcp_headers(
+            credential,
+            **{
+                "X-Dataagent-Conversation-Id": conversation_id,
+                "X-Dataagent-Turn-Id": str(turn_id),
+                "X-Dataagent-Project": "forged-project",
+            },
+        ),
+        json=mcp_execute_call(
+            query_id,
+            owner_id="forged-owner",
+            query_id="forged-query-id",
+            project="forged-project",
+            sql="request-body-sentinel",
+        ),
+    )
+    assert response.status_code == 409, response.text
+    assert response.json() == {"detail": "项目已归档"}
+
+    assert executor == []
+    assert query_status(query_id) == "planned"
+    records = audit_records()
+    assert len(records) == 1, records
+    record = records[0]
+    assert record["kind"] == "mcp"
+    assert record["status"] == "rejected_409"
+    assert record["owner_id"] == member["id"]
+    assert json.loads(record["sql"]) == {
+        "entry": "mcp",
+        "stage": "authentication",
+    }
+    serialized = json.dumps(records)
+    for secret in (
+        credential,
+        digest(credential),
+        conversation_id,
+        query_id,
+        "forged-owner",
+        "forged-query-id",
+        "forged-project",
+        "request-body-sentinel",
+    ):
+        assert secret not in serialized
+
+
+@pytest.mark.parametrize("state", ["archived", "deleting"])
+def test_mcp_transport_audits_frozen_personal_token(client, executor, state):
+    c, admin = client
+    project = create_project(c, admin)
+    project_id = project["id"]
+    member = create_member(c, admin, project_id)
+    query_id = add_query(member["id"], project_id)
+    freeze_project(c, admin, project_id, state)
+
+    response = c.post(
+        "/mcp/",
+        headers=mcp_headers(member["token"]),
+        json=mcp_execute_call(query_id),
+    )
+    assert response.status_code == 200, response.text
+    result = response.json()["result"]
+    assert result["isError"] is True
+    assert result["structuredContent"]["message"] == "项目已归档"
+
+    assert executor == []
+    assert query_status(query_id) == "planned"
+    records = audit_records()
+    assert len(records) == 1, records
+    record = records[0]
+    assert record["kind"] == "mcp"
+    assert record["status"] == "rejected_409"
+    assert record["owner_id"] == member["id"]
+    assert json.loads(record["sql"]) == {
+        "entry": "mcp",
+        "stage": "project_resolution",
+    }
+    serialized = json.dumps(records)
+    assert member["token"] not in serialized
+    assert query_id not in serialized
+
+
+def test_mcp_frozen_project_audits_only_rejected_tool_calls(client, executor):
+    c, admin = client
+    project = create_project(c, admin)
+    project_id = project["id"]
+    member = create_member(c, admin, project_id)
+    query_id = add_query(member["id"], project_id)
+    freeze_project(c, admin, project_id, "archived")
+
+    response = c.post(
+        "/mcp/", headers=mcp_headers(member["token"]), json=mcp_initialize()
+    )
+    assert response.status_code == 200, response.text
+    assert audit_records() == []
+
+    response = c.post(
+        "/mcp/",
+        headers=mcp_headers(member["token"]),
+        json={"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
+    )
+    assert response.status_code == 200, response.text
+    assert audit_records() == []
+
+    response = c.post(
+        "/mcp/",
+        headers=mcp_headers(member["token"]),
+        json=mcp_execute_call(query_id),
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["result"]["isError"] is True
+    records = audit_records()
+    assert len(records) == 1, records
+    assert records[0]["status"] == "rejected_409"
+
+
+def test_mcp_transport_audits_removed_personal_token(client, executor):
+    c, admin = client
+    project = create_project(c, admin)
+    project_id = project["id"]
+    member = create_member(c, admin, project_id)
+    query_id = add_query(member["id"], project_id)
+    remove_member(c, admin, project_id, member["id"])
+
+    response = c.post(
+        "/mcp/",
+        headers=mcp_headers(member["token"]),
+        json=mcp_execute_call(query_id),
+    )
+    assert response.status_code == 200, response.text
+    result = response.json()["result"]
+    assert result["isError"] is True
+    assert "请指定项目" in result["structuredContent"]["message"]
+
+    assert executor == []
+    assert query_status(query_id) == "planned"
+    records = audit_records()
+    assert len(records) == 1, records
+    assert records[0]["kind"] == "mcp"
+    assert records[0]["status"] == "rejected_404"
+    assert records[0]["owner_id"] == member["id"]
+    assert json.loads(records[0]["sql"]) == {
+        "entry": "mcp",
+        "stage": "project_resolution",
+    }
+
+
+def test_mcp_transport_audits_removed_agent_credential(client, executor):
+    from semantica_dataagent.auth import issue_agent_credential
+
+    c, admin = client
+    project = create_project(c, admin)
+    project_id = project["id"]
+    member = create_member(c, admin, project_id)
+    conversation_id, turn_id = add_running_turn(member["id"], project_id)
+    credential = issue_agent_credential(
+        member["id"], conversation_id, turn_id, project_id
+    )
+    query_id = add_query(member["id"], project_id)
+    remove_member(c, admin, project_id, member["id"])
+
+    response = c.post(
+        "/mcp/",
+        headers=mcp_headers(
+            credential,
+            **{
+                "X-Dataagent-Conversation-Id": conversation_id,
+                "X-Dataagent-Turn-Id": str(turn_id),
+            },
+        ),
+        json=mcp_execute_call(query_id),
+    )
+    assert response.status_code == 200, response.text
+    result = response.json()["result"]
+    assert result["isError"] is True
+    assert result["structuredContent"]["message"] == "项目不存在"
+
+    assert executor == []
+    assert query_status(query_id) == "planned"
+    records = audit_records()
+    assert len(records) == 1, records
+    assert records[0]["kind"] == "mcp"
+    assert records[0]["status"] == "rejected_404"
+    assert records[0]["owner_id"] == member["id"]
+    assert json.loads(records[0]["sql"]) == {
+        "entry": "mcp",
+        "stage": "project_resolution",
+    }
+
+
+def test_mcp_frozen_project_does_not_audit_forged_headers_or_credentials(
+    client, executor
+):
+    from semantica_dataagent.auth import issue_agent_credential
+
+    c, admin = client
+    project = create_project(c, admin)
+    project_id = project["id"]
+    member = create_member(c, admin, project_id)
+    conversation_id, turn_id = add_running_turn(member["id"], project_id)
+    credential = issue_agent_credential(
+        member["id"], conversation_id, turn_id, project_id
+    )
+    query_id = add_query(member["id"], project_id)
+    freeze_project(c, admin, project_id, "archived")
+    before = len(audit_records())
+
+    response = c.post(
+        "/mcp/",
+        headers=mcp_headers(
+            "not-a-real-token",
+            **{
+                "X-Dataagent-Conversation-Id": conversation_id,
+                "X-Dataagent-Turn-Id": str(turn_id),
+            },
+        ),
+        json=mcp_execute_call(query_id),
+    )
+    assert response.status_code == 401, response.text
+    assert len(audit_records()) == before
+
+    response = c.post(
+        "/mcp/",
+        headers=mcp_headers(
+            credential,
+            **{
+                "X-Dataagent-Conversation-Id": "forged-conversation",
+                "X-Dataagent-Turn-Id": "999",
+            },
+        ),
+        json=mcp_execute_call(query_id),
+    )
+    assert response.status_code == 401, response.text
+    assert response.json() == {"detail": "Invalid token"}
+    assert len(audit_records()) == before
+
+
+def test_mcp_frozen_audit_requires_matching_credential_conversation_and_turn(client):
+    from fastapi.security import HTTPAuthorizationCredentials
+
+    from semantica_dataagent.auth import issue_agent_credential
+    from semantica_dataagent.query_api import audit_mcp_authentication_rejection
+
+    c, admin = client
+    project = create_project(c, admin)
+    project_id = project["id"]
+    member = create_member(c, admin, project_id)
+    conversation_id, turn_id = add_running_turn(member["id"], project_id)
+    credential = issue_agent_credential(
+        member["id"], conversation_id, turn_id, project_id
+    )
+    freeze_project(c, admin, project_id, "archived")
+    bearer = HTTPAuthorizationCredentials(scheme="Bearer", credentials=credential)
+
+    audit_mcp_authentication_rejection(
+        bearer,
+        409,
+        conversation_id="forged-conversation",
+        turn_id=str(turn_id),
+    )
+    audit_mcp_authentication_rejection(
+        bearer,
+        409,
+        conversation_id=conversation_id,
+        turn_id="999",
+    )
+    audit_mcp_authentication_rejection(
+        HTTPAuthorizationCredentials(scheme="Bearer", credentials="not-a-real-token"),
+        409,
+        conversation_id=conversation_id,
+        turn_id=str(turn_id),
+    )
+    assert audit_records() == []
+
+    audit_mcp_authentication_rejection(
+        bearer,
+        409,
+        conversation_id=conversation_id,
+        turn_id=str(turn_id),
+    )
+    records = audit_records()
+    assert len(records) == 1, records
+    assert records[0]["owner_id"] == member["id"]
+    assert records[0]["status"] == "rejected_409"
+
+
+def test_mcp_project_rejection_audits_the_authenticated_owner_only(client, executor):
+    c, admin = client
+    project_a = create_project(c, admin)
+    project_a_id = project_a["id"]
+    member_a = create_member(c, admin, project_a_id)
+    query_a = add_query(member_a["id"], project_a_id)
+    freeze_project(c, admin, project_a_id, "archived")
+
+    member_b = create_member(c, admin, DEFAULT_PROJECT_ID)
+    response = c.post(
+        "/mcp/",
+        headers=mcp_headers(member_b["token"], **{"X-Dataagent-Project": project_a_id}),
+        json=mcp_execute_call(
+            query_a,
+            owner_id=member_a["id"],
+            query_id=query_a,
+            project=project_a_id,
+        ),
+    )
+    assert response.status_code == 200, response.text
+    result = response.json()["result"]
+    assert result["isError"] is True
+    assert result["structuredContent"]["message"] == "项目不存在"
+
+    assert executor == []
+    assert query_status(query_a) == "planned"
+    records = audit_records()
+    assert len(records) == 1, records
+    assert records[0]["kind"] == "mcp"
+    assert records[0]["status"] == "rejected_404"
+    assert records[0]["owner_id"] == member_b["id"]
+    assert json.loads(records[0]["sql"]) == {
+        "entry": "mcp",
+        "stage": "project_resolution",
+    }
+    serialized = json.dumps(records)
+    for forged in (member_a["id"], query_a, project_a_id):
+        assert forged not in serialized
+
+
+def test_mcp_frozen_project_auth_rejection_does_not_read_request_body(client):
+    import asyncio
+    from types import SimpleNamespace
+
+    from semantica_dataagent.app import MCPAuthentication
+    from semantica_dataagent.auth import issue_agent_credential
+    from semantica_dataagent.db import digest
+
+    c, admin = client
+    project = create_project(c, admin)
+    project_id = project["id"]
+    member = create_member(c, admin, project_id)
+    conversation_id, turn_id = add_running_turn(member["id"], project_id)
+    credential = issue_agent_credential(
+        member["id"], conversation_id, turn_id, project_id
+    )
+    freeze_project(c, admin, project_id, "archived")
+    scope = {
+        "type": "http",
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": "http",
+        "server": ("testserver", 80),
+        "client": ("testclient", 50000),
+        "root_path": "",
+        "path": "/mcp/",
+        "raw_path": b"/mcp/",
+        "query_string": b"",
+        "headers": [
+            (b"authorization", f"Bearer {credential}".encode()),
+            (b"content-type", b"application/json"),
+            (b"x-dataagent-conversation-id", conversation_id.encode()),
+            (b"x-dataagent-turn-id", str(turn_id).encode()),
+        ],
+    }
+    reads = []
+
+    async def receive():
+        reads.append("body")
+        return {
+            "type": "http.request",
+            "body": b"request-body-sentinel",
+            "more_body": False,
+        }
+
+    sent = []
+
+    async def send(message):
+        sent.append(message)
+
+    asyncio.run(MCPAuthentication(SimpleNamespace())(scope, receive, send))
+
+    assert sent[0]["status"] == 409
+    assert reads == []
+    records = audit_records()
+    assert len(records) == 1, records
+    assert records[0]["status"] == "rejected_409"
+    assert records[0]["owner_id"] == member["id"]
+    serialized = json.dumps(records)
+    assert credential not in serialized
+    assert digest(credential) not in serialized
+    assert "request-body-sentinel" not in serialized

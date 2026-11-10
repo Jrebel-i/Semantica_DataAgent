@@ -3,6 +3,7 @@
 import base64
 import hashlib
 import json
+import logging
 
 import httpx
 import jsonschema
@@ -21,6 +22,23 @@ from .storage_errors import StorageUnavailable
 
 PAGE_ITEMS = 25
 PAGE_CHARS = 12000
+
+
+def _audit_bound_project_rejection() -> None:
+    """Audit a tool call rejected by the project error bound by the transport."""
+    from .mcp_context import current_project_error_status, current_requester
+
+    status_code = current_project_error_status()
+    if status_code is None:
+        return
+    try:
+        from .query_api import audit_mcp_project_rejection
+
+        audit_mcp_project_rejection(current_requester().id, status_code)
+    except Exception:
+        logging.getLogger(__name__).exception(
+            "failed to audit an MCP project rejection"
+        )
 
 
 class ToolUnavailable(Exception):
@@ -167,6 +185,7 @@ def install_contract(server):
         try:
             ensure_tool_supported(current_project_type(), name)
         except (ToolInvalidInput, LookupError, ValueError) as exc:
+            _audit_bound_project_rejection()
             return classify_error(exc)
         try:
             jsonschema.validate(arguments, tool.parameters)

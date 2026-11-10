@@ -40,6 +40,7 @@ from .db import (
 from .dtb_executor import column_names
 from .plugins import ExecutorAuthenticationError, ExecutorError, configured
 from .project_api import require_query_project_access
+from .project_context import project_is_frozen
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -674,6 +675,73 @@ def audit_revoked_token_attempt(
                 elapsed_ms=0,
             )
         )
+
+
+def _audit_mcp_rejection(db, owner_id: str, status_code: int, stage: str) -> None:
+    db.add(
+        QueryAudit(
+            id=uuid.uuid4().hex,
+            owner_id=owner_id,
+            sql=json.dumps({"entry": "mcp", "stage": stage}, ensure_ascii=False),
+            kind="mcp",
+            status=f"rejected_{status_code}",
+            row_count=None,
+            elapsed_ms=0,
+        )
+    )
+
+
+def audit_mcp_authentication_rejection(
+    credentials: HTTPAuthorizationCredentials | None,
+    status_code: int,
+    *,
+    conversation_id: str | None = None,
+    turn_id: str | None = None,
+) -> None:
+    """Audit an MCP rejection that happens before tool dispatch.
+
+    The identity always comes from the credential record, never from request
+    headers or the body.  A 401 needs a real revoked token (or the revoked
+    owner of a real agent credential); a 409 needs an agent credential whose
+    stored conversation and turn match the request and whose stored project is
+    frozen.  Unknown credentials and forged header values write no audit.  No
+    query id can be proven at this stage, so none is stored.
+    """
+    if status_code not in (401, 409):
+        return
+    if credentials is None or credentials.scheme.lower() != "bearer":
+        return
+    with sessions().begin() as db:
+        token = db.get(Token, digest(credentials.credentials))
+        if token is not None:
+            if status_code != 401 or not token.revoked:
+                return
+            owner_id = token.id
+        else:
+            scoped = db.get(AgentCredential, digest(credentials.credentials))
+            if scoped is None:
+                return
+            if status_code == 409 and (
+                scoped.conversation_id != conversation_id
+                or str(scoped.turn_id) != turn_id
+                or not project_is_frozen(scoped.project_id)
+            ):
+                return
+            owner = db.query(Token).filter_by(id=scoped.owner_id).first()
+            if owner is None or (status_code == 401 and not owner.revoked):
+                return
+            owner_id = owner.id
+        _audit_mcp_rejection(db, owner_id, status_code, "authentication")
+
+
+def audit_mcp_project_rejection(owner_id: str, status_code: int) -> None:
+    """Audit a project-resolution rejection for an authenticated MCP caller."""
+    if status_code not in (404, 409):
+        return
+    with sessions().begin() as db:
+        if db.query(Token).filter_by(id=owner_id).first() is None:
+            return
+        _audit_mcp_rejection(db, owner_id, status_code, "project_resolution")
 
 
 def _query_requester_dependency(kind: str):
