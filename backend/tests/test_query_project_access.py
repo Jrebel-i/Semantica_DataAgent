@@ -73,6 +73,31 @@ def headers(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
+def mcp_headers(token: str | None, **extra: str) -> dict[str, str]:
+    values = {
+        "Accept": "application/json, text/event-stream",
+        "Host": "localhost:8000",
+        "Content-Type": "application/json",
+    }
+    if token is not None:
+        values["Authorization"] = f"Bearer {token}"
+    values.update(extra)
+    return values
+
+
+def mcp_initialize() -> dict:
+    return {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-03-26",
+            "capabilities": {},
+            "clientInfo": {"name": "test", "version": "1"},
+        },
+    }
+
+
 def create_project(c, admin: str) -> dict:
     response = c.post(
         "/api/v1/projects",
@@ -231,6 +256,43 @@ def add_conversation(
                 data=json.dumps({"id": query_id}),
             )
         )
+        return conversation_id, turn.id
+
+
+def add_running_turn(owner_id: str) -> tuple[str, int]:
+    from datetime import UTC, datetime
+
+    from semantica_dataagent.db import Conversation, Turn, sessions
+
+    conversation_id = uuid.uuid4().hex
+    with sessions().begin() as db:
+        db.add(
+            Conversation(
+                id=conversation_id,
+                owner_id=owner_id,
+                project_id=DEFAULT_PROJECT_ID,
+                title="query",
+                agent="pi",
+                provider_id="provider",
+                model="model",
+                created_at=datetime.now(UTC),
+                updated_at=datetime.now(UTC),
+            )
+        )
+        turn = Turn(
+            conversation_id=conversation_id,
+            provider_id="provider",
+            model="model",
+            sequence=1,
+            question="query",
+            status="running",
+            answer="",
+            sql="[]",
+            citations="[]",
+            started_at=datetime.now(UTC),
+        )
+        db.add(turn)
+        db.flush()
         return conversation_id, turn.id
 
 
@@ -1049,3 +1111,204 @@ def test_revoked_token_query_attempts_are_audited(
         == 401
     )
     assert len(audit_records()) == before
+
+
+def test_revoked_token_mcp_transport_audits_authentication_rejection(client, executor):
+    from semantica_dataagent.db import digest
+
+    c, admin = client
+    member = create_member(c, admin, DEFAULT_PROJECT_ID)
+    query_id = add_query(member["id"], DEFAULT_PROJECT_ID)
+    token = member["token"]
+
+    response = c.post("/mcp/", headers=mcp_headers(token), json=mcp_initialize())
+    assert response.status_code == 200, response.text
+    assert audit_records() == []
+
+    revoke_token(c, admin, member["id"])
+    body = {
+        "jsonrpc": "2.0",
+        "id": 7,
+        "method": "tools/call",
+        "params": {
+            "name": "execute_query",
+            "arguments": {
+                "confirmation_id": query_id,
+                "owner_id": "forged-owner",
+                "query_id": "forged-query-id",
+                "sql": "request-body-sentinel",
+            },
+        },
+    }
+    response = c.post(
+        "/mcp/",
+        headers=mcp_headers(
+            token,
+            **{
+                "X-Dataagent-Conversation-Id": "forged-conversation",
+                "X-Dataagent-Turn-Id": "999",
+                "X-Dataagent-Project": "forged-project",
+            },
+        ),
+        json=body,
+    )
+    assert response.status_code == 401, response.text
+    assert response.json() == {"detail": "Invalid token"}
+
+    records = audit_records()
+    assert len(records) == 1, records
+    record = records[0]
+    assert record["kind"] == "mcp"
+    assert record["status"] == "rejected_401"
+    assert record["owner_id"] == member["id"]
+    assert json.loads(record["sql"]) == {"entry": "mcp", "stage": "authentication"}
+    serialized = json.dumps(records)
+    for secret in (
+        token,
+        digest(token),
+        query_id,
+        "forged-owner",
+        "forged-query-id",
+        "forged-conversation",
+        "forged-project",
+        "request-body-sentinel",
+    ):
+        assert secret not in serialized
+
+    assert query_status(query_id) == "planned"
+    assert executor == []
+
+
+def test_mcp_authentication_audit_requires_a_real_revoked_bearer(client):
+    c, admin = client
+    member = create_member(c, admin, DEFAULT_PROJECT_ID)
+    revoke_token(c, admin, member["id"])
+    before = len(audit_records())
+
+    for token, extra in (
+        ("not-a-real-token", {}),
+        (None, {}),
+        (member["token"], {"Authorization": f"Basic {member['token']}"}),
+    ):
+        response = c.post(
+            "/mcp/", headers=mcp_headers(token, **extra), json=mcp_initialize()
+        )
+        assert response.status_code == 401, response.text
+        assert len(audit_records()) == before
+
+    response = c.get("/api/v1/projects", headers=headers(member["token"]))
+    assert response.status_code == 401, response.text
+    assert len(audit_records()) == before
+
+    response = c.post("/mcp/", headers=mcp_headers(admin), json=mcp_initialize())
+    assert response.status_code == 200, response.text
+    assert len(audit_records()) == before
+
+
+def test_mcp_auth_rejection_does_not_read_request_body(client):
+    import asyncio
+    from types import SimpleNamespace
+
+    from semantica_dataagent.app import MCPAuthentication
+
+    c, admin = client
+    member = create_member(c, admin, DEFAULT_PROJECT_ID)
+    revoke_token(c, admin, member["id"])
+    scope = {
+        "type": "http",
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": "http",
+        "server": ("testserver", 80),
+        "client": ("testclient", 50000),
+        "root_path": "",
+        "path": "/mcp/",
+        "raw_path": b"/mcp/",
+        "query_string": b"",
+        "headers": [
+            (b"authorization", f"Bearer {member['token']}".encode()),
+            (b"content-type", b"application/json"),
+        ],
+    }
+    reads = []
+
+    async def receive():
+        reads.append("body")
+        return {
+            "type": "http.request",
+            "body": b"request-body-sentinel",
+            "more_body": False,
+        }
+
+    sent = []
+
+    async def send(message):
+        sent.append(message)
+
+    asyncio.run(MCPAuthentication(SimpleNamespace())(scope, receive, send))
+
+    assert sent[0]["status"] == 401
+    assert reads == []
+    records = audit_records()
+    assert len(records) == 1
+    assert records[0]["status"] == "rejected_401"
+    assert records[0]["owner_id"] == member["id"]
+    assert "request-body-sentinel" not in json.dumps(records)
+
+
+def test_revoked_owner_agent_credential_is_audited_by_mcp_transport(client):
+    from semantica_dataagent.auth import issue_agent_credential
+    from semantica_dataagent.db import digest
+
+    c, admin = client
+    member = create_member(c, admin, DEFAULT_PROJECT_ID)
+    conversation_id, turn_id = add_running_turn(member["id"])
+    credential = issue_agent_credential(member["id"], conversation_id, turn_id)
+
+    revoke_token(c, admin, member["id"])
+    response = c.post(
+        "/mcp/",
+        headers=mcp_headers(
+            credential,
+            **{
+                "X-Dataagent-Conversation-Id": conversation_id,
+                "X-Dataagent-Turn-Id": str(turn_id),
+            },
+        ),
+        json=mcp_initialize(),
+    )
+    assert response.status_code == 401, response.text
+    assert response.json() == {"detail": "Invalid token"}
+
+    records = audit_records()
+    assert len(records) == 1, records
+    assert records[0]["kind"] == "mcp"
+    assert records[0]["status"] == "rejected_401"
+    assert records[0]["owner_id"] == member["id"]
+    assert json.loads(records[0]["sql"]) == {
+        "entry": "mcp",
+        "stage": "authentication",
+    }
+    serialized = json.dumps(records)
+    assert credential not in serialized
+    assert digest(credential) not in serialized
+    assert conversation_id not in serialized
+
+
+def test_mcp_redirect_audits_revoked_token_without_changing_401(client):
+    c, admin = client
+    member = create_member(c, admin, DEFAULT_PROJECT_ID)
+    revoke_token(c, admin, member["id"])
+
+    response = c.post(
+        "/mcp",
+        headers=mcp_headers(member["token"]),
+        json=mcp_initialize(),
+        follow_redirects=False,
+    )
+    assert response.status_code == 401, response.text
+    assert response.json() == {"detail": "Invalid token"}
+    records = audit_records()
+    assert len(records) == 1, records
+    assert records[0]["owner_id"] == member["id"]
+    assert records[0]["status"] == "rejected_401"

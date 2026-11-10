@@ -26,7 +26,7 @@ from sqlalchemy import text, update
 from . import auto_build, knowledge, project_context
 from .api_time import UtcDatetime
 from .attachments import MAX_REQUEST_BYTES
-from .auth import admin, authenticate_mcp, bearer, current_user
+from .auth import admin, authenticate_mcp, bearer, current_requester, current_user
 from .build_queue import build_queue, recover_interrupted_builds
 from .db import (
     Build,
@@ -1059,8 +1059,33 @@ def create_mcp():
     return server
 
 
+def _audit_mcp_auth_rejection(
+    credentials: HTTPAuthorizationCredentials | None,
+) -> None:
+    """Audit revoked MCP credentials without inspecting the request body."""
+    try:
+        from .query_api import audit_revoked_token_attempt
+
+        audit_revoked_token_attempt(credentials, "mcp", stage="authentication")
+    except Exception:
+        logging.getLogger(__name__).exception(
+            "failed to audit a revoked MCP token attempt"
+        )
+
+
+def _mcp_redirect_user(
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)],
+) -> str:
+    try:
+        return current_requester(credentials).role
+    except HTTPException as exc:
+        if exc.status_code == 401:
+            _audit_mcp_auth_rejection(credentials)
+        raise
+
+
 @app.api_route("/mcp", methods=["GET", "POST", "DELETE"], include_in_schema=False)
-def mcp_redirect(_: Annotated[str, Depends(current_user)]):
+def mcp_redirect(_: Annotated[str, Depends(_mcp_redirect_user)]):
     return RedirectResponse("/mcp/", status_code=307)
 
 
@@ -1079,6 +1104,8 @@ class MCPAuthentication:
                     request.headers.get("x-dataagent-turn-id"),
                 )
             except HTTPException as exc:
+                if exc.status_code == 401:
+                    _audit_mcp_auth_rejection(credentials)
                 await JSONResponse(
                     {"detail": exc.detail},
                     status_code=exc.status_code,

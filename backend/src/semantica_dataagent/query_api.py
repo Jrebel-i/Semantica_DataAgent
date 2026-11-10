@@ -27,6 +27,7 @@ from . import knowledge
 from .auth import Requester, _authenticated, admin, bearer, current_requester
 from .crypto import decrypt
 from .db import (
+    AgentCredential,
     Conversation,
     PersonalDtbToken,
     QueryAudit,
@@ -626,28 +627,47 @@ async def _execute(
                 row.query_key = key
 
 
-def _audit_revoked_query_attempt(
-    credentials: HTTPAuthorizationCredentials | None, kind: str, query_id: str
+def audit_revoked_token_attempt(
+    credentials: HTTPAuthorizationCredentials | None,
+    kind: str,
+    query_id: str | None = None,
+    *,
+    stage: str | None = None,
 ) -> None:
-    """Audit a saved-query entry rejected because the bearer token was revoked.
+    """Audit an entry rejected because the bearer token was revoked.
 
     Unknown credentials are not audited: there is no real identity to attach
-    the attempt to.  Only the token digest is looked up; the credential itself
-    is never stored or logged.
+    the attempt to.  Only the digest is looked up; the credential, digest and
+    request body are never stored or logged.  Callers that cannot prove a
+    query id, such as the MCP transport, omit it rather than trusting the
+    request.
     """
     if credentials is None or credentials.scheme.lower() != "bearer":
         return
     with sessions().begin() as db:
         token = db.get(Token, digest(credentials.credentials))
-        if token is None or not token.revoked:
-            return
+        if token is not None:
+            if not token.revoked:
+                return
+            owner_id = token.id
+        else:
+            scoped = db.get(AgentCredential, digest(credentials.credentials))
+            if scoped is None:
+                return
+            owner = db.query(Token).filter_by(id=scoped.owner_id).first()
+            if owner is None or not owner.revoked:
+                return
+            owner_id = owner.id
+        detail = {"entry": kind}
+        if query_id is not None:
+            detail["query_id"] = query_id
+        if stage is not None:
+            detail["stage"] = stage
         db.add(
             QueryAudit(
                 id=uuid.uuid4().hex,
-                owner_id=token.id,
-                sql=json.dumps(
-                    {"query_id": query_id, "entry": kind}, ensure_ascii=False
-                ),
+                owner_id=owner_id,
+                sql=json.dumps(detail, ensure_ascii=False),
                 kind=kind,
                 status="rejected_401",
                 row_count=None,
@@ -666,7 +686,7 @@ def _query_requester_dependency(kind: str):
         except HTTPException as exc:
             if exc.status_code == 401:
                 try:
-                    _audit_revoked_query_attempt(credentials, kind, query_id)
+                    audit_revoked_token_attempt(credentials, kind, query_id)
                 except Exception:
                     logger.exception("failed to audit a revoked token attempt")
             raise
