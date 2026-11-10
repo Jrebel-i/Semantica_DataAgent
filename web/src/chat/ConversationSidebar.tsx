@@ -52,7 +52,6 @@ export function ConversationSidebar({
   onSaveTitle,
   onDeleteConversation,
   onToggleArchived,
-  onNavigateChat,
 }: {
   messages: Messages;
   conversations: Conversation[];
@@ -87,7 +86,6 @@ export function ConversationSidebar({
   onSaveTitle: (id: string) => void;
   onDeleteConversation: (id: string) => void;
   onToggleArchived: () => void;
-  onNavigateChat?: () => void;
 }) {
   const t = messages;
   const filter = (rows: Conversation[]) =>
@@ -185,7 +183,6 @@ export function ConversationSidebar({
                         aria-label={conversation.title}
                         title={conversation.title}
                         onClick={() => {
-                          onNavigateChat?.();
                           void onOpenConversation(conversation.id);
                         }}
                         disabled={sending}
