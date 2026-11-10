@@ -55,8 +55,13 @@ def test_document_relations_include_quoted_sql_table_names():
             self.links = []
 
         def execute(self, query, params):
+            if "RETURN count(*) AS deleted" in query:
+                return [{"deleted": 0}]
+            if "RETURN elementId(n) AS id" in query:
+                return []
             if "UNWIND $rows AS row MATCH (d:SDADocument" in query:
                 self.links.extend(params["rows"])
+            return []
 
     storage = Storage()
     records = [
