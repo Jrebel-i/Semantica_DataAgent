@@ -3663,6 +3663,23 @@ code {
     overflow: hidden;
     text-overflow: ellipsis;
   }
+  .query-result-preview table,
+  .context-schema .schema-table {
+    width: max-content;
+    min-width: 100%;
+  }
+  .query-result-preview th,
+  .query-result-preview td,
+  .context-schema .schema-table th,
+  .context-schema .schema-table td {
+    max-width: 320px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .context-schema-body {
+    overflow-x: auto;
+  }
   .chat-layout,
   .chat-page-host .chat-layout,
   .chat-layout.context-hidden,

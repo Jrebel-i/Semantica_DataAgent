@@ -59,6 +59,30 @@ describe("narrow screen layout", () => {
     expect(table).toContain("min-width: 100%;");
   });
 
+  test("chat data tables keep cells on one line inside their own scrollers", () => {
+    for (const selector of [
+      ".query-result-preview th",
+      ".query-result-preview td",
+      ".context-schema .schema-table th",
+      ".context-schema .schema-table td",
+    ]) {
+      const cell = declarations(selector);
+      expect(cell).toContain("white-space: nowrap;");
+      expect(cell).toContain("max-width: 320px;");
+      expect(cell).toContain("overflow: hidden;");
+      expect(cell).toContain("text-overflow: ellipsis;");
+    }
+    expect(declarations(".query-result-preview table")).toContain(
+      "width: max-content;",
+    );
+    expect(declarations(".context-schema .schema-table")).toContain(
+      "width: max-content;",
+    );
+    expect(declarations(".context-schema-body")).toContain(
+      "overflow-x: auto;",
+    );
+  });
+
   test("the knowledge field table keeps cells on one line and scrolls itself", () => {
     for (const selector of [
       ".admin-page .knowledge-table-scroll .data-table th",
