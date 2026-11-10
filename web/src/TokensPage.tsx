@@ -12,6 +12,7 @@ import {
 } from "antd";
 import type { components } from "./api";
 import type { Messages } from "./i18n";
+import { TableScroll } from "./TableScroll";
 
 type TokenRow = components["schemas"]["TokenInfo"] & {
   projects?: { project_id: string; role: "admin" | "member" }[];
@@ -155,68 +156,70 @@ export function TokensPage({
       </div>
       {error && <Alert type="error" title={error} />}
       <div className="card section-card token-table-card">
-        <Table
-          rowKey="id"
-          dataSource={rows}
-          pagination={false}
-          columns={[
-            { title: t.name, dataIndex: "name" },
-            {
-              title: t.role,
-              render: (_, row) =>
-                row.role === "admin" ? t.roleAdmin : t.roleUser,
-            },
-            {
-              title: t.tokenProjects,
-              render: (_, row) =>
-                row.projects && row.projects.length > 0 ? (
-                  <Space wrap>
-                    {row.projects.map((item) => (
-                      <Tag key={item.project_id}>
-                        {projectName(item.project_id)} ·{" "}
-                        {item.role === "admin"
-                          ? t.projectAdminRole
-                          : t.projectMemberRole}
-                      </Tag>
-                    ))}
-                  </Space>
-                ) : (
-                  t.noProjectMembership
-                ),
-            },
-            {
-              title: t.created,
-              render: (_, row) => localTime(row.created_at),
-            },
-            {
-              title: t.lastUsed,
-              render: (_, row) =>
-                row.last_used_at ? localTime(row.last_used_at) : t.never,
-            },
-            {
-              title: t.status,
-              render: (_, row) =>
-                row.revoked ? (
-                  <Tag color="red">{t.revoked}</Tag>
-                ) : (
-                  <Tag color="green">{t.active}</Tag>
-                ),
-            },
-            {
-              title: t.actions,
-              render: (_, row) =>
-                !row.revoked && (
-                  <Button
-                    autoInsertSpace={false}
-                    danger
-                    onClick={() => setConfirm(row.id)}
-                  >
-                    {t.revoke}
-                  </Button>
-                ),
-            },
-          ]}
-        />
+        <TableScroll label={t.tokens}>
+          <Table
+            rowKey="id"
+            dataSource={rows}
+            pagination={false}
+            columns={[
+              { title: t.name, dataIndex: "name" },
+              {
+                title: t.role,
+                render: (_, row) =>
+                  row.role === "admin" ? t.roleAdmin : t.roleUser,
+              },
+              {
+                title: t.tokenProjects,
+                render: (_, row) =>
+                  row.projects && row.projects.length > 0 ? (
+                    <Space wrap>
+                      {row.projects.map((item) => (
+                        <Tag key={item.project_id}>
+                          {projectName(item.project_id)} ·{" "}
+                          {item.role === "admin"
+                            ? t.projectAdminRole
+                            : t.projectMemberRole}
+                        </Tag>
+                      ))}
+                    </Space>
+                  ) : (
+                    t.noProjectMembership
+                  ),
+              },
+              {
+                title: t.created,
+                render: (_, row) => localTime(row.created_at),
+              },
+              {
+                title: t.lastUsed,
+                render: (_, row) =>
+                  row.last_used_at ? localTime(row.last_used_at) : t.never,
+              },
+              {
+                title: t.status,
+                render: (_, row) =>
+                  row.revoked ? (
+                    <Tag color="red">{t.revoked}</Tag>
+                  ) : (
+                    <Tag color="green">{t.active}</Tag>
+                  ),
+              },
+              {
+                title: t.actions,
+                render: (_, row) =>
+                  !row.revoked && (
+                    <Button
+                      autoInsertSpace={false}
+                      danger
+                      onClick={() => setConfirm(row.id)}
+                    >
+                      {t.revoke}
+                    </Button>
+                  ),
+              },
+            ]}
+          />
+        </TableScroll>
       </div>
       {open && (
         <Modal

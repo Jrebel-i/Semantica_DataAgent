@@ -64,7 +64,12 @@ export function ContextDrawer({
                 )}
               </div>
             </div>
-            <div className="context-schema-body">
+            <div
+              className="context-schema-body"
+              tabIndex={0}
+              role="region"
+              aria-label={t.fields}
+            >
               <table className="schema-table">
                 <thead>
                   <tr>

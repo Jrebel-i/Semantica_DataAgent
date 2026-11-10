@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Alert, Button, Table } from "antd";
 import type { Messages } from "./i18n";
+import { TableScroll } from "./TableScroll";
 
 type Pull = {
   id: number;
@@ -83,17 +84,19 @@ export function PullsPanel({
       </div>
       {error && <Alert type="error" title={t.error} />}
       <div className="card token-table-card">
-        <Table
-          rowKey="id"
-          dataSource={pulls}
-          columns={[
-            { title: t.buildStartedAt, dataIndex: "started_at" },
-            { title: t.buildStatus, dataIndex: "status" },
-            { title: t.entityTable, dataIndex: "tables" },
-            { title: t.entityTask, dataIndex: "tasks" },
-            { title: t.pullFailure, dataIndex: "error" },
-          ]}
-        />
+        <TableScroll label={t.pullRecords}>
+          <Table
+            rowKey="id"
+            dataSource={pulls}
+            columns={[
+              { title: t.buildStartedAt, dataIndex: "started_at" },
+              { title: t.buildStatus, dataIndex: "status" },
+              { title: t.entityTable, dataIndex: "tables" },
+              { title: t.entityTask, dataIndex: "tasks" },
+              { title: t.pullFailure, dataIndex: "error" },
+            ]}
+          />
+        </TableScroll>
       </div>
     </section>
   );

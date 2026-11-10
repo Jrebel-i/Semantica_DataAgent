@@ -50,9 +50,9 @@ describe("narrow screen layout", () => {
     ]) {
       const cell = declarations(selector);
       expect(cell).toContain("white-space: nowrap;");
-      expect(cell).toContain("max-width: 320px;");
-      expect(cell).toContain("overflow: hidden;");
-      expect(cell).toContain("text-overflow: ellipsis;");
+      expect(cell).toContain("max-width: none;");
+      expect(cell).toContain("overflow: visible;");
+      expect(cell).toContain("text-overflow: clip;");
     }
     const table = declarations(".ant-table-wrapper .ant-table-content > table");
     expect(table).toContain("width: max-content;");
@@ -68,9 +68,9 @@ describe("narrow screen layout", () => {
     ]) {
       const cell = declarations(selector);
       expect(cell).toContain("white-space: nowrap;");
-      expect(cell).toContain("max-width: 320px;");
-      expect(cell).toContain("overflow: hidden;");
-      expect(cell).toContain("text-overflow: ellipsis;");
+      expect(cell).toContain("max-width: none;");
+      expect(cell).toContain("overflow: visible;");
+      expect(cell).toContain("text-overflow: clip;");
     }
     expect(declarations(".query-result-preview table")).toContain(
       "width: max-content;",
@@ -88,11 +88,26 @@ describe("narrow screen layout", () => {
     ]) {
       expect(declarations(selector)).toContain("white-space: nowrap;");
     }
-    expect(
-      declarations(
-        ".admin-page .knowledge-table-scroll .data-table td.field-comment",
-      ),
-    ).toContain("max-width: 260px;");
+    for (const selector of [
+      ".admin-page .knowledge-table-scroll .data-table td.field-comment",
+      ".admin-page .knowledge-table-scroll .data-table td.field-dimension",
+    ]) {
+      const cell = declarations(selector);
+      expect(cell).toContain("max-width: none;");
+      expect(cell).toContain("overflow: visible;");
+      expect(cell).toContain("text-overflow: clip;");
+    }
+  });
+
+  test("table scrollers expose a visible keyboard focus target", () => {
+    for (const selector of [
+      ".result-table-scroll:focus-visible",
+      ".context-schema-body:focus-visible",
+      ".knowledge-table-scroll:focus-visible",
+      ".table-scroll-region:focus-within",
+    ]) {
+      expect(css).toContain(selector);
+    }
   });
 
   test("wide multi-column layouts collapse to one column", () => {

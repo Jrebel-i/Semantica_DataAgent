@@ -3081,6 +3081,13 @@ code {
   max-height: 360px;
   overflow: auto;
 }
+.result-table-scroll:focus-visible,
+.context-schema-body:focus-visible,
+.knowledge-table-scroll:focus-visible,
+.table-scroll-region:focus-within {
+  outline: 2px solid var(--teal-dark);
+  outline-offset: 1px;
+}
 .query-result-preview th,
 .query-result-preview td {
   padding: 5px 8px;
@@ -3648,9 +3655,9 @@ code {
   }
   .ant-table-wrapper .ant-table-thead > tr > th,
   .ant-table-wrapper .ant-table-tbody > tr > td {
-    max-width: 320px;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    max-width: none;
+    overflow: visible;
+    text-overflow: clip;
     white-space: nowrap;
   }
   .admin-page .knowledge-table-scroll .data-table th,
@@ -3659,9 +3666,9 @@ code {
   }
   .admin-page .knowledge-table-scroll .data-table td.field-comment,
   .admin-page .knowledge-table-scroll .data-table td.field-dimension {
-    max-width: 260px;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    max-width: none;
+    overflow: visible;
+    text-overflow: clip;
   }
   .query-result-preview table,
   .context-schema .schema-table {
@@ -3672,9 +3679,9 @@ code {
   .query-result-preview td,
   .context-schema .schema-table th,
   .context-schema .schema-table td {
-    max-width: 320px;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    max-width: none;
+    overflow: visible;
+    text-overflow: clip;
     white-space: nowrap;
   }
   .context-schema-body {

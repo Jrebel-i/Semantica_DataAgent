@@ -433,6 +433,9 @@ test("字段表放在横向滚动容器里", async () => {
   const scroll = container.querySelector(".knowledge-table-scroll");
   expect(scroll).not.toBeNull();
   expect(scroll?.querySelector("table.data-table")).not.toBeNull();
+  expect(scroll?.getAttribute("tabindex")).toBe("0");
+  expect(scroll?.getAttribute("role")).toBe("region");
+  expect(scroll?.getAttribute("aria-label")).toBe("字段");
 });
 
 test("长字段名和类型列使用不换行的列标记", async () => {
@@ -455,6 +458,10 @@ test("长字段名和类型列使用不换行的列标记", async () => {
   expect(nameCell?.classList.contains("field-name")).toBe(true);
   const typeCell = container.querySelector("td.field-type");
   expect(typeCell?.textContent).toBe("string");
+  expect(typeCell?.getAttribute("title")).toBeNull();
+  expect(
+    container.querySelector("td.field-comment")?.getAttribute("title"),
+  ).toBeNull();
 });
 
 test("搜索仍按表名过滤，并继续使用 summary 视图", async () => {

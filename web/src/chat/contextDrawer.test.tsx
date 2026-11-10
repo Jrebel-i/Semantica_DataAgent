@@ -7,6 +7,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { ChatPage } from "../ChatPage";
 import { getMessages } from "../i18n";
@@ -50,6 +51,62 @@ test("没有上下文时隐藏面板和开关", async () => {
   expect(container.querySelector(".chat-layout.context-hidden")).toBeTruthy();
   expect(screen.queryByRole("button", { name: "收起面板" })).toBeNull();
   expect(screen.queryByRole("button", { name: "展开面板" })).toBeNull();
+});
+
+test("表结构抽屉完整显示长字段名和注释，并支持键盘横向滚动", async () => {
+  const longName = "customer_lifetime_value_segment_code_with_a_long_name";
+  const longComment =
+    "会员生命周期价值分层编码，用于精细化运营与渠道归因分析，取值来自离线宽表";
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/v1/agents")
+        return json([{ id: "pi", available: true }]);
+      if (url === "/api/v1/providers") return json([provider]);
+      if (url === "/api/v1/conversations") return json([]);
+      if (url === "/api/v1/conversations/ask")
+        return new Response(sse, {
+          headers: { "Content-Type": "text/event-stream" },
+        });
+      if (url.startsWith("/api/v1/tables/"))
+        return json({
+          ...table,
+          fields: [
+            {
+              ...table.fields[0],
+              name: longName,
+              comment: longComment,
+            },
+          ],
+        });
+      return new Response("", { status: 404 });
+    }),
+  );
+  render(<ChatPage token="token" role="user" messages={getMessages("zh")} />);
+  await waitFor(() =>
+    expect(composerSelectText("模型")).toBe(provider.models[0]),
+  );
+  fireEvent.change(screen.getByLabelText("问题"), {
+    target: { value: "查看表结构" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: /提\s*问/ }));
+
+  fireEvent.click(
+    await screen.findByRole("button", { name: "table:shop.payments" }),
+  );
+  const region = await screen.findByRole("region", { name: "字段" });
+  expect(region.classList.contains("context-schema-body")).toBe(true);
+  expect(region.getAttribute("tabindex")).toBe("0");
+  expect(within(region).getByText(longName).getAttribute("title")).toBeNull();
+  expect(
+    within(region)
+      .getByText(longComment, { exact: false })
+      .getAttribute("title"),
+  ).toBeNull();
+
+  region.focus();
+  expect(window.document.activeElement).toBe(region);
 });
 
 test("后打开的引用不会被较晚返回的旧请求覆盖", async () => {

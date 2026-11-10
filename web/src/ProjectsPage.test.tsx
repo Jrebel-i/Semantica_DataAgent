@@ -87,9 +87,17 @@ test("lists projects with type, status and creation time", async () => {
       ]),
     ),
   );
-  render(<ProjectsPage token="admin" messages={getMessages("zh")} />);
+  const { container } = render(
+    <ProjectsPage token="admin" messages={getMessages("zh")} />,
+  );
 
   expect(await screen.findByText("Platform Docs")).toBeTruthy();
+  await waitFor(() => {
+    const table = container.querySelector(".ant-table-content");
+    expect(table?.getAttribute("tabindex")).toBe("0");
+    expect(table?.getAttribute("role")).toBe("region");
+    expect(table?.getAttribute("aria-label")).toBe("项目");
+  });
   expect(screen.getByText("数仓型")).toBeTruthy();
   expect(screen.getByText("文档型")).toBeTruthy();
   expect(screen.getAllByText("有效").length).toBe(2);

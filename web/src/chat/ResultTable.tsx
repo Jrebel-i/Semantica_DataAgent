@@ -3,12 +3,19 @@ import type { QueryResult } from "./types";
 export function ResultTable({
   result,
   limit,
+  label,
 }: {
   result: QueryResult;
   limit?: number;
+  label: string;
 }) {
   return (
-    <div className="result-table-scroll">
+    <div
+      className="result-table-scroll"
+      tabIndex={0}
+      role="region"
+      aria-label={label}
+    >
       <table>
         <thead>
           <tr>
