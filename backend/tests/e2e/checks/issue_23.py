@@ -65,6 +65,20 @@ ALLOWED_FIELDS = frozenset(
         "options",
         "label",
         "conversation_id",
+        "rows",
+        "columns",
+        "values",
+        "issues",
+        "message",
+        "code",
+        "retryable",
+        "next_action",
+        "sql_fingerprint",
+        "sql_fingerprints",
+        "error_category",
+        "prompt",
+        "answer",
+        "content",
     }
 )
 
@@ -133,6 +147,7 @@ def check_langfuse_observability(ctx):
                         "langfuse_url": LANGFUSE,
                         "langfuse_public_key": public,
                         "langfuse_secret_key": secret,
+                        "langfuse_capture_content": "true",
                     }
                 },
             )
