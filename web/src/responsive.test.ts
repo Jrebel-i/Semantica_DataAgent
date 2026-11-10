@@ -29,9 +29,9 @@ describe("narrow screen layout", () => {
     expect(sidebar).toContain("position: fixed;");
     expect(sidebar).toContain("transform: translateX(-100%);");
     expect(sidebar).toContain("visibility: hidden;");
-    expect(declarations(".side-nav--drawer-open")).toContain(
-      "transform: translateX(0);",
-    );
+    const drawerOpen = declarations(".side-nav.side-nav--drawer-open");
+    expect(drawerOpen).toContain("transform: translateX(0);");
+    expect(drawerOpen).toContain("visibility: visible;");
     expect(declarations(".sidebar-scrim")).toContain("position: fixed;");
     expect(declarations(".sidebar-scrim")).toContain("inset: 0;");
   });

@@ -3563,7 +3563,7 @@ code {
       transform 0.18s ease,
       visibility 0.18s ease;
   }
-  .side-nav--drawer-open {
+  .side-nav.side-nav--drawer-open {
     transform: translateX(0);
     visibility: visible;
   }
