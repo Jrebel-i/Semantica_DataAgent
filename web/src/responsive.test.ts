@@ -78,9 +78,7 @@ describe("narrow screen layout", () => {
     expect(declarations(".context-schema .schema-table")).toContain(
       "width: max-content;",
     );
-    expect(declarations(".context-schema-body")).toContain(
-      "overflow-x: auto;",
-    );
+    expect(declarations(".context-schema-body")).toContain("overflow-x: auto;");
   });
 
   test("the knowledge field table keeps cells on one line and scrolls itself", () => {
