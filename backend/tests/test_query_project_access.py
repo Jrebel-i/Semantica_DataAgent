@@ -410,6 +410,12 @@ def test_permission_revocation_rejects_all_entrances(
     )
     assert response.status_code == download_status, response.text
 
+    response = c.post(
+        f"/api/v1/queries/{state['download_id']}/download-links",
+        headers=headers(member["token"]),
+    )
+    assert response.status_code == download_status, response.text
+
     response = c.get(state["link_path"])
     assert response.status_code == link_status, response.text
 
@@ -426,6 +432,7 @@ def test_permission_revocation_rejects_all_entrances(
         assert_rejected_audit("query", f"rejected_{rest_status}")
         assert_rejected_audit("mcp", f"rejected_{rest_status}")
         assert_rejected_audit("download", f"rejected_{download_status}")
+        assert_rejected_audit("download_link_created", f"rejected_{download_status}")
         assert_rejected_audit("download_link_used", f"rejected_{link_status}")
     else:
         assert_rejected_audit("mcp", "rejected_404")
