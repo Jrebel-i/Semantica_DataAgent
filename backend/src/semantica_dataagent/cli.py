@@ -215,6 +215,11 @@ def _parser() -> argparse.ArgumentParser:
         default=1,
         help="number of independent conversations per question",
     )
+    execution.add_argument(
+        "--expected-categories",
+        help="comma-separated categories expected in the question set; "
+        "categories with zero questions are reported as coverage gaps",
+    )
     split = commands.add_parser(
         "eval-split", help="write a reproducible stratified dev/holdout split"
     )

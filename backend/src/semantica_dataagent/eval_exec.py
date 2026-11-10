@@ -22,6 +22,13 @@ from .eval import (
 
 DETAIL_LIMIT = 200
 CLARIFY_MESSAGE = "请按以下口径回答并给出 SQL：{caliber}"
+DEFAULT_EXPECTED_CATEGORIES = (
+    "维度值筛选",
+    "时间语义",
+    "口径歧义",
+    "合法空结果",
+    "多表 Join",
+)
 
 
 def where_columns(sql, dialect="hive"):
@@ -243,12 +250,50 @@ def _summary(comparison):
     return None
 
 
-def _majority(repeat, equal_runs):
-    if equal_runs * 2 > repeat:
-        return "correct"
-    if equal_runs * 2 == repeat:
-        return "tie"
-    return "wrong"
+def _expected_categories(value):
+    if value is None:
+        return list(DEFAULT_EXPECTED_CATEGORIES)
+    items = value.split(",") if isinstance(value, str) else list(value)
+    categories = []
+    for item in items:
+        category = str(item).strip()
+        if category and category not in categories:
+            categories.append(category)
+    return categories
+
+
+def _verdict(runs):
+    comparable_runs = sum(run["comparison"] in ("equal", "different") for run in runs)
+    if comparable_runs * 2 <= len(runs):
+        return "uncomparable", comparable_runs
+    equal_runs = sum(run["comparison"] == "equal" for run in runs)
+    if equal_runs * 2 > comparable_runs:
+        return "correct", comparable_runs
+    if equal_runs * 2 == comparable_runs:
+        return "tie", comparable_runs
+    return "wrong", comparable_runs
+
+
+def _majority_comparison(result):
+    if result == "correct":
+        return "equal"
+    if result == "uncomparable":
+        return "uncomparable"
+    return "different"
+
+
+def _display_run(runs, comparison):
+    return next((run for run in runs if run["comparison"] == comparison), runs[0])
+
+
+def _uncomparable_reason(result, reference):
+    if result != "uncomparable":
+        return None
+    if reference.get("status") == "failed":
+        return "reference_failed"
+    if reference.get("status") == "skipped":
+        return "reference_skipped"
+    return "majority_uncomparable"
 
 
 def _coverage(entries):
@@ -262,6 +307,7 @@ def _coverage(entries):
                 "correct": 0,
                 "wrong": 0,
                 "tie": 0,
+                "uncomparable": 0,
                 "volatile": 0,
                 "failure_categories": {},
             },
@@ -289,11 +335,14 @@ def _recompute_summaries(report):
     entries = report.get("questions") or []
     report["failure_categories"] = _failure_summary(entries)
     report["coverage"] = _coverage(entries)
-    report["coverage_gaps"] = sorted(
+    expected = _expected_categories(report.get("expected_categories"))
+    report["expected_categories"] = expected
+    coverage = report["coverage"]
+    report["coverage_gaps"] = [
         category
-        for category, item in report["coverage"].items()
-        if item["total"] and item["correct"] == 0
-    )
+        for category in expected
+        if coverage.get(category, {}).get("total", 0) == 0
+    ]
     metrics = report.setdefault("metrics", {})
     classified = sum(bool(entry.get("failure_category")) for entry in entries)
     metrics["classified"] = classified
@@ -320,6 +369,20 @@ def render_report(report):
         lines += [f"- {question_id}" for question_id in excluded]
     else:
         lines.append("无。")
+    lines += ["", "## 不可比题目（不计入一致率分母）", ""]
+    uncomparable = report.get("excluded_uncomparable") or []
+    if uncomparable:
+        lines += [
+            "| 题号 | 原因 | 参考 SQL 状态 | 可比较遍数 |",
+            "| --- | --- | --- | --- |",
+        ]
+        lines += [
+            f"| {item['id']} | {item['reason']} | {item.get('reference_status') or '—'} | "
+            f"{item.get('comparable_runs', 0)}/{item.get('run_count', 0)} |"
+            for item in uncomparable
+        ]
+    else:
+        lines.append("无。")
     lines += ["", "## 失败原因", ""]
     failures = report.get("failure_reasons") or {}
     lines += [f"- {key}: {value}" for key, value in failures.items()]
@@ -338,8 +401,8 @@ def render_report(report):
     coverage = report.get("coverage") or {}
     if coverage:
         lines += [
-            "| category | 题数 | 答对 | 答错 | 平局 | 波动 | 失败分类 |",
-            "| --- | --- | --- | --- | --- | --- | --- |",
+            "| category | 题数 | 答对 | 答错 | 平局 | 不可比 | 波动 | 失败分类 |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- |",
         ]
         for category, item in coverage.items():
             detail = ", ".join(
@@ -348,13 +411,17 @@ def render_report(report):
             )
             lines.append(
                 f"| {_cell(category)} | {item['total']} | {item['correct']} | "
-                f"{item['wrong']} | {item['tie']} | {item['volatile']} | "
-                f"{_cell(detail) or '—'} |"
+                f"{item['wrong']} | {item['tie']} | {item.get('uncomparable', 0)} | "
+                f"{item['volatile']} | {_cell(detail) or '—'} |"
             )
     else:
         lines.append("无已评测题目。")
+    lines += ["", "## 覆盖缺口", ""]
+    expected = report.get("expected_categories") or []
+    if expected:
+        lines += [f"- 期望题型：{', '.join(expected)}"]
     gaps = report.get("coverage_gaps") or []
-    lines += ["", f"- 覆盖缺口：{', '.join(gaps) if gaps else '无'}"]
+    lines += [f"- 缺失题型：{', '.join(gaps) if gaps else '无'}"]
     lines += [
         "",
         (
@@ -382,10 +449,15 @@ def render_report(report):
             "",
             f"- 问题：{_cell(entry.get('question'))}",
             f"- 参考 SQL：`{_cell(entry.get('reference_sql'))}`",
-            f"- 判定：{entry['result']}（{entry['equal_runs']}/{entry['run_count']} 遍一致）",
+            (
+                f"- 判定：{entry['result']}（{entry['equal_runs']}/{entry['run_count']} 遍一致，"
+                f"{entry.get('comparable_runs', 0)} 遍可比较）"
+            ),
             f"- 波动题：{'是' if entry['volatile'] else '否'}",
             f"- failure_category：{entry.get('failure_category') or '未填写'}",
         ]
+        if entry.get("uncomparable_reason"):
+            lines.append(f"- 不可比原因：{entry['uncomparable_reason']}")
         for run in entry["runs"]:
             calls = " → ".join(
                 f"{call.get('name')}({call.get('summary')})"
@@ -475,6 +547,9 @@ def run_cli(args):
     split = getattr(args, "split", "dev") or "dev"
     if split not in ("dev", "holdout", "all"):
         raise SystemExit("--split 只能是 dev、holdout 或 all")
+    expected_categories = _expected_categories(
+        getattr(args, "expected_categories", None)
+    )
     unconfirmed = [question for question in questions if not question.answer_confirmed]
     confirmed = [question for question in questions if question.answer_confirmed]
     selected = (
@@ -555,10 +630,17 @@ def run_cli(args):
                 agent.pop("result", None)
                 runs.append(record)
             reference.pop("result", None)
-            first = runs[0]
             equal_runs = sum(run["comparison"] == "equal" for run in runs)
-            result = _majority(repeat, equal_runs)
+            result, comparable_runs = _verdict(runs)
+            comparison = _majority_comparison(result)
+            display = _display_run(runs, comparison)
             comparisons = dict(Counter(run["comparison"] for run in runs))
+            clarified_runs = sum(run["clarified"] for run in runs)
+            via_plan_runs = sum(run["via_plan"] for run in runs)
+            no_sql_runs = sum(not run["agent_sql"] for run in runs)
+            condition_incomplete_runs = sum(
+                bool(run["missing_condition_columns"]) for run in runs
+            )
             entries.append(
                 {
                     "id": question.id,
@@ -567,49 +649,68 @@ def run_cli(args):
                     "split": question.split,
                     "answer_confirmed": question.answer_confirmed,
                     "reference_sql": question.reference_sql,
-                    "sql": first["sql"],
-                    "actual_sql": first["sql"],
-                    "agent_sql": first["agent_sql"],
-                    "conversation_id": first["conversation_id"],
-                    "tool_calls": first["tool_calls"],
-                    "tool_call_sequence": first["tool_call_sequence"],
-                    "clarified": first["clarified"],
-                    "via_plan": first["via_plan"],
-                    "detail": first["detail"],
+                    "sql": display["sql"],
+                    "actual_sql": display["sql"],
+                    "agent_sql": display["agent_sql"],
+                    "conversation_id": display["conversation_id"],
+                    "tool_calls": display["tool_calls"],
+                    "tool_call_sequence": display["tool_call_sequence"],
+                    "clarified": clarified_runs > 0,
+                    "clarified_runs": clarified_runs,
+                    "via_plan": via_plan_runs > 0,
+                    "via_plan_runs": via_plan_runs,
+                    "no_sql": no_sql_runs > 0,
+                    "no_sql_runs": no_sql_runs,
+                    "condition_incomplete": condition_incomplete_runs > 0,
+                    "condition_incomplete_runs": condition_incomplete_runs,
+                    "detail": display["detail"],
                     "reference_detail": reference.get("detail"),
-                    "agent": first["agent"],
+                    "agent": display["agent"],
                     "reference": reference,
-                    "comparison": first["comparison"],
-                    "consistency": first["comparison"],
+                    "comparison": comparison,
+                    "consistency": comparison,
                     "truncated": any(run["truncated"] for run in runs),
-                    "summary": first["summary"],
-                    "missing_condition_columns": first["missing_condition_columns"],
-                    "agent_column_count": first["agent_column_count"],
-                    "reference_column_count": first["reference_column_count"],
+                    "summary": _summary(comparison),
+                    "missing_condition_columns": display["missing_condition_columns"],
+                    "agent_column_count": display["agent_column_count"],
+                    "reference_column_count": display["reference_column_count"],
                     "runs": runs,
                     "run_count": repeat,
                     "equal_runs": equal_runs,
+                    "comparable_runs": comparable_runs,
                     "comparison_counts": comparisons,
                     "result": result,
                     "majority_result": result,
                     "correct": result == "correct",
                     "volatile": len(comparisons) > 1,
+                    "uncomparable_reason": _uncomparable_reason(result, reference),
                     "failure_category": None,
                 }
             )
-    with_sql = sum(entry["agent_sql"] for entry in entries)
-    successful = sum(entry["agent"]["status"] == "succeeded" for entry in entries)
-    comparable = sum(entry["comparison"] in ("equal", "different") for entry in entries)
-    equal = sum(entry["comparison"] == "equal" for entry in entries)
+    comparable = sum(entry["result"] != "uncomparable" for entry in entries)
+    equal = sum(entry["result"] == "correct" for entry in entries)
+    execution_total = sum(
+        run["agent_sql"] for entry in entries for run in entry["runs"]
+    )
+    execution_success = sum(
+        run["agent"]["status"] == "succeeded"
+        for entry in entries
+        for run in entry["runs"]
+    )
     metrics = {
         "questions": len(entries),
         "runs": sum(entry["run_count"] for entry in entries),
-        "no_sql": len(entries) - with_sql,
+        "no_sql": sum(entry["no_sql"] for entry in entries),
+        "no_sql_runs": sum(entry["no_sql_runs"] for entry in entries),
         "clarified": sum(entry["clarified"] for entry in entries),
+        "clarified_runs": sum(entry["clarified_runs"] for entry in entries),
         "via_plan": sum(entry["via_plan"] for entry in entries),
-        "execution_success": successful,
-        "execution_total": with_sql,
-        "execution_success_rate": successful / with_sql if with_sql else None,
+        "via_plan_runs": sum(entry["via_plan_runs"] for entry in entries),
+        "execution_success": execution_success,
+        "execution_total": execution_total,
+        "execution_success_rate": (
+            execution_success / execution_total if execution_total else None
+        ),
         "equal": equal,
         "comparable": comparable,
         "consistency_rate": equal / comparable if comparable else None,
@@ -618,18 +719,14 @@ def run_cli(args):
         "reference_failures": sum(
             entry["reference"]["status"] == "failed" for entry in entries
         ),
-        "condition_incomplete": sum(
-            bool(entry["missing_condition_columns"]) for entry in entries
+        "condition_incomplete": sum(entry["condition_incomplete"] for entry in entries),
+        "condition_incomplete_runs": sum(
+            entry["condition_incomplete_runs"] for entry in entries
         ),
-        "correct": sum(entry["correct"] for entry in entries),
+        "correct": equal,
         "wrong": sum(entry["result"] == "wrong" for entry in entries),
         "tie": sum(entry["result"] == "tie" for entry in entries),
         "volatile": sum(entry["volatile"] for entry in entries),
-        "majority_consistency_rate": (
-            sum(entry["correct"] for entry in entries) / len(entries)
-            if entries
-            else None
-        ),
     }
     failures = dict(
         Counter(
@@ -655,15 +752,30 @@ def run_cli(args):
         }
         for question in unconfirmed
     ]
+    excluded_uncomparable = [
+        {
+            "id": entry["id"],
+            "category": entry["category"],
+            "split": entry["split"],
+            "reason": entry["uncomparable_reason"],
+            "reference_status": entry["reference"]["status"],
+            "comparable_runs": entry["comparable_runs"],
+            "run_count": entry["run_count"],
+        }
+        for entry in entries
+        if entry["result"] == "uncomparable"
+    ]
     report = {
         "project": getattr(args, "project", None),
         "split": split,
         "repeat": repeat,
+        "expected_categories": expected_categories,
         "metrics": metrics,
         "failure_reasons": failures,
         "run_failure_reasons": run_failures,
         "excluded_unconfirmed": [question.id for question in unconfirmed],
         "excluded": excluded,
+        "excluded_uncomparable": excluded_uncomparable,
         "questions": entries,
     }
     _recompute_summaries(report)

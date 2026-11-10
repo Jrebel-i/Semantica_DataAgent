@@ -13,6 +13,7 @@ import yaml
 
 GOOD = "SELECT id FROM shop.orders WHERE dt = '2025-01-01'"
 BAD = "SELECT id FROM shop.orders"
+BROKEN = "SELECT broken FROM shop.orders"
 
 
 class _FakeService:
@@ -23,8 +24,13 @@ class _FakeService:
         self.responses = {
             "stable": [GOOD, GOOD, GOOD],
             "volatile": [GOOD, GOOD, BAD],
+            "late": [BAD, GOOD, GOOD],
+            "early": [GOOD, BAD, BAD],
+            "always bad": [BAD, BAD, BAD],
+            "reference broken": [GOOD, GOOD, GOOD],
             "holdout": [GOOD],
         }
+        self.fail_sqls = {BROKEN}
         handler = self._handler()
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
         self.thread = Thread(target=self.server.serve_forever, daemon=True)
@@ -92,6 +98,9 @@ class _FakeService:
                         ]
                     )
                 elif self.path == "/api/v1/queries/plan":
+                    if body["sql"] in service.fail_sqls:
+                        self._json(422, {"detail": "参考 SQL 无法执行"})
+                        return
                     query_id = f"query-{len(service.plans)}"
                     service.plans[query_id] = body["sql"]
                     self._json(200, {"id": query_id, "execution_limit": 10})
@@ -110,14 +119,22 @@ class _FakeService:
         return Handler
 
 
-def _row(question_id, question, *, category, split="dev", confirmed=True):
+def _row(
+    question_id,
+    question,
+    *,
+    category,
+    split="dev",
+    confirmed=True,
+    reference_sql=GOOD,
+):
     return {
         "id": question_id,
         "question": question,
         "expected_tables": ["shop.orders"],
         "expected_fields": ["id"],
         "caliber": "订单口径",
-        "reference_sql": GOOD,
+        "reference_sql": reference_sql,
         "category": category,
         "split": split,
         "answer_confirmed": confirmed,
@@ -135,6 +152,15 @@ def check_eval_tool_upgrade(ctx):
             [
                 _row("q3", "stable", category="选表"),
                 _row("q2", "volatile", category="口径"),
+                _row("qlate", "late", category="选表"),
+                _row("qearly", "early", category="选表"),
+                _row("qbad", "always bad", category="多表 Join"),
+                _row(
+                    "qref",
+                    "reference broken",
+                    category="选表",
+                    reference_sql=BROKEN,
+                ),
                 _row("h1", "holdout", category="选表", split="holdout"),
                 _row("u1", "unconfirmed", category="口径", confirmed=False),
             ],
@@ -172,7 +198,8 @@ def check_eval_tool_upgrade(ctx):
         ctx.require(code == 0, f"eval-exec returned {code}")
         report = json.loads((work / "report.json").read_text(encoding="utf-8"))
         ctx.require(
-            [entry["id"] for entry in report["questions"]] == ["q3", "q2"],
+            [entry["id"] for entry in report["questions"]]
+            == ["q3", "q2", "qlate", "qearly", "qbad", "qref"],
             f"default split ran unexpected questions: {report['questions']}",
         )
         ctx.require(
@@ -185,6 +212,60 @@ def check_eval_tool_upgrade(ctx):
         ctx.require(by_id["q2"]["result"] == "correct", "2/3 should be correct")
         ctx.require(by_id["q2"]["volatile"], "2/3 should be volatile")
         ctx.require(by_id["q2"]["equal_runs"] == 2, "expected two equal runs")
+        ctx.require(by_id["qlate"]["result"] == "correct", "late 2/3 should be correct")
+        ctx.require(
+            by_id["qlate"]["comparison"] == "equal", "late comparison should be equal"
+        )
+        ctx.require(
+            by_id["qlate"]["sql"] == GOOD
+            and by_id["qlate"]["conversation_id"] == "conv-late-2",
+            "displayed SQL must come from the majority run",
+        )
+        ctx.require(by_id["qearly"]["result"] == "wrong", "early 1/3 should be wrong")
+        ctx.require(
+            by_id["qearly"]["comparison"] == "different"
+            and by_id["qearly"]["sql"] == BAD
+            and by_id["qearly"]["conversation_id"] == "conv-early-2",
+            "wrong question must display the failing majority SQL",
+        )
+        ctx.require(by_id["qbad"]["result"] == "wrong", "all-bad should be wrong")
+        ctx.require(
+            by_id["qref"]["result"] == "uncomparable"
+            and by_id["qref"]["reference"]["status"] == "failed",
+            "reference failure must be uncomparable",
+        )
+        ctx.require(
+            [item["id"] for item in report["excluded_uncomparable"]] == ["qref"],
+            f"uncomparable list wrong: {report['excluded_uncomparable']}",
+        )
+        metrics = report["metrics"]
+        ctx.require(
+            metrics["equal"] == 3
+            and metrics["comparable"] == 5
+            and metrics["consistency_rate"] == 0.6,
+            f"majority metrics wrong: {metrics}",
+        )
+        ctx.require(
+            metrics["correct"] == 3
+            and metrics["wrong"] == 2
+            and metrics["uncomparable"] == 1
+            and metrics["reference_failures"] == 1,
+            f"verdict metrics wrong: {metrics}",
+        )
+        ctx.require(
+            "majority_consistency_rate" not in metrics,
+            "legacy majority metric should be removed",
+        )
+        ctx.require(
+            report["coverage_gaps"]
+            == ["维度值筛选", "时间语义", "口径歧义", "合法空结果"],
+            f"coverage gaps wrong: {report['coverage_gaps']}",
+        )
+        ctx.require(
+            report["coverage"]["多表 Join"]["total"] == 1
+            and report["coverage"]["多表 Join"]["correct"] == 0,
+            f"all-wrong category must not be a gap: {report['coverage']}",
+        )
         ctx.require(
             len({run["conversation_id"] for run in by_id["q2"]["runs"]}) == 3,
             "each repeat must use a new conversation",
@@ -204,6 +285,36 @@ def check_eval_tool_upgrade(ctx):
                 body["question"] for _, body in service.asks if body.get("question")
             },
             "holdout question ran without --split holdout",
+        )
+        code = main(
+            [
+                "eval-exec",
+                "--questions",
+                str(questions),
+                "--report",
+                str(work / "override"),
+                "--base-url",
+                service.base_url,
+                "--token",
+                "SDA_ISSUE_235_E2E_TOKEN",
+                "--agent",
+                "pi",
+                "--provider-id",
+                "fake",
+                "--model",
+                "fake",
+                "--only",
+                "q3",
+                "--expected-categories",
+                "选表,时间语义",
+            ]
+        )
+        ctx.require(code == 0, f"eval-exec override returned {code}")
+        override = json.loads((work / "override.json").read_text(encoding="utf-8"))
+        ctx.require(
+            override["expected_categories"] == ["选表", "时间语义"]
+            and override["coverage_gaps"] == ["时间语义"],
+            f"expected categories override wrong: {override.get('coverage_gaps')}",
         )
         categories = work / "categories.yaml"
         categories.write_text(
@@ -265,9 +376,17 @@ def check_eval_tool_upgrade(ctx):
             not in (work / "report.md").read_text(encoding="utf-8"),
             "token leaked into the report",
         )
+        markdown = (work / "report.md").read_text(encoding="utf-8")
+        ctx.require(
+            "不可比题目" in markdown and "覆盖缺口" in markdown and "qref" in markdown,
+            "report markdown lacks rework sections",
+        )
         return {
             "questions": [entry["id"] for entry in report["questions"]],
             "excluded": report["excluded_unconfirmed"],
+            "uncomparable": [item["id"] for item in report["excluded_uncomparable"]],
+            "metrics": metrics,
+            "coverage_gaps": report["coverage_gaps"],
             "failure_categories": merged["failure_categories"],
             "split_counts": dict(counts),
         }

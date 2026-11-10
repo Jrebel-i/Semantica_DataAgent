@@ -191,7 +191,13 @@ class FakeQuestionService:
 
 
 def _question(
-    question_id, question, *, category="选表", split="dev", confirmed=True, reference_sql=GOOD
+    question_id,
+    question,
+    *,
+    category="选表",
+    split="dev",
+    confirmed=True,
+    reference_sql=GOOD,
 ):
     row = {
         "id": question_id,
