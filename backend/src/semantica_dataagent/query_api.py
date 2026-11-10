@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import io
 import json
+import logging
 import os
 import time
 import uuid
@@ -16,27 +17,33 @@ from urllib.parse import urlsplit
 import sqlglot
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
+from fastapi.security import HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field
 from sqlalchemy import update
 from sqlglot import exp
 from sqlglot.optimizer.scope import traverse_scope
 
 from . import knowledge
-from .auth import Requester, admin, current_requester
+from .auth import Requester, _authenticated, admin, bearer, current_requester
 from .crypto import decrypt
 from .db import (
+    AgentCredential,
     Conversation,
     PersonalDtbToken,
     QueryAudit,
     QueryExecution,
+    Token,
     Turn,
+    digest,
     sessions,
 )
 from .dtb_executor import column_names
 from .plugins import ExecutorAuthenticationError, ExecutorError, configured
-from .project_context import ARCHIVED_DETAIL, FROZEN_STATUSES
+from .project_api import require_query_project_access
+from .project_context import project_is_frozen
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 class PlanInput(BaseModel):
@@ -359,11 +366,16 @@ def _cleanup_expired_conversation_results(query_id: str, user: Requester) -> Non
         with sessions().begin() as db:
             row = db.get(QueryExecution, query_id)
             cutoff = retention_cutoff(db)
+            plan = {}
+            if row is not None and row.owner_id == user.id and row.plan_data:
+                try:
+                    parsed = json.loads(row.plan_data)
+                except (TypeError, ValueError):
+                    parsed = None
+                if isinstance(parsed, dict):
+                    plan = parsed
             if (
-                row is not None
-                and row.owner_id == user.id
-                and row.plan_data
-                and json.loads(row.plan_data).get("source") == "mcp"
+                plan.get("source") == "mcp"
                 and row.created_at.replace(tzinfo=UTC) < cutoff
             ):
                 db.delete(row)
@@ -506,12 +518,12 @@ async def execute_query(
                 or row.conversation_id is not None
             ):
                 raise HTTPException(404, "查询不存在")
-            if project_id is not None:
-                planned = json.loads(row.plan_data) if row.plan_data else {}
-                if planned.get("project_id", "default") != project_id:
-                    raise HTTPException(404, "查询不存在")
         result = await _execute_with_audit(
-            confirmation_id, ExecuteInput(), user, kind="mcp"
+            confirmation_id,
+            ExecuteInput(),
+            user,
+            kind="mcp",
+            expected_project_id=project_id,
         )
         result["download_urls"] = _download_links(
             confirmation_id, user, public_base_url()
@@ -526,15 +538,21 @@ async def _execute(
     body: ExecuteInput,
     user: Requester,
     audit_id: str,
+    *,
+    expected_project_id: str | None = None,
 ):
-    plugin, config = _config()
-    limit = body.limit if body.limit is not None else config.get("row_limit", 1000)
-    if limit > config.get("row_limit", 1000):
-        raise HTTPException(422, "超过返回行数上限")
     with sessions().begin() as db:
         row = db.get(QueryExecution, query_id)
         if row is None or row.owner_id != user.id:
             raise HTTPException(404, "查询不存在")
+        saved_plan, project_id = _resolved_plan_project(db, row)
+        if expected_project_id is not None and project_id != expected_project_id:
+            raise HTTPException(404, "查询不存在")
+        require_query_project_access(db, project_id, user)
+        plugin, config = _config()
+        limit = body.limit if body.limit is not None else config.get("row_limit", 1000)
+        if limit > config.get("row_limit", 1000):
+            raise HTTPException(422, "超过返回行数上限")
         cutoff = datetime.now(UTC) - timedelta(
             seconds=config.get("confirmation_ttl_seconds", 1800)
         )
@@ -545,7 +563,6 @@ async def _execute(
             raise HTTPException(400, "请先在个人设置中保存 DTB token")
         token = decrypt(secret.encrypted_token)
         sql = row.sql
-        saved_plan = json.loads(row.plan_data) if row.plan_data else {}
         claimed = db.execute(
             update(QueryExecution)
             .where(
@@ -562,7 +579,7 @@ async def _execute(
     status, result, key = "failed", None, None
     try:
         tree = _validate_sql(sql)
-        _tables_and_partitions(tree, project_id=saved_plan.get("project_id", "default"))
+        _tables_and_partitions(tree, project_id=project_id)
         cap = min(
             config.get("download_limit", 100000),
             saved_plan.get("execution_limit", config.get("download_limit", 100000)),
@@ -611,11 +628,150 @@ async def _execute(
                 row.query_key = key
 
 
+def audit_revoked_token_attempt(
+    credentials: HTTPAuthorizationCredentials | None,
+    kind: str,
+    query_id: str | None = None,
+    *,
+    stage: str | None = None,
+) -> None:
+    """Audit an entry rejected because the bearer token was revoked.
+
+    Unknown credentials are not audited: there is no real identity to attach
+    the attempt to.  Only the digest is looked up; the credential, digest and
+    request body are never stored or logged.  Callers that cannot prove a
+    query id, such as the MCP transport, omit it rather than trusting the
+    request.
+    """
+    if credentials is None or credentials.scheme.lower() != "bearer":
+        return
+    with sessions().begin() as db:
+        token = db.get(Token, digest(credentials.credentials))
+        if token is not None:
+            if not token.revoked:
+                return
+            owner_id = token.id
+        else:
+            scoped = db.get(AgentCredential, digest(credentials.credentials))
+            if scoped is None:
+                return
+            owner = db.query(Token).filter_by(id=scoped.owner_id).first()
+            if owner is None or not owner.revoked:
+                return
+            owner_id = owner.id
+        detail = {"entry": kind}
+        if query_id is not None:
+            detail["query_id"] = query_id
+        if stage is not None:
+            detail["stage"] = stage
+        db.add(
+            QueryAudit(
+                id=uuid.uuid4().hex,
+                owner_id=owner_id,
+                sql=json.dumps(detail, ensure_ascii=False),
+                kind=kind,
+                status="rejected_401",
+                row_count=None,
+                elapsed_ms=0,
+            )
+        )
+
+
+def _audit_mcp_rejection(db, owner_id: str, status_code: int, stage: str) -> None:
+    db.add(
+        QueryAudit(
+            id=uuid.uuid4().hex,
+            owner_id=owner_id,
+            sql=json.dumps({"entry": "mcp", "stage": stage}, ensure_ascii=False),
+            kind="mcp",
+            status=f"rejected_{status_code}",
+            row_count=None,
+            elapsed_ms=0,
+        )
+    )
+
+
+def audit_mcp_authentication_rejection(
+    credentials: HTTPAuthorizationCredentials | None,
+    status_code: int,
+    *,
+    conversation_id: str | None = None,
+    turn_id: str | None = None,
+) -> None:
+    """Audit an MCP rejection that happens before tool dispatch.
+
+    The identity always comes from the credential record, never from request
+    headers or the body.  A 401 needs a real revoked token (or the revoked
+    owner of a real agent credential); a 409 needs an agent credential whose
+    stored conversation and turn match the request and whose stored project is
+    frozen.  Unknown credentials and forged header values write no audit.  No
+    query id can be proven at this stage, so none is stored.
+    """
+    if status_code not in (401, 409):
+        return
+    if credentials is None or credentials.scheme.lower() != "bearer":
+        return
+    with sessions().begin() as db:
+        token = db.get(Token, digest(credentials.credentials))
+        if token is not None:
+            if status_code != 401 or not token.revoked:
+                return
+            owner_id = token.id
+        else:
+            scoped = db.get(AgentCredential, digest(credentials.credentials))
+            if scoped is None:
+                return
+            if status_code == 409 and (
+                scoped.conversation_id != conversation_id
+                or str(scoped.turn_id) != turn_id
+                or not project_is_frozen(scoped.project_id)
+            ):
+                return
+            owner = db.query(Token).filter_by(id=scoped.owner_id).first()
+            if owner is None or (status_code == 401 and not owner.revoked):
+                return
+            owner_id = owner.id
+        _audit_mcp_rejection(db, owner_id, status_code, "authentication")
+
+
+def audit_mcp_project_rejection(owner_id: str, status_code: int) -> None:
+    """Audit a project-resolution rejection for an authenticated MCP caller."""
+    if status_code not in (404, 409):
+        return
+    with sessions().begin() as db:
+        if db.query(Token).filter_by(id=owner_id).first() is None:
+            return
+        _audit_mcp_rejection(db, owner_id, status_code, "project_resolution")
+
+
+def _query_requester_dependency(kind: str):
+    def dependency(
+        query_id: str,
+        credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)],
+    ) -> Requester:
+        try:
+            return _authenticated(credentials)
+        except HTTPException as exc:
+            if exc.status_code == 401:
+                try:
+                    audit_revoked_token_attempt(credentials, kind, query_id)
+                except Exception:
+                    logger.exception("failed to audit a revoked token attempt")
+            raise
+
+    return dependency
+
+
+query_requester = _query_requester_dependency("query")
+download_requester = _query_requester_dependency("download")
+download_link_requester = _query_requester_dependency("download_link_created")
+
+
 @router.post("/api/v1/queries/{query_id}/execute")
 async def execute(
     query_id: str,
     body: ExecuteInput,
-    user: Annotated[Requester, Depends(current_requester)],
+    user: Annotated[Requester, Depends(query_requester)],
 ):
     with sessions()() as db:
         row = db.get(QueryExecution, query_id)
@@ -642,7 +798,12 @@ async def execute_for_turn(
 
 
 async def _execute_with_audit(
-    query_id: str, body: ExecuteInput, user: Requester, kind="query"
+    query_id: str,
+    body: ExecuteInput,
+    user: Requester,
+    kind="query",
+    *,
+    expected_project_id: str | None = None,
 ):
     with sessions()() as db:
         row = db.get(QueryExecution, query_id)
@@ -665,7 +826,13 @@ async def _execute_with_audit(
         )
     status, count = "failed", None
     try:
-        result = await _execute(query_id, body, user, audit_id)
+        result = await _execute(
+            query_id,
+            body,
+            user,
+            audit_id,
+            expected_project_id=expected_project_id,
+        )
         status, count = "succeeded", result["row_count"]
         return result
     except HTTPException as exc:
@@ -718,18 +885,93 @@ def get_result(query_id: str, user: Annotated[Requester, Depends(current_request
         }
 
 
-def _require_query_project_open(db, row) -> None:
-    """Download access follows the conversation's project archive state."""
-    from .db import Conversation, Project
+_MISSING_PLAN_PROJECT = object()
 
-    project_id = "default"
-    if row.conversation_id:
-        conversation = db.get(Conversation, row.conversation_id)
-        if conversation is not None:
-            project_id = conversation.project_id
-    project = db.get(Project, project_id)
-    if project is not None and project.status in FROZEN_STATUSES:
-        raise HTTPException(status_code=409, detail=ARCHIVED_DETAIL)
+
+def _plan_dict(row, *, not_found_detail: str) -> dict:
+    if row.plan_data is None:
+        return {}
+    try:
+        plan = json.loads(row.plan_data)
+    except (TypeError, ValueError):
+        raise HTTPException(404, not_found_detail) from None
+    if not isinstance(plan, dict):
+        raise HTTPException(404, not_found_detail)
+    return plan
+
+
+def _bound_conversation_project(db, row, *, not_found_detail: str) -> str | None:
+    if row.conversation_id is None:
+        return None
+    conversation = db.get(Conversation, row.conversation_id)
+    if conversation is None or conversation.owner_id != row.owner_id:
+        raise HTTPException(404, not_found_detail)
+    project_id = conversation.project_id
+    if (
+        not isinstance(project_id, str)
+        or not project_id
+        or project_id != project_id.strip()
+    ):
+        raise HTTPException(404, not_found_detail)
+    return project_id
+
+
+def _resolved_plan_project(
+    db, row, *, not_found_detail: str = "查询不存在"
+) -> tuple[dict, str]:
+    """Return the plan's own project, failing closed when it is not provable.
+
+    ``plan_data.project_id`` is the only authorization source (#232).  The
+    field arrived with project scoping in #178 (4be73d2); every later writer
+    stores it unconditionally.  A plan without it therefore predates project
+    scoping, when REST, conversation and MCP plan creation all targeted the
+    default project.  That code history is the only compatibility path.
+
+    A bound conversation is an integrity check, never an authorization source.
+    A non-default conversation on a plan without ``project_id`` cannot have
+    been produced by a known writer, so it is denied instead of being used to
+    grant access to the conversation's project.  Invalid JSON, a non-object
+    plan, a malformed project id, an unknown source or a conflicting
+    conversation also fail closed.
+    """
+    plan = _plan_dict(row, not_found_detail=not_found_detail)
+    planned_project = plan.get("project_id", _MISSING_PLAN_PROJECT)
+    if planned_project is not _MISSING_PLAN_PROJECT:
+        if (
+            not isinstance(planned_project, str)
+            or not planned_project
+            or planned_project != planned_project.strip()
+        ):
+            raise HTTPException(404, not_found_detail)
+        bound_project = _bound_conversation_project(
+            db, row, not_found_detail=not_found_detail
+        )
+        if bound_project is not None and bound_project != planned_project:
+            raise HTTPException(404, not_found_detail)
+        return plan, planned_project
+
+    # #81 introduced conversation_id and plan_data together.  A bound row with
+    # no plan cannot come from that writer and is treated as damaged.
+    if row.plan_data is None and row.conversation_id is not None:
+        raise HTTPException(404, not_found_detail)
+    if plan.get("source") not in (None, "", "mcp"):
+        raise HTTPException(404, not_found_detail)
+    bound_project = _bound_conversation_project(
+        db, row, not_found_detail=not_found_detail
+    )
+    if bound_project is not None and bound_project != "default":
+        raise HTTPException(404, not_found_detail)
+    return plan, "default"
+
+
+def _plan_project_id(db, row, *, not_found_detail: str = "查询不存在") -> str:
+    _, project_id = _resolved_plan_project(db, row, not_found_detail=not_found_detail)
+    return project_id
+
+
+def _require_query_project_access(db, row, user: Requester) -> None:
+    """All query access follows the project recorded on the plan itself."""
+    require_query_project_access(db, _plan_project_id(db, row), user)
 
 
 DOWNLOAD_LINK_TTL_SECONDS = 30 * 60
@@ -746,7 +988,9 @@ def _download_signature(query_id: str, format: str, expires: int) -> str:
     return hmac.new(key, message, hashlib.sha256).hexdigest()
 
 
-def _audit_download(owner_id: str, query_id: str, format: str, kind: str) -> None:
+def _audit_download(
+    owner_id: str, query_id: str, format: str, kind: str, status="succeeded"
+) -> None:
     with sessions().begin() as db:
         db.add(
             QueryAudit(
@@ -754,7 +998,7 @@ def _audit_download(owner_id: str, query_id: str, format: str, kind: str) -> Non
                 owner_id=owner_id,
                 sql=json.dumps({"query_id": query_id, "format": format}),
                 kind=kind,
-                status="succeeded",
+                status=status,
                 row_count=None,
                 elapsed_ms=0,
             )
@@ -763,11 +1007,24 @@ def _audit_download(owner_id: str, query_id: str, format: str, kind: str) -> Non
 
 def _download_links(query_id: str, user: Requester, base: str) -> dict[str, str]:
     _cleanup_expired_conversation_results(query_id, user)
+    denial = None
     with sessions()() as db:
         row = db.get(QueryExecution, query_id)
         if row is None or row.owner_id != user.id or row.status != "succeeded":
             raise HTTPException(404, "查询结果不存在")
-        _require_query_project_open(db, row)
+        try:
+            _require_query_project_access(db, row, user)
+        except HTTPException as exc:
+            denial = exc
+    if denial is not None:
+        _audit_download(
+            user.id,
+            query_id,
+            "all",
+            "download_link_created",
+            f"rejected_{denial.status_code}",
+        )
+        raise denial
     expires = int(time.time()) + DOWNLOAD_LINK_TTL_SECONDS
     links = {}
     for fmt in DOWNLOAD_FORMATS:
@@ -781,7 +1038,7 @@ def _download_links(query_id: str, user: Requester, base: str) -> dict[str, str]
 
 @router.post("/api/v1/queries/{query_id}/download-links")
 def create_download_links(
-    query_id: str, user: Annotated[Requester, Depends(current_requester)]
+    query_id: str, user: Annotated[Requester, Depends(download_link_requester)]
 ):
     return _download_links(query_id, user, "")
 
@@ -800,12 +1057,27 @@ async def download_link(query_id: str, format: str, expires: str, signature: str
         )
     ):
         raise HTTPException(404, "查询结果不存在")
+    denial = None
+    owner_id = None
     with sessions()() as db:
         row = db.get(QueryExecution, query_id)
         if row is None:
             raise HTTPException(404, "查询结果不存在")
-        _require_query_project_open(db, row)
+        owner_id = row.owner_id
         user = Requester(id=row.owner_id, role="user", token="")
+        try:
+            _require_query_project_access(db, row, user)
+        except HTTPException as exc:
+            denial = exc
+    if denial is not None:
+        _audit_download(
+            owner_id,
+            query_id,
+            format,
+            "download_link_used",
+            f"rejected_{denial.status_code}",
+        )
+        raise denial
     response = await download(query_id, user, format)
     _audit_download(user.id, query_id, format, "download_link_used")
     return response
@@ -814,66 +1086,81 @@ async def download_link(query_id: str, format: str, expires: str, signature: str
 @router.get("/api/v1/queries/{query_id}/download")
 async def download(
     query_id: str,
-    user: Annotated[Requester, Depends(current_requester)],
+    user: Annotated[Requester, Depends(download_requester)],
     format: Literal["csv", "xlsx", "json"] = "csv",
 ):
     _cleanup_expired_conversation_results(query_id, user)
+    denial = None
     with sessions()() as db:
         row = db.get(QueryExecution, query_id)
         if row is None or row.owner_id != user.id or row.status != "succeeded":
             raise HTTPException(404, "查询结果不存在")
-        _require_query_project_open(db, row)
-        if row.rows and (
-            row.conversation_id is not None
-            or (row.plan_data and json.loads(row.plan_data).get("source") == "mcp")
-        ):
-            saved = json.loads(row.rows)
-            names = column_names(saved["columns"])
-            values = saved["data"]
-            if format == "json":
-                content = json.dumps(
-                    {"columns": names, "rows": values}, ensure_ascii=False
-                ).encode()
-                content_type = "application/json"
-            elif format == "csv":
-                buffer = io.StringIO(newline="")
-                writer = csv.writer(buffer, lineterminator="\n")
-                writer.writerow(names)
-                writer.writerows(values)
-                content, content_type = buffer.getvalue().encode("utf-8"), "text/csv"
-            else:
-                from openpyxl import Workbook
-                from openpyxl.cell import WriteOnlyCell
+        try:
+            _require_query_project_access(db, row, user)
+        except HTTPException as exc:
+            denial = exc
+        if denial is None:
+            if row.rows and (
+                row.conversation_id is not None
+                or (row.plan_data and json.loads(row.plan_data).get("source") == "mcp")
+            ):
+                saved = json.loads(row.rows)
+                names = column_names(saved["columns"])
+                values = saved["data"]
+                if format == "json":
+                    content = json.dumps(
+                        {"columns": names, "rows": values}, ensure_ascii=False
+                    ).encode()
+                    content_type = "application/json"
+                elif format == "csv":
+                    buffer = io.StringIO(newline="")
+                    writer = csv.writer(buffer, lineterminator="\n")
+                    writer.writerow(names)
+                    writer.writerows(values)
+                    content, content_type = (
+                        buffer.getvalue().encode("utf-8"),
+                        "text/csv",
+                    )
+                else:
+                    from openpyxl import Workbook
+                    from openpyxl.cell import WriteOnlyCell
 
-                workbook = Workbook(write_only=True)
-                sheet = workbook.create_sheet()
-                for values_row in [names, *values]:
-                    cells = []
-                    for value in values_row:
-                        if isinstance(value, (dict, list)):
-                            value = json.dumps(value, ensure_ascii=False)
-                        cell = WriteOnlyCell(sheet, value=value)
-                        if isinstance(value, str):
-                            cell.data_type = "s"
-                        cells.append(cell)
-                    sheet.append(cells)
-                buffer = io.BytesIO()
-                workbook.save(buffer)
-                content = buffer.getvalue()
-                content_type = (
-                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    workbook = Workbook(write_only=True)
+                    sheet = workbook.create_sheet()
+                    for values_row in [names, *values]:
+                        cells = []
+                        for value in values_row:
+                            if isinstance(value, (dict, list)):
+                                value = json.dumps(value, ensure_ascii=False)
+                            cell = WriteOnlyCell(sheet, value=value)
+                            if isinstance(value, str):
+                                cell.data_type = "s"
+                            cells.append(cell)
+                        sheet.append(cells)
+                    buffer = io.BytesIO()
+                    workbook.save(buffer)
+                    content = buffer.getvalue()
+                    content_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                return Response(
+                    content,
+                    media_type=content_type,
+                    headers={
+                        "Content-Disposition": f'attachment; filename="query.{format}"'
+                    },
                 )
-            return Response(
-                content,
-                media_type=content_type,
-                headers={
-                    "Content-Disposition": f'attachment; filename="query.{format}"'
-                },
-            )
-        secret = db.get(PersonalDtbToken, user.id)
-        if secret is None:
-            raise HTTPException(400, "请先在个人设置中保存 DTB token")
-        key, token = row.query_key, decrypt(secret.encrypted_token)
+            secret = db.get(PersonalDtbToken, user.id)
+            if secret is None:
+                raise HTTPException(400, "请先在个人设置中保存 DTB token")
+            key, token = row.query_key, decrypt(secret.encrypted_token)
+    if denial is not None:
+        _audit_download(
+            user.id,
+            query_id,
+            format,
+            "download",
+            f"rejected_{denial.status_code}",
+        )
+        raise denial
     plugin, config = _config()
     try:
         async with asyncio.timeout(config.get("timeout_seconds", 300)):

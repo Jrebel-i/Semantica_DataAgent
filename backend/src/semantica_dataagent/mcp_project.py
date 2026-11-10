@@ -24,18 +24,26 @@ from .project_context import ARCHIVED_DETAIL, DEFAULT_PROJECT_ID
 NOT_FOUND = "项目不存在"
 
 
+class MCPProjectRejection(ToolInvalidInput):
+    """A project access rejection that the transport can audit."""
+
+    def __init__(self, message: str, status_code: int):
+        super().__init__(message)
+        self.status_code = status_code
+
+
 def _resolve(requester: Requester, project_id: str) -> str:
     try:
         return resolve_project_scope(project_id, requester).project_id
     except HTTPException as exc:
         if exc.status_code == 409 and exc.detail == ARCHIVED_DETAIL:
-            raise ToolInvalidInput(ARCHIVED_DETAIL) from exc
-        raise ToolInvalidInput(NOT_FOUND) from exc
+            raise MCPProjectRejection(ARCHIVED_DETAIL, 409) from exc
+        raise MCPProjectRejection(NOT_FOUND, 404) from exc
 
 
 def _selection_error(requester: Requester, projects: list) -> ToolInvalidInput:
     if not projects:
-        return ToolInvalidInput("请指定项目：当前令牌没有可访问的项目")
+        return MCPProjectRejection("请指定项目：当前令牌没有可访问的项目", 404)
     choices = "、".join(f"{row.id}（{row.name}）" for row in projects)
     return ToolInvalidInput(f"请指定项目：可访问的项目有 {choices}")
 
@@ -50,7 +58,7 @@ def resolve_mcp_project(
             requested_project_id is not None
             and requested_project_id != credential_project_id
         ):
-            raise ToolInvalidInput(NOT_FOUND)
+            raise MCPProjectRejection(NOT_FOUND, 404)
         return _resolve(requester, credential_project_id)
     if requested_project_id is not None:
         return _resolve(requester, requested_project_id)

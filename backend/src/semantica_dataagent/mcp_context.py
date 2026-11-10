@@ -31,6 +31,9 @@ _conversation_id: ContextVar[str | None] = ContextVar(
 _turn_id: ContextVar[str | None] = ContextVar("mcp_turn_id", default=None)
 _project_id: ContextVar[str | None] = ContextVar("mcp_project_id", default=None)
 _project_error: ContextVar[str | None] = ContextVar("mcp_project_error", default=None)
+_project_error_status: ContextVar[int | None] = ContextVar(
+    "mcp_project_error_status", default=None
+)
 
 
 @contextmanager
@@ -41,15 +44,18 @@ def bind_mcp_context(
     *,
     project_id: str | None = None,
     project_error: str | None = None,
+    project_error_status: int | None = None,
 ):
     requester_token = _requester.set(requester)
     conversation_token = _conversation_id.set(conversation_id or None)
     turn_token = _turn_id.set(turn_id)
     project_token = _project_id.set(project_id or None)
     project_error_token = _project_error.set(project_error or None)
+    project_error_status_token = _project_error_status.set(project_error_status)
     try:
         yield
     finally:
+        _project_error_status.reset(project_error_status_token)
         _project_error.reset(project_error_token)
         _project_id.reset(project_token)
         _turn_id.reset(turn_token)
@@ -86,6 +92,11 @@ def current_project_id() -> str:
 
         raise ToolInvalidInput(error)
     return _project_id.get() or DEFAULT_PROJECT_ID
+
+
+def current_project_error_status() -> int | None:
+    """HTTP-style status for the rejection bound by the MCP middleware."""
+    return _project_error_status.get()
 
 
 def current_project_context():

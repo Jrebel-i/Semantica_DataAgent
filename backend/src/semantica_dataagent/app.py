@@ -26,7 +26,7 @@ from sqlalchemy import text, update
 from . import auto_build, knowledge, project_context
 from .api_time import UtcDatetime
 from .attachments import MAX_REQUEST_BYTES
-from .auth import admin, authenticate_mcp, bearer, current_user
+from .auth import admin, authenticate_mcp, bearer, current_requester, current_user
 from .build_queue import build_queue, recover_interrupted_builds
 from .db import (
     Build,
@@ -1059,8 +1059,41 @@ def create_mcp():
     return server
 
 
+def _audit_mcp_auth_rejection(
+    credentials: HTTPAuthorizationCredentials | None,
+    status_code: int,
+    conversation_id: str | None = None,
+    turn_id: str | None = None,
+) -> None:
+    """Audit pre-dispatch MCP auth rejections without reading the body."""
+    try:
+        from .query_api import audit_mcp_authentication_rejection
+
+        audit_mcp_authentication_rejection(
+            credentials,
+            status_code,
+            conversation_id=conversation_id,
+            turn_id=turn_id,
+        )
+    except Exception:
+        logging.getLogger(__name__).exception(
+            "failed to audit an MCP authentication rejection"
+        )
+
+
+def _mcp_redirect_user(
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)],
+) -> str:
+    try:
+        return current_requester(credentials).role
+    except HTTPException as exc:
+        if exc.status_code == 401:
+            _audit_mcp_auth_rejection(credentials, exc.status_code)
+        raise
+
+
 @app.api_route("/mcp", methods=["GET", "POST", "DELETE"], include_in_schema=False)
-def mcp_redirect(_: Annotated[str, Depends(current_user)]):
+def mcp_redirect(_: Annotated[str, Depends(_mcp_redirect_user)]):
     return RedirectResponse("/mcp/", status_code=307)
 
 
@@ -1071,6 +1104,7 @@ class MCPAuthentication:
     async def __call__(self, scope, receive, send):
         if scope["type"] == "http":
             request = Request(scope, receive)
+            credentials = None
             try:
                 credentials = await bearer(request)
                 requester = authenticate_mcp(
@@ -1079,6 +1113,13 @@ class MCPAuthentication:
                     request.headers.get("x-dataagent-turn-id"),
                 )
             except HTTPException as exc:
+                if exc.status_code in (401, 409):
+                    _audit_mcp_auth_rejection(
+                        credentials,
+                        exc.status_code,
+                        request.headers.get("x-dataagent-conversation-id"),
+                        request.headers.get("x-dataagent-turn-id"),
+                    )
                 await JSONResponse(
                     {"detail": exc.detail},
                     status_code=exc.status_code,
@@ -1102,7 +1143,11 @@ class MCPAuthentication:
                 and header_project is not None
                 and query_project != header_project
             ):
-                project_id, project_error = None, "请只提供一种项目选择"
+                project_id, project_error, project_error_status = (
+                    None,
+                    "请只提供一种项目选择",
+                    None,
+                )
             else:
                 requested = (
                     query_project if query_project is not None else header_project
@@ -1111,9 +1156,10 @@ class MCPAuthentication:
                     project_id = resolve_mcp_project(
                         requester, requester.project_id, requested
                     )
-                    project_error = None
+                    project_error, project_error_status = None, None
                 except ToolInvalidInput as exc:
                     project_id, project_error = None, str(exc)
+                    project_error_status = getattr(exc, "status_code", None)
 
             with bind_mcp_context(
                 requester,
@@ -1121,6 +1167,7 @@ class MCPAuthentication:
                 request.headers.get(TURN_HEADER),
                 project_id=project_id,
                 project_error=project_error,
+                project_error_status=project_error_status,
             ):
                 await self.inner.state.mcp_app(scope, receive, send)
             return
