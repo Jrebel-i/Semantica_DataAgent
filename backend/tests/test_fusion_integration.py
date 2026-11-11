@@ -33,6 +33,7 @@ pytestmark = pytest.mark.skipif(
 def test_fusion_over_mcp(tmp_path, monkeypatch):
     from mcp import ClientSession
     from mcp.client.streamable_http import streamable_http_client
+
     from semantica_dataagent.app import app
     from semantica_dataagent.cli import initialize
     from semantica_dataagent.skill import SKILL_NAME, read_skill

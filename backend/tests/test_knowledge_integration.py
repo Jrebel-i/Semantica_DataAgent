@@ -34,6 +34,7 @@ pytestmark = pytest.mark.skipif(
 def test_build_and_retrieve_through_http(tmp_path, monkeypatch):
     from mcp import ClientSession
     from mcp.client.streamable_http import streamable_http_client
+
     from semantica_dataagent import knowledge, stages
     from semantica_dataagent.app import app
     from semantica_dataagent.cli import initialize
