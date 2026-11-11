@@ -428,11 +428,32 @@ def test_build_and_retrieve_through_http(tmp_path, monkeypatch):
                 for dialect in ("hive", "spark", "doris"):
                     checked = await session.call_tool(
                         "validate_sql",
-                        {"sql": "SELECT o.id FROM shop.orders o", "dialect": dialect},
+                        {
+                            "sql": (
+                                "SELECT o.id FROM shop.orders o "
+                                "WHERE o.dt = (SELECT MAX(dt) FROM shop.orders)"
+                            ),
+                            "dialect": dialect,
+                        },
                     )
                     assert json.loads(checked.content[0].text)["status"] == "pass", (
                         checked
                     )
+                missing_partition = await session.call_tool(
+                    "validate_sql",
+                    {"sql": "SELECT o.id FROM shop.orders o", "dialect": "hive"},
+                )
+                missing_body = json.loads(missing_partition.content[0].text)
+                assert missing_body["status"] == "issues", missing_partition
+                assert missing_body["syntax"]["status"] == "pass"
+                partition_issue = next(
+                    issue
+                    for issue in missing_body["issues"]
+                    if issue["kind"] == "partition"
+                )
+                assert partition_issue["table"] == "shop.orders"
+                assert partition_issue["field"] == "dt"
+                assert "缺少分区条件" in partition_issue["message"]
                 checked = await session.call_tool(
                     "validate_sql", {"sql": "SELECT FROM", "dialect": "hive"}
                 )
