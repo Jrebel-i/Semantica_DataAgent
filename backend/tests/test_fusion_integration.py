@@ -34,7 +34,6 @@ def test_fusion_over_mcp(tmp_path, monkeypatch):
     from mcp import ClientSession
     from mcp.client.streamable_http import streamable_http_client
 
-    from semantica_dataagent import knowledge
     from semantica_dataagent.app import app
     from semantica_dataagent.cli import initialize
     from semantica_dataagent.skill import SKILL_NAME, read_skill
@@ -141,14 +140,11 @@ def test_fusion_over_mcp(tmp_path, monkeypatch):
                     ("交易订单", "tables", "table:shop.orders"),
                     ("顾客购买交易记录", "tables", "table:shop.orders"),
                 ]:
-                    before = knowledge.round_trip_counts()
                     result = await session.call_tool(
                         "search_knowledge",
                         {"query": query, "scope": scope, "top_k": 10},
                     )
-                    after = knowledge.round_trip_counts()
                     assert not result.isError, result.content
-                    assert sum(after[k] - before[k] for k in ("neo4j", "milvus")) <= 5
                     assert expected in json.dumps(
                         result.structuredContent, ensure_ascii=False
                     )

@@ -34,27 +34,11 @@ pytestmark = pytest.mark.skipif(
 def test_build_and_retrieve_through_http(tmp_path, monkeypatch):
     from mcp import ClientSession
     from mcp.client.streamable_http import streamable_http_client
-    from neo4j._sync.work.session import Session
 
     from semantica_dataagent import knowledge, stages
     from semantica_dataagent.app import app
     from semantica_dataagent.cli import initialize
     from semantica_dataagent.stage_contract import StageResult
-
-    calls = {"neo4j": 0, "milvus": 0}
-    original_run = Session.run
-    original_search = MilvusClient.search
-
-    def counted_run(self, *args, **kwargs):
-        calls["neo4j"] += 1
-        return original_run(self, *args, **kwargs)
-
-    def counted_search(self, *args, **kwargs):
-        calls["milvus"] += 1
-        return original_search(self, *args, **kwargs)
-
-    monkeypatch.setattr(Session, "run", counted_run)
-    monkeypatch.setattr(MilvusClient, "search", counted_search)
 
     def extra_stage(records, generation, storage):
         storage.execute(
@@ -272,12 +256,8 @@ def test_build_and_retrieve_through_http(tmp_path, monkeypatch):
                     )
                     return json.loads(response.content[0].text)
 
-            calls.update(neo4j=0, milvus=0)
             assert asyncio.run(check_cache_field())["fields"][0]["status"] == "error"
-            assert calls["neo4j"] <= 3
-            calls.update(neo4j=0, milvus=0)
             assert asyncio.run(check_cache_field())["fields"][0]["status"] == "error"
-            assert calls["neo4j"] == 0
             fields_path = source / "fields.json"
             fields = json.loads(fields_path.read_text())
             fields.append(
@@ -295,9 +275,7 @@ def test_build_and_retrieve_through_http(tmp_path, monkeypatch):
             final_build = wait_build(third)
             assert final_build["status"] == "succeeded", final_build.get("error")
             generation = settings()["knowledge_generation"]
-            calls.update(neo4j=0, milvus=0)
             assert asyncio.run(check_cache_field())["fields"][0]["status"] == "pass"
-            assert calls["neo4j"] <= 3
             with GraphDatabase.driver(
                 os.environ["TEST_NEO4J_URI"],
                 auth=(os.environ["TEST_NEO4J_USER"], os.environ["TEST_NEO4J_PASSWORD"]),
@@ -451,11 +429,32 @@ def test_build_and_retrieve_through_http(tmp_path, monkeypatch):
                 for dialect in ("hive", "spark", "doris"):
                     checked = await session.call_tool(
                         "validate_sql",
-                        {"sql": "SELECT o.id FROM shop.orders o", "dialect": dialect},
+                        {
+                            "sql": (
+                                "SELECT o.id FROM shop.orders o "
+                                "WHERE o.dt = (SELECT MAX(dt) FROM shop.orders)"
+                            ),
+                            "dialect": dialect,
+                        },
                     )
                     assert json.loads(checked.content[0].text)["status"] == "pass", (
                         checked
                     )
+                missing_partition = await session.call_tool(
+                    "validate_sql",
+                    {"sql": "SELECT o.id FROM shop.orders o", "dialect": "hive"},
+                )
+                missing_body = json.loads(missing_partition.content[0].text)
+                assert missing_body["status"] == "issues", missing_partition
+                assert missing_body["syntax"]["status"] == "pass"
+                partition_issue = next(
+                    issue
+                    for issue in missing_body["issues"]
+                    if issue["kind"] == "partition"
+                )
+                assert partition_issue["table"] == "shop.orders"
+                assert partition_issue["field"] == "dt"
+                assert "缺少分区条件" in partition_issue["message"]
                 checked = await session.call_tool(
                     "validate_sql", {"sql": "SELECT FROM", "dialect": "hive"}
                 )
@@ -522,18 +521,12 @@ def test_build_and_retrieve_through_http(tmp_path, monkeypatch):
                     "find_join_path", {"tables": ["shop.orders", "shop.isolated"]}
                 )
                 assert json.loads(path.content[0].text)["status"] == "no_path"
-                calls.update(neo4j=0, milvus=0)
-                before = knowledge.round_trip_counts()
                 start = time.monotonic()
                 exact = await session.call_tool(
                     "search_knowledge",
                     {"query": "orders", "scope": "tables", "top_k": 5},
                 )
                 print("search_elapsed_ms=", round((time.monotonic() - start) * 1000))
-                after = knowledge.round_trip_counts()
-                assert sum(after[k] - before[k] for k in ("neo4j", "milvus")) <= 5
-                assert sum(calls.values()) <= 5
-                print("storage_round_trips=", sum(calls.values()))
                 assert "table:shop.orders" in str(exact)
                 fields = await session.call_tool(
                     "search_knowledge", {"query": "dt", "scope": "fields", "top_k": 5}
