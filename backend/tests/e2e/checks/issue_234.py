@@ -9,7 +9,34 @@ LANGFUSE_SECRET = "issue-234-dummy-secret"
 
 
 class Receiver:
-    """A local Langfuse-compatible ingestion endpoint."""
+    """A local ingestion endpoint with the real receiver's field projection."""
+
+    PERSISTED_FIELDS = frozenset(
+        {
+            "id",
+            "traceId",
+            "parentObservationId",
+            "name",
+            "startTime",
+            "endTime",
+            "completionStartTime",
+            "input",
+            "output",
+            "metadata",
+            "level",
+            "statusMessage",
+            "model",
+            "modelParameters",
+            "usage",
+            "version",
+            "environment",
+            "sessionId",
+            "userId",
+            "release",
+            "public",
+            "tags",
+        }
+    )
 
     def __init__(self):
         self.bodies = []
@@ -51,8 +78,13 @@ class Receiver:
         for request in list(self.bodies):
             for event in request.get("batch", []):
                 body = event.get("body") or {}
-                if body.get("name") == name:
-                    found.append(body)
+                stored = {
+                    key: value
+                    for key, value in body.items()
+                    if key in self.PERSISTED_FIELDS
+                }
+                if stored.get("name") == name:
+                    found.append(stored)
         return found
 
     def wait_spans(self, name, count, timeout=20):
@@ -103,6 +135,7 @@ def check_telemetry_defaults_to_metadata(ctx):
         fingerprints = []
         for span in spans:
             encoded = json.dumps(span, ensure_ascii=False)
+            metadata = span.get("metadata") or {}
             for literal in (literal_one, literal_two, "2025-01-01", "2026-02-02"):
                 ctx.require(
                     literal not in encoded,
@@ -110,7 +143,7 @@ def check_telemetry_defaults_to_metadata(ctx):
                 )
             ctx.require("SELECT" not in encoded, "raw SQL leaked in default mode")
             ctx.require(
-                span.get("sql_fingerprint"),
+                metadata.get("sql_fingerprint"),
                 f"missing SQL fingerprint: {span.get('name')}",
             )
             ctx.require(
@@ -118,16 +151,16 @@ def check_telemetry_defaults_to_metadata(ctx):
                 "content fields were sent in default mode",
             )
             ctx.require(
-                span.get("table") == "shop.orders",
+                metadata.get("table") == "shop.orders",
                 f"table metadata missing: {span}",
             )
             ctx.require(
-                span.get("is_error") is False,
+                metadata.get("is_error") is False,
                 "tool status metadata missing in default mode",
             )
-            if span.get("metadata", {}).get("duration_ms") is None:
+            if metadata.get("duration_ms") is None:
                 raise AssertionError("missing tool duration metadata")
-            fingerprints.append(span["sql_fingerprint"])
+            fingerprints.append(metadata["sql_fingerprint"])
 
         first, second, third = fingerprints
         ctx.require(
@@ -211,21 +244,26 @@ def check_telemetry_ignores_untrusted_metadata(ctx):
                 "SQL literal leaked through telemetry metadata",
             )
         ctx.require(
-            "table" not in join_spans[0] and "tables" not in join_spans[0],
+            "table" not in join_spans[0].get("metadata", {})
+            and "tables" not in join_spans[0].get("metadata", {}),
             "untrusted table arguments were promoted to metadata",
         )
         ctx.require(
-            join_spans[0].get("status") == "ok"
-            and join_spans[0].get("is_error") is False,
+            join_spans[0].get("metadata", {}).get("status") == "ok"
+            and join_spans[0].get("metadata", {}).get("is_error") is False,
             "untrusted nested status changed the telemetry status",
         )
         ctx.require(
-            sql_span.get("table") == "shop.orders",
+            sql_span.get("metadata", {}).get("table") == "shop.orders",
             f"trusted SQL table metadata missing: {sql_span}",
         )
-        error_span = next(span for span in join_spans if span.get("is_error") is True)
+        error_span = next(
+            span
+            for span in join_spans
+            if span.get("metadata", {}).get("is_error") is True
+        )
         ctx.require(
-            error_span.get("error_category") == "invalid_input",
+            error_span.get("metadata", {}).get("error_category") == "invalid_input",
             f"trusted error category missing: {error_span}",
         )
         ctx.require(

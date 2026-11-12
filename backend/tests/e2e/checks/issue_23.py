@@ -296,6 +296,12 @@ def check_langfuse_observability(ctx):
                     "source",
                     "token_name",
                     "duration_ms",
+                    "status",
+                    "is_error",
+                    "table",
+                    "tables",
+                    "sql_fingerprint",
+                    "error_category",
                 }
                 ctx.require(
                     set(item.get("metadata") or {}) <= allowed,

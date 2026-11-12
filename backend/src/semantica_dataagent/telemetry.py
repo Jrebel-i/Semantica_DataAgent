@@ -147,6 +147,16 @@ _TABLE_ARGUMENTS = {
 _METADATA_KEYS = frozenset(
     {"duration_ms", "agent", "provider", "model", "source", "token_name"}
 )
+_SUMMARY_METADATA_KEYS = frozenset(
+    {
+        "status",
+        "is_error",
+        "table",
+        "tables",
+        "sql_fingerprint",
+        "error_category",
+    }
+)
 _ENVELOPE_FIELDS = frozenset(
     {
         "id",
@@ -400,6 +410,22 @@ def _default_envelope(event, secrets):
     return payload
 
 
+def _add_metadata_summary(payload, event, secrets):
+    """Persist trusted derived fields where the receiver actually stores them."""
+    metadata = payload.get("metadata")
+    metadata = dict(metadata) if isinstance(metadata, dict) else {}
+    metadata = {
+        key: value
+        for key, value in metadata.items()
+        if key not in _SUMMARY_METADATA_KEYS
+    }
+    metadata.update(_metadata_summary(event, secrets))
+    if metadata:
+        payload["metadata"] = metadata
+    else:
+        payload.pop("metadata", None)
+
+
 def _filtered(value, secrets=(), capture_content=False, _top_level=True):
     if not capture_content:
         return _default_envelope(value, secrets)
@@ -521,14 +547,7 @@ def submit(kind, event, secrets=()):
         capture_content = bool(config[4]) if len(config) > 4 else False
         all_secrets = (*secrets, *config[1:4])
         payload = _filtered(event, all_secrets, capture_content)
-        if not capture_content:
-            payload.update(
-                {
-                    key: value
-                    for key, value in _metadata_summary(event, all_secrets).items()
-                    if key not in payload
-                }
-            )
+        _add_metadata_summary(payload, event, all_secrets)
         with _lock:
             if _worker is None or not _worker.is_alive():
                 _worker = threading.Thread(

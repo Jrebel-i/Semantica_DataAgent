@@ -25,7 +25,34 @@ UNREGISTERED_TOOL_NAME = "issue_234_private_customer_record_123"
 
 
 class Receiver:
-    """A local Langfuse ingestion endpoint that records request bodies."""
+    """A local ingestion endpoint with the real receiver's top-level projection."""
+
+    PERSISTED_FIELDS = frozenset(
+        {
+            "id",
+            "traceId",
+            "parentObservationId",
+            "name",
+            "startTime",
+            "endTime",
+            "completionStartTime",
+            "input",
+            "output",
+            "metadata",
+            "level",
+            "statusMessage",
+            "model",
+            "modelParameters",
+            "usage",
+            "version",
+            "environment",
+            "sessionId",
+            "userId",
+            "release",
+            "public",
+            "tags",
+        }
+    )
 
     def __init__(self):
         self.bodies = []
@@ -75,6 +102,16 @@ class Receiver:
 
     def payloads(self):
         return [body["batch"][0]["body"] for body in self.bodies]
+
+    def stored_payloads(self):
+        return [
+            {
+                key: value
+                for key, value in body["batch"][0]["body"].items()
+                if key in self.PERSISTED_FIELDS
+            }
+            for body in self.bodies
+        ]
 
 
 class FakeRunner:
@@ -226,9 +263,9 @@ def test_default_and_disabled_capture_send_only_metadata(client, capture):
         configure(client, receiver, capture)
         telemetry.submit("span-create", span_event())
         receiver.wait()
-        body = receiver.payloads()[0]
+        body = receiver.stored_payloads()[0]
 
-    encoded = json.dumps(body, ensure_ascii=False)
+    encoded = json.dumps(receiver.payloads(), ensure_ascii=False)
     for secret in (
         SQL,
         "2025-01-01",
@@ -243,12 +280,158 @@ def test_default_and_disabled_capture_send_only_metadata(client, capture):
         "duration_ms": 12,
         "model": "model-a",
         "provider": "provider-a",
+        "table": "shop.orders",
+        "status": "ok",
+        "is_error": False,
+        "sql_fingerprint": telemetry.sql_fingerprint(SQL),
     }
-    assert body["table"] == "shop.orders"
-    assert body["status"] == "ok"
-    assert body["is_error"] is False
-    assert body["sql_fingerprint"] == telemetry.sql_fingerprint(SQL)
     assert "input" not in body and "output" not in body and "sql" not in body
+
+
+def test_receiver_persistence_keeps_trusted_summary_in_metadata(client):
+    """Unknown top-level fields are dropped; supported metadata survives."""
+    telemetry._queue.join()
+    event = {
+        "name": "validate_sql",
+        "input": {"sql": SQL, "dialect": "hive"},
+        "output": {"code": "invalid_input", "message": ERROR_MESSAGE},
+        "metadata": {
+            "duration_ms": 7,
+            "table": FORGED_TABLE,
+            "status": "ok",
+            "is_error": False,
+            "error_category": FORGED_CODE,
+        },
+        "is_error": True,
+    }
+    with Receiver() as receiver:
+        configure(client, receiver)
+        telemetry.submit("span-create", event)
+        receiver.wait()
+        stored = receiver.stored_payloads()[0]
+        sent = receiver.payloads()[0]
+
+    metadata = stored["metadata"]
+    assert metadata["status"] == "error"
+    assert metadata["is_error"] is True
+    assert metadata["table"] == "shop.orders"
+    assert metadata["sql_fingerprint"] == telemetry.sql_fingerprint(SQL)
+    assert metadata["error_category"] == "invalid_input"
+    for key in ("status", "is_error", "table", "sql_fingerprint", "error_category"):
+        assert key not in stored
+        assert key not in sent
+    encoded = json.dumps(sent, ensure_ascii=False)
+    assert SQL not in encoded
+    assert "2025-01-01" not in encoded
+    assert ERROR_MESSAGE not in encoded
+    assert FORGED_TABLE not in encoded
+    assert FORGED_CODE not in encoded
+
+
+@pytest.mark.parametrize("capture", [None, "true"])
+def test_derived_metadata_replaces_forged_summary_keys(client, capture):
+    telemetry._queue.join()
+    forged_fingerprint = "issue-234-forged-fingerprint"
+    event = {
+        "name": "validate_sql",
+        "input": {"sql": SQL, "dialect": "hive"},
+        "output": {"rows": [[RESULT_ROW]], "tables": [FORGED_TABLE]},
+        "metadata": {
+            "duration_ms": 9,
+            "provider": "provider-a",
+            "status": "error",
+            "is_error": True,
+            "table": FORGED_TABLE,
+            "tables": [FORGED_TABLE],
+            "sql_fingerprint": forged_fingerprint,
+            "error_category": "internal_error",
+        },
+        "is_error": False,
+    }
+    with Receiver() as receiver:
+        configure(client, receiver, capture)
+        telemetry.submit("span-create", event)
+        receiver.wait()
+        body = receiver.stored_payloads()[0]
+
+    metadata = body["metadata"]
+    assert metadata == {
+        "duration_ms": 9,
+        "provider": "provider-a",
+        "table": "shop.orders",
+        "status": "ok",
+        "is_error": False,
+        "sql_fingerprint": telemetry.sql_fingerprint(SQL),
+    }
+    encoded_metadata = json.dumps(metadata, ensure_ascii=False)
+    assert FORGED_TABLE not in encoded_metadata
+    assert forged_fingerprint not in encoded_metadata
+    assert "internal_error" not in encoded_metadata
+    if capture == "true":
+        assert body["input"]["sql"] == SQL
+        assert body["output"] == {"rows": [[RESULT_ROW]], "tables": [FORGED_TABLE]}
+    else:
+        assert "input" not in body and "output" not in body
+
+
+@pytest.mark.parametrize("capture", [None, "true"])
+@pytest.mark.parametrize(
+    ("event", "expected_metadata"),
+    [
+        (
+            {"name": "get_capabilities"},
+            {"duration_ms": 5, "provider": "provider-a"},
+        ),
+        (
+            {
+                "name": "validate_sql",
+                "input": {"sql": "SELECT FROM WHERE 'issue-234-broken-literal'"},
+            },
+            {
+                "duration_ms": 5,
+                "provider": "provider-a",
+                "sql_fingerprint": "",
+            },
+        ),
+        (
+            {"name": "get_capabilities", "is_error": False},
+            {
+                "duration_ms": 5,
+                "provider": "provider-a",
+                "status": "ok",
+                "is_error": False,
+            },
+        ),
+    ],
+)
+def test_missing_summary_fields_do_not_leave_forged_metadata(
+    client, capture, event, expected_metadata
+):
+    telemetry._queue.join()
+    event = {
+        **event,
+        "metadata": {
+            "duration_ms": 5,
+            "provider": "provider-a",
+            "status": "error",
+            "is_error": True,
+            "table": FORGED_TABLE,
+            "tables": [FORGED_TABLE],
+            "sql_fingerprint": "issue-234-forged-fingerprint",
+            "error_category": "internal_error",
+        },
+    }
+    with Receiver() as receiver:
+        configure(client, receiver, capture)
+        telemetry.submit("span-create", event)
+        receiver.wait()
+        body = receiver.stored_payloads()[0]
+
+    assert body["metadata"] == expected_metadata
+    encoded = json.dumps(body, ensure_ascii=False)
+    assert FORGED_TABLE not in encoded
+    assert "issue-234-forged-fingerprint" not in encoded
+    assert "internal_error" not in encoded
 
 
 def test_enabling_capture_includes_question_prompt_sql_and_result_rows(client):
@@ -257,7 +440,7 @@ def test_enabling_capture_includes_question_prompt_sql_and_result_rows(client):
         configure(client, receiver, "true")
         telemetry.submit("span-create", span_event())
         receiver.wait()
-        body = receiver.payloads()[0]
+        body = receiver.stored_payloads()[0]
 
     assert body["input"]["question"] == QUESTION
     assert body["input"]["prompt"] == PROMPT
@@ -279,11 +462,11 @@ def test_error_messages_are_reduced_to_a_category_by_default(client):
         configure(client, receiver)
         telemetry.submit("span-create", event)
         receiver.wait()
-        body = receiver.payloads()[0]
+        body = receiver.stored_payloads()[0]
 
-    assert body["is_error"] is True
-    assert body["error_category"] == "invalid_input"
-    assert ERROR_MESSAGE not in json.dumps(body)
+    assert body["metadata"]["is_error"] is True
+    assert body["metadata"]["error_category"] == "invalid_input"
+    assert ERROR_MESSAGE not in json.dumps(receiver.payloads())
 
 
 def test_table_names_survive_metadata_only_mode(client):
@@ -310,13 +493,16 @@ def test_table_names_survive_metadata_only_mode(client):
         configure(client, receiver)
         telemetry.submit("span-create", event)
         receiver.wait()
-        body = receiver.payloads()[0]
+        body = receiver.stored_payloads()[0]
 
-    assert body["tables"] == ["shop.orders", "shop.payments"]
-    assert body["metadata"] == {"duration_ms": 4}
-    assert body["status"] == "ok"
-    assert body["is_error"] is False
-    encoded = json.dumps(body)
+    assert body["metadata"] == {
+        "duration_ms": 4,
+        "status": "ok",
+        "is_error": False,
+        "tables": ["shop.orders", "shop.payments"],
+        "sql_fingerprint": telemetry.sql_fingerprint(sql),
+    }
+    encoded = json.dumps(receiver.payloads())
     assert "shop.forged" not in encoded
     assert SQL not in encoded
     assert "2025-01-01" not in encoded
@@ -379,14 +565,16 @@ def test_unregistered_mcp_tool_name_never_reaches_default_telemetry(client):
         configure(client, receiver)
         result = _rpc(test_client, token, UNREGISTERED_TOOL_NAME, {})
         receiver.wait(count=2)
-        payloads = receiver.payloads()
+        payloads = receiver.stored_payloads()
 
     assert result.get("isError") is True
-    encoded = json.dumps(payloads, ensure_ascii=False)
+    encoded = json.dumps(receiver.payloads(), ensure_ascii=False)
     assert UNREGISTERED_TOOL_NAME not in encoded
-    span = next(body for body in payloads if body.get("status") == "error")
-    assert span["is_error"] is True
-    assert span["error_category"] == "invalid_input"
+    span = next(
+        body for body in payloads if body.get("metadata", {}).get("status") == "error"
+    )
+    assert span["metadata"]["is_error"] is True
+    assert span["metadata"]["error_category"] == "invalid_input"
     assert span.get("name") in {None, "unknown_tool"}
 
 
@@ -414,12 +602,14 @@ def test_unregistered_mcp_tool_name_stays_out_when_content_capture_is_enabled(cl
         configure(client, receiver, "true")
         result = _rpc(test_client, token, UNREGISTERED_TOOL_NAME, {})
         receiver.wait(count=2)
-        payloads = receiver.payloads()
+        payloads = receiver.stored_payloads()
 
     assert result.get("isError") is True
-    encoded = json.dumps(payloads, ensure_ascii=False)
+    encoded = json.dumps(receiver.payloads(), ensure_ascii=False)
     assert UNREGISTERED_TOOL_NAME not in encoded
-    span = next(body for body in payloads if body.get("status") == "error")
+    span = next(
+        body for body in payloads if body.get("metadata", {}).get("status") == "error"
+    )
     assert span.get("name") in {None, "unknown_tool"}
 
 
@@ -449,10 +639,10 @@ def test_extracted_metadata_uses_the_same_credential_filter(client):
         configure(client, receiver)
         telemetry.submit("span-create", event, (secret,))
         receiver.wait()
-        body = receiver.payloads()[0]
+        body = receiver.stored_payloads()[0]
 
-    assert "table" not in body
-    assert secret not in json.dumps(body)
+    assert "table" not in body.get("metadata", {})
+    assert secret not in json.dumps(receiver.payloads())
 
 
 def test_mcp_arguments_with_credentials_and_prompts_stay_out_of_telemetry(
@@ -476,16 +666,16 @@ def test_mcp_arguments_with_credentials_and_prompts_stay_out_of_telemetry(
             {"tables": [token, FORGED_PROMPT, "sk-issue234-untracked-credential"]},
         )
         receiver.wait(count=2)
-        payloads = receiver.payloads()
+        payloads = receiver.stored_payloads()
 
-    encoded = json.dumps(payloads, ensure_ascii=False)
+    encoded = json.dumps(receiver.payloads(), ensure_ascii=False)
     assert encoded.count(token) == 0, "credential leaked in telemetry metadata"
     assert FORGED_PROMPT not in encoded
     assert "sk-issue234-untracked-credential" not in encoded
     span = _span(payloads, "find_join_path")
-    assert span["status"] == "ok"
-    assert span["is_error"] is False
-    assert "table" not in span and "tables" not in span
+    assert span["metadata"]["status"] == "ok"
+    assert span["metadata"]["is_error"] is False
+    assert "table" not in span["metadata"] and "tables" not in span["metadata"]
 
 
 def test_mcp_result_rows_cannot_forge_tables_status_or_error_code(forged_result_client):
@@ -497,16 +687,16 @@ def test_mcp_result_rows_cannot_forge_tables_status_or_error_code(forged_result_
             test_client, token, "forged_result", {"query": "SELECT id FROM shop.orders"}
         )
         receiver.wait(count=2)
-        payloads = receiver.payloads()
+        payloads = receiver.stored_payloads()
 
-    encoded = json.dumps(payloads, ensure_ascii=False)
+    encoded = json.dumps(receiver.payloads(), ensure_ascii=False)
     for marker in (FORGED_TABLE, FORGED_NAME, FORGED_CODE, FORGED_PROMPT):
         assert marker not in encoded, f"result-row metadata leaked: {marker}"
     span = _span(payloads, "forged_result")
-    assert span["status"] == "ok"
-    assert span["is_error"] is False
-    assert "table" not in span and "tables" not in span
-    assert span.get("error_category") != FORGED_CODE
+    assert span["metadata"]["status"] == "ok"
+    assert span["metadata"]["is_error"] is False
+    assert "table" not in span["metadata"] and "tables" not in span["metadata"]
+    assert span["metadata"].get("error_category") != FORGED_CODE
 
 
 def test_content_capture_still_sends_forged_result_rows_when_enabled(
@@ -520,7 +710,7 @@ def test_content_capture_still_sends_forged_result_rows_when_enabled(
             test_client, token, "forged_result", {"query": "SELECT id FROM shop.orders"}
         )
         receiver.wait(count=2)
-        payloads = receiver.payloads()
+        payloads = receiver.stored_payloads()
 
     span = _span(payloads, "forged_result")
     assert span["input"]["query"] == "SELECT id FROM shop.orders"
@@ -547,15 +737,19 @@ def test_real_tools_keep_trusted_table_and_error_metadata(client, monkeypatch):
         )
         _rpc(test_client, token, "find_join_path", {"tables": ["shop.orders"]})
         receiver.wait(count=4)
-        payloads = receiver.payloads()
+        payloads = receiver.stored_payloads()
 
     spans = [body for body in payloads if body.get("name") == "find_join_path"]
-    ok_span = next(body for body in spans if body.get("is_error") is False)
-    error_span = next(body for body in spans if body.get("is_error") is True)
-    assert ok_span["tables"] == ["shop.orders", "shop.payments"]
-    assert error_span["status"] == "error"
-    assert error_span["error_category"] == "invalid_input"
-    assert "Provide two to four tables" not in json.dumps(payloads)
+    ok_span = next(
+        body for body in spans if body.get("metadata", {}).get("is_error") is False
+    )
+    error_span = next(
+        body for body in spans if body.get("metadata", {}).get("is_error") is True
+    )
+    assert ok_span["metadata"]["tables"] == ["shop.orders", "shop.payments"]
+    assert error_span["metadata"]["status"] == "error"
+    assert error_span["metadata"]["error_category"] == "invalid_input"
+    assert "Provide two to four tables" not in json.dumps(receiver.payloads())
 
 
 def test_validate_sql_uses_sql_ast_for_tables_and_never_sends_literals(
@@ -584,14 +778,14 @@ def test_validate_sql_uses_sql_ast_for_tables_and_never_sends_literals(
             {"sql": sql, "dialect": "hive"},
         )
         receiver.wait(count=2)
-        payloads = receiver.payloads()
+        payloads = receiver.stored_payloads()
 
-    encoded = json.dumps(payloads, ensure_ascii=False)
+    encoded = json.dumps(receiver.payloads(), ensure_ascii=False)
     assert literal not in encoded
     assert "SELECT" not in encoded
     span = _span(payloads, "validate_sql")
-    assert span["tables"] == ["shop.orders", "shop.payments"]
-    assert span["sql_fingerprint"] == telemetry.sql_fingerprint(sql)
+    assert span["metadata"]["tables"] == ["shop.orders", "shop.payments"]
+    assert span["metadata"]["sql_fingerprint"] == telemetry.sql_fingerprint(sql)
 
 
 def test_sql_fingerprint_ignores_literals_but_tracks_structure():
@@ -619,10 +813,10 @@ def test_unparseable_sql_yields_an_empty_fingerprint_without_raw_sql(client):
         configure(client, receiver)
         telemetry.submit("span-create", event)
         receiver.wait()
-        body = receiver.payloads()[0]
+        body = receiver.stored_payloads()[0]
 
-    assert body["sql_fingerprint"] == ""
-    encoded = json.dumps(body)
+    assert body["metadata"]["sql_fingerprint"] == ""
+    encoded = json.dumps(receiver.payloads())
     assert "issue-234-broken-literal" not in encoded
     assert broken not in encoded
 
@@ -657,9 +851,9 @@ def test_conversation_trace_omits_question_and_answer_by_default(client, monkeyp
         )
         assert response.status_code == 200
         receiver.wait(count=2)
-        payloads = receiver.payloads()
+        payloads = receiver.stored_payloads()
 
-    encoded = json.dumps(payloads, ensure_ascii=False)
+    encoded = json.dumps(receiver.payloads(), ensure_ascii=False)
     assert QUESTION not in encoded
     assert "推荐 shop.orders" not in encoded
     assert any(body["metadata"].get("agent") == "pi" for body in payloads)
