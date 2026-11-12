@@ -210,11 +210,19 @@ def _cell(value):
 def _ask(client, payload, project=None):
     result = {
         "sql": None,
+        "sql_source": None,
+        "final_query": False,
+        "stream_error": False,
         "conversation_id": None,
         "clarification": False,
         "via_plan": False,
         "tool_calls": [],
     }
+    done_sql = None
+    planned_sql = None
+    planned_after_clarification = None
+    last_clarification_index = -1
+    event_index = 0
     if project is not None:
         payload = {**payload, "project": project}
     try:
@@ -234,12 +242,15 @@ def _ask(client, payload, project=None):
                         continue
                     if not isinstance(data, dict):
                         continue
+                    event_index += 1
                     if event == "conversation":
                         conversation_id = data.get("conversation_id")
                         if isinstance(conversation_id, str):
                             result["conversation_id"] = conversation_id
                     elif event == "clarification":
                         result["clarification"] = True
+                        last_clarification_index = event_index
+                        planned_after_clarification = None
                     elif event == "tool_start":
                         name = data.get("name")
                         if isinstance(name, str) and name:
@@ -250,14 +261,34 @@ def _ask(client, payload, project=None):
                     elif event == "query_plan":
                         planned = _sql(data.get("sql"))
                         if planned:
-                            result["sql"] = planned
+                            planned_sql = planned
                             result["via_plan"] = True
+                            if event_index > last_clarification_index:
+                                planned_after_clarification = planned
                     elif event == "done":
                         answered = _sql(data.get("sql"))
                         if answered:
-                            result["sql"] = answered
+                            done_sql = answered
+                    elif event == "error":
+                        result["stream_error"] = True
     except (httpx.HTTPError, ValueError, TypeError):
+        result["stream_error"] = True
         return result
+    if result["stream_error"]:
+        return result
+    if result["clarification"]:
+        if planned_after_clarification:
+            result["sql"] = planned_after_clarification
+            result["sql_source"] = "query_plan"
+        result["final_query"] = result["sql"] is not None
+        return result
+    if done_sql:
+        result["sql"] = done_sql
+        result["sql_source"] = "done"
+    elif planned_sql:
+        result["sql"] = planned_sql
+        result["sql_source"] = "query_plan"
+    result["final_query"] = result["sql"] is not None
     return result
 
 
@@ -317,6 +348,8 @@ def _answer(client, question, args, *, collect_only=False):
     if first["sql"]:
         return {
             "sql": first["sql"],
+            "sql_source": first["sql_source"],
+            "final_query": first["final_query"],
             "clarified": clarification_received,
             "clarification_received": clarification_received,
             "clarification_followed_up": False,
@@ -328,20 +361,24 @@ def _answer(client, question, args, *, collect_only=False):
     if not clarification_received or not conversation_id:
         return {
             "sql": None,
+            "sql_source": None,
+            "final_query": False,
             "clarified": clarification_received,
             "clarification_received": clarification_received,
             "clarification_followed_up": False,
-            "via_plan": False,
+            "via_plan": first["via_plan"],
             "conversation_id": conversation_id,
             "tool_calls": tool_calls,
         }
     if collect_only:
         return {
             "sql": None,
+            "sql_source": None,
+            "final_query": False,
             "clarified": True,
             "clarification_received": True,
             "clarification_followed_up": False,
-            "via_plan": False,
+            "via_plan": first["via_plan"],
             "conversation_id": conversation_id,
             "tool_calls": tool_calls,
         }
@@ -356,10 +393,12 @@ def _answer(client, question, args, *, collect_only=False):
     tool_calls.extend(second["tool_calls"])
     return {
         "sql": second["sql"],
+        "sql_source": second["sql_source"],
+        "final_query": second["final_query"],
         "clarified": True,
         "clarification_received": True,
         "clarification_followed_up": True,
-        "via_plan": second["via_plan"],
+        "via_plan": first["via_plan"] or second["via_plan"],
         "conversation_id": conversation_id,
         "tool_calls": tool_calls,
     }
@@ -921,6 +960,15 @@ def render_report(report):
                 else str(call.get("name"))
                 for call in run["tool_calls"]
             )
+            final_query = run.get("final_query")
+            if final_query is True:
+                final_query_label = "是"
+            elif final_query is False:
+                final_query_label = "否"
+            elif run.get("sql"):
+                final_query_label = "未知（旧报告缺少标识；SQL 仅保留用于诊断）"
+            else:
+                final_query_label = "未知（旧报告缺少标识）"
             lines += [
                 "",
                 f"#### {entry['id']} 第 {run['run']} 遍",
@@ -934,6 +982,11 @@ def render_report(report):
                     )
                 ),
                 f"- 实际 SQL：`{_cell(run.get('sql')) or '—'}`",
+                (
+                    "- 最终业务查询："
+                    f"{final_query_label}"
+                    f"（SQL 来源：{run.get('sql_source') or '—'}）"
+                ),
                 f"- 参考 SQL：`{_cell(run.get('reference_sql'))}`",
                 f"- 工具调用：{calls or '无'}",
                 f"- 一致性：{run['comparison']}",
@@ -1144,6 +1197,8 @@ def run_cli(args):
                     "sql": sql,
                     "actual_sql": sql,
                     "agent_sql": bool(sql),
+                    "sql_source": answer["sql_source"],
+                    "final_query": answer["final_query"],
                     "clarified": answer["clarified"],
                     "clarification_received": answer["clarification_received"],
                     "clarification_followed_up": answer["clarification_followed_up"],
@@ -1197,6 +1252,8 @@ def run_cli(args):
                     "sql": display["sql"],
                     "actual_sql": display["sql"],
                     "agent_sql": display["agent_sql"],
+                    "sql_source": display["sql_source"],
+                    "final_query": display["final_query"],
                     "conversation_id": display["conversation_id"],
                     "tool_calls": display["tool_calls"],
                     "tool_call_sequence": display["tool_call_sequence"],
