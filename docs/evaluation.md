@@ -107,7 +107,7 @@ semantica-dataagent eval-exec \
 - `clarified` / `clarified_runs`：兼容旧报告保留的字段，语义等同“收到澄清”，不要据此推断是否真的发送了自动追问；新代码和报告请优先使用下面的显式字段。
 - `clarification_received` / `clarification_received_runs`：至少一遍收到澄清的题数 / 收到澄清的遍数。
 - `clarification_followed_up` / `clarification_followed_up_runs`：至少一遍实际发送了自动追问的题数 / 实际发送自动追问的遍数。仅采集的未确认题收到澄清后不自动回传题集口径，因此为 0；已确认题保持旧的自动追问行为。
-- `via_plan` / `via_plan_runs`：至少一遍走查询计划的题数 / 走查询计划的遍数。
+- `via_plan` / `via_plan_runs`：至少一遍实际观测到 `query_plan` 事件的题数 / 遍数。它记录计划路径事实，不表示最终 SQL 一定来自计划；最终采用来源看 `sql_source`。
 - `no_sql` / `no_sql_runs`：至少一遍没有 SQL 的题数 / 没有 SQL 的遍数。
 - `sql_source`（逐遍；题目级取展示遍）：被采用的最终业务 SQL 来源，取值为 `done` 或 `query_plan`；没有最终业务 SQL 时为 `null`。
 - `final_query`：该遍（题目级取展示遍）是否产出了最终业务查询。
@@ -116,7 +116,9 @@ semantica-dataagent eval-exec \
 
 Markdown 主表的“收到澄清”和“自动追问”两列分别对应上述字段，逐题明细和逐遍明细也分开显示，不会把收到澄清写成已追问。旧报告没有显式字段时，渲染回退到旧 `clarified` 的追问语义。
 
-澄清轮里展示的 SQL（无论来自 `done` 还是 `query_plan`）只用于探查，不会自动当作最终业务答案：报告把该遍记为 `sql=null`、`agent_sql=false`、`final_query=false`、`sql_source=null`，并且不调用执行接口，也不让这次探查冒充“已完成业务回答”。已确认题收到澄清后会按原有流程自动追问，只有追问轮真正产出的最终 SQL（或查询计划）才进入执行与一致率比较；仅采集的未确认题仍不自动回填题集口径。`error` 事件或流读取异常出现时，即使此前已经收到 SQL，也会丢弃该 SQL，不发起执行。没有最终 SQL 的遍仍按 `no_sql` 统计。
+澄清与候选 SQL 的先后顺序决定最终性。澄清之后出现的 `done` SQL 只用于探查：报告把该遍记为 `sql=null`、`agent_sql=false`、`final_query=false`、`sql_source=null`，不调用执行接口。澄清之后出现、且服务端正常结束的 `query_plan` 是明确形成的计划，会保留并执行，记为 `sql_source=query_plan`、`final_query=true`；已确认题自动追问的第二轮再次出现“澄清→计划”时同样保留。澄清之前出现、且澄清后没有新计划的 `query_plan` 不作为最终答案。同一流先出现 `query_plan`、后出现 `done` 时，最终 SQL 采用 `done`（`sql_source=done`），但 `via_plan` 仍为 true，保留计划路径事实。
+
+已确认题收到澄清后仍按原有流程自动追问；仅采集的未确认题不自动回填题集口径。`error` 事件或流读取异常出现时，即使此前已经收到最终候选 SQL，也会丢弃该 SQL，不发起执行。没有最终 SQL 的遍仍按 `no_sql` 统计。旧报告缺少 `final_query` 时按未知显示，不根据 SQL 是否存在推断最终性；旧 SQL 仍原样保留用于诊断。
 
 覆盖统计分成三层，避免 `--only` 或只跑一个 split 时把别的题误报成缺失：
 

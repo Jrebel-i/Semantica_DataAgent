@@ -220,6 +220,9 @@ def _ask(client, payload, project=None):
     }
     done_sql = None
     planned_sql = None
+    planned_after_clarification = None
+    last_clarification_index = -1
+    event_index = 0
     if project is not None:
         payload = {**payload, "project": project}
     try:
@@ -239,12 +242,15 @@ def _ask(client, payload, project=None):
                         continue
                     if not isinstance(data, dict):
                         continue
+                    event_index += 1
                     if event == "conversation":
                         conversation_id = data.get("conversation_id")
                         if isinstance(conversation_id, str):
                             result["conversation_id"] = conversation_id
                     elif event == "clarification":
                         result["clarification"] = True
+                        last_clarification_index = event_index
+                        planned_after_clarification = None
                     elif event == "tool_start":
                         name = data.get("name")
                         if isinstance(name, str) and name:
@@ -256,6 +262,9 @@ def _ask(client, payload, project=None):
                         planned = _sql(data.get("sql"))
                         if planned:
                             planned_sql = planned
+                            result["via_plan"] = True
+                            if event_index > last_clarification_index:
+                                planned_after_clarification = planned
                     elif event == "done":
                         answered = _sql(data.get("sql"))
                         if answered:
@@ -265,7 +274,13 @@ def _ask(client, payload, project=None):
     except (httpx.HTTPError, ValueError, TypeError):
         result["stream_error"] = True
         return result
-    if result["stream_error"] or result["clarification"]:
+    if result["stream_error"]:
+        return result
+    if result["clarification"]:
+        if planned_after_clarification:
+            result["sql"] = planned_after_clarification
+            result["sql_source"] = "query_plan"
+        result["final_query"] = result["sql"] is not None
         return result
     if done_sql:
         result["sql"] = done_sql
@@ -273,7 +288,6 @@ def _ask(client, payload, project=None):
     elif planned_sql:
         result["sql"] = planned_sql
         result["sql_source"] = "query_plan"
-        result["via_plan"] = True
     result["final_query"] = result["sql"] is not None
     return result
 
@@ -352,7 +366,7 @@ def _answer(client, question, args, *, collect_only=False):
             "clarified": clarification_received,
             "clarification_received": clarification_received,
             "clarification_followed_up": False,
-            "via_plan": False,
+            "via_plan": first["via_plan"],
             "conversation_id": conversation_id,
             "tool_calls": tool_calls,
         }
@@ -364,7 +378,7 @@ def _answer(client, question, args, *, collect_only=False):
             "clarified": True,
             "clarification_received": True,
             "clarification_followed_up": False,
-            "via_plan": False,
+            "via_plan": first["via_plan"],
             "conversation_id": conversation_id,
             "tool_calls": tool_calls,
         }
@@ -384,7 +398,7 @@ def _answer(client, question, args, *, collect_only=False):
         "clarified": True,
         "clarification_received": True,
         "clarification_followed_up": True,
-        "via_plan": second["via_plan"],
+        "via_plan": first["via_plan"] or second["via_plan"],
         "conversation_id": conversation_id,
         "tool_calls": tool_calls,
     }
@@ -947,8 +961,14 @@ def render_report(report):
                 for call in run["tool_calls"]
             )
             final_query = run.get("final_query")
-            if final_query is None:
-                final_query = bool(run.get("sql"))
+            if final_query is True:
+                final_query_label = "是"
+            elif final_query is False:
+                final_query_label = "否"
+            elif run.get("sql"):
+                final_query_label = "未知（旧报告缺少标识；SQL 仅保留用于诊断）"
+            else:
+                final_query_label = "未知（旧报告缺少标识）"
             lines += [
                 "",
                 f"#### {entry['id']} 第 {run['run']} 遍",
@@ -964,7 +984,7 @@ def render_report(report):
                 f"- 实际 SQL：`{_cell(run.get('sql')) or '—'}`",
                 (
                     "- 最终业务查询："
-                    f"{'是' if final_query else '否'}"
+                    f"{final_query_label}"
                     f"（SQL 来源：{run.get('sql_source') or '—'}）"
                 ),
                 f"- 参考 SQL：`{_cell(run.get('reference_sql'))}`",

@@ -20,6 +20,9 @@ BROKEN = "SELECT broken FROM shop.orders"
 TRUNCATED = "SELECT id FROM shop.orders WHERE dt = '2025-01-02'"
 EXPLORATORY = "SELECT exploratory FROM shop.orders WHERE dt = '2025-01-01'"
 FINAL = "SELECT final FROM shop.orders WHERE dt = '2025-01-01'"
+PLANNED = "SELECT planned FROM shop.orders WHERE dt = '2025-01-01'"
+FINAL_PLAN = "SELECT final_plan FROM shop.orders WHERE dt = '2025-01-01'"
+DONE_AFTER_PLAN = "SELECT done_after_plan FROM shop.orders WHERE dt = '2025-01-01'"
 
 
 class FakeQuestionService:
@@ -36,6 +39,12 @@ class FakeQuestionService:
         self.clarify_questions = set()
         self.clarify_sql = {}
         self.clarify_exploratory = {}
+        self.clarify_plans = {}
+        self.plan_before_clarification = {}
+        self.follow_up_plans = {}
+        self.follow_up_plan = {}
+        self.plan_then_done = {}
+        self.plan_errors = {}
         self.stream_error_questions = set()
         handler = self._handler()
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
@@ -54,6 +63,11 @@ class FakeQuestionService:
         truncated_sqls=None,
         clarify=None,
         clarify_exploratory=None,
+        clarify_plans=None,
+        plan_before_clarification=None,
+        follow_up_plans=None,
+        plan_then_done=None,
+        plan_errors=None,
         stream_errors=None,
     ):
         self.asks.clear()
@@ -61,7 +75,13 @@ class FakeQuestionService:
         self.plans.clear()
         self.counts.clear()
         self.clarify_sql.clear()
+        self.follow_up_plan.clear()
         self.clarify_exploratory = dict(clarify_exploratory or {})
+        self.clarify_plans = dict(clarify_plans or {})
+        self.plan_before_clarification = dict(plan_before_clarification or {})
+        self.follow_up_plans = dict(follow_up_plans or {})
+        self.plan_then_done = dict(plan_then_done or {})
+        self.plan_errors = dict(plan_errors or {})
         self.stream_error_questions = set(stream_errors or ())
         self.responses = dict(responses or {})
         self.fail_sqls = set(fail_sqls or ())
@@ -105,6 +125,32 @@ class FakeQuestionService:
                 if self.path == "/api/v1/conversations/ask":
                     question = body["question"]
                     conversation_id = body.get("conversation_id")
+                    if conversation_id in service.follow_up_plan:
+                        plan_sql = service.follow_up_plan.pop(conversation_id)
+                        self._sse(
+                            [
+                                (
+                                    "conversation",
+                                    {"conversation_id": conversation_id},
+                                ),
+                                (
+                                    "clarification",
+                                    {
+                                        "questions": [
+                                            {
+                                                "question": "用哪个口径？",
+                                                "options": [{"label": "订单口径"}],
+                                            }
+                                        ]
+                                    },
+                                ),
+                                (
+                                    "query_plan",
+                                    {"id": "follow-up-plan", "sql": plan_sql},
+                                ),
+                            ]
+                        )
+                        return
                     if conversation_id in service.clarify_sql:
                         sql = service.clarify_sql.pop(conversation_id)
                         self._sse(
@@ -126,7 +172,69 @@ class FakeQuestionService:
                     sql = choices[min(run_number - 1, len(choices) - 1)]
                     if question in service.clarify_questions:
                         service.clarify_sql[conversation_id] = sql
+                        if question in service.follow_up_plans:
+                            service.follow_up_plan[conversation_id] = (
+                                service.follow_up_plans[question]
+                            )
                         exploratory = service.clarify_exploratory.get(question)
+                        events = [
+                            ("conversation", {"conversation_id": conversation_id}),
+                            (
+                                "tool_start",
+                                {"name": "search_knowledge", "summary": "检索知识"},
+                            ),
+                        ]
+                        if question in service.plan_before_clarification:
+                            events.append(
+                                (
+                                    "query_plan",
+                                    {
+                                        "id": "plan-before-clarification",
+                                        "sql": service.plan_before_clarification[
+                                            question
+                                        ],
+                                    },
+                                )
+                            )
+                        events.append(
+                            (
+                                "clarification",
+                                {
+                                    "questions": [
+                                        {
+                                            "question": "用哪个口径？",
+                                            "options": [{"label": "订单口径"}],
+                                        }
+                                    ]
+                                },
+                            )
+                        )
+                        if question in service.clarify_plans:
+                            events.append(
+                                (
+                                    "query_plan",
+                                    {
+                                        "id": "clarified-plan",
+                                        "sql": service.clarify_plans[question],
+                                    },
+                                )
+                            )
+                        else:
+                            events.append(
+                                (
+                                    "done",
+                                    {
+                                        "text": "",
+                                        "sql": [{"sql": exploratory}]
+                                        if exploratory
+                                        else [],
+                                    },
+                                )
+                            )
+                        self._sse(events)
+                        return
+                    if question in service.plan_then_done:
+                        plan_sql, done_sql = service.plan_then_done[question]
                         self._sse(
                             [
                                 (
@@ -136,30 +244,36 @@ class FakeQuestionService:
                                 (
                                     "tool_start",
                                     {
-                                        "name": "search_knowledge",
-                                        "summary": "检索知识",
+                                        "name": "propose_query",
+                                        "summary": "生成 SQL",
                                     },
                                 ),
                                 (
-                                    "clarification",
-                                    {
-                                        "questions": [
-                                            {
-                                                "question": "用哪个口径？",
-                                                "options": [{"label": "订单口径"}],
-                                            }
-                                        ]
-                                    },
+                                    "query_plan",
+                                    {"id": "plan-before-done", "sql": plan_sql},
                                 ),
                                 (
                                     "done",
+                                    {"text": "已完成", "sql": [{"sql": done_sql}]},
+                                ),
+                            ]
+                        )
+                        return
+                    if question in service.plan_errors:
+                        self._sse(
+                            [
+                                (
+                                    "conversation",
+                                    {"conversation_id": conversation_id},
+                                ),
+                                (
+                                    "query_plan",
                                     {
-                                        "text": "",
-                                        "sql": [{"sql": exploratory}]
-                                        if exploratory
-                                        else [],
+                                        "id": "plan-before-error",
+                                        "sql": service.plan_errors[question],
                                     },
                                 ),
+                                ("error", {"message": "fake plan stream error"}),
                             ]
                         )
                         return
@@ -1790,3 +1904,181 @@ def test_ask_discards_sql_when_stream_raises():
     assert result["sql"] is None
     assert result["sql_source"] is None
     assert result["final_query"] is False
+
+
+def test_plan_before_clarification_is_not_executed(service, tmp_path, monkeypatch):
+    question_text = "synthetic plan before clarify"
+    service.reset(
+        {question_text: [None]},
+        clarify={question_text},
+        plan_before_clarification={question_text: PLANNED},
+    )
+    path = _write_questions(tmp_path, [_question("q1", question_text)])
+    monkeypatch.setenv("EVAL_EXEC_TOKEN", "secret")
+    args = _args(tmp_path, path, name="plan-before-clarify-report")
+    args.base_url = service.base_url
+    args.skip_reference = True
+    assert run_cli(args) == 0
+
+    assert service.executed == []
+    asks = [body for path, body in service.asks if path == "/api/v1/conversations/ask"]
+    assert len(asks) == 2
+    assert asks[1]["conversation_id"]
+    report = json.loads((tmp_path / "plan-before-clarify-report.json").read_text())
+    entry = report["questions"][0]
+    assert entry["sql"] is None
+    assert entry["agent_sql"] is False
+    assert entry["sql_source"] is None
+    assert entry["final_query"] is False
+    assert entry["agent"]["status"] == "no_sql"
+    assert entry["clarification_received"] is True
+    assert entry["clarification_followed_up"] is True
+    assert entry["via_plan"] is True
+    assert report["metrics"]["execution_total"] == 0
+
+
+def test_query_plan_after_clarification_is_kept(service, tmp_path, monkeypatch):
+    question_text = "synthetic clarify then plan"
+    service.reset(
+        {},
+        clarify={question_text},
+        clarify_plans={question_text: FINAL_PLAN},
+    )
+    path = _write_questions(tmp_path, [_question("q1", question_text)])
+    monkeypatch.setenv("EVAL_EXEC_TOKEN", "secret")
+    args = _args(tmp_path, path, name="clarify-plan-report")
+    args.base_url = service.base_url
+    args.skip_reference = True
+    assert run_cli(args) == 0
+
+    assert service.executed == [FINAL_PLAN]
+    asks = [body for path, body in service.asks if path == "/api/v1/conversations/ask"]
+    assert len(asks) == 1
+    report = json.loads((tmp_path / "clarify-plan-report.json").read_text())
+    entry = report["questions"][0]
+    assert entry["sql"] == FINAL_PLAN
+    assert entry["agent_sql"] is True
+    assert entry["sql_source"] == "query_plan"
+    assert entry["final_query"] is True
+    assert entry["via_plan"] is True
+    assert entry["via_plan_runs"] == 1
+    assert entry["clarification_received"] is True
+    assert entry["clarification_followed_up"] is False
+    assert entry["agent"]["status"] == "succeeded"
+
+
+def test_follow_up_clarification_then_plan_is_kept(service, tmp_path, monkeypatch):
+    question_text = "synthetic follow up clarify then plan"
+    service.reset(
+        {question_text: [GOOD]},
+        clarify={question_text},
+        follow_up_plans={question_text: FINAL_PLAN},
+    )
+    path = _write_questions(tmp_path, [_question("q1", question_text)])
+    monkeypatch.setenv("EVAL_EXEC_TOKEN", "secret")
+    args = _args(tmp_path, path, name="follow-up-plan-report")
+    args.base_url = service.base_url
+    args.skip_reference = True
+    assert run_cli(args) == 0
+
+    assert service.executed == [FINAL_PLAN]
+    asks = [body for path, body in service.asks if path == "/api/v1/conversations/ask"]
+    assert len(asks) == 2
+    assert asks[1]["conversation_id"]
+    report = json.loads((tmp_path / "follow-up-plan-report.json").read_text())
+    entry = report["questions"][0]
+    assert entry["sql"] == FINAL_PLAN
+    assert entry["sql_source"] == "query_plan"
+    assert entry["final_query"] is True
+    assert entry["via_plan"] is True
+    assert entry["clarification_received"] is True
+    assert entry["clarification_followed_up"] is True
+    assert entry["agent"]["status"] == "succeeded"
+
+
+def test_query_plan_then_done_keeps_via_plan_fact(service, tmp_path, monkeypatch):
+    question_text = "synthetic plan then done"
+    service.reset(
+        {},
+        plan_then_done={question_text: (PLANNED, DONE_AFTER_PLAN)},
+    )
+    path = _write_questions(tmp_path, [_question("q1", question_text)])
+    monkeypatch.setenv("EVAL_EXEC_TOKEN", "secret")
+    args = _args(tmp_path, path, name="plan-done-report")
+    args.base_url = service.base_url
+    args.skip_reference = True
+    assert run_cli(args) == 0
+
+    assert service.executed == [DONE_AFTER_PLAN]
+    report = json.loads((tmp_path / "plan-done-report.json").read_text())
+    entry = report["questions"][0]
+    assert entry["sql"] == DONE_AFTER_PLAN
+    assert entry["sql_source"] == "done"
+    assert entry["final_query"] is True
+    assert entry["via_plan"] is True
+    assert entry["via_plan_runs"] == 1
+    assert report["metrics"]["via_plan_runs"] == 1
+    assert entry["agent"]["status"] == "succeeded"
+
+
+def test_stream_error_after_plan_does_not_execute(service, tmp_path, monkeypatch):
+    question_text = "synthetic plan then error"
+    service.reset({}, plan_errors={question_text: PLANNED})
+    path = _write_questions(tmp_path, [_question("q1", question_text)])
+    monkeypatch.setenv("EVAL_EXEC_TOKEN", "secret")
+    args = _args(tmp_path, path, name="plan-error-report")
+    args.base_url = service.base_url
+    args.skip_reference = True
+    assert run_cli(args) == 0
+
+    assert service.executed == []
+    report = json.loads((tmp_path / "plan-error-report.json").read_text())
+    entry = report["questions"][0]
+    assert entry["sql"] is None
+    assert entry["agent_sql"] is False
+    assert entry["sql_source"] is None
+    assert entry["final_query"] is False
+    assert entry["via_plan"] is True
+    assert entry["agent"]["status"] == "no_sql"
+
+
+def test_legacy_report_with_sql_and_missing_flags_shows_unknown_finality(
+    tmp_path, service, monkeypatch
+):
+    service.reset({"legacy": [GOOD]})
+    path = _write_questions(tmp_path, [_question("q1", "legacy")])
+    monkeypatch.setenv("EVAL_EXEC_TOKEN", "secret")
+    args = _args(tmp_path, path, name="legacy-report")
+    args.base_url = service.base_url
+    assert run_cli(args) == 0
+
+    report = json.loads((tmp_path / "legacy-report.json").read_text())
+    entry = report["questions"][0]
+    entry.pop("final_query", None)
+    entry.pop("sql_source", None)
+    run = entry["runs"][0]
+    run.pop("final_query", None)
+    run.pop("sql_source", None)
+    (tmp_path / "legacy-report.json").write_text(
+        json.dumps(report, ensure_ascii=False), encoding="utf-8"
+    )
+
+    categories = tmp_path / "legacy-categories.yaml"
+    categories.write_text(yaml.safe_dump({}), encoding="utf-8")
+    merge_args = _parser().parse_args(
+        [
+            "eval-report",
+            "--report",
+            str(tmp_path / "legacy-report"),
+            "--categories",
+            str(categories),
+        ]
+    )
+    assert run_report(merge_args) == 0
+
+    markdown = (tmp_path / "legacy-report.md").read_text()
+    assert "最终业务查询：未知（旧报告缺少标识；SQL 仅保留用于诊断）" in markdown
+    assert f"- 实际 SQL：`{GOOD}`" in markdown
+    updated = json.loads((tmp_path / "legacy-report.json").read_text())
+    assert "final_query" not in updated["questions"][0]["runs"][0]
+    assert "sql_source" not in updated["questions"][0]["runs"][0]
