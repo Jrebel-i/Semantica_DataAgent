@@ -400,6 +400,17 @@ def _default_envelope(event, secrets):
     return payload
 
 
+def _add_metadata_summary(payload, event, secrets):
+    """Persist trusted derived fields where the receiver actually stores them."""
+    summary = _metadata_summary(event, secrets)
+    if not summary:
+        return
+    metadata = payload.get("metadata")
+    if not isinstance(metadata, dict):
+        metadata = {}
+    payload["metadata"] = {**metadata, **summary}
+
+
 def _filtered(value, secrets=(), capture_content=False, _top_level=True):
     if not capture_content:
         return _default_envelope(value, secrets)
@@ -521,14 +532,7 @@ def submit(kind, event, secrets=()):
         capture_content = bool(config[4]) if len(config) > 4 else False
         all_secrets = (*secrets, *config[1:4])
         payload = _filtered(event, all_secrets, capture_content)
-        if not capture_content:
-            payload.update(
-                {
-                    key: value
-                    for key, value in _metadata_summary(event, all_secrets).items()
-                    if key not in payload
-                }
-            )
+        _add_metadata_summary(payload, event, all_secrets)
         with _lock:
             if _worker is None or not _worker.is_alive():
                 _worker = threading.Thread(
