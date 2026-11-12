@@ -328,6 +328,112 @@ def test_receiver_persistence_keeps_trusted_summary_in_metadata(client):
     assert FORGED_CODE not in encoded
 
 
+@pytest.mark.parametrize("capture", [None, "true"])
+def test_derived_metadata_replaces_forged_summary_keys(client, capture):
+    telemetry._queue.join()
+    forged_fingerprint = "issue-234-forged-fingerprint"
+    event = {
+        "name": "validate_sql",
+        "input": {"sql": SQL, "dialect": "hive"},
+        "output": {"rows": [[RESULT_ROW]], "tables": [FORGED_TABLE]},
+        "metadata": {
+            "duration_ms": 9,
+            "provider": "provider-a",
+            "status": "error",
+            "is_error": True,
+            "table": FORGED_TABLE,
+            "tables": [FORGED_TABLE],
+            "sql_fingerprint": forged_fingerprint,
+            "error_category": "internal_error",
+        },
+        "is_error": False,
+    }
+    with Receiver() as receiver:
+        configure(client, receiver, capture)
+        telemetry.submit("span-create", event)
+        receiver.wait()
+        body = receiver.stored_payloads()[0]
+
+    metadata = body["metadata"]
+    assert metadata == {
+        "duration_ms": 9,
+        "provider": "provider-a",
+        "table": "shop.orders",
+        "status": "ok",
+        "is_error": False,
+        "sql_fingerprint": telemetry.sql_fingerprint(SQL),
+    }
+    encoded_metadata = json.dumps(metadata, ensure_ascii=False)
+    assert FORGED_TABLE not in encoded_metadata
+    assert forged_fingerprint not in encoded_metadata
+    assert "internal_error" not in encoded_metadata
+    if capture == "true":
+        assert body["input"]["sql"] == SQL
+        assert body["output"] == {"rows": [[RESULT_ROW]], "tables": [FORGED_TABLE]}
+    else:
+        assert "input" not in body and "output" not in body
+
+
+@pytest.mark.parametrize("capture", [None, "true"])
+@pytest.mark.parametrize(
+    ("event", "expected_metadata"),
+    [
+        (
+            {"name": "get_capabilities"},
+            {"duration_ms": 5, "provider": "provider-a"},
+        ),
+        (
+            {
+                "name": "validate_sql",
+                "input": {"sql": "SELECT FROM WHERE 'issue-234-broken-literal'"},
+            },
+            {
+                "duration_ms": 5,
+                "provider": "provider-a",
+                "sql_fingerprint": "",
+            },
+        ),
+        (
+            {"name": "get_capabilities", "is_error": False},
+            {
+                "duration_ms": 5,
+                "provider": "provider-a",
+                "status": "ok",
+                "is_error": False,
+            },
+        ),
+    ],
+)
+def test_missing_summary_fields_do_not_leave_forged_metadata(
+    client, capture, event, expected_metadata
+):
+    telemetry._queue.join()
+    event = {
+        **event,
+        "metadata": {
+            "duration_ms": 5,
+            "provider": "provider-a",
+            "status": "error",
+            "is_error": True,
+            "table": FORGED_TABLE,
+            "tables": [FORGED_TABLE],
+            "sql_fingerprint": "issue-234-forged-fingerprint",
+            "error_category": "internal_error",
+        },
+    }
+    with Receiver() as receiver:
+        configure(client, receiver, capture)
+        telemetry.submit("span-create", event)
+        receiver.wait()
+        body = receiver.stored_payloads()[0]
+
+    assert body["metadata"] == expected_metadata
+    encoded = json.dumps(body, ensure_ascii=False)
+    assert FORGED_TABLE not in encoded
+    assert "issue-234-forged-fingerprint" not in encoded
+    assert "internal_error" not in encoded
+
+
 def test_enabling_capture_includes_question_prompt_sql_and_result_rows(client):
     telemetry._queue.join()
     with Receiver() as receiver:

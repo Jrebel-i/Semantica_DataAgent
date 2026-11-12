@@ -147,6 +147,16 @@ _TABLE_ARGUMENTS = {
 _METADATA_KEYS = frozenset(
     {"duration_ms", "agent", "provider", "model", "source", "token_name"}
 )
+_SUMMARY_METADATA_KEYS = frozenset(
+    {
+        "status",
+        "is_error",
+        "table",
+        "tables",
+        "sql_fingerprint",
+        "error_category",
+    }
+)
 _ENVELOPE_FIELDS = frozenset(
     {
         "id",
@@ -402,13 +412,18 @@ def _default_envelope(event, secrets):
 
 def _add_metadata_summary(payload, event, secrets):
     """Persist trusted derived fields where the receiver actually stores them."""
-    summary = _metadata_summary(event, secrets)
-    if not summary:
-        return
     metadata = payload.get("metadata")
-    if not isinstance(metadata, dict):
-        metadata = {}
-    payload["metadata"] = {**metadata, **summary}
+    metadata = dict(metadata) if isinstance(metadata, dict) else {}
+    metadata = {
+        key: value
+        for key, value in metadata.items()
+        if key not in _SUMMARY_METADATA_KEYS
+    }
+    metadata.update(_metadata_summary(event, secrets))
+    if metadata:
+        payload["metadata"] = metadata
+    else:
+        payload.pop("metadata", None)
 
 
 def _filtered(value, secrets=(), capture_content=False, _top_level=True):
