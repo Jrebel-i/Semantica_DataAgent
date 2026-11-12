@@ -210,11 +210,16 @@ def _cell(value):
 def _ask(client, payload, project=None):
     result = {
         "sql": None,
+        "sql_source": None,
+        "final_query": False,
+        "stream_error": False,
         "conversation_id": None,
         "clarification": False,
         "via_plan": False,
         "tool_calls": [],
     }
+    done_sql = None
+    planned_sql = None
     if project is not None:
         payload = {**payload, "project": project}
     try:
@@ -250,14 +255,26 @@ def _ask(client, payload, project=None):
                     elif event == "query_plan":
                         planned = _sql(data.get("sql"))
                         if planned:
-                            result["sql"] = planned
-                            result["via_plan"] = True
+                            planned_sql = planned
                     elif event == "done":
                         answered = _sql(data.get("sql"))
                         if answered:
-                            result["sql"] = answered
+                            done_sql = answered
+                    elif event == "error":
+                        result["stream_error"] = True
     except (httpx.HTTPError, ValueError, TypeError):
+        result["stream_error"] = True
         return result
+    if result["stream_error"] or result["clarification"]:
+        return result
+    if done_sql:
+        result["sql"] = done_sql
+        result["sql_source"] = "done"
+    elif planned_sql:
+        result["sql"] = planned_sql
+        result["sql_source"] = "query_plan"
+        result["via_plan"] = True
+    result["final_query"] = result["sql"] is not None
     return result
 
 
@@ -317,6 +334,8 @@ def _answer(client, question, args, *, collect_only=False):
     if first["sql"]:
         return {
             "sql": first["sql"],
+            "sql_source": first["sql_source"],
+            "final_query": first["final_query"],
             "clarified": clarification_received,
             "clarification_received": clarification_received,
             "clarification_followed_up": False,
@@ -328,6 +347,8 @@ def _answer(client, question, args, *, collect_only=False):
     if not clarification_received or not conversation_id:
         return {
             "sql": None,
+            "sql_source": None,
+            "final_query": False,
             "clarified": clarification_received,
             "clarification_received": clarification_received,
             "clarification_followed_up": False,
@@ -338,6 +359,8 @@ def _answer(client, question, args, *, collect_only=False):
     if collect_only:
         return {
             "sql": None,
+            "sql_source": None,
+            "final_query": False,
             "clarified": True,
             "clarification_received": True,
             "clarification_followed_up": False,
@@ -356,6 +379,8 @@ def _answer(client, question, args, *, collect_only=False):
     tool_calls.extend(second["tool_calls"])
     return {
         "sql": second["sql"],
+        "sql_source": second["sql_source"],
+        "final_query": second["final_query"],
         "clarified": True,
         "clarification_received": True,
         "clarification_followed_up": True,
@@ -921,6 +946,9 @@ def render_report(report):
                 else str(call.get("name"))
                 for call in run["tool_calls"]
             )
+            final_query = run.get("final_query")
+            if final_query is None:
+                final_query = bool(run.get("sql"))
             lines += [
                 "",
                 f"#### {entry['id']} 第 {run['run']} 遍",
@@ -934,6 +962,11 @@ def render_report(report):
                     )
                 ),
                 f"- 实际 SQL：`{_cell(run.get('sql')) or '—'}`",
+                (
+                    "- 最终业务查询："
+                    f"{'是' if final_query else '否'}"
+                    f"（SQL 来源：{run.get('sql_source') or '—'}）"
+                ),
                 f"- 参考 SQL：`{_cell(run.get('reference_sql'))}`",
                 f"- 工具调用：{calls or '无'}",
                 f"- 一致性：{run['comparison']}",
@@ -1144,6 +1177,8 @@ def run_cli(args):
                     "sql": sql,
                     "actual_sql": sql,
                     "agent_sql": bool(sql),
+                    "sql_source": answer["sql_source"],
+                    "final_query": answer["final_query"],
                     "clarified": answer["clarified"],
                     "clarification_received": answer["clarification_received"],
                     "clarification_followed_up": answer["clarification_followed_up"],
@@ -1197,6 +1232,8 @@ def run_cli(args):
                     "sql": display["sql"],
                     "actual_sql": display["sql"],
                     "agent_sql": display["agent_sql"],
+                    "sql_source": display["sql_source"],
+                    "final_query": display["final_query"],
                     "conversation_id": display["conversation_id"],
                     "tool_calls": display["tool_calls"],
                     "tool_call_sequence": display["tool_call_sequence"],

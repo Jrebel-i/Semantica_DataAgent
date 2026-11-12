@@ -18,6 +18,8 @@ GOOD = "SELECT id FROM shop.orders WHERE dt = '2025-01-01'"
 BAD = "SELECT id FROM shop.orders"
 BROKEN = "SELECT broken FROM shop.orders"
 TRUNCATED = "SELECT id FROM shop.orders WHERE dt = '2025-01-02'"
+EXPLORATORY = "SELECT exploratory FROM shop.orders WHERE dt = '2025-01-01'"
+FINAL = "SELECT final FROM shop.orders WHERE dt = '2025-01-01'"
 
 
 class FakeQuestionService:
@@ -33,6 +35,8 @@ class FakeQuestionService:
         self.truncated_sqls = set()
         self.clarify_questions = set()
         self.clarify_sql = {}
+        self.clarify_exploratory = {}
+        self.stream_error_questions = set()
         handler = self._handler()
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
         self.thread = Thread(target=self.server.serve_forever, daemon=True)
@@ -49,12 +53,16 @@ class FakeQuestionService:
         fail_sqls=None,
         truncated_sqls=None,
         clarify=None,
+        clarify_exploratory=None,
+        stream_errors=None,
     ):
         self.asks.clear()
         self.executed.clear()
         self.plans.clear()
         self.counts.clear()
         self.clarify_sql.clear()
+        self.clarify_exploratory = dict(clarify_exploratory or {})
+        self.stream_error_questions = set(stream_errors or ())
         self.responses = dict(responses or {})
         self.fail_sqls = set(fail_sqls or ())
         self.truncated_sqls = set(truncated_sqls or ())
@@ -118,6 +126,7 @@ class FakeQuestionService:
                     sql = choices[min(run_number - 1, len(choices) - 1)]
                     if question in service.clarify_questions:
                         service.clarify_sql[conversation_id] = sql
+                        exploratory = service.clarify_exploratory.get(question)
                         self._sse(
                             [
                                 (
@@ -142,30 +151,39 @@ class FakeQuestionService:
                                         ]
                                     },
                                 ),
-                                ("done", {"text": "", "sql": []}),
+                                (
+                                    "done",
+                                    {
+                                        "text": "",
+                                        "sql": [{"sql": exploratory}]
+                                        if exploratory
+                                        else [],
+                                    },
+                                ),
                             ]
                         )
                         return
-                    self._sse(
-                        [
-                            ("conversation", {"conversation_id": conversation_id}),
-                            (
-                                "tool_start",
-                                {"name": "search_knowledge", "summary": "检索知识"},
-                            ),
-                            (
-                                "tool_start",
-                                {"name": "propose_query", "summary": "生成 SQL"},
-                            ),
-                            (
-                                "done",
-                                {
-                                    "text": "已生成 SQL",
-                                    "sql": [{"sql": sql}] if sql else [],
-                                },
-                            ),
-                        ]
-                    )
+                    events = [
+                        ("conversation", {"conversation_id": conversation_id}),
+                        (
+                            "tool_start",
+                            {"name": "search_knowledge", "summary": "检索知识"},
+                        ),
+                        (
+                            "tool_start",
+                            {"name": "propose_query", "summary": "生成 SQL"},
+                        ),
+                        (
+                            "done",
+                            {
+                                "text": "已生成 SQL",
+                                "sql": [{"sql": sql}] if sql else [],
+                            },
+                        ),
+                    ]
+                    if question in service.stream_error_questions:
+                        events.append(("error", {"message": "fake stream error"}))
+                    self._sse(events)
                 elif self.path == "/api/v1/queries/plan":
                     if body["sql"] in service.fail_sqls:
                         self._json(422, {"detail": "参考 SQL 无法执行"})
@@ -1620,3 +1638,155 @@ def test_eval_report_separates_evidence_backed_observation_for_collected_unconfi
     assert observed_only["observed_failure_category"] == "口径错"
     assert observed_only["observed_failure_evidence"] is None
     assert report["observed_failure_categories"] == {"口径错": 1}
+
+
+def test_clarification_exploratory_sql_is_not_executed_and_follow_up_completes(
+    service, tmp_path, monkeypatch
+):
+    question_text = "synthetic clarify explore"
+    service.reset(
+        {question_text: [FINAL]},
+        clarify={question_text},
+        clarify_exploratory={question_text: EXPLORATORY},
+    )
+    path = _write_questions(
+        tmp_path,
+        [_question("q1", question_text, category="口径歧义")],
+    )
+    monkeypatch.setenv("EVAL_EXEC_TOKEN", "secret")
+    args = _args(tmp_path, path)
+    args.base_url = service.base_url
+    assert run_cli(args) == 0
+
+    assert EXPLORATORY not in service.executed
+    assert FINAL in service.executed
+    ask_bodies = [
+        body for path, body in service.asks if path == "/api/v1/conversations/ask"
+    ]
+    assert len(ask_bodies) == 2
+    assert ask_bodies[0]["question"] == question_text
+    assert ask_bodies[1]["conversation_id"]
+
+    report = json.loads((tmp_path / "report.json").read_text())
+    entry = report["questions"][0]
+    assert entry["sql"] == FINAL
+    assert entry["actual_sql"] == FINAL
+    assert entry["sql_source"] == "done"
+    assert entry["final_query"] is True
+    assert entry["clarification_received"] is True
+    assert entry["clarification_followed_up"] is True
+    run = entry["runs"][0]
+    assert run["sql"] == FINAL
+    assert run["sql_source"] == "done"
+    assert run["final_query"] is True
+    assert run["agent"]["status"] == "succeeded"
+    assert report["metrics"]["execution_total"] == 1
+    assert report["metrics"]["execution_success"] == 1
+    assert "最终业务查询：是（SQL 来源：done）" in (tmp_path / "report.md").read_text()
+
+
+def test_collect_only_clarification_exploratory_sql_is_not_executed(
+    service, tmp_path, monkeypatch
+):
+    question_text = "synthetic collect clarify explore"
+    service.reset(
+        {},
+        clarify={question_text},
+        clarify_exploratory={question_text: EXPLORATORY},
+    )
+    path = _write_questions(
+        tmp_path,
+        [
+            _question(
+                "u1",
+                question_text,
+                category="口径歧义",
+                confirmed=False,
+            )
+        ],
+    )
+    monkeypatch.setenv("EVAL_EXEC_TOKEN", "secret")
+    args = _args(tmp_path, path, name="collect-explore-report")
+    args.base_url = service.base_url
+    args.collect_unconfirmed = True
+    args.skip_reference = True
+    assert run_cli(args) == 0
+
+    assert service.executed == []
+    ask_bodies = [
+        body for path, body in service.asks if body.get("question") == question_text
+    ]
+    assert len(ask_bodies) == 1
+
+    report = json.loads((tmp_path / "collect-explore-report.json").read_text())
+    entry = report["questions"][0]
+    assert entry["sql"] is None
+    assert entry["agent_sql"] is False
+    assert entry["sql_source"] is None
+    assert entry["final_query"] is False
+    assert entry["clarification_received"] is True
+    assert entry["clarification_followed_up"] is False
+    run = entry["runs"][0]
+    assert run["agent"]["status"] == "no_sql"
+    assert run["sql"] is None
+    assert run["sql_source"] is None
+    assert run["final_query"] is False
+
+
+def test_stream_error_after_done_does_not_execute_residual_sql(
+    service, tmp_path, monkeypatch
+):
+    question_text = "synthetic error after sql"
+    service.reset(
+        {question_text: [GOOD]},
+        stream_errors={question_text},
+    )
+    path = _write_questions(
+        tmp_path,
+        [_question("q1", question_text)],
+    )
+    monkeypatch.setenv("EVAL_EXEC_TOKEN", "secret")
+    args = _args(tmp_path, path, name="error-report")
+    args.base_url = service.base_url
+    args.skip_reference = True
+    assert run_cli(args) == 0
+
+    assert service.executed == []
+    report = json.loads((tmp_path / "error-report.json").read_text())
+    entry = report["questions"][0]
+    assert entry["sql"] is None
+    assert entry["agent_sql"] is False
+    assert entry["sql_source"] is None
+    assert entry["final_query"] is False
+    assert entry["agent"]["status"] == "no_sql"
+    assert entry["runs"][0]["sql"] is None
+
+
+def test_ask_discards_sql_when_stream_raises():
+    import httpx
+
+    from semantica_dataagent.eval_exec import _ask
+
+    class Response:
+        is_success = True
+
+        def iter_lines(self):
+            yield "event: done"
+            yield 'data: {"sql": [{"sql": "SELECT residual FROM shop.orders"}]}'
+            raise httpx.ReadError("synthetic connection loss")
+
+    class Stream:
+        def __enter__(self):
+            return Response()
+
+        def __exit__(self, *exc):
+            return False
+
+    class Client:
+        def stream(self, method, path, json):
+            return Stream()
+
+    result = _ask(Client(), {"question": "synthetic stream error"})
+    assert result["sql"] is None
+    assert result["sql_source"] is None
+    assert result["final_query"] is False

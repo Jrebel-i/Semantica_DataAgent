@@ -90,7 +90,7 @@ semantica-dataagent eval-exec \
 
 参考 SQL 本身失败、或可比较遍数没有超过一半的题，`result` 为 `uncomparable`：不算错题，不进 `equal` / `comparable` / `consistency_rate` 的分母，并在 `excluded_uncomparable` 和 Markdown“不可比题目”一节单独列出。
 
-报告同时写 `<report>.json` 和 `<report>.md`。JSON 顶层包含 `split`、`only`、`repeat`、`collect_unconfirmed`、`collected_unconfirmed`、`web_url`、`expected_categories`、`metrics`、`excluded_unconfirmed`、`excluded`、`excluded_uncomparable`、`failure_reasons`、`failure_categories`、`observed_failure_categories`、`coverage`、`evaluation_coverage`、`question_set`、`question_set_coverage`、`coverage_gaps`、`confirmed_coverage_gaps`、`scope_coverage_gaps`、`unconfirmed_only_categories` 和 `questions`。每道题包含 `answer_confirmed`、`collect_only`、实际 SQL、参考 SQL、逐遍的 `runs`（对话 id、外部链接 `conversation_url`、工具调用序列、实际 SQL、agent 与参考执行状态、一致性结果），以及 `equal_runs`、`comparable_runs`、`result`（`correct` / `wrong` / `tie` / `uncomparable`）、`correct`、`volatility`（`stable` / `volatile` / `unknown`）、`volatile`（未知时为 `null`）、`volatility_reason`、`uncomparable_reason`、`failure_category`、`observed_failure_category` / `observed_failure_evidence`、`clarification_received` / `clarification_received_runs` 和 `clarification_followed_up` / `clarification_followed_up_runs`。每遍 `runs` 也分别记录 `clarification_received` 与 `clarification_followed_up`。题目级的 `comparison` / `consistency` / `summary` 和展示用 SQL 取多数判定对应的第一遍，不再固定取第一遍。
+报告同时写 `<report>.json` 和 `<report>.md`。JSON 顶层包含 `split`、`only`、`repeat`、`collect_unconfirmed`、`collected_unconfirmed`、`web_url`、`expected_categories`、`metrics`、`excluded_unconfirmed`、`excluded`、`excluded_uncomparable`、`failure_reasons`、`failure_categories`、`observed_failure_categories`、`coverage`、`evaluation_coverage`、`question_set`、`question_set_coverage`、`coverage_gaps`、`confirmed_coverage_gaps`、`scope_coverage_gaps`、`unconfirmed_only_categories` 和 `questions`。每道题包含 `answer_confirmed`、`collect_only`、实际 SQL、参考 SQL、逐遍的 `runs`（对话 id、外部链接 `conversation_url`、工具调用序列、实际 SQL、`sql_source`、`final_query`、agent 与参考执行状态、一致性结果），以及 `equal_runs`、`comparable_runs`、`result`（`correct` / `wrong` / `tie` / `uncomparable`）、`correct`、`volatility`（`stable` / `volatile` / `unknown`）、`volatile`（未知时为 `null`）、`volatility_reason`、`uncomparable_reason`、`failure_category`、`observed_failure_category` / `observed_failure_evidence`、`clarification_received` / `clarification_received_runs` 和 `clarification_followed_up` / `clarification_followed_up_runs`。每遍 `runs` 也分别记录 `clarification_received`、`clarification_followed_up`、`sql_source` 和 `final_query`。题目级的 `comparison` / `consistency` / `summary` 和展示用 SQL 取多数判定对应的第一遍，不再固定取第一遍。
 
 核心指标只有一套多数口径：
 
@@ -109,10 +109,14 @@ semantica-dataagent eval-exec \
 - `clarification_followed_up` / `clarification_followed_up_runs`：至少一遍实际发送了自动追问的题数 / 实际发送自动追问的遍数。仅采集的未确认题收到澄清后不自动回传题集口径，因此为 0；已确认题保持旧的自动追问行为。
 - `via_plan` / `via_plan_runs`：至少一遍走查询计划的题数 / 走查询计划的遍数。
 - `no_sql` / `no_sql_runs`：至少一遍没有 SQL 的题数 / 没有 SQL 的遍数。
+- `sql_source`（逐遍；题目级取展示遍）：被采用的最终业务 SQL 来源，取值为 `done` 或 `query_plan`；没有最终业务 SQL 时为 `null`。
+- `final_query`：该遍（题目级取展示遍）是否产出了最终业务查询。
 - `condition_incomplete` / `condition_incomplete_runs`：至少一遍缺参考 SQL 条件列的题数 / 缺条件列的遍数；仅采集的未确认题恒为 0。
 - `confirmed_questions` / `collected_only_questions` / `collected_only_runs`：仅在开启 `--collect-unconfirmed` 时出现，分别表示参与计分的已确认题数、仅采集题数和仅采集遍数；`questions` 与 `runs` 包含仅采集部分。
 
 Markdown 主表的“收到澄清”和“自动追问”两列分别对应上述字段，逐题明细和逐遍明细也分开显示，不会把收到澄清写成已追问。旧报告没有显式字段时，渲染回退到旧 `clarified` 的追问语义。
+
+澄清轮里展示的 SQL（无论来自 `done` 还是 `query_plan`）只用于探查，不会自动当作最终业务答案：报告把该遍记为 `sql=null`、`agent_sql=false`、`final_query=false`、`sql_source=null`，并且不调用执行接口，也不让这次探查冒充“已完成业务回答”。已确认题收到澄清后会按原有流程自动追问，只有追问轮真正产出的最终 SQL（或查询计划）才进入执行与一致率比较；仅采集的未确认题仍不自动回填题集口径。`error` 事件或流读取异常出现时，即使此前已经收到 SQL，也会丢弃该 SQL，不发起执行。没有最终 SQL 的遍仍按 `no_sql` 统计。
 
 覆盖统计分成三层，避免 `--only` 或只跑一个 split 时把别的题误报成缺失：
 

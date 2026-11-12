@@ -340,8 +340,14 @@ def test_fake_agent_direct_clarification_and_query_plan(monkeypatch, tmp_path):
         assert metrics["execution_success"] == 4
         assert metrics["condition_incomplete"] == 1
         assert entries[0]["clarified"] is False
+        assert entries[0]["sql_source"] == "done"
+        assert entries[0]["final_query"] is True
         assert entries[1]["clarified"] is True
+        assert entries[1]["sql_source"] == "done"
+        assert entries[1]["final_query"] is True
         assert entries[2]["via_plan"] is True
+        assert entries[2]["sql_source"] == "query_plan"
+        assert entries[2]["final_query"] is True
         assert entries[2]["clarified"] is False
         assert [entry["comparison"] for entry in entries[:3]] == ["equal"] * 3
         follow_up = next(
