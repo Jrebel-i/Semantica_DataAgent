@@ -72,7 +72,9 @@ class Snapshot:
                 return candidates, reason
             return [], reason
         short = self.by_short.get(name, [])
-        return short, None if short else "missing"
+        if len(short) == 1:
+            return short, None
+        return short, "ambiguous" if short else "missing"
 
     def resolve(self, name):
         matches, reason = self.resolution(name)
