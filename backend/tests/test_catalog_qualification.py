@@ -364,10 +364,13 @@ def test_sample_api_requires_catalog_only_when_knowledge_records_it(monkeypatch)
 
     monkeypatch.setattr(knowledge, "describe", lambda **_: [_metadata("hive")])
 
-    with pytest.raises(ToolInvalidInput) as error:
+    try:
         _table_metadata("shop.orders")
-
-    assert "完整限定" in str(error.value)
+    except ToolInvalidInput as error:
+        message = str(error)
+    else:
+        raise AssertionError("unqualified sample must be rejected")
+    assert "完整限定" in message
     assert _table_metadata("hive.shop.orders")["catalog"] == "hive"
 
 
@@ -439,7 +442,8 @@ def test_describe_tables_filters_three_part_names_by_catalog(monkeypatch, summar
 
     rows = knowledge.describe(names=["hive.shop.orders"], summary=summary)
 
-    assert [row["catalog"] for row in rows] == ["hive"]
+    assert len(rows) == 1
+    assert rows[0].get("catalog") == "hive"
     query, parameters = calls[-1]
     assert "t.catalog" in query
     assert "$catalog_names" in query
