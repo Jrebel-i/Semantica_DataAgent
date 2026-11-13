@@ -38,9 +38,11 @@ from .db import (
     sessions,
 )
 from .dtb_executor import column_names
+from .failure_diagnostics import safe_dtb_category, safe_query_stage
 from .plugins import ExecutorAuthenticationError, ExecutorError, configured
 from .project_api import require_query_project_access
 from .project_context import project_is_frozen
+from .sql_validation import SUPPORTED_CATALOGS as _SUPPORTED_CATALOGS
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -68,6 +70,34 @@ def _validate_sql(sql):
     ):
         raise HTTPException(422, "仅允许 SELECT 或 WITH 查询")
     return tree
+
+
+def _query_failure(stage, category):
+    return {
+        "stage": safe_query_stage(stage),
+        "category": safe_dtb_category(category),
+    }
+
+
+def _annotate_query_failure(exc, stage, category):
+    failure = _query_failure(stage, category)
+    exc.failure_stage = failure["stage"]
+    exc.failure_category = failure["category"]
+    return exc
+
+
+def _record_execution_failure(db, row, stage, category):
+    """Persist only the fixed diagnostic fields on the existing plan JSON."""
+    if row is None or not row.plan_data:
+        return
+    try:
+        plan = json.loads(row.plan_data)
+    except (TypeError, ValueError):
+        return
+    if not isinstance(plan, dict):
+        return
+    plan["execution_failure"] = _query_failure(stage, category)
+    row.plan_data = json.dumps(plan, ensure_ascii=False)
 
 
 def _config():
@@ -105,7 +135,96 @@ def _partition_terms(where):
     return terms
 
 
-def _latest_partition_subquery(term, field, alias, scope, table):
+def _metadata_catalog(metadata):
+    value = metadata.get("catalog")
+    return value.strip().lower() if isinstance(value, str) else ""
+
+
+def _metadata_table_parts(metadata):
+    database = metadata.get("database")
+    name = metadata.get("name")
+    return (
+        _metadata_catalog(metadata),
+        database.strip().lower() if isinstance(database, str) else "",
+        name.strip().lower() if isinstance(name, str) else "",
+    )
+
+
+def _sql_table_parts(table):
+    return (
+        (table.catalog or "").strip().lower(),
+        (table.db or "").strip().lower(),
+        (table.name or "").strip().lower(),
+    )
+
+
+def _table_lookup(tables):
+    lookup = {"catalog": {}, "db": {}, "name": {}}
+    for metadata in tables:
+        catalog, database, name = _metadata_table_parts(metadata)
+        if not database or not name:
+            continue
+        if catalog:
+            lookup["catalog"].setdefault((catalog, database, name), []).append(metadata)
+        lookup["db"].setdefault((database, name), []).append(metadata)
+        lookup["name"].setdefault(name, []).append(metadata)
+    return lookup
+
+
+def _match_table(table, lookup):
+    """Resolve one SQL table without inventing a catalog for old metadata.
+
+    Three-part names match catalog metadata exactly.  Knowledge generations
+    written before catalogs were recorded have no catalog field; for those,
+    the well-known Doris catalogs are accepted only when the database.table
+    pair has exactly one such catalog-less match.  A known catalog that is
+    absent from catalog-aware metadata is never guessed, and a two-part name
+    that spans more than one catalog is rejected as ambiguous.
+    """
+    catalog, database, name = _sql_table_parts(table)
+    if not name or not isinstance(table.this, exp.Identifier):
+        return None, "unsupported"
+    base = (
+        lookup["name"].get(name, [])
+        if not database
+        else lookup["db"].get((database, name), [])
+    )
+    if catalog:
+        exact = lookup["catalog"].get((catalog, database, name), [])
+        if len(exact) == 1:
+            return exact[0], None
+        if len(exact) > 1:
+            return None, "ambiguous"
+        if catalog not in _SUPPORTED_CATALOGS:
+            return None, "catalog"
+        uncatalogued = [item for item in base if not _metadata_catalog(item)]
+        if len(base) == 1 and len(uncatalogued) == 1:
+            return uncatalogued[0], None
+        return (None, "ambiguous") if base else (None, "missing")
+    if len(base) == 1:
+        return base[0], None
+    return (None, "ambiguous") if base else (None, "missing")
+
+
+def _executable_name(metadata, table):
+    catalog, database, name = _metadata_table_parts(metadata)
+    if not name:
+        catalog, database, name = _sql_table_parts(table)
+    catalog = catalog or (table.catalog or "").strip().lower()
+    database = database or (table.db or "").strip().lower()
+    return ".".join(part for part in (catalog, database, name) if part)
+
+
+def _same_physical_table(inner, outer, metadata, lookup):
+    matched, _ = _match_table(inner, lookup)
+    if matched is not metadata:
+        return False
+    inner_catalog, _, _ = _sql_table_parts(inner)
+    outer_catalog, _, _ = _sql_table_parts(outer)
+    return not (inner_catalog and outer_catalog and inner_catalog != outer_catalog)
+
+
+def _latest_partition_subquery(term, field, alias, scope, table, metadata, lookup):
     if not isinstance(term, exp.EQ):
         return None
     column = term.this
@@ -164,12 +283,7 @@ def _latest_partition_subquery(term, field, alias, scope, table):
     if not isinstance(from_, exp.From) or not isinstance(from_.this, exp.Table):
         return None
     inner_table = from_.this
-    if (
-        not isinstance(inner_table.this, exp.Identifier)
-        or inner_table.catalog
-        or inner_table.name.lower() != table.name.lower()
-        or (inner_table.db or "").lower() != (table.db or "").lower()
-    ):
+    if not _same_physical_table(inner_table, table, metadata, lookup):
         return None
     max_column = projection.this
     if max_column.table and max_column.table.lower() not in {
@@ -187,12 +301,7 @@ def _partition_issues(tree, tables):
     rules in one place lets ``validate_sql`` show the same rejection that the
     execution path would raise, instead of maintaining a second copy.
     """
-    lookup = {}
-    for table in tables:
-        lookup.setdefault(table["name"].lower(), []).append(table)
-        lookup.setdefault((table["database"] + "." + table["name"]).lower(), []).append(
-            table
-        )
+    lookup = _table_lookup(tables)
     names = []
     records = []
     problems = []
@@ -203,7 +312,7 @@ def _partition_issues(tree, tables):
             table = source[1]
             if not isinstance(table, exp.Table):
                 continue
-            if not isinstance(table.this, exp.Identifier) or table.catalog:
+            if not isinstance(table.this, exp.Identifier):
                 problems.append(
                     (
                         422,
@@ -217,22 +326,39 @@ def _partition_issues(tree, tables):
                     )
                 )
                 continue
-            name = ".".join(part for part in (table.db, table.name) if part).lower()
-            matches = lookup.get(name, [])
-            if len(matches) != 1:
+            metadata, reason = _match_table(table, lookup)
+            name = (
+                _executable_name(metadata, table)
+                if metadata
+                else table.sql(dialect="doris")
+            )
+            if metadata is None:
+                if reason == "ambiguous":
+                    message = f"无法确定表在哪个目录下: {name}"
+                    suggestion = (
+                        "存在多个目录下的同名表，请使用 catalog.database.table。"
+                    )
+                elif reason == "catalog":
+                    message = f"无法确认表的目录元数据: {name}"
+                    suggestion = (
+                        "知识库没有该目录的元数据；请使用 database.table，"
+                        "不要猜测目录。"
+                    )
+                else:
+                    message = f"无法确定表的分区元数据: {name}"
+                    suggestion = "确认知识库中存在唯一的 database.table 元数据。"
                 problems.append(
                     (
                         422,
                         {
                             "kind": "partition_metadata",
                             "table": name,
-                            "message": f"无法确定表的分区元数据: {name}",
-                            "suggestion": "确认知识库中存在唯一的 database.table 元数据。",
+                            "message": message,
+                            "suggestion": suggestion,
                         },
                     )
                 )
                 continue
-            metadata = matches[0]
             fields = metadata.get("fields")
             if (
                 not isinstance(fields, list)
@@ -256,27 +382,39 @@ def _partition_issues(tree, tables):
                     )
                 )
                 continue
-            names.append(name)
+            if name not in names:
+                names.append(name)
             partitions = [f["name"].lower() for f in fields if f.get("partition")]
-            records.append((scope, terms, alias, table, name, partitions))
+            records.append((scope, terms, alias, table, name, partitions, metadata))
 
     latest_runtime = False
     allowed = set()
-    for scope, terms, alias, table, _, partitions in records:
+    for scope, terms, alias, table, _, partitions, metadata in records:
         for field in partitions:
             for term in terms:
-                inner = _latest_partition_subquery(term, field, alias, scope, table)
+                inner = _latest_partition_subquery(
+                    term, field, alias, scope, table, metadata, lookup
+                )
                 if inner is not None:
                     allowed.add(id(inner))
                     latest_runtime = True
 
-    for scope, terms, alias, table, name, partitions in records:
+    for scope, terms, alias, table, name, partitions, metadata in records:
         if id(scope.expression) in allowed:
             continue
         for field in partitions:
 
-            def valid(term, field=field, alias=alias, scope=scope, table=table):
-                if _latest_partition_subquery(term, field, alias, scope, table):
+            def valid(
+                term,
+                field=field,
+                alias=alias,
+                scope=scope,
+                table=table,
+                metadata=metadata,
+            ):
+                if _latest_partition_subquery(
+                    term, field, alias, scope, table, metadata, lookup
+                ):
                     return True
                 if not isinstance(
                     term,
@@ -577,8 +715,11 @@ async def _execute(
             raise HTTPException(409, "查询已执行")
     started = time.monotonic()
     status, result, key = "failed", None, None
+    stage, category = "unknown", "unknown"
     try:
+        stage = "validate_sql"
         tree = _validate_sql(sql)
+        stage = "table_catalog"
         _tables_and_partitions(tree, project_id=project_id)
         cap = min(
             config.get("download_limit", 100000),
@@ -587,8 +728,11 @@ async def _execute(
         bounded = f"SELECT * FROM ({tree.sql(dialect='doris')}) AS _dataagent_query LIMIT {cap}"
         executor = plugin.bind(config, token)
         async with asyncio.timeout(config.get("timeout_seconds", 300)):
+            stage = "submit"
             key = await executor.submit(bounded, cap)
+            stage = "wait"
             result = await executor.wait(key)
+        stage = "result"
         columns, rows = result.get("columns"), result.get("data")
         names = column_names(columns)
         if names is None:
@@ -608,11 +752,40 @@ async def _execute(
             "possibly_truncated": len(rows) >= min(limit, cap),
         }
     except ExecutorAuthenticationError as exc:
-        raise HTTPException(401, str(exc)) from exc
-    except TimeoutError as exc:
-        raise HTTPException(504, "查询超时") from exc
+        category = "authentication"
+        executor_stage = getattr(exc, "failure_stage", None)
+        if executor_stage == "submit":
+            stage = "submit"
+        elif executor_stage == "poll":
+            stage = "wait"
+        raise _annotate_query_failure(
+            HTTPException(401, "DTB token 失效，请在个人设置中更新"),
+            stage,
+            category,
+        ) from None
+    except TimeoutError:
+        category = "timeout"
+        raise _annotate_query_failure(
+            HTTPException(504, "查询超时"), stage, category
+        ) from None
     except ExecutorError as exc:
-        raise HTTPException(502, str(exc)) from exc
+        category = getattr(exc, "failure_category", "unknown")
+        executor_stage = getattr(exc, "failure_stage", None)
+        if executor_stage in {"submit", "poll", "download"}:
+            stage = {"submit": "submit", "poll": "wait", "download": "result"}[
+                executor_stage
+            ]
+        raise _annotate_query_failure(
+            HTTPException(502, "查询执行失败"), stage, category
+        ) from None
+    except HTTPException as exc:
+        category = "sql" if stage == "validate_sql" else "table_or_catalog"
+        raise _annotate_query_failure(exc, stage, category)
+    except Exception:  # noqa: BLE001 - unknown failures degrade to a fixed category
+        category = "unknown"
+        raise _annotate_query_failure(
+            HTTPException(502, "查询执行失败"), stage, category
+        ) from None
     finally:
         with sessions().begin() as db:
             row = db.get(QueryExecution, query_id)
@@ -625,7 +798,10 @@ async def _execute(
             if status == "succeeded":
                 row.rows = json.dumps(result, ensure_ascii=False)
                 row.row_count = len(result["data"])
+            if key is not None:
                 row.query_key = key
+            if status != "succeeded":
+                _record_execution_failure(db, row, stage, category)
 
 
 def audit_revoked_token_attempt(

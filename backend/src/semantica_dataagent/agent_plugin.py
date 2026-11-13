@@ -596,7 +596,10 @@ class SandboxTurn:
                 await asyncio.to_thread(self.sandbox.start)
             except BaseException:
                 unregister_session(self.request.conversation_id, self.sandbox)
-                await asyncio.to_thread(self.sandbox.close)
+                try:
+                    await asyncio.to_thread(self.sandbox.close)
+                except BaseException:  # noqa: BLE001, S110 - first failure wins
+                    pass
                 raise
         return self
 

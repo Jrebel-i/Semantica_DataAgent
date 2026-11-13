@@ -6,8 +6,26 @@ import socket
 from pathlib import Path, PurePosixPath
 from urllib.parse import urlsplit
 
+from .failure_diagnostics import (
+    safe_pod_status,
+    safe_session_category,
+    safe_session_stage,
+)
+
 RUNNER_IMAGE = "172.16.242.124:31640/dataagent-agent-runner:1.2.1"
 SESSION_LABEL = "app.kubernetes.io/component=agent-session"
+
+
+class SessionStartError(RuntimeError):
+    """A safe start-stage failure without kubectl output or pod contents."""
+
+    def __init__(self, stage, category, *, pod_status=None):
+        self.failure_stage = safe_session_stage(stage)
+        self.failure_category = safe_session_category(category)
+        self.pod_status = safe_pod_status(pod_status)
+        super().__init__(
+            f"session start failed: {self.failure_stage}/{self.failure_category}"
+        )
 
 
 def _endpoint(address: str) -> tuple[str, int]:
@@ -216,6 +234,60 @@ class KubernetesSessionSandbox:
             timeout=150,
         )
 
+    def _pod_status(self):
+        """Read only allow-listed status fields from this session Pod."""
+        import json
+
+        try:
+            result = self._run("get", "pod", self.name, "-o", "json", check=False)
+        except BaseException:  # noqa: BLE001 - diagnostics must not mask start failure
+            return None
+        if getattr(result, "returncode", 1) != 0:
+            return None
+        try:
+            payload = json.loads(result.stdout)
+        except (TypeError, ValueError):
+            return None
+        status = payload.get("status") if isinstance(payload, dict) else None
+        if not isinstance(status, dict):
+            return None
+        safe = {}
+        for source, target in (("phase", "phase"), ("reason", "reason")):
+            value = status.get(source)
+            if isinstance(value, str) and value:
+                safe[target] = value[:64]
+        container_statuses = status.get("containerStatuses")
+        if isinstance(container_statuses, list) and container_statuses:
+            container = container_statuses[0]
+            state = container.get("state") if isinstance(container, dict) else None
+            waiting = state.get("waiting") if isinstance(state, dict) else None
+            last = container.get("lastState") if isinstance(container, dict) else None
+            terminated = last.get("terminated") if isinstance(last, dict) else None
+            reason = (
+                waiting.get("reason")
+                if isinstance(waiting, dict)
+                else terminated.get("reason")
+                if isinstance(terminated, dict)
+                else None
+            )
+            if isinstance(reason, str) and reason:
+                safe["container_reason"] = reason[:64]
+        return safe or None
+
+    def _start_failure(self, exc, stage):
+        import subprocess
+
+        if not isinstance(exc, Exception):
+            return exc
+        if isinstance(exc, subprocess.TimeoutExpired):
+            category = "timeout"
+        elif isinstance(exc, subprocess.CalledProcessError):
+            category = "nonzero_exit"
+        else:
+            category = "startup_error"
+        pod_status = self._pod_status() if stage in {"create", "wait"} else None
+        return SessionStartError(stage, category, pod_status=pod_status)
+
     def start(self):
         import json
 
@@ -224,19 +296,28 @@ class KubernetesSessionSandbox:
                 raise RuntimeError("session already ended")
             (self.workspace / "work").mkdir(parents=True, exist_ok=True)
             (self.workspace / "sessions").mkdir(parents=True, exist_ok=True)
+            stage = "create"
             try:
                 self._run("create", "-f", "-", input=json.dumps(self.spec))
+                stage = "wait"
                 self._run(
                     "wait",
                     "--for=condition=Ready",
                     f"pod/{self.name}",
                     "--timeout=120s",
                 )
+                stage = "upload"
                 self._upload()
                 self.ready = True
-            except BaseException:
-                self.close()
-                raise
+            except BaseException as exc:
+                failure = self._start_failure(exc, stage)
+                try:
+                    self.close()
+                except BaseException:  # noqa: BLE001, S110 - first failure wins
+                    pass
+                if failure is exc:
+                    raise
+                raise failure from None
 
     def _transfer(self, direction, payload=None):
         import subprocess

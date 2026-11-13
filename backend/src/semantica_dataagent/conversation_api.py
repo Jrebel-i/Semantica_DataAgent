@@ -45,6 +45,7 @@ from .db import (
     TurnEvent,
     sessions,
 )
+from .failure_diagnostics import failure_details, failure_label
 from .project_api import accessible_projects, resolve_project_scope
 from .provider_api import EFFORT_LEVELS, EffortLevel, provider_config
 from .query_api import query_requester
@@ -971,10 +972,17 @@ async def _stream(
                     "message": message,
                 },
             )
-    except Exception as exc:  # stream must report, not crash silently
-        logger.exception("Agent stream failed for conversation %s", conversation_id)
-        message = f"Agent failed: {type(exc).__name__}"
-        event = AgentEvent(ERROR, {"message": message})
+    except Exception as exc:  # noqa: BLE001 - stream must report, not crash silently
+        details = failure_details(exc)
+        label = failure_label(exc)
+        logger.error(
+            "Agent stream failed for conversation %s: %s", conversation_id, label
+        )
+        message = f"Agent failed: {label}"
+        data = {"message": message}
+        if details is not None:
+            data["failure"] = details
+        event = AgentEvent(ERROR, data)
         _record_event(turn_id, seq, event)
         _finish_turn(turn_id, "failed", event, message)
         terminal = True
@@ -983,7 +991,7 @@ async def _stream(
             {
                 "conversation_id": conversation_id,
                 "turn_id": turn_id,
-                "message": message,
+                **data,
             },
         )
     finally:

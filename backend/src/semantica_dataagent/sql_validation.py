@@ -20,6 +20,7 @@ from .db import Build, sessions
 # Keys shared above both limits do not identify a relationship.
 MAX_KEY_FRACTION = 0.05
 MIN_COMMON_KEY_TABLES = 5
+SUPPORTED_CATALOGS = frozenset({"internal", "hive", "awsdatacatalog"})
 
 
 @dataclass
@@ -31,10 +32,19 @@ class Snapshot:
 
     def __post_init__(self):
         self.by_name = {full(t).lower(): t for t in self.tables}
+        self.by_db = defaultdict(list)
         self.by_short = defaultdict(list)
         self.fields = {}
         self.keys = defaultdict(set)
-        for name, table in self.by_name.items():
+        for table in self.tables:
+            name = full(table).lower()
+            database = (
+                f"{table['database']}.{table['name']}".lower()
+                if table.get("database") and table.get("name")
+                else ""
+            )
+            if database:
+                self.by_db[database].append(table)
             self.by_short[table["name"].lower()].append(table)
             fields = field_names(table)
             self.fields[name] = fields
@@ -57,9 +67,18 @@ class Snapshot:
 
     def resolve(self, name):
         name = name.lower()
-        if "." in name:
+        parts = name.split(".")
+        if len(parts) == 3:
             table = self.by_name.get(name)
-            return [table] if table else []
+            if table is not None:
+                return [table]
+            if parts[0] not in SUPPORTED_CATALOGS:
+                return []
+            base = self.by_db.get(".".join(parts[1:]), [])
+            uncatalogued = [item for item in base if not item.get("catalog")]
+            return uncatalogued if len(base) == 1 and uncatalogued else []
+        if len(parts) == 2:
+            return list(self.by_db.get(name, []))
         return self.by_short.get(name, [])
 
     def documents_for(self, pairs):
@@ -143,7 +162,9 @@ def load_snapshot(project_id: str | None = None):
 
 
 def full(t):
-    return f"{t['database']}.{t['name']}"
+    return ".".join(
+        part for part in (t.get("catalog"), t.get("database"), t.get("name")) if part
+    )
 
 
 def field_names(t):
@@ -240,7 +261,7 @@ def check_sql(sql, dialect, snapshot, partition_tables=None):
             for s in scope.sources.values()
             if isinstance(s, exp.Table)
         ):
-            name = ".".join(x for x in (table.db, table.name) if x)
+            name = ".".join(x for x in (table.catalog, table.db, table.name) if x)
             matches = snapshot.resolve(name)
             item = {
                 "name": name,
