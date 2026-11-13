@@ -217,7 +217,7 @@ def test_knowledge_summary_preserves_catalog(monkeypatch):
 
     summary = knowledge.describe(summary=True)
 
-    assert summary[0]["catalog"] == "hive"
+    assert summary[0].get("catalog") == "hive"
 
 
 def test_table_api_preserves_catalog_without_adding_null(client, monkeypatch):
@@ -239,7 +239,7 @@ def test_table_api_preserves_catalog_without_adding_null(client, monkeypatch):
     response = c.get("/api/v1/tables", params={"view": "summary"}, headers=headers)
 
     assert response.status_code == 200, response.text
-    assert response.json()[0]["catalog"] == "hive"
+    assert response.json()[0].get("catalog") == "hive"
 
     without_catalog = {key: value for key, value in summary.items() if key != "catalog"}
     monkeypatch.setattr(knowledge, "describe", lambda **_: [without_catalog])
