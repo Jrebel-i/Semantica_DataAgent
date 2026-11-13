@@ -188,14 +188,25 @@ def test_session_pid1_sigterm_behavior_as_container_init():
             timeout=30,
         )
 
-    def state(name):
-        result = subprocess.run(
-            ["docker", "inspect", "-f", "{{.State.Running}} {{.State.ExitCode}}", name],
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=10,
-        )
+    def state(name, timeout):
+        if timeout <= 0:
+            return None
+        try:
+            result = subprocess.run(
+                [
+                    "docker",
+                    "inspect",
+                    "-f",
+                    "{{.State.Running}} {{.State.ExitCode}}",
+                    name,
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=timeout,
+            )
+        except subprocess.TimeoutExpired:
+            return None
         if result.returncode != 0:
             return None
         running, exit_code = result.stdout.split()
@@ -203,11 +214,14 @@ def test_session_pid1_sigterm_behavior_as_container_init():
 
     def wait_running(name):
         deadline = time.monotonic() + 10
-        while time.monotonic() < deadline:
-            current = state(name)
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            current = state(name, remaining)
             if current is not None and current[0]:
                 return current
-            time.sleep(0.1)
+            time.sleep(min(0.1, max(0.0, remaining)))
         pytest.fail("container did not stay running")
 
     def wait_ready(name):
@@ -226,20 +240,30 @@ def test_session_pid1_sigterm_behavior_as_container_init():
         pytest.fail("command did not finish registering handlers")
 
     def wait_stopped(name, deadline):
-        while time.monotonic() < deadline:
-            current = state(name)
+        while True:
+            now = time.monotonic()
+            if now >= deadline:
+                pytest.fail("container did not stop before the deadline")
+            current = state(name, deadline - now)
             if current is not None and not current[0]:
-                return current[1]
-            time.sleep(0.1)
-        pytest.fail(f"container did not stop before the deadline: {state(name)}")
+                if time.monotonic() <= deadline:
+                    return current[1]
+                pytest.fail("container stopped after the deadline")
+            time.sleep(min(0.1, max(0.0, deadline - time.monotonic())))
 
-    def kill(name, *args):
-        subprocess.run(
-            ["docker", "kill", *args, name],
-            check=True,
-            capture_output=True,
-            timeout=10,
-        )
+    def kill(name, deadline, *args):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            pytest.fail("deadline expired before sending a signal")
+        try:
+            subprocess.run(
+                ["docker", "kill", *args, name],
+                check=True,
+                capture_output=True,
+                timeout=remaining,
+            )
+        except subprocess.TimeoutExpired:
+            pytest.fail("signal command exceeded the deadline")
 
     def remove(name):
         subprocess.run(
@@ -252,17 +276,21 @@ def test_session_pid1_sigterm_behavior_as_container_init():
         start(legacy, legacy_script + marker)
         wait_running(legacy)
         wait_ready(legacy)
-        kill(legacy, "--signal=TERM")
-        deadline = time.monotonic() + term_bound
-        while time.monotonic() < deadline:
-            current = state(legacy)
+        legacy_deadline = time.monotonic() + term_bound
+        kill(legacy, legacy_deadline, "--signal=TERM")
+        while True:
+            remaining = legacy_deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            current = state(legacy, remaining)
             assert current is not None and current[0], (
                 "legacy PID1 command must stay running for the whole "
                 f"{term_bound}s after SIGTERM; state={current}"
             )
-            time.sleep(0.1)
-        kill(legacy)
-        assert wait_stopped(legacy, time.monotonic() + term_bound) == 137
+            time.sleep(min(0.1, max(0.0, legacy_deadline - time.monotonic())))
+        stop_deadline = time.monotonic() + term_bound
+        kill(legacy, stop_deadline)
+        assert wait_stopped(legacy, stop_deadline) == 137
     finally:
         remove(legacy)
 
@@ -271,8 +299,9 @@ def test_session_pid1_sigterm_behavior_as_container_init():
         start(fixed, command[2] + marker)
         wait_running(fixed)
         wait_ready(fixed)
-        kill(fixed, "--signal=TERM")
-        assert wait_stopped(fixed, time.monotonic() + term_bound) == 0
+        fixed_deadline = time.monotonic() + term_bound
+        kill(fixed, fixed_deadline, "--signal=TERM")
+        assert wait_stopped(fixed, fixed_deadline) == 0
     finally:
         remove(fixed)
 
