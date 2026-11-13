@@ -159,13 +159,13 @@ def test_session_pid1_sigterm_behavior_as_container_init():
     import time
     import uuid
 
+    term_bound = 3.0
     image = _cached_runner_image()
     command = pod_spec()["spec"]["containers"][0]["command"]
     legacy_script = command[2].removeprefix(SIGTERM_HANDLER)
     assert legacy_script.startswith("setInterval(")
 
-    def start(script):
-        name = f"sda-issue262-{uuid.uuid4().hex}"
+    def start(name, script):
         subprocess.run(
             [
                 "docker",
@@ -187,23 +187,26 @@ def test_session_pid1_sigterm_behavior_as_container_init():
             check=True,
             timeout=30,
         )
-        return name
 
-    def running(name):
+    def state(name):
         result = subprocess.run(
-            ["docker", "inspect", "-f", "{{.State.Running}}", name],
+            ["docker", "inspect", "-f", "{{.State.Running}} {{.State.ExitCode}}", name],
             capture_output=True,
             text=True,
             check=False,
             timeout=10,
         )
-        return result.returncode == 0 and result.stdout.strip() == "true"
+        if result.returncode != 0:
+            return None
+        running, exit_code = result.stdout.split()
+        return running == "true", int(exit_code)
 
     def wait_running(name):
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline:
-            if running(name):
-                return
+            current = state(name)
+            if current is not None and current[0]:
+                return current
             time.sleep(0.1)
         pytest.fail("container did not stay running")
 
@@ -222,56 +225,56 @@ def test_session_pid1_sigterm_behavior_as_container_init():
             time.sleep(0.1)
         pytest.fail("command did not finish registering handlers")
 
-    def wait_exit(name):
-        result = subprocess.run(
-            ["docker", "wait", name],
+    def wait_stopped(name, deadline):
+        while time.monotonic() < deadline:
+            current = state(name)
+            if current is not None and not current[0]:
+                return current[1]
+            time.sleep(0.1)
+        pytest.fail(f"container did not stop before the deadline: {state(name)}")
+
+    def kill(name, *args):
+        subprocess.run(
+            ["docker", "kill", *args, name],
+            check=True,
             capture_output=True,
-            text=True,
-            check=False,
-            timeout=20,
+            timeout=10,
         )
-        assert result.returncode == 0, result.stderr
-        return int(result.stdout.strip())
+
+    def remove(name):
+        subprocess.run(
+            ["docker", "rm", "-f", name], capture_output=True, check=False, timeout=15
+        )
 
     marker = '; console.log("READY")'
-    legacy = start(legacy_script + marker)
+    legacy = f"sda-issue262-{uuid.uuid4().hex}"
     try:
+        start(legacy, legacy_script + marker)
         wait_running(legacy)
         wait_ready(legacy)
-        subprocess.run(
-            ["docker", "kill", "--signal=TERM", legacy],
-            check=True,
-            capture_output=True,
-            timeout=10,
-        )
-        time.sleep(3)
-        assert running(legacy), "legacy PID1 command must survive SIGTERM for 3s"
-        subprocess.run(
-            ["docker", "kill", legacy], check=True, capture_output=True, timeout=10
-        )
-        assert wait_exit(legacy) == 137
+        kill(legacy, "--signal=TERM")
+        deadline = time.monotonic() + term_bound
+        while time.monotonic() < deadline:
+            current = state(legacy)
+            assert current is not None and current[0], (
+                "legacy PID1 command must stay running for the whole "
+                f"{term_bound}s after SIGTERM; state={current}"
+            )
+            time.sleep(0.1)
+        kill(legacy)
+        assert wait_stopped(legacy, time.monotonic() + term_bound) == 137
     finally:
-        subprocess.run(
-            ["docker", "rm", "-f", legacy], capture_output=True, check=False, timeout=15
-        )
+        remove(legacy)
 
-    fixed = start(command[2] + marker)
+    fixed = f"sda-issue262-{uuid.uuid4().hex}"
     try:
+        start(fixed, command[2] + marker)
         wait_running(fixed)
         wait_ready(fixed)
-        started = time.monotonic()
-        subprocess.run(
-            ["docker", "kill", "--signal=TERM", fixed],
-            check=True,
-            capture_output=True,
-            timeout=10,
-        )
-        assert wait_exit(fixed) == 0
-        assert time.monotonic() - started < 10
+        kill(fixed, "--signal=TERM")
+        assert wait_stopped(fixed, time.monotonic() + term_bound) == 0
     finally:
-        subprocess.run(
-            ["docker", "rm", "-f", fixed], capture_output=True, check=False, timeout=15
-        )
+        remove(fixed)
 
 
 def test_session_firewall_denies_ipv4_and_ipv6_by_default():
