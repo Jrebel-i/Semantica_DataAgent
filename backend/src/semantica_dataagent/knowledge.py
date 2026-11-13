@@ -1136,8 +1136,9 @@ def describe(names=None, database=None, search=None, summary=False, project_id=N
             ORDER BY table.database,table.name""",
             parameters,
         )
-        return [
-            {
+        summary_rows = []
+        for row in rows:
+            item = {
                 "name": row["table"]["name"],
                 "database": row["table"]["database"],
                 "comment": row["table"].get("comment", ""),
@@ -1146,8 +1147,10 @@ def describe(names=None, database=None, search=None, summary=False, project_id=N
                 "document_count": row["document_count"],
                 "has_partition": bool(row["has_partition"]),
             }
-            for row in rows
-        ]
+            if row["table"].get("catalog"):
+                item["catalog"] = row["table"]["catalog"]
+            summary_rows.append(item)
+        return summary_rows
     rows = execute(
         store,
         filters

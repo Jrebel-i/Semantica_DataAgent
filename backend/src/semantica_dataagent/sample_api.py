@@ -19,13 +19,8 @@ from .dtb_executor import column_names
 from .mcp_context import current_requester
 from .mcp_contract import ToolInvalidInput, ToolUnavailable
 from .plugins import ExecutorAuthenticationError, ExecutorError
-from .query_api import (
-    _config,
-    _match_table,
-    _table_lookup,
-    _tables_and_partitions,
-    _validate_sql,
-)
+from .query_api import _config, _tables_and_partitions, _validate_sql
+from .table_catalog import match_table, table_lookup
 
 MAX_COLUMNS = 30
 MAX_LIMIT = 20
@@ -71,7 +66,7 @@ def _table_metadata(table, project_id=None):
         matches = knowledge.describe(names=[qualified])
     else:
         matches = knowledge.describe(names=[qualified], project_id=project_id)
-    metadata, reason = _match_table(parsed, _table_lookup(matches))
+    metadata, reason = match_table(parsed, table_lookup(matches))
     if metadata is None:
         for candidate in matches:
             if not isinstance(candidate, dict):

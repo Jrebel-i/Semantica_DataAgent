@@ -16,11 +16,11 @@ from sqlglot.optimizer.scope import traverse_scope
 
 from . import knowledge, project_context
 from .db import Build, sessions
+from .table_catalog import resolve_table, table_lookup
 
 # Keys shared above both limits do not identify a relationship.
 MAX_KEY_FRACTION = 0.05
 MIN_COMMON_KEY_TABLES = 5
-SUPPORTED_CATALOGS = frozenset({"internal", "hive", "awsdatacatalog"})
 
 
 @dataclass
@@ -32,19 +32,12 @@ class Snapshot:
 
     def __post_init__(self):
         self.by_name = {full(t).lower(): t for t in self.tables}
-        self.by_db = defaultdict(list)
+        self._lookup = table_lookup(self.tables)
         self.by_short = defaultdict(list)
         self.fields = {}
         self.keys = defaultdict(set)
         for table in self.tables:
             name = full(table).lower()
-            database = (
-                f"{table['database']}.{table['name']}".lower()
-                if table.get("database") and table.get("name")
-                else ""
-            )
-            if database:
-                self.by_db[database].append(table)
             self.by_short[table["name"].lower()].append(table)
             fields = field_names(table)
             self.fields[name] = fields
@@ -68,17 +61,13 @@ class Snapshot:
     def resolve(self, name):
         name = name.lower()
         parts = name.split(".")
-        if len(parts) == 3:
-            table = self.by_name.get(name)
-            if table is not None:
-                return [table]
-            if parts[0] not in SUPPORTED_CATALOGS:
-                return []
-            base = self.by_db.get(".".join(parts[1:]), [])
-            uncatalogued = [item for item in base if not item.get("catalog")]
-            return uncatalogued if len(base) == 1 and uncatalogued else []
-        if len(parts) == 2:
-            return list(self.by_db.get(name, []))
+        if len(parts) in (2, 3):
+            metadata, reason, candidates = resolve_table(
+                exp.to_table(name, dialect="doris"), self._lookup
+            )
+            if metadata is not None:
+                return [metadata]
+            return candidates if reason == "ambiguous" else []
         return self.by_short.get(name, [])
 
     def documents_for(self, pairs):

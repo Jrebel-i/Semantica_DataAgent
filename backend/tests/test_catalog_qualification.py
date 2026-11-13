@@ -1,5 +1,7 @@
 """Catalog-qualified physical tables stay executable without guessing catalogs."""
 
+import json
+
 import pytest
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
@@ -59,7 +61,7 @@ def test_catalog_qualified_snapshot_query_preserves_catalog(
 
     assert response.status_code == 200, response.text
     plan = response.json()
-    assert plan["tables"] == [f"{catalog.lower()}.shop.orders"]
+    assert plan["tables"] == [f"{catalog}.shop.orders"]
     assert plan["partition_selection"] == "latest_at_runtime"
 
 
@@ -133,6 +135,24 @@ def test_latest_partition_subquery_must_use_the_same_catalog(client, monkeypatch
     assert "缺少分区条件" in response.text
 
 
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT * FROM hive.shop.orders WHERE dt = (SELECT MAX(dt) FROM shop.orders)",
+        "SELECT * FROM shop.orders WHERE dt = (SELECT MAX(dt) FROM hive.shop.orders)",
+    ],
+)
+def test_latest_partition_subquery_rejects_mixed_qualification(
+    client, monkeypatch, sql
+):
+    c, headers = _configure(client, monkeypatch, [_metadata()])
+
+    response = c.post("/api/v1/queries/plan", headers=headers, json={"sql": sql})
+
+    assert response.status_code == 422, response.text
+    assert "缺少分区条件" in response.text
+
+
 def test_validate_sql_reports_and_keeps_catalog_qualification(monkeypatch):
     from semantica_dataagent import knowledge
     from semantica_dataagent.sql_validation import Snapshot, check_sql
@@ -170,3 +190,73 @@ def test_sample_sql_keeps_requested_catalog(monkeypatch):
     assert resolved["catalog"] == "hive"
     assert "`hive`.`shop`.`orders`" in sql
     assert "`dt` = '2025-01-03'" in sql
+
+
+def test_knowledge_summary_preserves_catalog(monkeypatch):
+    from semantica_dataagent import knowledge
+
+    row = {
+        "table": {
+            "name": "orders",
+            "database": "shop",
+            "ref": "table:shop.orders",
+            "catalog": "hive",
+            "comment": "",
+        },
+        "field_count": 1,
+        "document_count": 0,
+        "has_partition": True,
+    }
+    monkeypatch.setattr(
+        knowledge,
+        "_project_settings",
+        lambda project_id=None: {"knowledge_generation": "test_generation"},
+    )
+    monkeypatch.setattr(knowledge, "read_graph", lambda values: object())
+    monkeypatch.setattr(knowledge, "execute", lambda store, query, parameters: [row])
+
+    summary = knowledge.describe(summary=True)
+
+    assert summary[0]["catalog"] == "hive"
+
+
+def test_table_api_preserves_catalog_without_adding_null(client, monkeypatch):
+    from semantica_dataagent import knowledge
+
+    c, headers = client
+    summary = {
+        "catalog": "hive",
+        "name": "orders",
+        "database": "shop",
+        "comment": "",
+        "ref": "table:shop.orders",
+        "field_count": 1,
+        "document_count": 0,
+        "has_partition": True,
+    }
+    monkeypatch.setattr(knowledge, "describe", lambda **_: [summary])
+
+    response = c.get("/api/v1/tables", params={"view": "summary"}, headers=headers)
+
+    assert response.status_code == 200, response.text
+    assert response.json()[0]["catalog"] == "hive"
+
+    without_catalog = {key: value for key, value in summary.items() if key != "catalog"}
+    monkeypatch.setattr(knowledge, "describe", lambda **_: [without_catalog])
+    response = c.get("/api/v1/tables", params={"view": "summary"}, headers=headers)
+    assert "catalog" not in response.json()[0]
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        'SELECT * FROM TABLE(GENERATE_SERIES(1, 10)) AS "alias_synthetic_marker"',
+        'SELECT * FROM missing_table AS "alias_synthetic_marker"',
+    ],
+)
+def test_validate_sql_partition_issue_does_not_echo_aliases(sql):
+    from semantica_dataagent.sql_validation import Snapshot, check_sql
+
+    result = check_sql(sql, "doris", Snapshot([], [], []), partition_tables=[])
+
+    assert "synthetic_marker" not in json.dumps(result, ensure_ascii=False)

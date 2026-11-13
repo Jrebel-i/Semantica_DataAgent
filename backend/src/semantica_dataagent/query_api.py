@@ -42,7 +42,12 @@ from .failure_diagnostics import safe_dtb_category, safe_query_stage
 from .plugins import ExecutorAuthenticationError, ExecutorError, configured
 from .project_api import require_query_project_access
 from .project_context import project_is_frozen
-from .sql_validation import SUPPORTED_CATALOGS as _SUPPORTED_CATALOGS
+from .table_catalog import (
+    executable_name,
+    match_table,
+    same_physical_table,
+    table_lookup,
+)
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -135,95 +140,6 @@ def _partition_terms(where):
     return terms
 
 
-def _metadata_catalog(metadata):
-    value = metadata.get("catalog")
-    return value.strip().lower() if isinstance(value, str) else ""
-
-
-def _metadata_table_parts(metadata):
-    database = metadata.get("database")
-    name = metadata.get("name")
-    return (
-        _metadata_catalog(metadata),
-        database.strip().lower() if isinstance(database, str) else "",
-        name.strip().lower() if isinstance(name, str) else "",
-    )
-
-
-def _sql_table_parts(table):
-    return (
-        (table.catalog or "").strip().lower(),
-        (table.db or "").strip().lower(),
-        (table.name or "").strip().lower(),
-    )
-
-
-def _table_lookup(tables):
-    lookup = {"catalog": {}, "db": {}, "name": {}}
-    for metadata in tables:
-        catalog, database, name = _metadata_table_parts(metadata)
-        if not database or not name:
-            continue
-        if catalog:
-            lookup["catalog"].setdefault((catalog, database, name), []).append(metadata)
-        lookup["db"].setdefault((database, name), []).append(metadata)
-        lookup["name"].setdefault(name, []).append(metadata)
-    return lookup
-
-
-def _match_table(table, lookup):
-    """Resolve one SQL table without inventing a catalog for old metadata.
-
-    Three-part names match catalog metadata exactly.  Knowledge generations
-    written before catalogs were recorded have no catalog field; for those,
-    the well-known Doris catalogs are accepted only when the database.table
-    pair has exactly one such catalog-less match.  A known catalog that is
-    absent from catalog-aware metadata is never guessed, and a two-part name
-    that spans more than one catalog is rejected as ambiguous.
-    """
-    catalog, database, name = _sql_table_parts(table)
-    if not name or not isinstance(table.this, exp.Identifier):
-        return None, "unsupported"
-    base = (
-        lookup["name"].get(name, [])
-        if not database
-        else lookup["db"].get((database, name), [])
-    )
-    if catalog:
-        exact = lookup["catalog"].get((catalog, database, name), [])
-        if len(exact) == 1:
-            return exact[0], None
-        if len(exact) > 1:
-            return None, "ambiguous"
-        if catalog not in _SUPPORTED_CATALOGS:
-            return None, "catalog"
-        uncatalogued = [item for item in base if not _metadata_catalog(item)]
-        if len(base) == 1 and len(uncatalogued) == 1:
-            return uncatalogued[0], None
-        return (None, "ambiguous") if base else (None, "missing")
-    if len(base) == 1:
-        return base[0], None
-    return (None, "ambiguous") if base else (None, "missing")
-
-
-def _executable_name(metadata, table):
-    catalog, database, name = _metadata_table_parts(metadata)
-    if not name:
-        catalog, database, name = _sql_table_parts(table)
-    catalog = catalog or (table.catalog or "").strip().lower()
-    database = database or (table.db or "").strip().lower()
-    return ".".join(part for part in (catalog, database, name) if part)
-
-
-def _same_physical_table(inner, outer, metadata, lookup):
-    matched, _ = _match_table(inner, lookup)
-    if matched is not metadata:
-        return False
-    inner_catalog, _, _ = _sql_table_parts(inner)
-    outer_catalog, _, _ = _sql_table_parts(outer)
-    return not (inner_catalog and outer_catalog and inner_catalog != outer_catalog)
-
-
 def _latest_partition_subquery(term, field, alias, scope, table, metadata, lookup):
     if not isinstance(term, exp.EQ):
         return None
@@ -283,7 +199,7 @@ def _latest_partition_subquery(term, field, alias, scope, table, metadata, looku
     if not isinstance(from_, exp.From) or not isinstance(from_.this, exp.Table):
         return None
     inner_table = from_.this
-    if not _same_physical_table(inner_table, table, metadata, lookup):
+    if not same_physical_table(inner_table, table, metadata, lookup):
         return None
     max_column = projection.this
     if max_column.table and max_column.table.lower() not in {
@@ -301,7 +217,7 @@ def _partition_issues(tree, tables):
     rules in one place lets ``validate_sql`` show the same rejection that the
     execution path would raise, instead of maintaining a second copy.
     """
-    lookup = _table_lookup(tables)
+    lookup = table_lookup(tables)
     names = []
     records = []
     problems = []
@@ -318,47 +234,46 @@ def _partition_issues(tree, tables):
                         422,
                         {
                             "kind": "partition_metadata",
-                            "table": table.sql(dialect="doris"),
-                            "condition": table.sql(dialect="doris"),
+                            "table": "<unsupported>",
+                            "condition": "<unsupported>",
                             "message": "不支持此表来源",
-                            "suggestion": "只使用 database.table 形式的物理表。",
+                            "suggestion": (
+                                "只使用 catalog.database.table 或 database.table "
+                                "形式的物理表。"
+                            ),
                         },
                     )
                 )
                 continue
-            metadata, reason = _match_table(table, lookup)
-            name = (
-                _executable_name(metadata, table)
-                if metadata
-                else table.sql(dialect="doris")
-            )
+            metadata, reason = match_table(table, lookup)
             if metadata is None:
                 if reason == "ambiguous":
-                    message = f"无法确定表在哪个目录下: {name}"
+                    message = "无法确定表在哪个目录下"
                     suggestion = (
                         "存在多个目录下的同名表，请使用 catalog.database.table。"
                     )
                 elif reason == "catalog":
-                    message = f"无法确认表的目录元数据: {name}"
+                    message = "无法确认表的目录元数据"
                     suggestion = (
                         "知识库没有该目录的元数据；请使用 database.table，"
                         "不要猜测目录。"
                     )
                 else:
-                    message = f"无法确定表的分区元数据: {name}"
+                    message = "无法确定表的分区元数据"
                     suggestion = "确认知识库中存在唯一的 database.table 元数据。"
                 problems.append(
                     (
                         422,
                         {
                             "kind": "partition_metadata",
-                            "table": name,
+                            "table": "<unknown>",
                             "message": message,
                             "suggestion": suggestion,
                         },
                     )
                 )
                 continue
+            name = executable_name(metadata, table)
             fields = metadata.get("fields")
             if (
                 not isinstance(fields, list)
@@ -474,7 +389,9 @@ def _partition_analysis(tree, project_id=None):
             else knowledge.describe(project_id=project_id)
         )
     except Exception as exc:
-        raise HTTPException(503, "无法读取分区元数据") from exc
+        raise _annotate_query_failure(
+            HTTPException(503, "无法读取分区元数据"), "table_catalog", "data_source"
+        ) from exc
     names, latest_runtime, problems = _partition_issues(tree, tables)
     if problems:
         status, issue = problems[0]
@@ -779,8 +696,24 @@ async def _execute(
             HTTPException(502, "查询执行失败"), stage, category
         ) from None
     except HTTPException as exc:
-        category = "sql" if stage == "validate_sql" else "table_or_catalog"
-        raise _annotate_query_failure(exc, stage, category)
+        failure_stage = getattr(exc, "failure_stage", None)
+        if failure_stage is not None:
+            stage = safe_query_stage(failure_stage)
+        failure_category = getattr(exc, "failure_category", None)
+        category = (
+            safe_dtb_category(failure_category)
+            if failure_category is not None
+            else "unknown"
+        )
+        if category == "unknown":
+            category = "sql" if stage == "validate_sql" else "table_or_catalog"
+        detail = {
+            "validate_sql": "SQL 校验失败",
+            "table_catalog": "查询未通过目录或分区校验",
+        }.get(stage, "查询执行失败")
+        raise _annotate_query_failure(
+            HTTPException(exc.status_code, detail), stage, category
+        ) from None
     except Exception:  # noqa: BLE001 - unknown failures degrade to a fixed category
         category = "unknown"
         raise _annotate_query_failure(

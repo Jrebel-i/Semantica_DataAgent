@@ -3,7 +3,7 @@
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from . import knowledge
 from .auth import current_user
@@ -30,6 +30,7 @@ class DocumentLink(BaseModel):
 
 
 class TableSummary(BaseModel):
+    catalog: str | None = Field(default=None, exclude_if=lambda value: value is None)
     name: str
     database: str
     comment: str
@@ -40,6 +41,7 @@ class TableSummary(BaseModel):
 
 
 class TableView(BaseModel):
+    catalog: str | None = Field(default=None, exclude_if=lambda value: value is None)
     name: str
     database: str
     comment: str

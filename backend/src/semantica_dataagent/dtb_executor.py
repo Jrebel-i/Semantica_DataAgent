@@ -67,6 +67,26 @@ def _exception_category(exc):
     return "unknown"
 
 
+_MISSING_TABLE = re.compile(
+    r"Table\[([A-Za-z0-9_.@#$\-]{1,128})\]"
+    r"\s*does not exist\s*in\s*database\[([A-Za-z0-9_.@#$\-]{1,128})\]"
+)
+
+
+def _poll_error_category(message):
+    """Map only the known, bounded DTB missing-table shape; everything else is unknown.
+
+    ``errorMessage`` is free-form platform text, so a keyword search would let
+    arbitrary SQL, literals or credentials be misclassified.  The one shape
+    observed in production is matched as a whole with identifier-only captures.
+    """
+    if not isinstance(message, str):
+        return "unknown"
+    return (
+        "table_or_catalog" if _MISSING_TABLE.fullmatch(message.strip()) else "unknown"
+    )
+
+
 class DtbExecutor:
     id = "dtb"
     version = "1.0"
@@ -213,7 +233,11 @@ class DtbExecutor:
             "GET", "/api/data-query/result/" + quote(key, safe="")
         )
         if data.get("errorMessage"):
-            raise DtbError("DTB 查询执行失败", stage="poll", category="unknown")
+            raise DtbError(
+                "DTB 查询执行失败",
+                stage="poll",
+                category=_poll_error_category(data.get("errorMessage")),
+            )
         return data
 
     async def wait(self, key):

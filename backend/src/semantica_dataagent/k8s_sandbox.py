@@ -14,6 +14,7 @@ from .failure_diagnostics import (
 
 RUNNER_IMAGE = "172.16.242.124:31640/dataagent-agent-runner:1.2.1"
 SESSION_LABEL = "app.kubernetes.io/component=agent-session"
+POD_STATUS_TIMEOUT_SECONDS = 10
 
 
 class SessionStartError(RuntimeError):
@@ -215,7 +216,7 @@ class KubernetesSessionSandbox:
             mcp_url=mcp_url,
         )
 
-    def _run(self, *args, input=None, check=True):
+    def _run(self, *args, input=None, check=True, timeout=150):
         import subprocess
 
         return subprocess.run(
@@ -231,7 +232,7 @@ class KubernetesSessionSandbox:
             text=True,
             capture_output=True,
             check=check,
-            timeout=150,
+            timeout=timeout,
         )
 
     def _pod_status(self):
@@ -239,8 +240,16 @@ class KubernetesSessionSandbox:
         import json
 
         try:
-            result = self._run("get", "pod", self.name, "-o", "json", check=False)
-        except BaseException:  # noqa: BLE001 - diagnostics must not mask start failure
+            result = self._run(
+                "get",
+                "pod",
+                self.name,
+                "-o",
+                "json",
+                check=False,
+                timeout=POD_STATUS_TIMEOUT_SECONDS,
+            )
+        except Exception:  # noqa: BLE001 - diagnostics must not mask start failure
             return None
         if getattr(result, "returncode", 1) != 0:
             return None
@@ -255,7 +264,7 @@ class KubernetesSessionSandbox:
         for source, target in (("phase", "phase"), ("reason", "reason")):
             value = status.get(source)
             if isinstance(value, str) and value:
-                safe[target] = value[:64]
+                safe[target] = value
         container_statuses = status.get("containerStatuses")
         if isinstance(container_statuses, list) and container_statuses:
             container = container_statuses[0]
@@ -271,8 +280,8 @@ class KubernetesSessionSandbox:
                 else None
             )
             if isinstance(reason, str) and reason:
-                safe["container_reason"] = reason[:64]
-        return safe or None
+                safe["container_reason"] = reason
+        return safe_pod_status(safe)
 
     def _start_failure(self, exc, stage):
         import subprocess
@@ -310,11 +319,20 @@ class KubernetesSessionSandbox:
                 self._upload()
                 self.ready = True
             except BaseException as exc:
-                failure = self._start_failure(exc, stage)
+                diagnostic_cancel = None
+                try:
+                    failure = self._start_failure(exc, stage)
+                except Exception:  # noqa: BLE001 - diagnostics must not mask the first failure
+                    failure = exc
+                except BaseException as cancelled:  # noqa: BLE001 - cancellation wins
+                    failure = exc
+                    diagnostic_cancel = cancelled
                 try:
                     self.close()
-                except BaseException:  # noqa: BLE001, S110 - first failure wins
+                except Exception:  # noqa: BLE001, S110 - first failure wins
                     pass
+                if diagnostic_cancel is not None:
+                    raise diagnostic_cancel from None
                 if failure is exc:
                     raise
                 raise failure from None

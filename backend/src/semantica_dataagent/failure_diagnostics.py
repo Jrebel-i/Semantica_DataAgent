@@ -23,33 +23,61 @@ DTB_CATEGORIES = frozenset(
 
 SESSION_STAGES = frozenset({"create", "wait", "upload", "unknown"})
 SESSION_CATEGORIES = frozenset({"nonzero_exit", "timeout", "startup_error", "unknown"})
-POD_STATUS_FIELDS = ("phase", "reason", "container_reason")
+POD_PHASES = frozenset({"Pending", "Running", "Succeeded", "Failed", "Unknown"})
+POD_REASONS = frozenset(
+    {
+        "ContainerCreating",
+        "ContainerStatusUnknown",
+        "CrashLoopBackOff",
+        "CreateContainerConfigError",
+        "CreateContainerError",
+        "DeadlineExceeded",
+        "ErrImagePull",
+        "Error",
+        "Evicted",
+        "ImagePullBackOff",
+        "InvalidImageName",
+        "NodeAffinity",
+        "NodeLost",
+        "OOMKilled",
+        "PodInitializing",
+        "RunContainerError",
+        "SchedulingGated",
+        "Shutdown",
+        "TerminationByKubelet",
+        "Unschedulable",
+        "UnexpectedAdmissionError",
+    }
+)
 KNOWN_STAGES = DTB_STAGES | QUERY_STAGES | SESSION_STAGES
 KNOWN_CATEGORIES = DTB_CATEGORIES | SESSION_CATEGORIES
 
 
+def _safe_value(value, allowed):
+    return value if isinstance(value, str) and value in allowed else "unknown"
+
+
 def safe_dtb_stage(value):
-    return value if value in DTB_STAGES else "unknown"
+    return _safe_value(value, DTB_STAGES)
 
 
 def safe_dtb_category(value):
-    return value if value in DTB_CATEGORIES else "unknown"
+    return _safe_value(value, DTB_CATEGORIES)
 
 
 def safe_query_stage(value):
-    return value if value in QUERY_STAGES else "unknown"
+    return _safe_value(value, QUERY_STAGES)
 
 
 def safe_session_stage(value):
-    return value if value in SESSION_STAGES else "unknown"
+    return _safe_value(value, SESSION_STAGES)
 
 
 def safe_session_category(value):
-    return value if value in SESSION_CATEGORIES else "unknown"
+    return _safe_value(value, SESSION_CATEGORIES)
 
 
-def failure_label(exc):
-    """Return a fixed label for a diagnostic exception, or its class name."""
+def _diagnostic_pair(exc):
     stage = getattr(exc, "failure_stage", None)
     category = getattr(exc, "failure_category", None)
     if (
@@ -58,33 +86,36 @@ def failure_label(exc):
         and isinstance(category, str)
         and category in KNOWN_CATEGORIES
     ):
-        return f"{stage}/{category}"
-    return type(exc).__name__
+        return stage, category
+    return "unknown", "unknown"
+
+
+def failure_label(exc):
+    """Return a fixed label; untrusted diagnostic attributes degrade to unknown."""
+    stage, category = _diagnostic_pair(exc)
+    return f"{stage}/{category}"
 
 
 def safe_pod_status(value):
     """Keep only allow-listed Pod status strings from a raw status mapping."""
     if not isinstance(value, dict):
         return None
-    details = {
-        key: value[key][:64]
-        for key in POD_STATUS_FIELDS
-        if isinstance(value.get(key), str) and value[key]
-    }
+    details = {}
+    phase = value.get("phase")
+    if isinstance(phase, str):
+        details["phase"] = _safe_value(phase, POD_PHASES)
+    reason = value.get("reason")
+    if isinstance(reason, str):
+        details["reason"] = _safe_value(reason, POD_REASONS)
+    container_reason = value.get("container_reason")
+    if isinstance(container_reason, str):
+        details["container_reason"] = _safe_value(container_reason, POD_REASONS)
     return details or None
 
 
 def failure_details(exc):
     """Return the safe fields that may be persisted or streamed."""
-    stage = getattr(exc, "failure_stage", None)
-    category = getattr(exc, "failure_category", None)
-    if (
-        not isinstance(stage, str)
-        or stage not in KNOWN_STAGES
-        or not isinstance(category, str)
-        or category not in KNOWN_CATEGORIES
-    ):
-        return None
+    stage, category = _diagnostic_pair(exc)
     details = {"stage": stage, "category": category}
     pod_status = safe_pod_status(getattr(exc, "pod_status", None))
     if pod_status is not None:
