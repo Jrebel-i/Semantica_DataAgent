@@ -327,6 +327,12 @@ provider 的 base_url 与 api_key 每轮按会话当前设置重新下发给 run
 
 启用 Langfuse 后默认只上报元数据：工具名、耗时、状态、模型、provider、表名、是否出错、错误类别和 SQL 指纹。状态、是否出错、表名、错误类别和 SQL 指纹写入 observation 的 `metadata` 字段，因为真实接收端会忽略未声明的顶层字段；读取真实 trace 时从 `metadata` 获取这些值。工具名只认服务端实际注册的工具表，固定 trace 名 `online-conversation`、`local-mcp` 单独保留；未注册的调用显示固定 `unknown_tool`，不采用请求里的名字，内容采集模式下同样如此。用户问题、agent 回答、工具入参与结果、SQL 原文、结果行和错误原文只在管理员显式开启全局设置 `langfuse_capture_content` 后上报；未设置与显式关闭等价。SQL 指纹用 sqlglot 解析后把字面值替换为占位符再哈希，解析失败时指纹为空，不得回退为原文。表名只能从该工具声明且经过校验的表参数，或从可信 SQL AST 提取；不得扫描任意结果行、嵌套对象或按键名信任内容。错误类别只能是工具边界产生的固定代码，嵌套结果里的 `code`、`is_error` 不参与判断。所有提取出的元数据必须经过与内容字段相同的已知秘密与凭据过滤；无法可靠确认时省略，不回退原文。界面必须说明默认只上报元数据，并说明开启内容采集后会上报问题和回答。应用持有的 MCP token、provider API key、Langfuse 密钥、Neo4j 密码、认证与 Cookie 头和会话文件内容不得上报。上报字段采用集中允许列表，并遮盖已知秘密及 Bearer、sk-、password=、api_key=、token= 等凭据形式；不得把会话文件或请求头作为遥测载荷。
 
+## 查询执行失败诊断与目录限定
+
+查询执行失败时只在既有 `plan_data` 中写入固定的 `execution_failure={stage, category}`，不新增迁移。`stage` 只允许 `validate_sql`、`table_catalog`、`submit`、`wait`、`result`、`unknown`；`category` 只允许 `table_or_catalog`、`sql`、`authentication`、`data_source`、`timeout`、`result`、`unknown`。DTB 轮询的 `errorMessage` 是自由文本：只有已核实的完整形态 `Table[<identifier>]does not exist in database[<identifier>]`（标识符字符集受限、整串匹配）归为 `poll/table_or_catalog`；其余形态，包括含关键字但结构不符或带敏感标记的文本，一律 `poll/unknown`。该协议没有可靠的 SQL 错误形态，因此不猜 SQL 类别；HTTP 401 才是 `authentication`，httpx 超时和传输错误分别归为 `timeout` 与 `data_source`。原始 `errorMessage` 永不进入异常文本、响应、日志、SSE 或遥测。失败前已经提交拿到 `query_key` 时必须保留该内部关联标识，但查询仍为 `failed`，不得因此获得结果读取、直接下载或下载链接权限。执行期 HTTP 反馈（含 SQL 重校验、元数据读取和分区/目录校验）只返回固定文案，不转发原异常 `detail`；原始 `errorMessage`、stderr、命令 input、SQL、字面值和结果行不得进入响应、日志、SSE 或遥测。对话轮次失败只持久化并发送 `Agent failed: <stage>/<category>`；没有可信诊断属性的异常固定降级为 `unknown/unknown`，不拼接异常类名或原文。
+
+物理表以 SQL AST 中的三段式 `catalog.database.table` 为准，任何校验、分区分析和取样 SQL 都必须保留已有 catalog。知识代带 catalog 时按 `catalog + database + name` 精确匹配；此时省略 catalog 的两段式表名一律拒绝并提示改用完整限定，因为计划表名带 catalog 而实际 SQL 不带时可能落到默认目录，不能由计划悄悄补全。旧知识代没有 catalog 时，仅当 `database.table` 在知识中唯一且请求的 catalog 是 `internal`、`hive`、`AwsDataCatalog` 之一时兼容，不删除也不改写已有 catalog；两段式旧用法继续可用。`describe_tables` 的 `names` 支持三段式并按存储的 catalog 精确过滤，知识无 catalog 时三段式请求返回空，不回退到其它目录的同名表。知识 `summary` 模式若原始表属性带 catalog 必须原样保留，不能因手工挑字段丢失。两段式表名跨多个 catalog 时返回 422，要求使用 `catalog.database.table`；未知 catalog 不带前缀猜测，也不批量给 SQL 补 catalog。`MAX` 最新分区子查询的内外表必须显式限定到同一 catalog；一端省略 catalog 时即使知识元数据唯一也不视为同一物理表，因为 Doris 的默认目录可能不同。分区问题的 `table` 字段只使用知识元数据中的可靠物理标识，元数据缺失时为 `<unknown>`（非物理表来源为 `<unsupported>`），不使用别名或 AST 原文。无法确定时返回固定安全类别和明确建议，不能悄悄改 SQL、删条件或把历史未复现的根因写成已确认结论。
+
 ## 会话管理接口
 
 `GET /api/v1/conversations` 默认只列出未归档会话；`?archived=true` 列出已归档会话。响应包含 `project_id`、`project_name`、`pinned`、`archived`，置顶会话按置顶时间倒序，其余按更新时间倒序。列表只返回请求者当前仍有权限的项目的会话；已失去项目权限的会话不出现在列表里，但所有者直接读取详情仍可成功。`?project=<id>` 只返回该项目的会话，显式项目按 `project_scope` 校验（不存在与无权限统一 404）。`conversations.project_id` 在迁移 `0034` 增加并回填 `default`。
@@ -374,6 +380,8 @@ provider 的 base_url 与 api_key 每轮按会话当前设置重新下发给 run
 ## Kubernetes 会话沙箱
 
 `DATAAGENT_AGENT_MODE=k8s` 使用独立会话 Pod；本地默认继续使用 Docker。Pod 规格、命名空间 RBAC 和 NetworkPolicy 在 `tests/test_k8s_sandbox_spec.py` 检查，真实双栈默认拒绝及允许目标还须在集群运行 `tests/e2e/checks/issue_26.py` 验证。会话出站实际由 init 容器的 iptables 限制；当前 flannel 不执行 NetworkPolicy。会话 Pod 在独立命名空间使用临时卷，轮次开始和结束时传递该对话的工作目录及会话文件；不得向 agent 容器传入 Kubernetes ServiceAccount token 或能力。运行时 Neo4j Secret 经 `DATAAGENT_NEO4J_AUTH` 注入时只用于匹配用户名的默认凭据，管理员显式保存的设置优先。
+
+会话启动失败必须保留 `create` / `wait` / `upload` 阶段和 `nonzero_exit` / `timeout` / `startup_error` 类别，并通过真实调用方进入 SSE 与持久化轮次。只能读取本会话 Pod 的 `phase`、`reason`、`container_reason` 三个状态字段；Pod message、kubectl stdout/stderr、命令参数与 stdin 一律丢弃。诊断读取失败或 cleanup 失败都不得覆盖首个启动失败；`KeyboardInterrupt`、`SystemExit` 等生命周期语义保持原样。不要为诊断扩大命名空间、Pod 读取权限或扫描全局资源。
 
 ## 查询结果下载链接
 

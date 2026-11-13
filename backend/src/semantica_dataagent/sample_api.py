@@ -20,6 +20,7 @@ from .mcp_context import current_requester
 from .mcp_contract import ToolInvalidInput, ToolUnavailable
 from .plugins import ExecutorAuthenticationError, ExecutorError
 from .query_api import _config, _tables_and_partitions, _validate_sql
+from .table_catalog import match_table, table_lookup
 
 MAX_COLUMNS = 30
 MAX_LIMIT = 20
@@ -47,21 +48,54 @@ def _partition_sort_key(value):
 
 
 def _qualified(metadata):
-    return f"{metadata['database']}.{metadata['name']}"
+    return ".".join(
+        part
+        for part in (
+            metadata.get("catalog"),
+            metadata["database"],
+            metadata["name"],
+        )
+        if part
+    )
 
 
 def _table_metadata(table, project_id=None):
+    parsed = exp.to_table(table, dialect="doris")
+    # Knowledge may predate catalogs, so load candidates by database.table and
+    # let the shared resolver apply the explicit catalog from the request.
+    qualified = f"{parsed.db}.{parsed.name}" if parsed.db else parsed.name
     if project_id in (None, "default"):
-        matches = knowledge.describe(names=[table])
+        matches = knowledge.describe(names=[qualified])
     else:
-        matches = knowledge.describe(names=[table], project_id=project_id)
-    if not matches:
+        matches = knowledge.describe(names=[qualified], project_id=project_id)
+    metadata, reason = match_table(parsed, table_lookup(matches))
+    if metadata is None:
+        for candidate in matches:
+            if not isinstance(candidate, dict):
+                continue
+            name = candidate.get("name")
+            if not isinstance(name, str) or name.lower() != parsed.name.lower():
+                continue
+            database = candidate.get("database")
+            if isinstance(database, str):
+                _metadata_identifier(database, "库名")
+            _metadata_identifier(name, "表名")
+        if reason == "ambiguous":
+            raise ToolInvalidInput(
+                f"表名 {table} 不唯一，请使用 catalog.database.table"
+            )
+        if reason == "unqualified":
+            raise ToolInvalidInput(
+                "表名需要包含目录的完整限定（catalog.database.table），"
+                "省略目录可能落到默认目录"
+            )
+        if reason == "catalog":
+            raise ToolInvalidInput(f"无法确认表 {table} 的目录元数据")
         raise ToolInvalidInput(f"表 {table} 不在当前知识代")
-    if len(matches) > 1:
-        raise ToolInvalidInput(f"表名 {table} 不唯一，请使用 database.table")
-    metadata = matches[0]
     if not metadata.get("database") or not metadata.get("name"):
         raise ToolUnavailable(f"表 {table} 缺少元数据")
+    if parsed.catalog and not metadata.get("catalog"):
+        metadata = {**metadata, "catalog": parsed.catalog}
     return metadata
 
 
@@ -291,9 +325,15 @@ async def _latest_partitions(metadata, fields, runtime, project_id=None):
 
 
 def _build_sql(metadata, selected, partitions, limit):
+    catalog = metadata.get("catalog")
     table = exp.Table(
         this=exp.Identifier(this=metadata["name"], quoted=True),
         db=exp.Identifier(this=metadata["database"], quoted=True),
+        catalog=(
+            exp.Identifier(this=catalog, quoted=True)
+            if isinstance(catalog, str) and catalog
+            else None
+        ),
     )
     query = exp.select(
         *[exp.column(exp.Identifier(this=column, quoted=True)) for column in selected]

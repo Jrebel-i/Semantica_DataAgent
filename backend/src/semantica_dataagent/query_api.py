@@ -38,9 +38,16 @@ from .db import (
     sessions,
 )
 from .dtb_executor import column_names
+from .failure_diagnostics import safe_dtb_category, safe_query_stage
 from .plugins import ExecutorAuthenticationError, ExecutorError, configured
 from .project_api import require_query_project_access
 from .project_context import project_is_frozen
+from .table_catalog import (
+    executable_name,
+    match_table,
+    same_physical_table,
+    table_lookup,
+)
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -68,6 +75,34 @@ def _validate_sql(sql):
     ):
         raise HTTPException(422, "仅允许 SELECT 或 WITH 查询")
     return tree
+
+
+def _query_failure(stage, category):
+    return {
+        "stage": safe_query_stage(stage),
+        "category": safe_dtb_category(category),
+    }
+
+
+def _annotate_query_failure(exc, stage, category):
+    failure = _query_failure(stage, category)
+    exc.failure_stage = failure["stage"]
+    exc.failure_category = failure["category"]
+    return exc
+
+
+def _record_execution_failure(db, row, stage, category):
+    """Persist only the fixed diagnostic fields on the existing plan JSON."""
+    if row is None or not row.plan_data:
+        return
+    try:
+        plan = json.loads(row.plan_data)
+    except (TypeError, ValueError):
+        return
+    if not isinstance(plan, dict):
+        return
+    plan["execution_failure"] = _query_failure(stage, category)
+    row.plan_data = json.dumps(plan, ensure_ascii=False)
 
 
 def _config():
@@ -105,7 +140,7 @@ def _partition_terms(where):
     return terms
 
 
-def _latest_partition_subquery(term, field, alias, scope, table):
+def _latest_partition_subquery(term, field, alias, scope, table, metadata, lookup):
     if not isinstance(term, exp.EQ):
         return None
     column = term.this
@@ -164,12 +199,7 @@ def _latest_partition_subquery(term, field, alias, scope, table):
     if not isinstance(from_, exp.From) or not isinstance(from_.this, exp.Table):
         return None
     inner_table = from_.this
-    if (
-        not isinstance(inner_table.this, exp.Identifier)
-        or inner_table.catalog
-        or inner_table.name.lower() != table.name.lower()
-        or (inner_table.db or "").lower() != (table.db or "").lower()
-    ):
+    if not same_physical_table(inner_table, table, metadata, lookup):
         return None
     max_column = projection.this
     if max_column.table and max_column.table.lower() not in {
@@ -187,12 +217,7 @@ def _partition_issues(tree, tables):
     rules in one place lets ``validate_sql`` show the same rejection that the
     execution path would raise, instead of maintaining a second copy.
     """
-    lookup = {}
-    for table in tables:
-        lookup.setdefault(table["name"].lower(), []).append(table)
-        lookup.setdefault((table["database"] + "." + table["name"]).lower(), []).append(
-            table
-        )
+    lookup = table_lookup(tables)
     names = []
     records = []
     problems = []
@@ -203,36 +228,59 @@ def _partition_issues(tree, tables):
             table = source[1]
             if not isinstance(table, exp.Table):
                 continue
-            if not isinstance(table.this, exp.Identifier) or table.catalog:
+            if not isinstance(table.this, exp.Identifier):
                 problems.append(
                     (
                         422,
                         {
                             "kind": "partition_metadata",
-                            "table": table.sql(dialect="doris"),
-                            "condition": table.sql(dialect="doris"),
+                            "table": "<unsupported>",
+                            "condition": "<unsupported>",
                             "message": "不支持此表来源",
-                            "suggestion": "只使用 database.table 形式的物理表。",
+                            "suggestion": (
+                                "只使用 catalog.database.table 或 database.table "
+                                "形式的物理表。"
+                            ),
                         },
                     )
                 )
                 continue
-            name = ".".join(part for part in (table.db, table.name) if part).lower()
-            matches = lookup.get(name, [])
-            if len(matches) != 1:
+            metadata, reason = match_table(table, lookup)
+            if metadata is None:
+                if reason == "ambiguous":
+                    message = "无法确定表在哪个目录下"
+                    suggestion = (
+                        "存在多个目录下的同名表，请使用 catalog.database.table。"
+                    )
+                elif reason == "unqualified":
+                    message = "SQL 省略了表的目录，无法确认与知识库中的表一致"
+                    suggestion = (
+                        "请使用 catalog.database.table 完整限定表名"
+                        "（目录以 describe_tables 返回的 catalog 为准）；"
+                        "省略目录可能落到默认目录。"
+                    )
+                elif reason == "catalog":
+                    message = "无法确认表的目录元数据"
+                    suggestion = (
+                        "知识库没有该目录的元数据；请使用 database.table，"
+                        "不要猜测目录。"
+                    )
+                else:
+                    message = "无法确定表的分区元数据"
+                    suggestion = "确认知识库中存在唯一的 database.table 元数据。"
                 problems.append(
                     (
                         422,
                         {
                             "kind": "partition_metadata",
-                            "table": name,
-                            "message": f"无法确定表的分区元数据: {name}",
-                            "suggestion": "确认知识库中存在唯一的 database.table 元数据。",
+                            "table": "<unknown>",
+                            "message": message,
+                            "suggestion": suggestion,
                         },
                     )
                 )
                 continue
-            metadata = matches[0]
+            name = executable_name(metadata, table)
             fields = metadata.get("fields")
             if (
                 not isinstance(fields, list)
@@ -256,27 +304,39 @@ def _partition_issues(tree, tables):
                     )
                 )
                 continue
-            names.append(name)
+            if name not in names:
+                names.append(name)
             partitions = [f["name"].lower() for f in fields if f.get("partition")]
-            records.append((scope, terms, alias, table, name, partitions))
+            records.append((scope, terms, alias, table, name, partitions, metadata))
 
     latest_runtime = False
     allowed = set()
-    for scope, terms, alias, table, _, partitions in records:
+    for scope, terms, alias, table, _, partitions, metadata in records:
         for field in partitions:
             for term in terms:
-                inner = _latest_partition_subquery(term, field, alias, scope, table)
+                inner = _latest_partition_subquery(
+                    term, field, alias, scope, table, metadata, lookup
+                )
                 if inner is not None:
                     allowed.add(id(inner))
                     latest_runtime = True
 
-    for scope, terms, alias, table, name, partitions in records:
+    for scope, terms, alias, table, name, partitions, metadata in records:
         if id(scope.expression) in allowed:
             continue
         for field in partitions:
 
-            def valid(term, field=field, alias=alias, scope=scope, table=table):
-                if _latest_partition_subquery(term, field, alias, scope, table):
+            def valid(
+                term,
+                field=field,
+                alias=alias,
+                scope=scope,
+                table=table,
+                metadata=metadata,
+            ):
+                if _latest_partition_subquery(
+                    term, field, alias, scope, table, metadata, lookup
+                ):
                     return True
                 if not isinstance(
                     term,
@@ -336,7 +396,9 @@ def _partition_analysis(tree, project_id=None):
             else knowledge.describe(project_id=project_id)
         )
     except Exception as exc:
-        raise HTTPException(503, "无法读取分区元数据") from exc
+        raise _annotate_query_failure(
+            HTTPException(503, "无法读取分区元数据"), "table_catalog", "data_source"
+        ) from exc
     names, latest_runtime, problems = _partition_issues(tree, tables)
     if problems:
         status, issue = problems[0]
@@ -577,8 +639,11 @@ async def _execute(
             raise HTTPException(409, "查询已执行")
     started = time.monotonic()
     status, result, key = "failed", None, None
+    stage, category = "unknown", "unknown"
     try:
+        stage = "validate_sql"
         tree = _validate_sql(sql)
+        stage = "table_catalog"
         _tables_and_partitions(tree, project_id=project_id)
         cap = min(
             config.get("download_limit", 100000),
@@ -587,8 +652,11 @@ async def _execute(
         bounded = f"SELECT * FROM ({tree.sql(dialect='doris')}) AS _dataagent_query LIMIT {cap}"
         executor = plugin.bind(config, token)
         async with asyncio.timeout(config.get("timeout_seconds", 300)):
+            stage = "submit"
             key = await executor.submit(bounded, cap)
+            stage = "wait"
             result = await executor.wait(key)
+        stage = "result"
         columns, rows = result.get("columns"), result.get("data")
         names = column_names(columns)
         if names is None:
@@ -608,11 +676,56 @@ async def _execute(
             "possibly_truncated": len(rows) >= min(limit, cap),
         }
     except ExecutorAuthenticationError as exc:
-        raise HTTPException(401, str(exc)) from exc
-    except TimeoutError as exc:
-        raise HTTPException(504, "查询超时") from exc
+        category = "authentication"
+        executor_stage = getattr(exc, "failure_stage", None)
+        if executor_stage == "submit":
+            stage = "submit"
+        elif executor_stage == "poll":
+            stage = "wait"
+        raise _annotate_query_failure(
+            HTTPException(401, "DTB token 失效，请在个人设置中更新"),
+            stage,
+            category,
+        ) from None
+    except TimeoutError:
+        category = "timeout"
+        raise _annotate_query_failure(
+            HTTPException(504, "查询超时"), stage, category
+        ) from None
     except ExecutorError as exc:
-        raise HTTPException(502, str(exc)) from exc
+        category = getattr(exc, "failure_category", "unknown")
+        executor_stage = getattr(exc, "failure_stage", None)
+        if executor_stage in {"submit", "poll", "download"}:
+            stage = {"submit": "submit", "poll": "wait", "download": "result"}[
+                executor_stage
+            ]
+        raise _annotate_query_failure(
+            HTTPException(502, "查询执行失败"), stage, category
+        ) from None
+    except HTTPException as exc:
+        failure_stage = getattr(exc, "failure_stage", None)
+        if failure_stage is not None:
+            stage = safe_query_stage(failure_stage)
+        failure_category = getattr(exc, "failure_category", None)
+        category = (
+            safe_dtb_category(failure_category)
+            if failure_category is not None
+            else "unknown"
+        )
+        if category == "unknown":
+            category = "sql" if stage == "validate_sql" else "table_or_catalog"
+        detail = {
+            "validate_sql": "SQL 校验失败",
+            "table_catalog": "查询未通过目录或分区校验",
+        }.get(stage, "查询执行失败")
+        raise _annotate_query_failure(
+            HTTPException(exc.status_code, detail), stage, category
+        ) from None
+    except Exception:  # noqa: BLE001 - unknown failures degrade to a fixed category
+        category = "unknown"
+        raise _annotate_query_failure(
+            HTTPException(502, "查询执行失败"), stage, category
+        ) from None
     finally:
         with sessions().begin() as db:
             row = db.get(QueryExecution, query_id)
@@ -625,7 +738,10 @@ async def _execute(
             if status == "succeeded":
                 row.rows = json.dumps(result, ensure_ascii=False)
                 row.row_count = len(result["data"])
+            if key is not None:
                 row.query_key = key
+            if status != "succeeded":
+                _record_execution_failure(db, row, stage, category)
 
 
 def audit_revoked_token_attempt(

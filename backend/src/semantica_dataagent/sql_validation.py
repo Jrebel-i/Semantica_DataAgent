@@ -16,6 +16,7 @@ from sqlglot.optimizer.scope import traverse_scope
 
 from . import knowledge, project_context
 from .db import Build, sessions
+from .table_catalog import resolve_table, table_lookup
 
 # Keys shared above both limits do not identify a relationship.
 MAX_KEY_FRACTION = 0.05
@@ -31,10 +32,12 @@ class Snapshot:
 
     def __post_init__(self):
         self.by_name = {full(t).lower(): t for t in self.tables}
+        self._lookup = table_lookup(self.tables)
         self.by_short = defaultdict(list)
         self.fields = {}
         self.keys = defaultdict(set)
-        for name, table in self.by_name.items():
+        for table in self.tables:
+            name = full(table).lower()
             self.by_short[table["name"].lower()].append(table)
             fields = field_names(table)
             self.fields[name] = fields
@@ -55,12 +58,27 @@ class Snapshot:
                 self.neighbors[b].add(a)
                 self.edge_pairs[frozenset((a, b))].append(edge)
 
-    def resolve(self, name):
+    def resolution(self, name):
+        """Return ``(matches, reason)``; ``reason`` is None only for a full match."""
         name = name.lower()
-        if "." in name:
-            table = self.by_name.get(name)
-            return [table] if table else []
-        return self.by_short.get(name, [])
+        parts = name.split(".")
+        if len(parts) in (2, 3):
+            metadata, reason, candidates = resolve_table(
+                exp.to_table(name, dialect="doris"), self._lookup
+            )
+            if metadata is not None:
+                return [metadata], None
+            if reason in {"ambiguous", "unqualified"}:
+                return candidates, reason
+            return [], reason
+        short = self.by_short.get(name, [])
+        if len(short) == 1:
+            return short, None
+        return short, "ambiguous" if short else "missing"
+
+    def resolve(self, name):
+        matches, reason = self.resolution(name)
+        return [] if reason == "unqualified" else matches
 
     def documents_for(self, pairs):
         if self.document_loader and pairs:
@@ -143,7 +161,9 @@ def load_snapshot(project_id: str | None = None):
 
 
 def full(t):
-    return f"{t['database']}.{t['name']}"
+    return ".".join(
+        part for part in (t.get("catalog"), t.get("database"), t.get("name")) if part
+    )
 
 
 def field_names(t):
@@ -240,17 +260,17 @@ def check_sql(sql, dialect, snapshot, partition_tables=None):
             for s in scope.sources.values()
             if isinstance(s, exp.Table)
         ):
-            name = ".".join(x for x in (table.db, table.name) if x)
-            matches = snapshot.resolve(name)
+            name = ".".join(x for x in (table.catalog, table.db, table.name) if x)
+            matches, reason = snapshot.resolution(name)
             item = {
                 "name": name,
                 "status": "pass"
-                if len(matches) == 1
+                if reason is None
                 else "ambiguous"
-                if matches
+                if reason == "ambiguous"
                 else "error",
             }
-            if len(matches) == 1:
+            if reason is None:
                 resolved[id(table)] = matches[0]
                 item["ref"] = matches[0]["ref"]
             else:
@@ -273,6 +293,8 @@ def check_sql(sql, dialect, snapshot, partition_tables=None):
                         "message": (
                             f"表名不唯一: {name}"
                             if item["status"] == "ambiguous"
+                            else f"表缺少目录限定: {name}"
+                            if reason == "unqualified"
                             else f"表不存在: {name}"
                         ),
                         "suggestion": (

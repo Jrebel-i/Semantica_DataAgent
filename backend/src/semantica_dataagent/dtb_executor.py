@@ -8,6 +8,10 @@ from urllib.parse import quote
 import httpx
 
 from .dtb_auth import authentication_failed
+from .failure_diagnostics import (
+    safe_dtb_category,
+    safe_dtb_stage,
+)
 from .plugins import ExecutorAuthenticationError, ExecutorError
 
 
@@ -32,11 +36,55 @@ def column_names(columns):
 
 
 class DtbError(ExecutorError):
-    pass
+    """An executor failure whose public message never includes raw platform text."""
+
+    def __init__(self, message, *, stage="unknown", category="unknown"):
+        super().__init__(message)
+        self.failure_stage = safe_dtb_stage(stage)
+        self.failure_category = safe_dtb_category(category)
 
 
 class DtbAuthenticationError(DtbError, ExecutorAuthenticationError):
-    pass
+    def __init__(self, message, *, stage="unknown"):
+        super().__init__(message, stage=stage, category="authentication")
+
+
+def _request_stage(path):
+    if path == "/api/data-query/async-execute":
+        return "submit"
+    if path.startswith("/api/data-query/result/"):
+        return "poll"
+    if path.startswith("/api/data-query/download"):
+        return "download"
+    return "unknown"
+
+
+def _exception_category(exc):
+    if isinstance(exc, httpx.TimeoutException):
+        return "timeout"
+    if isinstance(exc, httpx.TransportError):
+        return "data_source"
+    return "unknown"
+
+
+_MISSING_TABLE = re.compile(
+    r"Table\[([A-Za-z0-9_.@#$\-]{1,128})\]"
+    r"\s*does not exist\s*in\s*database\[([A-Za-z0-9_.@#$\-]{1,128})\]"
+)
+
+
+def _poll_error_category(message):
+    """Map only the known, bounded DTB missing-table shape; everything else is unknown.
+
+    ``errorMessage`` is free-form platform text, so a keyword search would let
+    arbitrary SQL, literals or credentials be misclassified.  The one shape
+    observed in production is matched as a whole with identifier-only captures.
+    """
+    if not isinstance(message, str):
+        return "unknown"
+    return (
+        "table_or_catalog" if _MISSING_TABLE.fullmatch(message.strip()) else "unknown"
+    )
 
 
 class DtbExecutor:
@@ -116,6 +164,7 @@ class DtbExecutor:
             "x-requested-with": "XMLHttpRequest",
             "cookie": f"satoken={self.token}",
         }
+        stage = _request_stage(path)
         for attempt in range(len(self.retry_delays) + 1):
             try:
                 async with (
@@ -127,26 +176,39 @@ class DtbExecutor:
                         method, self.base_url + path, headers=headers, **kwargs
                     )
                 if authentication_failed(response.status_code, None):
-                    raise DtbAuthenticationError("DTB token 失效，请在个人设置中更新")
+                    raise DtbAuthenticationError(
+                        "DTB token 失效，请在个人设置中更新", stage=stage
+                    )
                 response.raise_for_status()
                 if raw:
                     if not response.content:
-                        raise DtbError("DTB 下载结果为空")
+                        raise DtbError(
+                            "DTB 下载结果为空", stage=stage, category="result"
+                        )
                     return response.content, response.headers.get("content-type")
                 payload = response.json()
                 if not isinstance(payload, dict):
-                    raise DtbError("DTB 响应格式错误")
+                    raise DtbError("DTB 响应格式错误", stage=stage, category="unknown")
                 status = str(payload.get("status", ""))
                 if authentication_failed(response.status_code, payload):
-                    raise DtbAuthenticationError("DTB token 失效，请在个人设置中更新")
+                    raise DtbAuthenticationError(
+                        "DTB token 失效，请在个人设置中更新", stage=stage
+                    )
                 if status != "200" or not isinstance(payload.get("data"), dict):
-                    raise DtbError("DTB 响应失败")
+                    raise DtbError("DTB 响应失败", stage=stage, category="unknown")
                 return payload["data"]
             except DtbAuthenticationError:
                 raise
-            except (httpx.HTTPError, ValueError, DtbError) as exc:
+            except DtbError:
                 if attempt == len(self.retry_delays):
-                    raise DtbError("DTB 请求失败") from exc
+                    raise
+                await asyncio.sleep(self.retry_delays[attempt])
+            except (httpx.HTTPError, ValueError, TypeError) as exc:
+                if attempt == len(self.retry_delays):
+                    category = _exception_category(exc)
+                    raise DtbError(
+                        "DTB 请求失败", stage=stage, category=category
+                    ) from None
                 await asyncio.sleep(self.retry_delays[attempt])
         raise AssertionError("unreachable")
 
@@ -163,7 +225,7 @@ class DtbExecutor:
         )
         key = data.get("queryKey") or data.get("queryId")
         if not isinstance(key, str) or not key:
-            raise DtbError("DTB 未返回查询标识")
+            raise DtbError("DTB 未返回查询标识", stage="submit", category="result")
         return key
 
     async def poll(self, key):
@@ -171,7 +233,11 @@ class DtbExecutor:
             "GET", "/api/data-query/result/" + quote(key, safe="")
         )
         if data.get("errorMessage"):
-            raise DtbError("DTB 查询执行失败")
+            raise DtbError(
+                "DTB 查询执行失败",
+                stage="poll",
+                category=_poll_error_category(data.get("errorMessage")),
+            )
         return data
 
     async def wait(self, key):
