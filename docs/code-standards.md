@@ -379,7 +379,7 @@ provider 的 base_url 与 api_key 每轮按会话当前设置重新下发给 run
 
 ## Kubernetes 会话沙箱
 
-`DATAAGENT_AGENT_MODE=k8s` 使用独立会话 Pod；本地默认继续使用 Docker。Pod 规格、命名空间 RBAC 和 NetworkPolicy 在 `tests/test_k8s_sandbox_spec.py` 检查，真实双栈默认拒绝及允许目标还须在集群运行 `tests/e2e/checks/issue_26.py` 验证。会话出站实际由 init 容器的 iptables 限制；当前 flannel 不执行 NetworkPolicy。会话 Pod 在独立命名空间使用临时卷，轮次开始和结束时传递该对话的工作目录及会话文件；不得向 agent 容器传入 Kubernetes ServiceAccount token 或能力。运行时 Neo4j Secret 经 `DATAAGENT_NEO4J_AUTH` 注入时只用于匹配用户名的默认凭据，管理员显式保存的设置优先。
+`DATAAGENT_AGENT_MODE=k8s` 使用独立会话 Pod；本地默认继续使用 Docker。Pod 规格、命名空间 RBAC 和 NetworkPolicy 在 `tests/test_k8s_sandbox_spec.py` 检查，真实双栈默认拒绝及允许目标还须在集群运行 `tests/e2e/checks/issue_26.py` 验证。会话出站实际由 init 容器的 iptables 限制；当前 flannel 不执行 NetworkPolicy。agent 容器的常驻 PID1 必须显式处理 SIGTERM 并以 0 退出；不得靠缩短 terminationGracePeriod、force delete 或提高启动等待上限掩盖终止延迟。会话 Pod 在独立命名空间使用临时卷，轮次开始和结束时传递该对话的工作目录及会话文件；不得向 agent 容器传入 Kubernetes ServiceAccount token 或能力。运行时 Neo4j Secret 经 `DATAAGENT_NEO4J_AUTH` 注入时只用于匹配用户名的默认凭据，管理员显式保存的设置优先。
 
 会话启动失败必须保留 `create` / `wait` / `upload` 阶段和 `nonzero_exit` / `timeout` / `startup_error` 类别，并通过真实调用方进入 SSE 与持久化轮次。只能读取本会话 Pod 的 `phase`、`reason`、`container_reason` 三个状态字段；Pod message、kubectl stdout/stderr、命令参数与 stdin 一律丢弃。诊断读取失败或 cleanup 失败都不得覆盖首个启动失败；`KeyboardInterrupt`、`SystemExit` 等生命周期语义保持原样。不要为诊断扩大命名空间、Pod 读取权限或扫描全局资源。
 

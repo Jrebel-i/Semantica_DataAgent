@@ -16,6 +16,16 @@ RUNNER_IMAGE = "172.16.242.124:31640/dataagent-agent-runner:1.2.1"
 SESSION_LABEL = "app.kubernetes.io/component=agent-session"
 POD_STATUS_TIMEOUT_SECONDS = 10
 
+# Node ignores default signal dispositions when it runs as PID 1.  Without an
+# explicit handler a normal Pod deletion waits out the 30 second grace period
+# and then kills the container (exit 137).
+PID1_SIGTERM_HANDLER = "process.on('SIGTERM', () => process.exit(0)); "
+PID1_COMMAND = [
+    "node",
+    "-e",
+    PID1_SIGTERM_HANDLER + "setInterval(() => {}, 2147483647)",
+]
+
 
 class SessionStartError(RuntimeError):
     """A safe start-stage failure without kubectl output or pod contents."""
@@ -120,7 +130,7 @@ def build_pod_spec(
             {
                 "name": "agent",
                 "image": RUNNER_IMAGE,
-                "command": ["node", "-e", "setInterval(() => {}, 2147483647)"],
+                "command": list(PID1_COMMAND),
                 "workingDir": "/workspace",
                 "securityContext": {
                     "runAsUser": 1000,
