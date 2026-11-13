@@ -348,11 +348,12 @@ def test_validate_sql_requires_catalog_only_when_knowledge_records_it(monkeypatc
         "SELECT * FROM shop.orders WHERE dt = '2025-01-01'",
         "hive",
         snapshot,
-        partition_tables=[],
+        partition_tables=[metadata],
     )
 
     assert result["status"] != "pass"
     table_issues = [issue for issue in result["issues"] if issue["kind"] == "table"]
+    assert len(table_issues) == 1
     assert table_issues[0]["message"] == "表缺少目录限定: shop.orders"
     assert "hive.shop.orders" in table_issues[0]["suggestion"]
 
