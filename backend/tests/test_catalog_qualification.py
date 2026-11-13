@@ -207,6 +207,7 @@ def test_knowledge_summary_preserves_catalog(monkeypatch):
         "document_count": 0,
         "has_partition": True,
     }
+
     monkeypatch.setattr(
         knowledge,
         "_project_settings",
@@ -375,11 +376,16 @@ def test_sample_api_requires_catalog_only_when_knowledge_records_it(monkeypatch)
     assert _table_metadata("hive.shop.orders")["catalog"] == "hive"
 
 
+class _DescribeCalls(list):
+    project_ids: list
+
+
 def _describe_graph(monkeypatch, tables):
     """Fake the graph query shape, filtering by the parameters it receives."""
     from semantica_dataagent import knowledge
 
-    calls = []
+    calls = _DescribeCalls()
+    calls.project_ids = []
 
     def execute(store, query, parameters):
         calls.append((query, parameters))
@@ -422,11 +428,11 @@ def _describe_graph(monkeypatch, tables):
             for table in selected
         ]
 
-    monkeypatch.setattr(
-        knowledge,
-        "_project_settings",
-        lambda project_id=None: {"knowledge_generation": "test_generation"},
-    )
+    def project_settings(project_id=None):
+        calls.project_ids.append(project_id)
+        return {"knowledge_generation": "test_generation"}
+
+    monkeypatch.setattr(knowledge, "_project_settings", project_settings)
     monkeypatch.setattr(knowledge, "read_graph", lambda values: object())
     monkeypatch.setattr(knowledge, "execute", execute)
     return calls
@@ -460,3 +466,68 @@ def test_describe_tables_does_not_fall_back_to_another_catalog(monkeypatch, summ
 
     _describe_graph(monkeypatch, [_metadata()])
     assert knowledge.describe(names=["hive.shop.orders"], summary=summary) == []
+
+
+@pytest.mark.parametrize("catalog", ["internal", "hive", "AwsDataCatalog"])
+def test_sample_api_resolves_explicit_catalog_against_legacy_knowledge(
+    monkeypatch, catalog
+):
+    from semantica_dataagent import sample_api
+    from semantica_dataagent.mcp_contract import ToolInvalidInput
+
+    calls = _describe_graph(monkeypatch, [_metadata()])
+
+    try:
+        resolved = sample_api._table_metadata(f"{catalog}.shop.orders")
+    except ToolInvalidInput as error:
+        raise AssertionError(
+            f"legacy knowledge rejected explicit {catalog}: {error}"
+        ) from None
+
+    assert resolved["catalog"] == catalog
+    assert calls[-1][1]["names"] == ["shop.orders"]
+
+
+def test_sample_api_resolves_exact_catalog_and_rejects_another_catalog(monkeypatch):
+    from semantica_dataagent import sample_api
+    from semantica_dataagent.mcp_contract import ToolInvalidInput
+
+    calls = _describe_graph(monkeypatch, [_metadata("hive")])
+
+    assert sample_api._table_metadata("hive.shop.orders")["catalog"] == "hive"
+    assert calls[-1][1]["names"] == ["shop.orders"]
+
+    try:
+        sample_api._table_metadata("internal.shop.orders")
+    except ToolInvalidInput as error:
+        message = str(error)
+    else:
+        raise AssertionError("wrong catalog must be rejected")
+    assert "目录" in message
+
+
+def test_sample_api_rejects_unqualified_name_with_multiple_catalogs(monkeypatch):
+    from semantica_dataagent import sample_api
+    from semantica_dataagent.mcp_contract import ToolInvalidInput
+
+    _describe_graph(monkeypatch, [_metadata("hive"), _metadata("internal")])
+
+    try:
+        sample_api._table_metadata("shop.orders")
+    except ToolInvalidInput as error:
+        message = str(error)
+    else:
+        raise AssertionError("ambiguous unqualified sample must be rejected")
+    assert "不唯一" in message
+
+
+def test_sample_api_forwards_project_to_knowledge(monkeypatch):
+    from semantica_dataagent import sample_api
+
+    calls = _describe_graph(monkeypatch, [_metadata()])
+
+    resolved = sample_api._table_metadata("shop.orders", project_id="proj-legacy")
+
+    assert resolved["name"] == "orders"
+    assert calls.project_ids[-1] == "proj-legacy"
+    assert calls[-1][1]["names"] == ["shop.orders"]

@@ -61,9 +61,9 @@ def _qualified(metadata):
 
 def _table_metadata(table, project_id=None):
     parsed = exp.to_table(table, dialect="doris")
-    qualified = ".".join(
-        part for part in (parsed.catalog, parsed.db, parsed.name) if part
-    )
+    # Knowledge may predate catalogs, so load candidates by database.table and
+    # let the shared resolver apply the explicit catalog from the request.
+    qualified = f"{parsed.db}.{parsed.name}" if parsed.db else parsed.name
     if project_id in (None, "default"):
         matches = knowledge.describe(names=[qualified])
     else:
