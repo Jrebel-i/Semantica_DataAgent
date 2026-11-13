@@ -252,6 +252,13 @@ def _partition_issues(tree, tables):
                     suggestion = (
                         "存在多个目录下的同名表，请使用 catalog.database.table。"
                     )
+                elif reason == "unqualified":
+                    message = "SQL 省略了表的目录，无法确认与知识库中的表一致"
+                    suggestion = (
+                        "请使用 catalog.database.table 完整限定表名"
+                        "（目录以 describe_tables 返回的 catalog 为准）；"
+                        "省略目录可能落到默认目录。"
+                    )
                 elif reason == "catalog":
                     message = "无法确认表的目录元数据"
                     suggestion = (

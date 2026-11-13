@@ -1111,13 +1111,29 @@ def describe(names=None, database=None, search=None, summary=False, project_id=N
     values = _project_settings(project_id)
     project = project_context.from_values(values)
     store = read_graph(values)
+    # Three-part requests match the stored catalog exactly; a catalog-less
+    # knowledge generation cannot answer them, so it returns nothing instead of
+    # falling back to a same-named table in another (or unknown) catalog.
+    catalog_names = (
+        [
+            name.lower()
+            for name in names
+            if isinstance(name, str) and name.count(".") == 2
+        ]
+        if names
+        else None
+    )
     filters = """MATCH (t:SDATable {generation:$generation})
-            WHERE ($names IS NULL OR t.name IN $names OR t.database + '.' + t.name IN $names)
+            WHERE ($names IS NULL OR t.name IN $names OR t.database + '.' + t.name IN $names
+                   OR (t.catalog IS NOT NULL
+                       AND toLower(t.catalog + '.' + t.database + '.' + t.name)
+                           IN $catalog_names))
               AND ($database IS NULL OR t.database = $database)
               AND ($search IS NULL OR toLower(t.name) CONTAINS toLower($search))"""
     parameters = {
         "generation": project.generation,
         "names": names,
+        "catalog_names": catalog_names,
         "database": database,
         "search": search,
     }

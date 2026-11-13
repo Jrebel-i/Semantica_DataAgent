@@ -50,6 +50,13 @@ def resolve_table(table, lookup):
     pair has exactly one such catalog-less match.  A known catalog absent from
     catalog-aware metadata is never guessed, and duplicate or multi-catalog
     matches are reported as ambiguous instead of selecting one.
+
+    When knowledge records a catalog, an unqualified ``database.table`` name is
+    rejected with the ``unqualified`` reason instead of being promoted to that
+    catalog: the executor would still run the unqualified SQL, which can land
+    in the default catalog.  The caller must ask the user for the explicit
+    ``catalog.database.table`` form; legacy catalog-less knowledge keeps
+    accepting two-part names.
     """
     catalog, database, name = sql_table_parts(table)
     if not name or not isinstance(table.this, exp.Identifier):
@@ -76,7 +83,10 @@ def resolve_table(table, lookup):
             return None, "catalog", []
         return None, "missing", []
     if len(base) == 1:
-        return base[0], None, base
+        metadata = base[0]
+        if metadata_catalog(metadata):
+            return None, "unqualified", base
+        return metadata, None, base
     if base:
         return None, "ambiguous", base
     return None, "missing", []

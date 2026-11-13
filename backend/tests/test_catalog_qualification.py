@@ -260,3 +260,198 @@ def test_validate_sql_partition_issue_does_not_echo_aliases(sql):
     result = check_sql(sql, "doris", Snapshot([], [], []), partition_tables=[])
 
     assert "synthetic_marker" not in json.dumps(result, ensure_ascii=False)
+
+
+def _configure_calls(client, monkeypatch, tables):
+    from semantica_dataagent import knowledge, query_api
+
+    monkeypatch.setattr(knowledge, "describe", lambda **_: tables)
+    calls = []
+
+    class Plugin:
+        def bind(self, config, token):
+            calls.append("bind")
+            return self
+
+        async def estimate(self, sql):
+            calls.append("estimate")
+            return {"partitions": None, "rows": None}
+
+        async def submit(self, sql, limit):
+            calls.append("submit")
+            raise AssertionError("rejected plans must never submit")
+
+    monkeypatch.setattr(query_api, "_config", lambda: (Plugin(), {}))
+    c, headers = client
+    return c, headers, calls
+
+
+def test_two_part_plan_is_rejected_when_knowledge_records_catalog(client, monkeypatch):
+    c, headers, calls = _configure_calls(client, monkeypatch, [_metadata("hive")])
+
+    response = c.post(
+        "/api/v1/queries/plan",
+        headers=headers,
+        json={"sql": "SELECT * FROM shop.orders WHERE dt = '2025-01-01'"},
+    )
+
+    assert response.status_code == 422, response.text
+    assert "省略了表的目录" in response.text
+    assert "hive.shop.orders" not in response.text
+    assert calls == []
+
+
+def test_three_part_plan_succeeds_when_knowledge_records_the_same_catalog(
+    client, monkeypatch
+):
+    c, headers, calls = _configure_calls(client, monkeypatch, [_metadata("hive")])
+
+    response = c.post(
+        "/api/v1/queries/plan",
+        headers=headers,
+        json={
+            "sql": (
+                "SELECT * FROM hive.shop.orders "
+                "WHERE dt = (SELECT MAX(dt) FROM hive.shop.orders)"
+            )
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["tables"] == ["hive.shop.orders"]
+    assert "estimate" in calls
+
+
+def test_legacy_two_part_plan_still_succeeds_without_catalog_metadata(
+    client, monkeypatch
+):
+    c, headers, calls = _configure_calls(client, monkeypatch, [_metadata()])
+
+    response = c.post(
+        "/api/v1/queries/plan",
+        headers=headers,
+        json={"sql": "SELECT * FROM shop.orders WHERE dt = '2025-01-01'"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["tables"] == ["shop.orders"]
+    assert "estimate" in calls
+
+
+def test_validate_sql_requires_catalog_only_when_knowledge_records_it(monkeypatch):
+    from semantica_dataagent.sql_validation import Snapshot, check_sql
+
+    metadata = {**_metadata("hive"), "ref": "table:shop.orders"}
+    snapshot = Snapshot([metadata], [], [])
+
+    result = check_sql(
+        "SELECT * FROM shop.orders WHERE dt = '2025-01-01'",
+        "hive",
+        snapshot,
+        partition_tables=[],
+    )
+
+    assert result["status"] != "pass"
+    table_issues = [issue for issue in result["issues"] if issue["kind"] == "table"]
+    assert table_issues[0]["message"] == "表缺少目录限定: shop.orders"
+    assert "hive.shop.orders" in table_issues[0]["suggestion"]
+
+
+def test_sample_api_requires_catalog_only_when_knowledge_records_it(monkeypatch):
+    from semantica_dataagent import knowledge
+    from semantica_dataagent.mcp_contract import ToolInvalidInput
+    from semantica_dataagent.sample_api import _table_metadata
+
+    monkeypatch.setattr(knowledge, "describe", lambda **_: [_metadata("hive")])
+
+    with pytest.raises(ToolInvalidInput) as error:
+        _table_metadata("shop.orders")
+
+    assert "完整限定" in str(error.value)
+    assert _table_metadata("hive.shop.orders")["catalog"] == "hive"
+
+
+def _describe_graph(monkeypatch, tables):
+    """Fake the graph query shape, filtering by the parameters it receives."""
+    from semantica_dataagent import knowledge
+
+    calls = []
+
+    def execute(store, query, parameters):
+        calls.append((query, parameters))
+        names = parameters.get("names")
+        catalog_names = set(parameters.get("catalog_names") or ())
+        selected = []
+        for table in tables:
+            qualified = f"{table['database']}.{table['name']}"
+            full_name = (
+                f"{table['catalog']}.{qualified}" if table.get("catalog") else ""
+            )
+            if names is not None and not (
+                table["name"] in names
+                or qualified in names
+                or (full_name and full_name.lower() in catalog_names)
+            ):
+                continue
+            selected.append(table)
+
+        def row(table):
+            return {
+                **table,
+                "ref": table.get("ref") or f"table:{table['database']}.{table['name']}",
+            }
+
+        if "count(f) AS field_count" in query:
+            return [
+                {
+                    "table": row(table),
+                    "field_count": len(table.get("fields") or ()),
+                    "document_count": 0,
+                    "has_partition": any(
+                        field.get("partition") for field in table.get("fields") or ()
+                    ),
+                }
+                for table in selected
+            ]
+        return [
+            {"table": row(table), "fields": table.get("fields") or [], "documents": []}
+            for table in selected
+        ]
+
+    monkeypatch.setattr(
+        knowledge,
+        "_project_settings",
+        lambda project_id=None: {"knowledge_generation": "test_generation"},
+    )
+    monkeypatch.setattr(knowledge, "read_graph", lambda values: object())
+    monkeypatch.setattr(knowledge, "execute", execute)
+    return calls
+
+
+@pytest.mark.parametrize("summary", [False, True])
+def test_describe_tables_filters_three_part_names_by_catalog(monkeypatch, summary):
+    from semantica_dataagent import knowledge
+
+    calls = _describe_graph(
+        monkeypatch,
+        [_metadata("hive"), _metadata("internal")],
+    )
+
+    rows = knowledge.describe(names=["hive.shop.orders"], summary=summary)
+
+    assert [row["catalog"] for row in rows] == ["hive"]
+    query, parameters = calls[-1]
+    assert "t.catalog" in query
+    assert "$catalog_names" in query
+    assert parameters["catalog_names"] == ["hive.shop.orders"]
+
+
+@pytest.mark.parametrize("summary", [False, True])
+def test_describe_tables_does_not_fall_back_to_another_catalog(monkeypatch, summary):
+    from semantica_dataagent import knowledge
+
+    _describe_graph(monkeypatch, [_metadata("internal")])
+    assert knowledge.describe(names=["hive.shop.orders"], summary=summary) == []
+
+    _describe_graph(monkeypatch, [_metadata()])
+    assert knowledge.describe(names=["hive.shop.orders"], summary=summary) == []

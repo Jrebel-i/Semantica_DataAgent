@@ -61,7 +61,9 @@ def _qualified(metadata):
 
 def _table_metadata(table, project_id=None):
     parsed = exp.to_table(table, dialect="doris")
-    qualified = f"{parsed.db}.{parsed.name}" if parsed.db else parsed.name
+    qualified = ".".join(
+        part for part in (parsed.catalog, parsed.db, parsed.name) if part
+    )
     if project_id in (None, "default"):
         matches = knowledge.describe(names=[qualified])
     else:
@@ -81,6 +83,11 @@ def _table_metadata(table, project_id=None):
         if reason == "ambiguous":
             raise ToolInvalidInput(
                 f"表名 {table} 不唯一，请使用 catalog.database.table"
+            )
+        if reason == "unqualified":
+            raise ToolInvalidInput(
+                "表名需要包含目录的完整限定（catalog.database.table），"
+                "省略目录可能落到默认目录"
             )
         if reason == "catalog":
             raise ToolInvalidInput(f"无法确认表 {table} 的目录元数据")

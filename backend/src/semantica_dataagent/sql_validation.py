@@ -58,7 +58,8 @@ class Snapshot:
                 self.neighbors[b].add(a)
                 self.edge_pairs[frozenset((a, b))].append(edge)
 
-    def resolve(self, name):
+    def resolution(self, name):
+        """Return ``(matches, reason)``; ``reason`` is None only for a full match."""
         name = name.lower()
         parts = name.split(".")
         if len(parts) in (2, 3):
@@ -66,9 +67,16 @@ class Snapshot:
                 exp.to_table(name, dialect="doris"), self._lookup
             )
             if metadata is not None:
-                return [metadata]
-            return candidates if reason == "ambiguous" else []
-        return self.by_short.get(name, [])
+                return [metadata], None
+            if reason in {"ambiguous", "unqualified"}:
+                return candidates, reason
+            return [], reason
+        short = self.by_short.get(name, [])
+        return short, None if short else "missing"
+
+    def resolve(self, name):
+        matches, reason = self.resolution(name)
+        return [] if reason == "unqualified" else matches
 
     def documents_for(self, pairs):
         if self.document_loader and pairs:
@@ -251,16 +259,16 @@ def check_sql(sql, dialect, snapshot, partition_tables=None):
             if isinstance(s, exp.Table)
         ):
             name = ".".join(x for x in (table.catalog, table.db, table.name) if x)
-            matches = snapshot.resolve(name)
+            matches, reason = snapshot.resolution(name)
             item = {
                 "name": name,
                 "status": "pass"
-                if len(matches) == 1
+                if reason is None
                 else "ambiguous"
-                if matches
+                if reason == "ambiguous"
                 else "error",
             }
-            if len(matches) == 1:
+            if reason is None:
                 resolved[id(table)] = matches[0]
                 item["ref"] = matches[0]["ref"]
             else:
@@ -283,6 +291,8 @@ def check_sql(sql, dialect, snapshot, partition_tables=None):
                         "message": (
                             f"表名不唯一: {name}"
                             if item["status"] == "ambiguous"
+                            else f"表缺少目录限定: {name}"
+                            if reason == "unqualified"
                             else f"表不存在: {name}"
                         ),
                         "suggestion": (
