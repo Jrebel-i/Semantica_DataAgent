@@ -25,7 +25,7 @@ spec:
     fsGroup: 1000
   containers:
     - name: bootstrap
-      image: 172.16.242.124:31640/dataagent-app:4f898c6
+      image: 172.16.242.124:31640/dataagent-app:001d46d
       command: ["sleep", "1800"]
       env:
         - name: DATAAGENT_DB_PATH
