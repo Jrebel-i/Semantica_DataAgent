@@ -736,6 +736,12 @@ def test_session_failure_reaches_sse_and_persisted_turn_without_raw_text(
     turn = detail["turns"][0]
     assert turn["status"] == "failed"
     assert turn["error"] == "Agent failed: wait/nonzero_exit"
+    persisted_error = next(event for event in turn["events"] if event["type"] == "error")
+    assert persisted_error["data"]["failure"] == {
+        "stage": "wait",
+        "category": "nonzero_exit",
+        "pod_status": {"phase": "Pending"},
+    }
     assert MARKER not in json.dumps(turn, ensure_ascii=False)
 
 
@@ -794,4 +800,9 @@ def test_unknown_agent_failure_degrades_to_fixed_unknown_in_sse_and_storage(
     turn = detail["turns"][0]
     assert turn["status"] == "failed"
     assert turn["error"] == "Agent failed: unknown/unknown"
+    persisted_error = next(event for event in turn["events"] if event["type"] == "error")
+    assert persisted_error["data"]["failure"] == {
+        "stage": "unknown",
+        "category": "unknown",
+    }
     assert MARKER not in json.dumps(turn, ensure_ascii=False)
