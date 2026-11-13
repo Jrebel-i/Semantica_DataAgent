@@ -82,6 +82,198 @@ def test_session_pod_is_labeled_and_limits_its_workspace():
     assert all(volume.get("emptyDir") == {} for volume in spec["volumes"])
 
 
+def _node_executable():
+    node = shutil.which("node")
+    assert node, "Node is required for the PID1 command test"
+    result = subprocess.run(
+        [node, "-p", "process.execPath"],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=10,
+    )
+    return result.stdout.strip() or node
+
+
+def _cached_runner_image():
+    _require_docker()
+    from semantica_dataagent.k8s_sandbox import RUNNER_IMAGE
+
+    result = subprocess.run(
+        ["docker", "image", "inspect", RUNNER_IMAGE],
+        capture_output=True,
+        check=False,
+        timeout=15,
+    )
+    if result.returncode != 0:
+        pytest.skip("the cached runner image is required for the container PID1 test")
+    return RUNNER_IMAGE
+
+
+SIGTERM_HANDLER = "process.on('SIGTERM', () => process.exit(0)); "
+
+
+def test_session_pid1_command_exits_zero_on_sigterm():
+    """The built command must exit 0, not take Node's default SIGTERM death.
+
+    A host child is not PID1; the container test below and the real-Pod script
+    cover PID1 semantics.  Without the explicit handler the built command exits
+    from the default SIGTERM action with returncode -15, so this is a real
+    behavioral check of the command extracted from the Pod spec.
+    """
+    import os
+    import select
+    import signal
+    import time
+
+    command = pod_spec()["spec"]["containers"][0]["command"]
+    assert command[:2] == ["node", "-e"]
+    script = command[2] + '; console.log("READY")'
+
+    process = subprocess.Popen(
+        [_node_executable(), command[1], script],
+        start_new_session=True,
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        readable, _, _ = select.select([process.stdout], [], [], 5)
+        assert readable, "command did not finish registering handlers"
+        assert process.stdout.readline().strip() == "READY"
+        assert process.poll() is None, "PID1 command must stay resident before SIGTERM"
+        started = time.monotonic()
+        process.send_signal(signal.SIGTERM)
+        assert process.wait(timeout=5) == 0
+        assert time.monotonic() - started < 5
+    finally:
+        if process.poll() is None:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.wait(timeout=5)
+
+    assert command[2].startswith(SIGTERM_HANDLER), (
+        "PID1 command must install an explicit SIGTERM handler"
+    )
+
+
+def test_session_pid1_sigterm_behavior_as_container_init():
+    import time
+    import uuid
+
+    image = _cached_runner_image()
+    command = pod_spec()["spec"]["containers"][0]["command"]
+    legacy_script = command[2].removeprefix(SIGTERM_HANDLER)
+    assert legacy_script.startswith("setInterval(")
+
+    def start(script):
+        name = f"sda-issue262-{uuid.uuid4().hex}"
+        subprocess.run(
+            [
+                "docker",
+                "run",
+                "-d",
+                "--name",
+                name,
+                "--pull",
+                "never",
+                "--network",
+                "none",
+                "--entrypoint",
+                "node",
+                image,
+                "-e",
+                script,
+            ],
+            capture_output=True,
+            check=True,
+            timeout=30,
+        )
+        return name
+
+    def running(name):
+        result = subprocess.run(
+            ["docker", "inspect", "-f", "{{.State.Running}}", name],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
+        )
+        return result.returncode == 0 and result.stdout.strip() == "true"
+
+    def wait_running(name):
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            if running(name):
+                return
+            time.sleep(0.1)
+        pytest.fail("container did not stay running")
+
+    def wait_ready(name):
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            logs = subprocess.run(
+                ["docker", "logs", name],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=10,
+            )
+            if "READY" in logs.stdout:
+                return
+            time.sleep(0.1)
+        pytest.fail("command did not finish registering handlers")
+
+    def wait_exit(name):
+        result = subprocess.run(
+            ["docker", "wait", name],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=20,
+        )
+        assert result.returncode == 0, result.stderr
+        return int(result.stdout.strip())
+
+    marker = '; console.log("READY")'
+    legacy = start(legacy_script + marker)
+    try:
+        wait_running(legacy)
+        wait_ready(legacy)
+        subprocess.run(
+            ["docker", "kill", "--signal=TERM", legacy],
+            check=True,
+            capture_output=True,
+            timeout=10,
+        )
+        time.sleep(3)
+        assert running(legacy), "legacy PID1 command must survive SIGTERM for 3s"
+        subprocess.run(
+            ["docker", "kill", legacy], check=True, capture_output=True, timeout=10
+        )
+        assert wait_exit(legacy) == 137
+    finally:
+        subprocess.run(
+            ["docker", "rm", "-f", legacy], capture_output=True, check=False, timeout=15
+        )
+
+    fixed = start(command[2] + marker)
+    try:
+        wait_running(fixed)
+        wait_ready(fixed)
+        started = time.monotonic()
+        subprocess.run(
+            ["docker", "kill", "--signal=TERM", fixed],
+            check=True,
+            capture_output=True,
+            timeout=10,
+        )
+        assert wait_exit(fixed) == 0
+        assert time.monotonic() - started < 10
+    finally:
+        subprocess.run(
+            ["docker", "rm", "-f", fixed], capture_output=True, check=False, timeout=15
+        )
+
+
 def test_session_firewall_denies_ipv4_and_ipv6_by_default():
     pod = pod_spec()
     init = pod["spec"]["initContainers"][0]
