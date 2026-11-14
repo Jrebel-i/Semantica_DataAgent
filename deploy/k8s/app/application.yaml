@@ -48,7 +48,7 @@ spec:
         fsGroup: 1000
       containers:
         - name: dataagent
-          image: 172.16.242.124:31640/dataagent-app:001d46d
+          image: 172.16.242.124:31640/dataagent-app:9c0b7a4
           imagePullPolicy: Always
           ports:
             - containerPort: 8000
@@ -71,6 +71,8 @@ spec:
               value: k8s
             - name: DATAAGENT_PUBLIC_URL
               value: http://dataagent.semantica-dataagent.svc:8000
+            - name: DATAAGENT_SESSION_NODES
+              value: k8s-worker-03,k8s-worker-05
             - name: DATAAGENT_NODE_NAME
               valueFrom:
                 fieldRef:

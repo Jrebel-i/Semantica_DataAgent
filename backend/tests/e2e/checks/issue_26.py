@@ -1,6 +1,7 @@
 """Check the deployed frontend and the actual session Pod firewall."""
 
 import json
+import os
 import shlex
 import socket
 import subprocess
@@ -29,6 +30,65 @@ def _kubectl(*args, input_data=None, check=True, timeout=180, namespace=NAMESPAC
     if check and result.returncode:
         raise AssertionError(f"kubectl {args[0]} failed: {result.stderr[-1000:]}")
     return result
+
+
+def _deployment_session_nodes(deployment):
+    """Read the literal session node pool from the live Deployment."""
+    containers = (
+        deployment.get("spec", {})
+        .get("template", {})
+        .get("spec", {})
+        .get("containers", [])
+    )
+    for container in containers:
+        if container.get("name") != "dataagent":
+            continue
+        found = None
+        for item in container.get("env", []):
+            if item.get("name") != "DATAAGENT_SESSION_NODES":
+                continue
+            if found is not None:
+                raise AssertionError("DATAAGENT_SESSION_NODES must appear only once")
+            if "valueFrom" in item or "value" not in item:
+                raise AssertionError(
+                    "DATAAGENT_SESSION_NODES must be a plain non-sensitive value"
+                )
+            value = item["value"]
+            if not isinstance(value, str):
+                raise TypeError("DATAAGENT_SESSION_NODES must be a string")
+            found = value
+        return found
+    raise AssertionError("Deployment is missing the dataagent container")
+
+
+def _apply_session_placement(pod, *, app_node, session_nodes):
+    """Apply the e2e placement contract without overriding a configured pool."""
+    spec = pod["spec"]
+    if session_nodes is None:
+        spec["nodeSelector"] = {"kubernetes.io/hostname": app_node}
+        return pod
+    if "nodeSelector" in spec:
+        raise AssertionError(
+            "DATAAGENT_SESSION_NODES must not be combined with nodeSelector"
+        )
+    required = (
+        spec.get("affinity", {})
+        .get("nodeAffinity", {})
+        .get("requiredDuringSchedulingIgnoredDuringExecution", {})
+        .get("nodeSelectorTerms", [])
+    )
+    expected = session_nodes.split(",")
+    if not any(
+        expression.get("key") == "kubernetes.io/hostname"
+        and expression.get("operator") == "In"
+        and expression.get("values") == expected
+        for term in required
+        for expression in term.get("matchExpressions", [])
+    ):
+        raise AssertionError(
+            "session Pod affinity does not match DATAAGENT_SESSION_NODES"
+        )
+    return pod
 
 
 def check_frontend_and_mcp(ctx):
@@ -60,6 +120,10 @@ def check_session_egress(ctx):
     ready = [p for p in pods if p["status"].get("phase") == "Running"]
     ctx.require(len(ready) == 1, "expected exactly one running application Pod")
     node = ready[0]["spec"]["nodeName"]
+    deployment = json.loads(
+        _kubectl("get", "deployment", "dataagent", "-o", "json").stdout
+    )
+    session_nodes = _deployment_session_nodes(deployment)
     created_pod = False
     try:
         service_ip = _kubectl(
@@ -75,14 +139,21 @@ def check_session_egress(ctx):
                 host = service_ip
             return original_resolve(host, *args, **kwargs)
 
-        with patch("socket.getaddrinfo", side_effect=resolve):
+        with (
+            patch("socket.getaddrinfo", side_effect=resolve),
+            patch.dict(os.environ, {}, clear=False),
+        ):
+            if session_nodes is None:
+                os.environ.pop("DATAAGENT_SESSION_NODES", None)
+            else:
+                os.environ["DATAAGENT_SESSION_NODES"] = session_nodes
             pod = build_pod_spec(
                 name=name,
                 workspace_subpath="conversations/" + session,
                 model_url="https://llm-cn.pkfare-inc.com",
                 mcp_url="http://dataagent.semantica-dataagent.svc:8000/mcp/",
             )
-        pod["spec"]["nodeSelector"] = {"kubernetes.io/hostname": node}
+        _apply_session_placement(pod, app_node=node, session_nodes=session_nodes)
         _kubectl(
             "create",
             "-f",

@@ -2,6 +2,7 @@
 
 import ipaddress
 import os
+import re
 import socket
 from pathlib import Path, PurePosixPath
 from urllib.parse import urlsplit
@@ -15,6 +16,10 @@ from .failure_diagnostics import (
 RUNNER_IMAGE = "172.16.242.124:31640/dataagent-agent-runner:1.2.1"
 SESSION_LABEL = "app.kubernetes.io/component=agent-session"
 POD_STATUS_TIMEOUT_SECONDS = 10
+
+_NODE_NAME = re.compile(
+    r"[a-z0-9](?:[-a-z0-9]*[a-z0-9])?(?:\.[a-z0-9](?:[-a-z0-9]*[a-z0-9])?)*"
+)
 
 # Node ignores default signal dispositions when it runs as PID 1.  Without an
 # explicit handler a normal Pod deletion waits out the 30 second grace period
@@ -59,6 +64,19 @@ def _resolve(address: str) -> tuple[str, int, list[str]]:
     if not addresses:
         raise ValueError(f"cannot resolve agent endpoint: {host}")
     return host, port, addresses
+
+
+def _session_nodes(value: str) -> list[str]:
+    nodes = value.split(",")
+    if any(
+        not node
+        or node.strip() != node
+        or len(node) > 63
+        or _NODE_NAME.fullmatch(node) is None
+        for node in nodes
+    ):
+        raise ValueError("invalid DATAAGENT_SESSION_NODES")
+    return nodes
 
 
 def _firewall(endpoints) -> str:
@@ -154,9 +172,29 @@ def build_pod_spec(
             {"name": "tmp", "emptyDir": {}},
         ],
     }
-    node = os.environ.get("DATAAGENT_NODE_NAME")
-    if node:
-        spec["nodeSelector"] = {"kubernetes.io/hostname": node}
+    nodes = os.environ.get("DATAAGENT_SESSION_NODES")
+    if nodes is not None:
+        spec["affinity"] = {
+            "nodeAffinity": {
+                "requiredDuringSchedulingIgnoredDuringExecution": {
+                    "nodeSelectorTerms": [
+                        {
+                            "matchExpressions": [
+                                {
+                                    "key": "kubernetes.io/hostname",
+                                    "operator": "In",
+                                    "values": _session_nodes(nodes),
+                                }
+                            ]
+                        }
+                    ]
+                }
+            }
+        }
+    else:
+        node = os.environ.get("DATAAGENT_NODE_NAME")
+        if node:
+            spec["nodeSelector"] = {"kubernetes.io/hostname": node}
     return {
         "apiVersion": "v1",
         "kind": "Pod",

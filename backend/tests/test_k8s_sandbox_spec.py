@@ -82,6 +82,256 @@ def test_session_pod_is_labeled_and_limits_its_workspace():
     assert all(volume.get("emptyDir") == {} for volume in spec["volumes"])
 
 
+def test_session_node_pool_uses_required_node_affinity(monkeypatch):
+    monkeypatch.setenv("DATAAGENT_SESSION_NODES", "k8s-worker-03,k8s-worker-05")
+    monkeypatch.setenv("DATAAGENT_NODE_NAME", "k8s-worker-04")
+    spec = pod_spec()["spec"]
+    assert "nodeSelector" not in spec
+    assert spec["affinity"] == {
+        "nodeAffinity": {
+            "requiredDuringSchedulingIgnoredDuringExecution": {
+                "nodeSelectorTerms": [
+                    {
+                        "matchExpressions": [
+                            {
+                                "key": "kubernetes.io/hostname",
+                                "operator": "In",
+                                "values": ["k8s-worker-03", "k8s-worker-05"],
+                            }
+                        ]
+                    }
+                ]
+            }
+        }
+    }
+
+
+def test_session_node_pool_absent_keeps_legacy_node_selector(monkeypatch):
+    monkeypatch.delenv("DATAAGENT_SESSION_NODES", raising=False)
+    monkeypatch.setenv("DATAAGENT_NODE_NAME", "k8s-worker-04")
+    spec = pod_spec()["spec"]
+    assert spec["nodeSelector"] == {"kubernetes.io/hostname": "k8s-worker-04"}
+    assert "affinity" not in spec
+
+
+def test_session_placement_absent_keeps_unconstrained_scheduling(monkeypatch):
+    monkeypatch.delenv("DATAAGENT_SESSION_NODES", raising=False)
+    monkeypatch.delenv("DATAAGENT_NODE_NAME", raising=False)
+    spec = pod_spec()["spec"]
+    assert "nodeSelector" not in spec
+    assert "affinity" not in spec
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "",
+        ",",
+        "k8s-worker-03,",
+        ",k8s-worker-05",
+        "k8s-worker-03,,k8s-worker-05",
+        " k8s-worker-03",
+        "k8s-worker-03 ",
+        "K8S-WORKER-03",
+        "k8s_worker_03",
+        "-k8s-worker-03",
+        "k8s-worker-03-",
+        "k8s-worker-03!",
+        "worker 03",
+        "a" * 64,
+    ],
+)
+def test_session_node_pool_rejects_empty_or_invalid_names(monkeypatch, value):
+    monkeypatch.setenv("DATAAGENT_SESSION_NODES", value)
+    with pytest.raises(ValueError, match="DATAAGENT_SESSION_NODES"):
+        pod_spec()
+
+
+def test_application_sessions_restricted_to_verified_node_pool():
+    deployments = [
+        doc
+        for doc in manifests()
+        if doc.get("kind") == "Deployment"
+        and doc.get("metadata", {}).get("name") == "dataagent"
+    ]
+    assert len(deployments) == 1
+    container = deployments[0]["spec"]["template"]["spec"]["containers"][0]
+    env = {item["name"]: item for item in container["env"]}
+    session_nodes = [
+        item for item in container["env"] if item["name"] == "DATAAGENT_SESSION_NODES"
+    ]
+    assert len(session_nodes) == 1
+    assert session_nodes[0] == {
+        "name": "DATAAGENT_SESSION_NODES",
+        "value": "k8s-worker-03,k8s-worker-05",
+    }
+    assert env["DATAAGENT_NODE_NAME"]["valueFrom"] == {
+        "fieldRef": {"fieldPath": "spec.nodeName"}
+    }
+
+
+def issue_26_checks():
+    path = ROOT / "backend/tests/e2e/checks/issue_26.py"
+    spec = importlib.util.spec_from_file_location("_issue_26_checks", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _deployment_with_env(env):
+    return {
+        "spec": {
+            "template": {"spec": {"containers": [{"name": "dataagent", "env": env}]}}
+        }
+    }
+
+
+def test_issue_26_e2e_reads_production_deployment_session_nodes():
+    deployments = [
+        doc
+        for doc in manifests()
+        if doc.get("kind") == "Deployment"
+        and doc.get("metadata", {}).get("name") == "dataagent"
+    ]
+    assert len(deployments) == 1
+    assert (
+        issue_26_checks()._deployment_session_nodes(deployments[0])
+        == "k8s-worker-03,k8s-worker-05"
+    )
+
+
+def test_issue_26_e2e_without_deployment_pool_returns_none():
+    assert issue_26_checks()._deployment_session_nodes(_deployment_with_env([])) is None
+
+
+@pytest.mark.parametrize(
+    "containers",
+    [[], [{"name": "app", "env": []}]],
+)
+def test_issue_26_e2e_rejects_missing_dataagent_container(containers):
+    deployment = {"spec": {"template": {"spec": {"containers": containers}}}}
+    with pytest.raises(AssertionError, match="dataagent container"):
+        issue_26_checks()._deployment_session_nodes(deployment)
+
+
+def test_issue_26_e2e_rejects_duplicate_session_nodes_env():
+    deployment = _deployment_with_env(
+        [
+            {"name": "DATAAGENT_SESSION_NODES", "value": "k8s-worker-03"},
+            {"name": "DATAAGENT_SESSION_NODES", "value": "k8s-worker-05"},
+        ]
+    )
+    with pytest.raises(AssertionError, match="must appear only once"):
+        issue_26_checks()._deployment_session_nodes(deployment)
+
+
+@pytest.mark.parametrize(
+    ("item", "error"),
+    [
+        (
+            {
+                "name": "DATAAGENT_SESSION_NODES",
+                "valueFrom": {"secretKeyRef": {"name": "nodes", "key": "nodes"}},
+            },
+            AssertionError,
+        ),
+        (
+            {
+                "name": "DATAAGENT_SESSION_NODES",
+                "value": "k8s-worker-03",
+                "valueFrom": {"secretKeyRef": {"name": "nodes", "key": "nodes"}},
+            },
+            AssertionError,
+        ),
+        ({"name": "DATAAGENT_SESSION_NODES", "value": 3}, TypeError),
+    ],
+)
+def test_issue_26_e2e_rejects_non_literal_session_nodes(item, error):
+    with pytest.raises(error, match="DATAAGENT_SESSION_NODES"):
+        issue_26_checks()._deployment_session_nodes(_deployment_with_env([item]))
+
+
+def test_issue_26_e2e_without_pool_keeps_app_node_selector(monkeypatch):
+    monkeypatch.delenv("DATAAGENT_SESSION_NODES", raising=False)
+    monkeypatch.delenv("DATAAGENT_NODE_NAME", raising=False)
+    pod = pod_spec()
+    issue_26_checks()._apply_session_placement(
+        pod, app_node="k8s-worker-04", session_nodes=None
+    )
+    assert pod["spec"]["nodeSelector"] == {"kubernetes.io/hostname": "k8s-worker-04"}
+    assert "affinity" not in pod["spec"]
+
+
+def test_issue_26_e2e_pool_uses_affinity_without_node_selector(monkeypatch):
+    monkeypatch.setenv("DATAAGENT_SESSION_NODES", "k8s-worker-03,k8s-worker-05")
+    monkeypatch.setenv("DATAAGENT_NODE_NAME", "k8s-worker-04")
+    pod = pod_spec()
+    issue_26_checks()._apply_session_placement(
+        pod, app_node="k8s-worker-04", session_nodes="k8s-worker-03,k8s-worker-05"
+    )
+    assert "nodeSelector" not in pod["spec"]
+    assert pod["spec"]["affinity"] == {
+        "nodeAffinity": {
+            "requiredDuringSchedulingIgnoredDuringExecution": {
+                "nodeSelectorTerms": [
+                    {
+                        "matchExpressions": [
+                            {
+                                "key": "kubernetes.io/hostname",
+                                "operator": "In",
+                                "values": ["k8s-worker-03", "k8s-worker-05"],
+                            }
+                        ]
+                    }
+                ]
+            }
+        }
+    }
+
+
+def test_issue_26_e2e_pool_rejects_conflicting_node_selector():
+    pod = {"spec": {"nodeSelector": {"kubernetes.io/hostname": "k8s-worker-04"}}}
+    with pytest.raises(AssertionError, match="must not be combined with nodeSelector"):
+        issue_26_checks()._apply_session_placement(
+            pod, app_node="k8s-worker-04", session_nodes="k8s-worker-03,k8s-worker-05"
+        )
+
+
+@pytest.mark.parametrize(
+    "pod",
+    [
+        {"spec": {}},
+        {
+            "spec": {
+                "affinity": {
+                    "nodeAffinity": {
+                        "requiredDuringSchedulingIgnoredDuringExecution": {
+                            "nodeSelectorTerms": [
+                                {
+                                    "matchExpressions": [
+                                        {
+                                            "key": "kubernetes.io/hostname",
+                                            "operator": "In",
+                                            "values": ["k8s-worker-03"],
+                                        }
+                                    ]
+                                }
+                            ]
+                        }
+                    }
+                }
+            }
+        },
+    ],
+)
+def test_issue_26_e2e_pool_rejects_mismatched_affinity(pod):
+    with pytest.raises(AssertionError, match="affinity does not match"):
+        issue_26_checks()._apply_session_placement(
+            pod, app_node="k8s-worker-04", session_nodes="k8s-worker-03,k8s-worker-05"
+        )
+
+
 def _node_executable():
     node = shutil.which("node")
     assert node, "Node is required for the PID1 command test"
