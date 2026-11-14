@@ -82,6 +82,90 @@ def test_session_pod_is_labeled_and_limits_its_workspace():
     assert all(volume.get("emptyDir") == {} for volume in spec["volumes"])
 
 
+def test_session_node_pool_uses_required_node_affinity(monkeypatch):
+    monkeypatch.setenv("DATAAGENT_SESSION_NODES", "k8s-worker-03,k8s-worker-05")
+    monkeypatch.setenv("DATAAGENT_NODE_NAME", "k8s-worker-04")
+    spec = pod_spec()["spec"]
+    assert "nodeSelector" not in spec
+    assert spec["affinity"] == {
+        "nodeAffinity": {
+            "requiredDuringSchedulingIgnoredDuringExecution": {
+                "nodeSelectorTerms": [
+                    {
+                        "matchExpressions": [
+                            {
+                                "key": "kubernetes.io/hostname",
+                                "operator": "In",
+                                "values": ["k8s-worker-03", "k8s-worker-05"],
+                            }
+                        ]
+                    }
+                ]
+            }
+        }
+    }
+
+
+def test_session_node_pool_absent_keeps_legacy_node_selector(monkeypatch):
+    monkeypatch.delenv("DATAAGENT_SESSION_NODES", raising=False)
+    monkeypatch.setenv("DATAAGENT_NODE_NAME", "k8s-worker-04")
+    spec = pod_spec()["spec"]
+    assert spec["nodeSelector"] == {"kubernetes.io/hostname": "k8s-worker-04"}
+    assert "affinity" not in spec
+
+
+def test_session_placement_absent_keeps_unconstrained_scheduling(monkeypatch):
+    monkeypatch.delenv("DATAAGENT_SESSION_NODES", raising=False)
+    monkeypatch.delenv("DATAAGENT_NODE_NAME", raising=False)
+    spec = pod_spec()["spec"]
+    assert "nodeSelector" not in spec
+    assert "affinity" not in spec
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "",
+        ",",
+        "k8s-worker-03,",
+        ",k8s-worker-05",
+        "k8s-worker-03,,k8s-worker-05",
+        " k8s-worker-03",
+        "k8s-worker-03 ",
+        "K8S-WORKER-03",
+        "k8s_worker_03",
+        "-k8s-worker-03",
+        "k8s-worker-03-",
+        "k8s-worker-03!",
+        "worker 03",
+        "a" * 64,
+    ],
+)
+def test_session_node_pool_rejects_empty_or_invalid_names(monkeypatch, value):
+    monkeypatch.setenv("DATAAGENT_SESSION_NODES", value)
+    with pytest.raises(ValueError, match="DATAAGENT_SESSION_NODES"):
+        pod_spec()
+
+
+def test_application_sessions_restricted_to_verified_node_pool():
+    deployments = [
+        doc
+        for doc in manifests()
+        if doc.get("kind") == "Deployment"
+        and doc.get("metadata", {}).get("name") == "dataagent"
+    ]
+    assert len(deployments) == 1
+    container = deployments[0]["spec"]["template"]["spec"]["containers"][0]
+    env = {item["name"]: item for item in container["env"]}
+    assert env["DATAAGENT_SESSION_NODES"] == {
+        "name": "DATAAGENT_SESSION_NODES",
+        "value": "k8s-worker-03,k8s-worker-05",
+    }
+    assert env["DATAAGENT_NODE_NAME"]["valueFrom"] == {
+        "fieldRef": {"fieldPath": "spec.nodeName"}
+    }
+
+
 def _node_executable():
     node = shutil.which("node")
     assert node, "Node is required for the PID1 command test"

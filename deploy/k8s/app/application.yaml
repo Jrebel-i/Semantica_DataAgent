@@ -71,6 +71,8 @@ spec:
               value: k8s
             - name: DATAAGENT_PUBLIC_URL
               value: http://dataagent.semantica-dataagent.svc:8000
+            - name: DATAAGENT_SESSION_NODES
+              value: k8s-worker-03,k8s-worker-05
             - name: DATAAGENT_NODE_NAME
               valueFrom:
                 fieldRef:
