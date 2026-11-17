@@ -531,3 +531,100 @@ def test_sample_api_forwards_project_to_knowledge(monkeypatch):
     assert resolved["name"] == "orders"
     assert calls.project_ids[-1] == "proj-legacy"
     assert calls[-1][1]["names"] == ["shop.orders"]
+
+
+def test_validate_records_and_table_stage_distinguish_tables_by_catalog():
+    from semantica_dataagent import knowledge, table_stage
+    from semantica_dataagent.canonical import Record
+
+    records = [
+        Record(
+            "table",
+            {"catalog": "hive", "database": "shop", "name": "orders", "comment": "H"},
+            "tables.json",
+        ),
+        Record(
+            "table",
+            {
+                "catalog": "internal",
+                "database": "shop",
+                "name": "orders",
+                "comment": "I",
+            },
+            "tables.json",
+        ),
+        Record(
+            "field",
+            {
+                "catalog": "hive",
+                "database": "shop",
+                "table": "orders",
+                "name": "id",
+                "type": "string",
+                "comment": "H",
+                "partition": False,
+            },
+            "fields.json",
+        ),
+        Record(
+            "field",
+            {
+                "catalog": "internal",
+                "database": "shop",
+                "table": "orders",
+                "name": "id",
+                "type": "string",
+                "comment": "I",
+                "partition": False,
+            },
+            "fields.json",
+        ),
+    ]
+    knowledge.validate_records(records)
+
+    class Storage:
+        build_id = 1
+        all_records = None
+        is_incremental = False
+
+        def __init__(self):
+            self._settings = {}
+            self.rows = []
+            self.vectors = []
+
+        def execute(self, query, parameters):
+            if "UNWIND $rows AS row" in query:
+                self.rows.extend(parameters["rows"])
+            return []
+
+        def add_vectors(self, ids, texts, metadata):
+            self.vectors.extend(metadata)
+
+    storage = Storage()
+    result = table_stage.write(records, "test", storage)
+    assert result.counts == {"table": 2, "field": 2}
+    assert {r["ref"] for r in storage.rows} == {
+        "table:hive.shop.orders",
+        "table:internal.shop.orders",
+        "field:hive.shop.orders.id",
+        "field:internal.shop.orders.id",
+    }
+    assert {v["catalog"] for v in storage.vectors} == {"hive", "internal"}
+
+    with pytest.raises(ValueError, match="Duplicate"):
+        knowledge.validate_records([records[0], records[0]])
+
+    missing_catalog_field = Record(
+        "field",
+        {
+            "database": "shop",
+            "table": "orders",
+            "name": "id",
+            "type": "string",
+            "comment": "bare",
+            "partition": False,
+        },
+        "fields.json",
+    )
+    with pytest.raises(ValueError, match="missing table"):
+        table_stage.write([records[0], missing_catalog_field], "test", Storage())

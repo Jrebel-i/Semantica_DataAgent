@@ -34,6 +34,19 @@ def filter_records(records, rules):
             ok = allowed(
                 data["database"], rules["database_include"], rules["database_exclude"]
             )
+        if record.kind == "relationship":
+            ok = ok and (
+                allowed(
+                    data["from_database"],
+                    rules["database_include"],
+                    rules["database_exclude"],
+                )
+                and allowed(
+                    data["to_database"],
+                    rules["database_include"],
+                    rules["database_exclude"],
+                )
+            )
         if record.kind == "task":
             ok = ok and allowed(
                 data["name"], rules["task_include"], rules["task_exclude"]

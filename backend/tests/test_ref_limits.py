@@ -37,6 +37,35 @@ def test_table_field_and_document_references_are_bounded():
     )
 
 
+def test_table_and_field_references_include_optional_catalog():
+    assert (
+        reference("table", {"database": "shop", "name": "orders"})
+        == "table:shop.orders"
+    )
+    assert (
+        reference(
+            "table", {"catalog": "hive.prod", "database": "shop", "name": "orders"}
+        )
+        == "table:hive%2Eprod.shop.orders"
+    )
+    assert (
+        reference(
+            "field",
+            {
+                "catalog": "hive.prod",
+                "database": "shop",
+                "table": "orders",
+                "name": "id",
+            },
+        )
+        == "field:hive%2Eprod.shop.orders.id"
+    )
+    long_catalog = reference(
+        "table", {"catalog": "c" * 2500, "database": "shop", "name": "orders"}
+    )
+    assert len(long_catalog.encode()) <= MAX_REF_BYTES
+
+
 def test_stages_record_truncated_references():
     from semantica_dataagent import document_stage, table_stage
 

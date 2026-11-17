@@ -64,13 +64,17 @@ def write(records, generation, storage):
     ]
     all_records = storage.all_records if storage.all_records is not None else records
     table_keys = {
-        (r.data["database"], r.data["name"]) for r in all_records if r.kind == "table"
+        (r.data.get("catalog") or "", r.data["database"], r.data["name"])
+        for r in all_records
+        if r.kind == "table"
     }
     refs = [item["ref"] for item in tables + fields]
     if len(set(refs)) != len(refs):
         raise ValueError("Duplicate table or field reference")
     if not storage.is_incremental and any(
-        (field["database"], field["table"]) not in table_keys for field in fields
+        (field.get("catalog") or "", field["database"], field["table"])
+        not in table_keys
+        for field in fields
     ):
         raise ValueError("A field refers to a missing table")
     if (

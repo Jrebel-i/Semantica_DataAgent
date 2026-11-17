@@ -18,8 +18,13 @@ def doc_ref(category, path, counts=None):
 
 
 def table_name(path):
-    match = re.fullmatch(r"([^. /]+)\.([^. /]+)\.md", Path(path).name, re.IGNORECASE)
-    return match.groups() if match else None
+    match = re.fullmatch(
+        r"(?:([^. /]+)\.)?([^. /]+)\.([^. /]+)\.md", Path(path).name, re.IGNORECASE
+    )
+    if not match:
+        return None
+    groups = match.groups()
+    return groups if groups[0] is not None else groups[1:]
 
 
 def chunks(content, limit=900):

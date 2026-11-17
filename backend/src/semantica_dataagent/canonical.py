@@ -19,6 +19,7 @@ KINDS = {
     "column_lineage": "column_lineage",
     "dimension_values": "dimension_value",
     "documents": "document",
+    "relationships": "relationship",
 }
 SCHEMAS = Path(__file__).resolve().parent / "schemas" / "v2"
 if not SCHEMAS.exists():
@@ -93,11 +94,23 @@ class CanonicalAdapter:
                     finally:
                         book.close()
                 schema = json.loads((SCHEMAS / f"{kind}.schema.json").read_text())
+                is_tabular = path.suffix.lower() in {".csv", ".xlsx"}
+                optional_props = set(schema.get("properties", ())) - set(
+                    schema.get("required", ())
+                )
                 for row in rows:
+                    if is_tabular:
+                        for key in list(row):
+                            if key in optional_props and row[key] in (None, ""):
+                                del row[key]
                     if kind == "field" and isinstance(row.get("partition"), str):
                         value = row["partition"].lower()
                         if value in {"true", "false"}:
                             row["partition"] = value == "true"
+                    if is_tabular and kind == "relationship":
+                        for col_key in ("from_columns", "to_columns"):
+                            if isinstance(row.get(col_key), str):
+                                row[col_key] = json.loads(row[col_key])
                     validate(row, schema)
                     records.append(
                         Record(kind, row, path.relative_to(directory).as_posix())
