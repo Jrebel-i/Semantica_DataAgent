@@ -305,7 +305,7 @@ def test_ossie_normalizes_legacy_versions_wrappers_and_extensions(tmp_path: Path
         {"semantic_model": [_minimal_model("a"), _minimal_model("b")]},
         [_minimal_model("a"), _minimal_model("b")],
         {
-            "version": "0.3.0.dev0",
+            "version": "0.2.0.dev0",
             "name": "both_ext",
             "custom_extensions": [{"vendor_name": "A", "data": {}}],
             "nonportable_extensions": [{"vendor_name": "B", "data": {}}],
@@ -337,6 +337,75 @@ def test_ossie_rejects_invalid_wrappers_conflicting_extensions_and_schema_errors
     (ossie_dir / "invalid.json").write_text(json.dumps(payload), encoding="utf-8")
     with pytest.raises(ValueError):
         OssieAdapter().read(tmp_path, {})
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        _minimal_model(
+            "top_custom_ext",
+            custom_extensions=[{"vendor_name": "X", "data": {"a": 1}}],
+        ),
+        {
+            "version": "0.3.0.dev0",
+            "name": "dataset_custom_ext",
+            "datasets": [
+                {
+                    "name": "orders",
+                    "source": "shop.orders",
+                    "custom_extensions": [{"vendor_name": "X", "data": {"a": 1}}],
+                }
+            ],
+        },
+        {
+            "version": "0.3.0.dev0",
+            "name": "field_custom_ext",
+            "datasets": [
+                {
+                    "name": "orders",
+                    "source": "shop.orders",
+                    "fields": [
+                        {
+                            "name": "order_id",
+                            "expression": {"sql": "order_id"},
+                            "datatype": "Integer",
+                            "custom_extensions": [
+                                {
+                                    "vendor_name": "SEMANTICA_DATAAGENT",
+                                    "data": {"partition": True},
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ],
+        },
+        _minimal_model(
+            "both_ext_03",
+            custom_extensions=[{"vendor_name": "A", "data": {}}],
+            nonportable_extensions=[{"vendor_name": "B", "data": {}}],
+        ),
+    ],
+)
+def test_ossie_rejects_custom_extensions_in_03_document(tmp_path: Path, payload):
+    from semantica_dataagent import knowledge
+    from semantica_dataagent.ossie_source import OssieAdapter
+
+    ossie_dir = tmp_path / "ossie"
+    ossie_dir.mkdir()
+    (ossie_dir / "native03.json").write_text(json.dumps(payload), encoding="utf-8")
+    adapter = OssieAdapter()
+    with pytest.raises(
+        ValueError, match=r"Additional properties are not allowed.*custom_extensions"
+    ):
+        adapter.read(tmp_path, {})
+    with pytest.raises(
+        ValueError, match=r"Additional properties are not allowed.*custom_extensions"
+    ):
+        knowledge.read_sources(
+            {"source_directory": str(tmp_path), "_project_type": "warehouse"},
+            [("source", adapter, True, {})],
+        )
 
 
 def test_ossie_reads_tpcds_official_example_and_generates_derived_docs(tmp_path: Path):

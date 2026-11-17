@@ -14,6 +14,14 @@ _TABLE_MENTION_RE = re.compile(
 )
 
 
+def link_table_documents(execute, generation, rows):
+    """Merge HAS_DOCUMENT edges between SDATable and SDADocument nodes."""
+    return execute(
+        "UNWIND $rows AS row MATCH (d:SDADocument {generation:$generation, ref:row.ref}), (t:SDATable {generation:$generation, database:row.database, name:row.name}) WHERE coalesce(t.catalog, '') = coalesce(row.catalog, '') MERGE (t)-[:HAS_DOCUMENT]->(d)",
+        {"generation": generation, "rows": rows},
+    )
+
+
 def _reconcile_document_table_links(storage, records, generation):
     """Link documents to tables mentioned in document text or dictionary filenames."""
     tables = {
@@ -69,10 +77,7 @@ def _reconcile_document_table_links(storage, records, generation):
                         "name": actual[2],
                     }
                 )
-    storage.execute(
-        "UNWIND $rows AS row MATCH (d:SDADocument {generation:$generation, ref:row.ref}), (t:SDATable {generation:$generation, database:row.database, name:row.name}) WHERE coalesce(t.catalog, '') = coalesce(row.catalog, '') MERGE (t)-[:HAS_DOCUMENT]->(d)",
-        {"generation": generation, "rows": links},
-    )
+    link_table_documents(storage.execute, generation, links)
 
 
 def _reconcile_foreign_keys(storage, records, generation):

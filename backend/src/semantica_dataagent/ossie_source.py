@@ -102,6 +102,25 @@ def _ossie_validator() -> Draft202012Validator:
     return Draft202012Validator(schema)
 
 
+def validate_ossie_schema(
+    document: dict[str, Any],
+    *,
+    context: str = "",
+    error_cls: type[Exception] = ValueError,
+) -> None:
+    """Validate an Ossie document against the bundled 0.3.0.dev0 JSON Schema."""
+    errors = sorted(
+        _ossie_validator().iter_errors(document),
+        key=lambda err: [str(part) for part in err.absolute_path],
+    )
+    if errors:
+        first = errors[0]
+        loc = ".".join(str(part) for part in first.absolute_path)
+        detail = f"{loc}: {first.message}" if loc else first.message
+        message = f"{context}: {detail}" if context else detail
+        raise error_cls(message)
+
+
 def _load_raw_document(path: Path, raw: bytes) -> Any:
     try:
         text = raw.decode("utf-8-sig")
@@ -122,6 +141,8 @@ def _load_raw_document(path: Path, raw: bytes) -> Any:
 
 
 def _normalize_extensions(node: Any, *, legacy_version: bool) -> Any:
+    if not legacy_version:
+        return node
     if isinstance(node, list):
         return [
             _normalize_extensions(item, legacy_version=legacy_version) for item in node
@@ -138,7 +159,7 @@ def _normalize_extensions(node: Any, *, legacy_version: bool) -> Any:
     if has_custom:
         out["nonportable_extensions"] = out.pop("custom_extensions")
     extensions = out.get("nonportable_extensions")
-    if (has_custom or legacy_version) and isinstance(extensions, list):
+    if isinstance(extensions, list):
         out["nonportable_extensions"] = _decode_legacy_extensions(extensions)
     for key, value in list(out.items()):
         if key == "nonportable_extensions":
@@ -196,15 +217,7 @@ def _normalize_and_validate_model(raw_obj: Any, source_rel: str) -> dict[str, An
 
     model = _normalize_extensions(model, legacy_version=is_legacy)
 
-    errors = sorted(
-        _ossie_validator().iter_errors(model),
-        key=lambda err: [str(part) for part in err.absolute_path],
-    )
-    if errors:
-        first = errors[0]
-        loc = ".".join(str(part) for part in first.absolute_path)
-        detail = f"{loc}: {first.message}" if loc else first.message
-        raise ValueError(f"{source_rel}: {detail}")
+    validate_ossie_schema(model, context=source_rel)
     return model
 
 
@@ -293,12 +306,13 @@ def _all_expressions(expr_obj: dict[str, Any]) -> list[tuple[str, str]]:
     return items
 
 
-def _extract_single_column(
+def extract_single_column(
     expr_text: str,
     dialect: str,
     dataset_name: str,
     source_parts: tuple[str, ...],
 ) -> str | None:
+    """Return the physical column name when an expression selects one column on the dataset."""
     read_dialect = SQLGLOT_DIALECT_MAP.get(dialect.upper())
     try:
         node = sqlglot.parse_one(expr_text, read=read_dialect)
@@ -615,7 +629,7 @@ def _merge_dataset(
         ds_field_names.add(fname)
 
         expr_text, expr_dialect = _select_expression(field_obj["expression"])
-        physical_col = _extract_single_column(
+        physical_col = extract_single_column(
             expr_text, expr_dialect, ds_name, raw_source_parts
         )
         logical_to_physical[fname] = physical_col
