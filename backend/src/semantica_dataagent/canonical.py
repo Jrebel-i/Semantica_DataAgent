@@ -4,6 +4,8 @@ import csv
 import hashlib
 import io
 import json
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import ClassVar
@@ -24,6 +26,19 @@ KINDS = {
 SCHEMAS = Path(__file__).resolve().parent / "schemas" / "v2"
 if not SCHEMAS.exists():
     SCHEMAS = Path(__file__).resolve().parents[3] / "schemas" / "v2"
+_EXCLUDED_ROOTS: ContextVar[tuple[Path, ...]] = ContextVar(
+    "canonical_excluded_roots", default=()
+)
+
+
+@contextmanager
+def exclude_directories(paths: tuple[Path, ...]):
+    """Temporarily ignore directories owned by sibling enabled source adapters."""
+    token = _EXCLUDED_ROOTS.set(paths)
+    try:
+        yield
+    finally:
+        _EXCLUDED_ROOTS.reset(token)
 
 
 @dataclass(frozen=True)
@@ -58,6 +73,8 @@ class CanonicalAdapter:
             raise ValueError(f"Source directory does not exist: {directory}")
         records = []
         hashes = {}
+        base_resolved = directory.resolve()
+        excluded = tuple(path.resolve() for path in _EXCLUDED_ROOTS.get())
         for path in sorted(directory.rglob("*")):
             if ".git" in path.relative_to(directory).parts:
                 continue
@@ -67,8 +84,11 @@ class CanonicalAdapter:
                 ".xlsx",
             }:
                 continue
-            if not path.resolve().is_relative_to(directory.resolve()):
+            resolved = path.resolve()
+            if not resolved.is_relative_to(base_resolved):
                 raise ValueError("Canonical file escapes source directory")
+            if any(resolved.is_relative_to(root) for root in excluded):
+                continue
             kind = KINDS.get(path.stem)
             if kind is None:
                 raise ValueError(f"Unknown entity file: {path}")

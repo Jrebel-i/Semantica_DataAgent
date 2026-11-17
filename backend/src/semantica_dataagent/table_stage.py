@@ -47,6 +47,8 @@ def write(records, generation, storage):
             r.data,
             ref=reference(r.kind, r.data, truncations),
             source_file=r.source_file,
+            source_key=r.source_key or r.source_file,
+            source_files=list(r.source_files),
             build_id=storage.build_id,
         )
         for r in records
@@ -57,6 +59,8 @@ def write(records, generation, storage):
             r.data,
             ref=reference(r.kind, r.data, truncations),
             source_file=r.source_file,
+            source_key=r.source_key or r.source_file,
+            source_files=list(r.source_files),
             build_id=storage.build_id,
         )
         for r in records
