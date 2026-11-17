@@ -327,3 +327,320 @@ def test_key_frequency_threshold_in_small_and_large_generations():
             data,
         )
         assert generic["joins"][0]["status"] == "unsupported"
+
+
+def _catalog_relationship_snapshot():
+    tables = [
+        {
+            "catalog": "hive",
+            "database": "shop",
+            "name": "orders",
+            "ref": "table:hive.shop.orders",
+            "fields": [
+                {"name": "id", "partition": False},
+                {"name": "tenant_id", "partition": False},
+                {"name": "customer_id", "partition": False},
+                {"name": "dt", "partition": True},
+            ],
+        },
+        {
+            "catalog": "hive",
+            "database": "shop",
+            "name": "customers",
+            "ref": "table:hive.shop.customers",
+            "fields": [
+                {"name": "id", "partition": False},
+                {"name": "name", "partition": False},
+            ],
+        },
+        {
+            "catalog": "hive",
+            "database": "shop",
+            "name": "order_items",
+            "ref": "table:hive.shop.order_items",
+            "fields": [
+                {"name": "tenant_id", "partition": False},
+                {"name": "order_id", "partition": False},
+                {"name": "sku", "partition": False},
+            ],
+        },
+    ]
+    relationships = [
+        {
+            "name": "orders_customer",
+            "ref": "relationship:hive.shop.orders:hive.shop.customers:orders_customer",
+            "from_table": "hive.shop.orders",
+            "to_table": "hive.shop.customers",
+            "from_columns": ["customer_id"],
+            "to_columns": ["id"],
+        },
+        {
+            "name": "items_order",
+            "ref": "relationship:hive.shop.order_items:hive.shop.orders:items_order",
+            "from_table": "hive.shop.order_items",
+            "to_table": "hive.shop.orders",
+            "from_columns": ["tenant_id", "order_id"],
+            "to_columns": ["tenant_id", "id"],
+        },
+    ]
+    return Snapshot(tables, [], [], relationships=relationships)
+
+
+def test_find_join_path_uses_relationships_as_strong_evidence_with_column_pairs():
+    data = _catalog_relationship_snapshot()
+
+    forward = join_path(["hive.shop.orders", "hive.shop.customers"], data)
+    assert forward["status"] == "found"
+    assert forward["strength"] == "strong"
+    assert len(forward["steps"]) == 1
+    step = forward["steps"][0]
+    assert step["from"] == "hive.shop.orders"
+    assert step["to"] == "hive.shop.customers"
+    assert step["keys"] == ["customer_id=id"]
+    assert step["strength"] == "strong"
+    assert step["evidence"] == [
+        {
+            "type": "relationship",
+            "strength": "strong",
+            "name": "orders_customer",
+            "ref": "relationship:hive.shop.orders:hive.shop.customers:orders_customer",
+            "from_columns": ["customer_id"],
+            "to_columns": ["id"],
+        }
+    ]
+
+    reverse = join_path(["hive.shop.customers", "hive.shop.orders"], data)
+    assert reverse["status"] == "found"
+    assert reverse["strength"] == "strong"
+    assert reverse["steps"][0]["keys"] == ["id=customer_id"]
+
+    composite = join_path(["hive.shop.order_items", "hive.shop.orders"], data)
+    assert composite["status"] == "found"
+    assert composite["strength"] == "strong"
+    assert composite["steps"][0]["keys"] == ["tenant_id", "order_id=id"]
+
+    multi_hop = join_path(["hive.shop.order_items", "hive.shop.customers"], data)
+    assert multi_hop["status"] == "found"
+    assert multi_hop["strength"] == "strong"
+    assert len(multi_hop["steps"]) == 2
+
+    assert join_path(["shop.orders", "shop.customers"], data)["status"] == "no_path"
+
+
+def test_load_snapshot_reads_relates_to_edges(monkeypatch):
+    from semantica_dataagent import knowledge, sql_validation
+
+    sql_validation._snapshot_cache = None
+    monkeypatch.setenv("DATAAGENT_DB_PATH", "/tmp/nonexistent-ignored-by-mock.db")
+    monkeypatch.setattr(
+        sql_validation, "_build_version", lambda pid: (1, (1, "succeeded"))
+    )
+    monkeypatch.setattr(
+        knowledge,
+        "settings",
+        lambda project_id=None: {
+            "neo4j_uri": "bolt://127.0.0.1:7687",
+            "neo4j_user": "neo4j",
+            "neo4j_password": "secret",
+            "knowledge_generation": "test_gen",
+        },
+    )
+    monkeypatch.setattr(knowledge, "read_graph", lambda values: object())
+
+    def fake_execute(store, query, params):
+        if "HAS_FIELD" in query:
+            return [
+                {
+                    "table": {
+                        "catalog": "hive",
+                        "database": "shop",
+                        "name": "orders",
+                        "ref": "table:hive.shop.orders",
+                    },
+                    "fields": [{"name": "customer_id", "partition": False}],
+                },
+                {
+                    "table": {
+                        "catalog": "hive",
+                        "database": "shop",
+                        "name": "customers",
+                        "ref": "table:hive.shop.customers",
+                    },
+                    "fields": [{"name": "id", "partition": False}],
+                },
+            ]
+        if "DEPENDS_ON" in query:
+            return []
+        if "RELATES_TO" in query:
+            return [
+                {
+                    "relationship": {
+                        "name": "orders_customer",
+                        "ref": "relationship:hive.shop.orders:hive.shop.customers:orders_customer",
+                        "from_table": "hive.shop.orders",
+                        "to_table": "hive.shop.customers",
+                        "from_columns": ["customer_id"],
+                        "to_columns": ["id"],
+                    }
+                }
+            ]
+        return []
+
+    monkeypatch.setattr(knowledge, "execute", fake_execute)
+    snap = sql_validation.load_snapshot()
+    assert len(snap.relationships) == 1
+    path = join_path(["hive.shop.orders", "hive.shop.customers"], snap)
+    assert path["status"] == "found"
+    assert path["strength"] == "strong"
+    assert path["steps"][0]["keys"] == ["customer_id=id"]
+    sql_validation._snapshot_cache = None
+
+
+def test_check_sql_supports_single_and_composite_relationships_with_catalog():
+    data = _catalog_relationship_snapshot()
+
+    # Single-column FK with 3-part catalog tables and partition filter
+    single = check_sql(
+        "SELECT o.id, c.name FROM hive.shop.orders o "
+        "JOIN hive.shop.customers c ON o.customer_id = c.id "
+        "WHERE o.dt = '2025-01-01'",
+        "hive",
+        data,
+        partition_tables=data.tables,
+    )
+    assert single["status"] == "pass", single
+    assert single["joins"][0]["status"] == "supported"
+    assert single["joins"][0]["evidence"] == [
+        {
+            "type": "relationship",
+            "strength": "strong",
+            "name": "orders_customer",
+            "ref": "relationship:hive.shop.orders:hive.shop.customers:orders_customer",
+            "from_columns": ["customer_id"],
+            "to_columns": ["id"],
+        }
+    ]
+
+    # Reversed equality order and unaliased 3-part column qualification
+    reversed_unaliased = check_sql(
+        "SELECT hive.shop.orders.id FROM hive.shop.orders "
+        "JOIN hive.shop.customers "
+        "ON hive.shop.customers.id = hive.shop.orders.customer_id "
+        "WHERE hive.shop.orders.dt = '2025-01-01'",
+        "hive",
+        data,
+        partition_tables=data.tables,
+    )
+    assert reversed_unaliased["status"] == "pass", reversed_unaliased
+    assert reversed_unaliased["joins"][0]["status"] == "supported"
+
+    # Complete composite key (columns written in reverse table order)
+    composite_ok = check_sql(
+        "SELECT o.id, i.sku FROM hive.shop.orders o "
+        "JOIN hive.shop.order_items i "
+        "ON o.id = i.order_id AND i.tenant_id = o.tenant_id "
+        "WHERE o.dt = '2025-01-01'",
+        "hive",
+        data,
+        partition_tables=data.tables,
+    )
+    assert composite_ok["status"] == "pass", composite_ok
+    assert composite_ok["joins"][0]["status"] == "supported"
+    assert {
+        "type": "relationship",
+        "strength": "strong",
+        "name": "items_order",
+        "ref": "relationship:hive.shop.order_items:hive.shop.orders:items_order",
+        "from_columns": ["tenant_id", "order_id"],
+        "to_columns": ["tenant_id", "id"],
+    } in composite_ok["joins"][0]["evidence"]
+
+    # Partial composite key (omits order_id = id) must NOT be supported
+    composite_partial = check_sql(
+        "SELECT o.id, i.sku FROM hive.shop.orders o "
+        "JOIN hive.shop.order_items i "
+        "ON i.tenant_id = o.tenant_id "
+        "WHERE o.dt = '2025-01-01'",
+        "hive",
+        data,
+        partition_tables=data.tables,
+    )
+    assert composite_partial["status"] == "issues"
+    assert composite_partial["joins"][0]["status"] != "supported"
+    assert not any(
+        e["type"] == "relationship" for e in composite_partial["joins"][0]["evidence"]
+    )
+
+    # Disjunctive ON with composite key must NOT be supported
+    composite_or = check_sql(
+        "SELECT o.id, i.sku FROM hive.shop.orders o "
+        "JOIN hive.shop.order_items i "
+        "ON (i.tenant_id = o.tenant_id AND i.order_id = o.id) OR 1 = 1 "
+        "WHERE o.dt = '2025-01-01'",
+        "hive",
+        data,
+        partition_tables=data.tables,
+    )
+    assert composite_or["joins"][0]["status"] != "supported"
+
+    # Wrong column pair on related tables must NOT be supported
+    wrong_cols = check_sql(
+        "SELECT o.id, c.name FROM hive.shop.orders o "
+        "JOIN hive.shop.customers c ON o.id = c.id "
+        "WHERE o.dt = '2025-01-01'",
+        "hive",
+        data,
+        partition_tables=data.tables,
+    )
+    assert wrong_cols["joins"][0]["status"] == "unsupported"
+    assert wrong_cols["status"] == "issues"
+
+
+def test_check_sql_distinguishes_multiple_relationships_between_same_tables():
+    tables = [
+        {
+            "database": "shop",
+            "name": "orders",
+            "ref": "table:shop.orders",
+            "fields": [
+                {"name": "id", "partition": False},
+                {"name": "billing_id", "partition": False},
+                {"name": "shipping_id", "partition": False},
+            ],
+        },
+        {
+            "database": "shop",
+            "name": "addresses",
+            "ref": "table:shop.addresses",
+            "fields": [
+                {"name": "id", "partition": False},
+                {"name": "city", "partition": False},
+            ],
+        },
+    ]
+    rels = [
+        {
+            "name": "billing",
+            "ref": "relationship:shop.orders:shop.addresses:billing",
+            "from_table": "shop.orders",
+            "to_table": "shop.addresses",
+            "from_columns": ["billing_id"],
+            "to_columns": ["id"],
+        },
+        {
+            "name": "shipping",
+            "ref": "relationship:shop.orders:shop.addresses:shipping",
+            "from_table": "shop.orders",
+            "to_table": "shop.addresses",
+            "from_columns": ["shipping_id"],
+            "to_columns": ["id"],
+        },
+    ]
+    data = Snapshot(tables, [], [], relationships=rels)
+    checked = check_sql(
+        "SELECT o.id, a.city FROM shop.orders o JOIN shop.addresses a ON o.shipping_id = a.id",
+        "hive",
+        data,
+    )
+    assert checked["status"] == "pass"
+    assert [e["name"] for e in checked["joins"][0]["evidence"]] == ["shipping"]

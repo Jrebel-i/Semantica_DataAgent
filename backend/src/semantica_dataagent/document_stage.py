@@ -48,7 +48,15 @@ def write(records, generation, storage):
                 )
             match = table_name(d["path"])
             if match:
-                links.append({"ref": ref, "database": match[0], "name": match[1]})
+                catalog, database, name = match if len(match) == 3 else ("", *match)
+                links.append(
+                    {
+                        "ref": ref,
+                        "catalog": catalog,
+                        "database": database,
+                        "name": name,
+                    }
+                )
     storage.execute(
         "UNWIND $rows AS row CREATE (d:SDAEntity:SDADocument) SET d = row, d.generation = $generation",
         {"generation": generation, "rows": rows},
@@ -58,7 +66,7 @@ def write(records, generation, storage):
         {"generation": generation, "rows": parts},
     )
     storage.execute(
-        "UNWIND $rows AS row MATCH (d:SDADocument {generation:$generation, ref:row.ref}), (t:SDATable {generation:$generation, database:row.database, name:row.name}) MERGE (t)-[:HAS_DOCUMENT]->(d)",
+        "UNWIND $rows AS row MATCH (d:SDADocument {generation:$generation, ref:row.ref}), (t:SDATable {generation:$generation, database:row.database, name:row.name}) WHERE coalesce(t.catalog, '') = coalesce(row.catalog, '') MERGE (t)-[:HAS_DOCUMENT]->(d)",
         {"generation": generation, "rows": links},
     )
     for offset in range(0, len(parts), 4):

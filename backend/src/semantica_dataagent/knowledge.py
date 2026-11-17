@@ -82,11 +82,40 @@ def validate_records(records):
     }
     seen = set()
     for record in records:
-        if record.kind in fields:
-            key = (record.kind, *(record.data[field] for field in fields[record.kind]))
-            if key in seen:
-                raise ValueError("Duplicate " + record.kind + " reference")
-            seen.add(key)
+        data = record.data
+        if record.kind == "relationship":
+            from_cols = data.get("from_columns") or []
+            to_cols = data.get("to_columns") or []
+            if not from_cols or len(from_cols) != len(to_cols):
+                raise ValueError(
+                    f"Relationship {data['name']} has mismatched column counts"
+                )
+            key = (
+                "relationship",
+                data.get("from_catalog") or "",
+                data["from_database"],
+                data["from_table"],
+                data.get("to_catalog") or "",
+                data["to_database"],
+                data["to_table"],
+                data["name"],
+            )
+        elif record.kind in fields:
+            prefix = (
+                (data.get("catalog") or "",)
+                if record.kind in {"table", "field"}
+                else ()
+            )
+            key = (
+                record.kind,
+                *prefix,
+                *(data[field] for field in fields[record.kind]),
+            )
+        else:
+            continue
+        if key in seen:
+            raise ValueError("Duplicate " + record.kind + " reference")
+        seen.add(key)
 
 
 def settings(project_id=None):
@@ -336,12 +365,29 @@ def release_milvus(store):
 
 
 def reference(kind, data, counts=None):
-    key = ".".join(
-        quote(str(data[k]), safe="").replace(".", "%2E")
-        for k in (
-            ("database", "name") if kind == "table" else ("database", "table", "name")
+    if kind == "relationship":
+        from_parts = (
+            ("from_catalog", "from_database", "from_table")
+            if data.get("from_catalog")
+            else ("from_database", "from_table")
         )
-    )
+        to_parts = (
+            ("to_catalog", "to_database", "to_table")
+            if data.get("to_catalog")
+            else ("to_database", "to_table")
+        )
+        from_key = ".".join(
+            quote(str(data[k]), safe="").replace(".", "%2E") for k in from_parts
+        )
+        to_key = ".".join(
+            quote(str(data[k]), safe="").replace(".", "%2E") for k in to_parts
+        )
+        name_key = quote(str(data["name"]), safe="").replace(".", "%2E")
+        return bounded_ref(f"relationship:{from_key}:{to_key}:{name_key}", counts)
+    parts = ("database", "name") if kind == "table" else ("database", "table", "name")
+    if data.get("catalog"):
+        parts = ("catalog", *parts)
+    key = ".".join(quote(str(data[k]), safe="").replace(".", "%2E") for k in parts)
     return bounded_ref(f"{kind}:{key}", counts)
 
 
@@ -862,6 +908,12 @@ def run_build(build_id):
                 )
                 delete_batches(
                     storage.execute,
+                    "MATCH (:SDATable {generation:$generation})-[r:RELATES_TO]->(:SDATable {generation:$generation}) WHERE r.source_file IN $files OR r.source_key IN $files OR any(s IN coalesce(r.source_files, []) WHERE s IN $files)",
+                    "r",
+                    {"generation": generation, "files": sorted(touched)},
+                )
+                delete_batches(
+                    storage.execute,
                     "MATCH (n:SDAEntity {generation:$generation}) WHERE n.source_file IN $files OR n.source_key IN $files OR any(s IN coalesce(n.source_files, []) WHERE s IN $files) OR (n:SDADimensionValue AND any(t IN $tables WHERE t.database = n.database AND t.table = n.table))",
                     "n",
                     params,
@@ -1149,7 +1201,7 @@ def describe(names=None, database=None, search=None, summary=False, project_id=N
             RETURN properties(t) AS table, field_count,
                    count(d) AS document_count,
                    partition_count > 0 AS has_partition
-            ORDER BY table.database,table.name""",
+            ORDER BY coalesce(table.catalog, ''),table.database,table.name""",
             parameters,
         )
         summary_rows = []
@@ -1174,7 +1226,7 @@ def describe(names=None, database=None, search=None, summary=False, project_id=N
             OPTIONAL MATCH (t)-[:HAS_FIELD]->(f:SDAField {generation:$generation})
             WITH t, collect(properties(f)) AS fields
             OPTIONAL MATCH (t)-[:HAS_DOCUMENT]->(d:SDADocument {generation:$generation})
-            RETURN properties(t) AS table, fields, collect({ref:d.ref, path:d.path, category:d.category}) AS documents ORDER BY table.database,table.name""",
+            RETURN properties(t) AS table, fields, collect({ref:d.ref, path:d.path, category:d.category}) AS documents ORDER BY coalesce(table.catalog, ''),table.database,table.name""",
         parameters,
     )
     return [
@@ -1283,7 +1335,7 @@ def search(query, scope, top_k, category=None, project_id=None):
         lexical_query = """CALL {
           MATCH (n:SDAEntity {generation:$generation})
           WHERE ((n:SDATable AND 'tables' IN $scopes) OR (n:SDAField AND 'fields' IN $scopes) OR (n:SDATask AND 'tasks' IN $scopes))
-            AND (toLower(n.name) = toLower($query) OR toLower(coalesce(n.database,'') + '.' + n.name) = toLower($query))
+            AND (toLower(n.name) = toLower($query) OR toLower(coalesce(n.database,'') + '.' + n.name) = toLower($query) OR (n:SDATable AND n.catalog IS NOT NULL AND toLower(n.catalog + '.' + n.database + '.' + n.name) = toLower($query)))
             AND $category IS NULL
           RETURN 'exact' AS source, properties(n) AS item LIMIT $limit
           UNION ALL
