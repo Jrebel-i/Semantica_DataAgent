@@ -277,12 +277,6 @@ def evidence(a, b, left_key=None, right_key=None, snapshot=None, documents=()):
     if left_key is None and right_key is None:
         for rel in snapshot.relationship_pairs.get(pair_key, ()):
             found.append(_relationship_evidence(rel))
-    elif left_key and right_key:
-        observed = {frozenset(((aname, left_key.lower()), (bname, right_key.lower())))}
-        for rel in snapshot.relationship_pairs.get(pair_key, ()):
-            required = _relationship_required_pairs(rel)
-            if required is not None and required <= observed:
-                found.append(_relationship_evidence(rel))
     common = (
         set(snapshot.fields[aname]) & set(snapshot.fields[bname]) & snapshot.keys.keys()
     )
@@ -496,11 +490,7 @@ def check_sql(sql, dialect, snapshot, partition_tables=None):
                                     ((aname, l.name.lower()), (bname, r.name.lower()))
                                 )
                             )
-                            supports.extend(
-                                p
-                                for p in evidence(a, b, l.name, r.name, snapshot)
-                                if p["type"] != "relationship"
-                            )
+                            supports.extend(evidence(a, b, l.name, r.name, snapshot))
                             pending_documents.append(
                                 (len(result["joins"]), a, b, l.name, r.name)
                             )

@@ -16,8 +16,8 @@ from . import knowledge, project_context
 from .ossie_source import (
     OSSIE_TARGET_VERSION,
     SEMANTICA_VENDOR_NAME,
-    _extract_single_column,
-    _ossie_validator,
+    extract_single_column,
+    validate_ossie_schema,
 )
 
 ExportFormat = Literal["yaml", "json"]
@@ -111,7 +111,7 @@ def _column_expression(
 ) -> dict[str, str]:
     if (
         _SIMPLE_IDENTIFIER_RE.fullmatch(col_name)
-        and _extract_single_column(
+        and extract_single_column(
             col_name, "OSSIE_SQL_2026", dataset_name, source_parts
         )
         == col_name
@@ -298,23 +298,21 @@ def _build_relationships(
 
 def validate_ossie_document(document: dict[str, Any]) -> None:
     """Validate an exported Ossie document against the bundled 0.3.0.dev0 JSON Schema."""
-    errors = sorted(
-        _ossie_validator().iter_errors(document),
-        key=lambda err: [str(part) for part in err.absolute_path],
+    validate_ossie_schema(
+        document,
+        context="Exported Ossie document failed schema validation",
+        error_cls=OssieExportError,
     )
-    if errors:
-        first = errors[0]
-        loc = ".".join(str(part) for part in first.absolute_path)
-        detail = f"{loc}: {first.message}" if loc else first.message
-        raise OssieExportError(
-            f"Exported Ossie document failed schema validation: {detail}"
-        )
 
 
 def _query_graph_snapshot(
     project_id: str, database: str | None
 ) -> tuple[list[dict[str, Any]], dict[str, list[dict[str, Any]]], list[dict[str, Any]]]:
-    values = knowledge._project_settings(project_id)
+    values = (
+        knowledge.settings()
+        if project_id in (None, project_context.DEFAULT_PROJECT_ID)
+        else knowledge.settings(project_id)
+    )
     project = project_context.from_values(values, project_id)
     if (
         project.project_id != project_context.DEFAULT_PROJECT_ID
