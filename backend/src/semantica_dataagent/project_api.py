@@ -660,6 +660,66 @@ def get_project_source_status(
     return ProjectSourceStatus(**auto_build.source_status(scope.project_id))
 
 
+@router.get(
+    "/api/v1/projects/{project_id}/export/ossie",
+    response_class=Response,
+    responses={
+        200: {
+            "description": "Current knowledge generation exported as an Apache Ossie model",
+            "content": {
+                "application/yaml": {"schema": {"type": "string"}},
+                "application/json": {"schema": {"type": "string"}},
+            },
+        }
+    },
+)
+def export_project_ossie(
+    project_id: str,
+    requester: Annotated[Requester, Depends(current_requester)],
+    format: Literal["yaml", "json"] = "yaml",
+    database: str | None = None,
+):
+    from .ossie_export import (
+        EmptyKnowledgeGenerationError,
+        OssieExportError,
+        UnsupportedProjectTypeError,
+        export_ossie,
+    )
+    from .storage_errors import StorageUnavailable
+
+    scope = resolve_project_scope(project_id, requester, allow_frozen=False)
+    try:
+        content = export_ossie(
+            project_id=scope.project_id,
+            format=format,
+            database=database,
+            project_type=scope.project_type,
+        )
+    except UnsupportedProjectTypeError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except EmptyKnowledgeGenerationError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except OssieExportError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except StorageUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    media_type = (
+        "application/json; charset=utf-8"
+        if format == "json"
+        else "application/yaml; charset=utf-8"
+    )
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="{scope.project_id}.ossie.{format}"'
+            )
+        },
+    )
+
+
 def project_id_candidate(name: str) -> str:
     """Build a storage-safe id from an ASCII view of the project name."""
     base = re.sub(r"[^a-z0-9]+", "", name.lower())[:24]
