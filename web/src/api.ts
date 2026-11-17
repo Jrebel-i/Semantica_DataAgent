@@ -574,6 +574,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{project_id}/export/ossie": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Export Project Ossie */
+        get: operations["export_project_ossie_api_v1_projects__project_id__export_ossie_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{project_id}/members": {
         parameters: {
             query?: never;
@@ -2101,6 +2118,8 @@ export interface components {
         };
         /** TableSummary */
         TableSummary: {
+            /** Catalog */
+            catalog?: string | null;
             /** Comment */
             comment: string;
             /** Database */
@@ -2118,6 +2137,8 @@ export interface components {
         };
         /** TableView */
         TableView: {
+            /** Catalog */
+            catalog?: string | null;
             /** Comment */
             comment: string;
             /** Database */
@@ -3561,6 +3582,41 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    export_project_ossie_api_v1_projects__project_id__export_ossie_get: {
+        parameters: {
+            query?: {
+                format?: "yaml" | "json";
+                database?: string | null;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Current knowledge generation exported as an Apache Ossie model */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": string;
+                    "application/yaml": string;
+                };
             };
             /** @description Validation Error */
             422: {
