@@ -124,6 +124,9 @@ def _delete_neo4j(project_id: str, settings: dict) -> None:
 def _delete_milvus(project_id: str, settings: dict) -> None:
     from pymilvus import MilvusClient
 
+    from . import knowledge
+
+    knowledge.evict_project_vector_readers(project_id)
     client = MilvusClient(uri=settings["milvus_uri"])
     try:
         for name in client.list_collections():
@@ -214,6 +217,9 @@ def _delete_database(project_id: str, settings: dict) -> None:
             db.query(QueryExecution).filter(
                 QueryExecution.conversation_id.in_(conversation_ids)
             ).delete(synchronize_session=False)
+        from . import trajectories
+
+        trajectories.delete_project_trajectories(db, project_id)
         db.query(Conversation).filter(Conversation.project_id == project_id).delete(
             synchronize_session=False
         )

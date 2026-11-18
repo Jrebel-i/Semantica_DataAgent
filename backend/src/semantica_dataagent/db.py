@@ -4,7 +4,7 @@ import uuid
 from datetime import UTC, datetime
 from threading import Lock
 
-from sqlalchemy import create_engine
+from sqlalchemy import Index, create_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
 
@@ -233,6 +233,7 @@ class KnowledgeGeneration(Base):
     build_id: Mapped[int | None]
     created_at: Mapped[str | None]
     deleting: Mapped[bool] = mapped_column(default=False, server_default="0")
+    is_candidate: Mapped[bool] = mapped_column(default=False, server_default="0")
 
 
 class GenerationPointer(Base):
@@ -357,3 +358,63 @@ class PullRecord(Base):
     build_id: Mapped[int | None]
     source_directory: Mapped[str | None]
     operation_id: Mapped[str | None]
+
+
+class InteractionTrajectory(Base):
+    """Sanitized, untruncated interaction trajectory persisted per project."""
+
+    __tablename__ = "interaction_trajectories"
+    __table_args__ = (
+        Index(
+            "ix_interaction_trajectories_project_recorded_id",
+            "project_id",
+            "recorded_at",
+            "id",
+        ),
+        Index(
+            "ix_interaction_trajectories_project_id_cursor",
+            "project_id",
+            "id",
+        ),
+        Index(
+            "ix_interaction_trajectories_conv_turn",
+            "conversation_id",
+            "turn_id",
+        ),
+        Index(
+            "ix_interaction_trajectories_local_window",
+            "project_id",
+            "token_id",
+            "source_type",
+            "last_activity_at",
+        ),
+        Index(
+            "ix_interaction_trajectories_session_key",
+            "session_key",
+            unique=True,
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    project_id: Mapped[str] = mapped_column(default="default", server_default="default")
+    source_type: Mapped[str]
+    session_key: Mapped[str]
+    conversation_id: Mapped[str | None]
+    turn_id: Mapped[int | None]
+    token_id: Mapped[str | None]
+    langfuse_trace_id: Mapped[str | None]
+    status: Mapped[str] = mapped_column(default="running", server_default="running")
+    question: Mapped[str] = mapped_column(default="", server_default="")
+    answer: Mapped[str] = mapped_column(default="", server_default="")
+    tool_calls: Mapped[str] = mapped_column(default="[]", server_default="[]")
+    matched_refs: Mapped[str] = mapped_column(default="[]", server_default="[]")
+    clarifications: Mapped[str] = mapped_column(default="[]", server_default="[]")
+    sql_validations: Mapped[str] = mapped_column(default="[]", server_default="[]")
+    final_sql: Mapped[str] = mapped_column(default="[]", server_default="[]")
+    citations: Mapped[str] = mapped_column(default="[]", server_default="[]")
+    window_started_at: Mapped[datetime | None]
+    last_activity_at: Mapped[datetime] = mapped_column(
+        default=lambda: datetime.now(UTC)
+    )
+    recorded_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC))
+    updated_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC))

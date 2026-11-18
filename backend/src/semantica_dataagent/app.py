@@ -106,6 +106,7 @@ async def lifespan(application):
 
     await asyncio.to_thread(recover_interrupted_builds)
     await asyncio.to_thread(knowledge.cleanup_interrupted_generations)
+    await asyncio.to_thread(knowledge.cleanup_candidate_generations)
     from .corrections import recover_applying
     from .semantic_overrides import migrate_legacy_metadata_overrides
 
@@ -705,7 +706,10 @@ def list_generations(
         pointer = generation_pointer(db, project.project_id)
         rows = (
             db.query(KnowledgeGeneration)
-            .filter(KnowledgeGeneration.project_id == project.project_id)
+            .filter(
+                KnowledgeGeneration.project_id == project.project_id,
+                KnowledgeGeneration.is_candidate.is_(False),
+            )
             .order_by(KnowledgeGeneration.created_at.desc())
             .all()
         )
@@ -741,7 +745,7 @@ def switch_generation(
 ):
     with sessions().begin() as db:
         row = db.get(KnowledgeGeneration, name)
-        if row is None or row.project_id != scope.project_id:
+        if row is None or row.project_id != scope.project_id or row.is_candidate:
             raise HTTPException(status_code=404, detail="Generation not found")
         if row.deleting:
             raise HTTPException(status_code=409, detail="Generation is being deleted")
@@ -1178,9 +1182,31 @@ class MCPAuthentication:
                 PROJECT_QUERY,
                 TURN_HEADER,
                 bind_mcp_context,
+                resolve_eval_binding,
             )
             from .mcp_contract import ToolInvalidInput
             from .mcp_project import resolve_mcp_project
+
+            eval_binding = resolve_eval_binding(
+                credentials.credentials if credentials else None
+            )
+            if eval_binding is not None:
+                bound_project, bound_generation = eval_binding
+                with bind_mcp_context(
+                    requester,
+                    request.headers.get(CONVERSATION_HEADER),
+                    request.headers.get(TURN_HEADER),
+                    project_id=bound_project,
+                    suppress_trajectory=True,
+                ):
+                    if bound_generation:
+                        with project_context.bind_generation(
+                            bound_project, bound_generation
+                        ):
+                            await self.inner.state.mcp_app(scope, receive, send)
+                    else:
+                        await self.inner.state.mcp_app(scope, receive, send)
+                return
 
             query_project = request.query_params.get(PROJECT_QUERY)
             header_project = request.headers.get(PROJECT_HEADER)

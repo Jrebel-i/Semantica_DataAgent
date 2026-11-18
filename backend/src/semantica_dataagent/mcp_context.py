@@ -11,10 +11,13 @@ The resolved id (or a safe tool error when selection is ambiguous) is bound
 together with the identity so every tool reads the same project.
 """
 
+import os
 from contextlib import contextmanager
 from contextvars import ContextVar
+from threading import Lock
 
 from .auth import Requester
+from .db import digest
 from .project_context import DEFAULT_PROJECT_ID
 
 CONVERSATION_HEADER = "x-dataagent-conversation-id"
@@ -34,6 +37,9 @@ _project_error: ContextVar[str | None] = ContextVar("mcp_project_error", default
 _project_error_status: ContextVar[int | None] = ContextVar(
     "mcp_project_error_status", default=None
 )
+_suppress_trajectory: ContextVar[bool] = ContextVar(
+    "mcp_suppress_trajectory", default=False
+)
 
 
 @contextmanager
@@ -45,6 +51,7 @@ def bind_mcp_context(
     project_id: str | None = None,
     project_error: str | None = None,
     project_error_status: int | None = None,
+    suppress_trajectory: bool = False,
 ):
     requester_token = _requester.set(requester)
     conversation_token = _conversation_id.set(conversation_id or None)
@@ -52,9 +59,11 @@ def bind_mcp_context(
     project_token = _project_id.set(project_id or None)
     project_error_token = _project_error.set(project_error or None)
     project_error_status_token = _project_error_status.set(project_error_status)
+    suppress_token = _suppress_trajectory.set(suppress_trajectory)
     try:
         yield
     finally:
+        _suppress_trajectory.reset(suppress_token)
         _project_error_status.reset(project_error_status_token)
         _project_error.reset(project_error_token)
         _project_id.reset(project_token)
@@ -97,6 +106,50 @@ def current_project_id() -> str:
 def current_project_error_status() -> int | None:
     """HTTP-style status for the rejection bound by the MCP middleware."""
     return _project_error_status.get()
+
+
+def current_suppress_trajectory() -> bool:
+    """Whether synthetic/evaluation MCP calls should skip trajectory persistence."""
+    return bool(_suppress_trajectory.get())
+
+
+_eval_lock = Lock()
+_eval_bindings: dict[str, tuple[str, str | None]] = {}
+
+
+def _reset_after_fork() -> None:
+    global _eval_lock
+    _eval_lock = Lock()
+    _eval_bindings.clear()
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_reset_after_fork)
+
+
+def register_eval_token(
+    token: str, project_id: str, generation: str | None = None
+) -> None:
+    """Bind an ephemeral evaluation bearer token to a target project and generation."""
+    token_digest = digest(token)
+    with _eval_lock:
+        _eval_bindings[token_digest] = (project_id, generation)
+
+
+def unregister_eval_token(token: str) -> None:
+    """Remove an ephemeral evaluation token binding."""
+    token_digest = digest(token)
+    with _eval_lock:
+        _eval_bindings.pop(token_digest, None)
+
+
+def resolve_eval_binding(token: str | None) -> tuple[str, str | None] | None:
+    """Return ``(project_id, generation)`` when ``token`` is a registered eval credential."""
+    if not token:
+        return None
+    token_digest = digest(token)
+    with _eval_lock:
+        return _eval_bindings.get(token_digest)
 
 
 def current_project_context():

@@ -4,6 +4,7 @@ import base64
 import hashlib
 import json
 import logging
+from contextvars import ContextVar
 
 import httpx
 import jsonschema
@@ -22,6 +23,10 @@ from .storage_errors import StorageUnavailable
 
 PAGE_ITEMS = 25
 PAGE_CHARS = 12000
+
+_captured_structured: ContextVar[dict | None] = ContextVar(
+    "mcp_captured_structured", default=None
+)
 
 
 def _audit_bound_project_rejection() -> None:
@@ -242,6 +247,9 @@ def install_contract(server):
                 structured = json.loads(result[0].text)
             else:
                 structured = result
+            holder = _captured_structured.get()
+            if holder is not None:
+                holder["value"] = structured
             if name == "execute_query" and isinstance(structured, dict):
                 return CallToolResult(
                     content=result[0] if isinstance(result, tuple) else result,
@@ -304,26 +312,40 @@ def install_contract(server):
         import uuid
         from datetime import UTC, datetime
 
+        from . import trajectories
         from .crypto import decrypt
         from .db import Conversation, Provider, Token, Turn, sessions
         from .mcp_context import (
             current_conversation_id,
+            current_project_id,
             current_requester,
+            current_suppress_trajectory,
             current_turn_id,
         )
         from .telemetry import UNKNOWN_TOOL_NAME, submit, trace_id
 
         started = datetime.now(UTC)
         clock = time.monotonic()
-        result = await call_impl(name, arguments)
+        holder: dict = {}
+        holder_token = _captured_structured.set(holder)
+        try:
+            result = await call_impl(name, arguments)
+        finally:
+            _captured_structured.reset(holder_token)
         trusted_name = name if name in tools else UNKNOWN_TOOL_NAME
         try:
             requester = current_requester()
             conversation_id = current_conversation_id()
             supplied_turn = current_turn_id()
+            suppress = current_suppress_trajectory()
             active_turn = None
             token_name = ""
             provider_secret = ""
+            project_id: str | None = None
+            try:
+                project_id = current_project_id()
+            except ToolInvalidInput:
+                project_id = None
             with sessions()() as db:
                 owner = db.query(Token).filter_by(id=requester.id).first()
                 token_name = owner.name if owner else ""
@@ -335,6 +357,7 @@ def install_contract(server):
                 ):
                     conversation = db.get(Conversation, conversation_id)
                     if conversation and conversation.owner_id == requester.id:
+                        project_id = project_id or conversation.project_id
                         provider = db.get(Provider, conversation.provider_id)
                         if provider and provider.api_key:
                             provider_secret = decrypt(provider.api_key)
@@ -349,27 +372,61 @@ def install_contract(server):
                         )
                         if active_turn:
                             active_turn = active_turn.id
-            current_trace = (
-                trace_id(conversation_id, active_turn)
-                if active_turn
-                else uuid.uuid4().hex
-            )
             secrets = (requester.token, provider_secret)
-            if not active_turn:
-                submit(
-                    "trace-create",
-                    {
-                        "id": current_trace,
-                        "name": "local-mcp",
-                        "metadata": {"source": "local", "token_name": token_name},
-                    },
-                    secrets,
-                )
             data = (
                 result.structuredContent
                 if hasattr(result, "structuredContent")
                 else result
             )
+            trajectory_output = holder.get("value", data)
+            is_error = bool(getattr(result, "isError", False))
+            recorded_trace = None
+            if (
+                project_id is not None
+                and not suppress
+                and (active_turn is not None or trusted_name != "ask_dataagent")
+            ):
+                recorded_trace = trajectories.record_mcp_tool_call(
+                    project_id=project_id,
+                    token_id=requester.id,
+                    conversation_id=conversation_id if active_turn else None,
+                    turn_id=active_turn,
+                    is_online_turn=bool(active_turn),
+                    tool_name=trusted_name,
+                    arguments=arguments,
+                    output=trajectory_output,
+                    is_error=is_error,
+                    secrets=secrets,
+                    now=started,
+                )
+            current_trace = (
+                trace_id(conversation_id, active_turn)
+                if active_turn
+                else (recorded_trace or uuid.uuid4().hex)
+            )
+            if not active_turn:
+                trace_meta = {
+                    "source": "local",
+                    "token_name": token_name,
+                    "traceId": current_trace,
+                }
+                if project_id is not None:
+                    trace_meta["project_id"] = project_id
+                submit(
+                    "trace-create",
+                    {
+                        "id": current_trace,
+                        "name": "local-mcp",
+                        "metadata": trace_meta,
+                    },
+                    secrets,
+                )
+            span_meta: dict = {
+                "duration_ms": int((time.monotonic() - clock) * 1000),
+                "traceId": current_trace,
+            }
+            if project_id is not None:
+                span_meta["project_id"] = project_id
             submit(
                 "span-create",
                 {
@@ -380,9 +437,9 @@ def install_contract(server):
                     "endTime": datetime.now(UTC).isoformat(),
                     "input": arguments,
                     "output": data,
-                    "is_error": bool(getattr(result, "isError", False)),
-                    "status": "error" if getattr(result, "isError", False) else "ok",
-                    "metadata": {"duration_ms": int((time.monotonic() - clock) * 1000)},
+                    "is_error": is_error,
+                    "status": "error" if is_error else "ok",
+                    "metadata": span_meta,
                 },
                 secrets,
             )

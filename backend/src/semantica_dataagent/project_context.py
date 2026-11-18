@@ -21,6 +21,7 @@ import shutil
 import uuid
 from collections.abc import Mapping
 from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -104,6 +105,22 @@ PROJECT_SETTING_KEYS = frozenset(
 
 STORAGE_PREFIX = "sda_"
 _GENERATION_PATTERN = re.compile(r"[A-Za-z][A-Za-z0-9_]{0,63}")
+
+_bound_generations: ContextVar[dict[str, str] | None] = ContextVar(
+    "project_bound_generations", default=None
+)
+
+
+@contextmanager
+def bind_generation(project_id: str, generation: str):
+    """Temporarily aim all reads for ``project_id`` at an isolated generation."""
+    current = dict(_bound_generations.get() or {})
+    current[project_id] = generation
+    token = _bound_generations.set(current)
+    try:
+        yield
+    finally:
+        _bound_generations.reset(token)
 
 
 class ProjectNotFound(LookupError):
@@ -337,7 +354,11 @@ def current_project(
         project = db.get(Project, resolved)
         if project is None:
             raise ProjectNotFound(resolved)
-        values = normalize_values(_read_settings(db, resolved))
+        values = _read_settings(db, resolved)
+    overrides = _bound_generations.get()
+    if overrides and resolved in overrides:
+        values[GENERATION_KEY] = overrides[resolved]
+    values = normalize_values(values)
     return ProjectContext(resolved, values, project.name, project.type, project.status)
 
 
@@ -395,6 +416,15 @@ def with_generation(values: Mapping[str, Any], generation: str) -> dict[str, Any
     return result
 
 
+def with_source_directory(
+    values: Mapping[str, Any], directory: str | Path
+) -> dict[str, Any]:
+    """Return a copy of settings values aimed at an isolated source working copy."""
+    result = dict(values)
+    result[SOURCE_DIRECTORY_KEY] = str(Path(directory).resolve())
+    return result
+
+
 def index_name(name: str) -> str:
     return ProjectContext.index_name(name)
 
@@ -423,6 +453,11 @@ def projects_root() -> Path:
 
 def project_source_directory(project_id: str) -> Path:
     return projects_root() / project_id / "source"
+
+
+def candidate_generations_dir(project_id: str) -> Path:
+    """Directory holding isolated temporary working copies for candidate generations."""
+    return projects_root() / project_id / ".candidates"
 
 
 def project_eval_directory(project_id: str) -> Path:
@@ -469,6 +504,7 @@ def generation_is_built(project_id: str, generation: str) -> bool:
             row is not None
             and row.project_id == project_id
             and row.build_id is not None
+            and not row.deleting
         )
 
 
