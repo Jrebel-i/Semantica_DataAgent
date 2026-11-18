@@ -24,4 +24,12 @@ def as_utc(value):
     return value
 
 
+def as_utc_or_now(value: datetime | str | None) -> datetime:
+    """Normalize a datetime/ISO string to UTC, defaulting ``None`` to current UTC time."""
+    if value is None:
+        return datetime.now(UTC)
+    parsed = as_utc(value)
+    return parsed if isinstance(parsed, datetime) else datetime.now(UTC)
+
+
 UtcDatetime = Annotated[datetime, BeforeValidator(as_utc)]

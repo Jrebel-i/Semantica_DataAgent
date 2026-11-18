@@ -817,3 +817,167 @@ def test_approved_correction_promotes_validated_sql_to_eval_questions(
             )
             == 2
         )
+
+
+def test_auto_applied_member_correction_does_not_auto_confirm_eval_question(
+    tmp_path: Path, monkeypatch
+):
+    import base64
+
+    from semantica_dataagent import knowledge, project_context, sql_validation
+    from semantica_dataagent.app import app
+    from semantica_dataagent.project_api import create_project_record
+
+    admin_token = _configure(tmp_path, monkeypatch)
+    admin_headers = {"Authorization": f"Bearer {admin_token}"}
+    project = create_project_record("Auto Promo Project", "document")
+    member_token, member_id = _create_user_token("auto-promo-member")
+    member_headers = {"Authorization": f"Bearer {member_token}"}
+
+    def fake_execute(_store, _query, _parameters):
+        src_dir = project_context.project_source_directory(project.id)
+        doc_path = src_dir / "knowledge" / "metrics" / "gmv.md"
+        content = (
+            doc_path.read_text(encoding="utf-8") if doc_path.exists() else "# 旧口径\n"
+        )
+        return [
+            {
+                "node": {
+                    "content": content,
+                    "source_file": "knowledge/metrics/gmv.md",
+                }
+            }
+        ]
+
+    monkeypatch.setattr(
+        knowledge, "existing_refs", lambda refs, project_id=None: set(refs)
+    )
+    monkeypatch.setattr(knowledge, "read_graph", lambda values: object())
+    monkeypatch.setattr(knowledge, "execute", fake_execute)
+    monkeypatch.setattr(
+        sql_validation,
+        "validate_sql",
+        lambda sql, dialect="hive", project_id=None: {"status": "pass", "issues": []},
+    )
+
+    with TestClient(app, headers=admin_headers) as client:
+        assert (
+            client.put(
+                f"/api/v1/projects/{project.id}/members/{member_id}",
+                json={"role": "member"},
+            ).status_code
+            == 200
+        )
+        assert (
+            client.put(
+                f"/api/v1/projects/{project.id}/auto-build",
+                json={"enabled": False},
+            ).status_code
+            == 200
+        )
+        assert (
+            client.post(
+                "/api/v1/source/upload",
+                params={"project": project.id},
+                json={
+                    "target": "knowledge/metrics",
+                    "files": [
+                        {
+                            "path": "gmv.md",
+                            "content_base64": base64.b64encode(
+                                "# 旧口径\n".encode()
+                            ).decode(),
+                        }
+                    ],
+                },
+            ).status_code
+            == 200
+        )
+        assert (
+            client.put(
+                f"/api/v1/projects/{project.id}/evolution-policy",
+                json={"correction_require_review": False},
+            ).status_code
+            == 200
+        )
+
+        # Member auto_applied correction MUST NOT become answer_confirmed=True
+        mem_prop = client.post(
+            "/api/v1/corrections",
+            params={"project": project.id},
+            headers=member_headers,
+            json={
+                "target": "document:gmv",
+                "target_kind": "document",
+                "patch": "# 成员直通修改\n",
+                "reason": "成员自动生效纠错",
+                "question": "成员自动生效的问题是否会直接进回归集",
+                "caliber": "成员口径",
+                "reference_sql": "SELECT COUNT(*) FROM shop.orders",
+            },
+        )
+        assert mem_prop.status_code == 201, mem_prop.text
+        assert mem_prop.json()["status"] == "auto_applied"
+
+        qs_after_member = client.get(
+            "/api/v1/eval-questions", params={"project": project.id}
+        ).json()
+        assert all(q["answer_confirmed"] is False for q in qs_after_member)
+
+        # Admin-authored auto_applied correction DOES promote as answer_confirmed=True
+        adm_prop = client.post(
+            "/api/v1/corrections",
+            params={"project": project.id},
+            json={
+                "target": "document:gmv",
+                "target_kind": "document",
+                "patch": "# 管理员直通修改\n",
+                "reason": "管理员自动生效纠错",
+                "question": "管理员自动生效的问题应该直接确认",
+                "caliber": "管理员口径",
+                "reference_sql": "SELECT SUM(amount) FROM shop.orders",
+            },
+        )
+        assert adm_prop.status_code == 201, adm_prop.text
+        assert adm_prop.json()["status"] == "auto_applied"
+
+        qs_after_admin = client.get(
+            "/api/v1/eval-questions", params={"project": project.id}
+        ).json()
+        adm_q = next(
+            q for q in qs_after_admin if q["proposal_id"] == adm_prop.json()["id"]
+        )
+        assert adm_q["answer_confirmed"] is True
+
+
+def test_eval_questions_500_scrubs_internal_yaml_parse_errors(
+    tmp_path: Path, monkeypatch
+):
+    from semantica_dataagent import project_context
+    from semantica_dataagent.app import app
+    from semantica_dataagent.project_api import create_project_record
+
+    admin_token = _configure(tmp_path, monkeypatch)
+    headers = {"Authorization": f"Bearer {admin_token}"}
+    project = create_project_record("Corrupt Eval Proj", "warehouse")
+
+    q_path = project_context.eval_questions_path(project.id)
+    q_path.parent.mkdir(parents=True, exist_ok=True)
+    q_path.write_text(
+        "questions: [unclosed sk-secret-leak-999999999999", encoding="utf-8"
+    )
+
+    with TestClient(app, headers=headers) as client:
+        for method, path in (
+            ("get", "/api/v1/eval-questions"),
+            ("patch", "/api/v1/eval-questions/q1"),
+            ("delete", "/api/v1/eval-questions/q1"),
+        ):
+            kwargs = {"params": {"project": project.id}}
+            if method == "patch":
+                kwargs["json"] = {"notes": "x"}
+            resp = getattr(client, method)(path, **kwargs)
+            assert resp.status_code == 500
+            detail = resp.json()["detail"]
+            assert "sk-secret-leak" not in detail
+            assert "invalid question YAML" not in detail

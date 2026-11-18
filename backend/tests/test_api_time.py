@@ -170,7 +170,15 @@ def test_rest_time_fields_have_utc_offset(client, monkeypatch):
                     question="question",
                     status="completed",
                     answer="answer",
-                    sql="[]",
+                    sql=json.dumps(
+                        [
+                            {
+                                "sql": "SELECT id FROM shop.orders",
+                                "dialect": "hive",
+                                "validated": True,
+                            }
+                        ]
+                    ),
                     citations="[]",
                     started_at=datetime(2026, 1, 1),
                     finished_at=datetime(2026, 1, 1, 0, 1),
@@ -214,9 +222,17 @@ def test_rest_time_fields_have_utc_offset(client, monkeypatch):
         )
         db.flush()
         build_id = build.id
+        turn_id = (
+            db.query(Turn.id)
+            .filter(Turn.conversation_id == "conversation", Turn.sequence == 1)
+            .scalar()
+        )
 
-    from semantica_dataagent import pull_service
+    from semantica_dataagent import evolution_runner, pull_service
 
+    monkeypatch.setattr(
+        evolution_runner, "execute_evolution_run", lambda run_id, **kwargs: None
+    )
     monkeypatch.setattr(
         pull_service,
         "run_pull",
@@ -235,6 +251,32 @@ def test_rest_time_fields_have_utc_offset(client, monkeypatch):
     )
     switched = c.post("/api/v1/generations/naive/switch", headers=headers)
     assert switched.status_code == 200, switched.text
+    feedback_resp = c.post(
+        f"/api/v1/conversations/conversation/turns/{turn_id}/feedback",
+        headers=headers,
+        json={"rating": "accurate"},
+    )
+    assert feedback_resp.status_code == 201, feedback_resp.text
+    eval_created = c.post(
+        "/api/v1/eval-questions",
+        headers=headers,
+        json={
+            "question": "时间测试评测题",
+            "caliber": "测试口径",
+            "reference_sql": "SELECT id FROM shop.orders",
+            "dialect": "hive",
+        },
+    )
+    assert eval_created.status_code == 201, eval_created.text
+    eval_qid = eval_created.json()["id"]
+    eval_patched = c.patch(
+        f"/api/v1/eval-questions/{eval_qid}",
+        headers=headers,
+        json={"notes": "updated"},
+    )
+    assert eval_patched.status_code == 200, eval_patched.text
+    evo_triggered = c.post("/api/v1/evolution/runs", headers=headers)
+    assert evo_triggered.status_code == 202, evo_triggered.text
     payloads = {
         "token_issued": issued.json(),
         "tokens": c.get("/api/v1/tokens", headers=headers).json(),
@@ -264,6 +306,11 @@ def test_rest_time_fields_have_utc_offset(client, monkeypatch):
         "evolution_run": c.get(
             "/api/v1/evolution/runs/evo-time-1", headers=headers
         ).json(),
+        "evolution_run_triggered": evo_triggered.json(),
+        "turn_feedback": feedback_resp.json(),
+        "eval_question_created": eval_created.json(),
+        "eval_questions": c.get("/api/v1/eval-questions", headers=headers).json(),
+        "eval_question_patched": eval_patched.json(),
     }
     failures = {
         name: problems

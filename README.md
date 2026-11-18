@@ -186,7 +186,7 @@ flowchart TD
   - 保守确定性解析任务 SQL 中的物理表等值 JOIN 生成 `relationships`、一致性 `GROUP BY` / `ROW_NUMBER() = 1` 生成 `primary_key`、分区策略与直接上游写入 `dataset.ai_context.instructions`；低基数维度值原样内联进字段说明，高基数维度表保留同行 `row_id` 自动导出至 `dimension_values.json`。
 - **基于问答轨迹的自主演化闭环（[ADR 0009](docs/adr/0009-git-backed-semantic-overrides-and-correction-policy.md)、[ADR 0010](docs/adr/0010-local-trajectories-and-candidate-generation-gate.md)）**：
   - 将修正覆盖层（`overrides/semantic_overrides.yaml`）迁入项目 Git 源目录版本化管理，并在前端纠错审批、评测题集（`dev` / `holdout` 分层防泄露）与演化看板（`/evolution`）中统一编排。
-  - 从本地采集的问答轨迹中排除 `holdout` 后按 70% 诊断 / 30% 验证保留划分，聚类五类信号（检索绕路、SQL 自修、多轮追问、保留多语义**口径变体**的重复澄清与缺口失败），逐轮提出单一因果假设，经 L1 静态校验与 L2 隔离**候选知识代**对比门禁后产出 `source="evolution"` 纠错提案并原子推进批次检查点。
+  - 从本地采集的问答轨迹中排除 `holdout` 后按 70% 诊断 / 30% 验证保留划分，聚类五类信号（检索绕路、SQL 自修、多轮纠偏、保留多语义**口径变体**的重复澄清与缺口失败），逐轮提出单一因果假设，经 L1 静态校验与 L2 隔离**候选知识代**对比门禁后产出 `source="evolution"` 纠错提案并原子推进批次检查点。
 
 ---
 

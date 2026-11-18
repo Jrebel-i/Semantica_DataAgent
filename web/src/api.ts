@@ -1954,8 +1954,11 @@ export interface components {
             candidate_change?: {
                 [key: string]: unknown;
             };
-            /** Decision */
-            decision: string;
+            /**
+             * Decision
+             * @enum {string}
+             */
+            decision: "running" | "accept" | "reject" | "incomplete";
             /** Evidence Trajectory Ids */
             evidence_trajectory_ids?: number[];
             /** Finished At */
@@ -2435,7 +2438,7 @@ export interface components {
             /** Reference Sql */
             reference_sql?: string | null;
             /** Source */
-            source?: ("manual" | "mcp" | "evolution") | null;
+            source?: "manual" | null;
             /** Structured Patch */
             structured_patch?: {
                 [key: string]: unknown;

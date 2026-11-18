@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+import yaml
 from sqlalchemy import text, update
 from sqlalchemy.exc import IntegrityError
 
@@ -26,8 +27,10 @@ from . import (
     trajectory_miner,
 )
 from . import eval as eval_mod
+from .api_time import as_utc as _as_utc
 from .auth import Requester
 from .db import (
+    CorrectionProposal,
     EvolutionCheckpoint,
     EvolutionRound,
     EvolutionRun,
@@ -39,7 +42,6 @@ from .provider_api import provider_config
 from .source_directory import relative
 
 logger = logging.getLogger(__name__)
-_FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.MULTILINE)
 DEFAULT_EVOLVER_TIMEOUT_SECONDS = 60.0
 
 
@@ -49,14 +51,6 @@ class EvolutionConflictError(RuntimeError):
 
 class EvolutionFrozenError(RuntimeError):
     """Raised when attempting to run evolution on an archived or deleting project."""
-
-
-def _as_utc(value: datetime | None) -> datetime | None:
-    if value is None:
-        return None
-    if value.tzinfo is None:
-        return value.replace(tzinfo=UTC)
-    return value.astimezone(UTC)
 
 
 def _loads_json(raw: str | None, default: Any) -> Any:
@@ -118,37 +112,209 @@ def serialize_run(
     }
 
 
-def recover_interrupted_evolution_runs() -> int:
-    """Mark leftover running evolution runs as incomplete and clean candidate generations.
+def _find_emitted_proposal_for_run(
+    db, project_id: str, run_id: str, rounds: Sequence[EvolutionRound]
+) -> tuple[CorrectionProposal | None, EvolutionRound | None]:
+    for rnd in reversed(rounds):
+        if rnd.proposal_id:
+            prop = db.get(CorrectionProposal, rnd.proposal_id)
+            if prop is not None:
+                return prop, rnd
+    evo_props = (
+        db.query(CorrectionProposal)
+        .filter(
+            CorrectionProposal.project_id == project_id,
+            CorrectionProposal.source == "evolution",
+        )
+        .order_by(CorrectionProposal.created_at.desc())
+        .all()
+    )
+    for prop in evo_props:
+        gate_data = _loads_json(prop.gate_report, {})
+        prov = gate_data.get("provenance") if isinstance(gate_data, dict) else None
+        if isinstance(prov, dict) and prov.get("evolution_run_id") == run_id:
+            round_num = prov.get("round_number")
+            matched_round = next(
+                (r for r in rounds if r.round_number == round_num),
+                rounds[-1] if rounds else None,
+            )
+            return prop, matched_round
+    return None, None
 
-    Startup recovery never advances project checkpoints or modifies active generations.
+
+def _finalize_accepted_run_in_db(
+    db,
+    *,
+    run_id: str,
+    round_id: str | None,
+    proposal_id: str,
+    l1_json: str | None,
+    l2_json: str | None,
+    frozen_max_trajectory_id: int | None,
+    round_number: int | None,
+    accepted_at: datetime,
+) -> tuple[EvolutionRun, list[EvolutionRound]]:
+    if round_id is not None:
+        rnd = db.get(EvolutionRound, round_id)
+        if rnd is not None:
+            if l1_json is not None:
+                rnd.l1_gate_report = l1_json
+            if l2_json is not None:
+                rnd.l2_gate_report = l2_json
+            rnd.decision = "accept"
+            rnd.proposal_id = proposal_id
+            rnd.reject_reason = None
+            rnd.finished_at = accepted_at
+
+    run = db.get(EvolutionRun, run_id)
+    assert run is not None
+    ckpt_row = db.get(EvolutionCheckpoint, run.project_id)
+    target_ckpt_id = (
+        frozen_max_trajectory_id
+        if frozen_max_trajectory_id is not None
+        else run.frozen_max_trajectory_id
+    )
+    if ckpt_row is None:
+        ckpt_row = EvolutionCheckpoint(
+            project_id=run.project_id,
+            checkpoint_trajectory_id=target_ckpt_id,
+            checkpoint_at=accepted_at,
+            last_run_id=run_id,
+            updated_at=accepted_at,
+        )
+        db.add(ckpt_row)
+    else:
+        if target_ckpt_id is not None:
+            ckpt_row.checkpoint_trajectory_id = target_ckpt_id
+        ckpt_row.checkpoint_at = accepted_at
+        ckpt_row.last_run_id = run_id
+        ckpt_row.updated_at = accepted_at
+
+    run.status = "accepted"
+    run.stop_reason = "accepted"
+    run.error = None
+    run.proposal_id = proposal_id
+    run.checkpoint_after_trajectory_id = ckpt_row.checkpoint_trajectory_id
+    if round_number is not None:
+        run.rounds_completed = round_number
+    run.finished_at = accepted_at
+    rounds = (
+        db.query(EvolutionRound)
+        .filter(EvolutionRound.run_id == run_id)
+        .order_by(EvolutionRound.round_number.asc())
+        .all()
+    )
+    return run, rounds
+
+
+def recover_interrupted_evolution_runs() -> int:
+    """Reconcile or abort leftover running evolution runs and clean candidate generations.
+
+    If a run crashed after emitting a ``CorrectionProposal``, finalize the accepted
+    run/round/checkpoint consistently so restarts never duplicate proposals. Otherwise
+    mark the interrupted run and unfinished rounds ``incomplete`` without advancing
+    the checkpoint.
     """
     now = datetime.now(UTC)
-    recovered = 0
-    with sessions().begin() as db:
+    reconcile_items: list[tuple[str, str | None, str, str, int | None, int | None]] = []
+    incomplete_ids: list[str] = []
+
+    with sessions()() as db:
         running_runs = (
             db.query(EvolutionRun).filter(EvolutionRun.status == "running").all()
         )
-        run_ids = [row.id for row in running_runs]
         for run in running_runs:
-            run.status = "incomplete"
-            run.stop_reason = "interrupted"
-            run.error = "Evolution run interrupted by application restart"
-            run.finished_at = now
+            rounds = (
+                db.query(EvolutionRound)
+                .filter(EvolutionRound.run_id == run.id)
+                .order_by(EvolutionRound.round_number.asc())
+                .all()
+            )
+            prop, matched_round = _find_emitted_proposal_for_run(
+                db, run.project_id, run.id, rounds
+            )
+            if prop is not None:
+                reconcile_items.append(
+                    (
+                        run.id,
+                        matched_round.id if matched_round else None,
+                        prop.id,
+                        prop.status,
+                        run.frozen_max_trajectory_id,
+                        matched_round.round_number if matched_round else None,
+                    )
+                )
+            else:
+                incomplete_ids.append(run.id)
+
+    for _run_id, _rnd_id, prop_id, prop_status, _fmax, _rnum in reconcile_items:
+        if prop_status == "applying":
+            corrections.recover_applying(only_id=prop_id)
+
+    recovered = 0
+    with sessions().begin() as db:
+        for (
+            run_id,
+            round_id,
+            prop_id,
+            _prop_status,
+            frozen_max,
+            round_num,
+        ) in reconcile_items:
+            prop = db.get(CorrectionProposal, prop_id)
+            gate_data = _loads_json(prop.gate_report, {}) if prop is not None else {}
+            l1_json = (
+                json.dumps(gate_data["l1_gate"], ensure_ascii=False)
+                if isinstance(gate_data, dict) and "l1_gate" in gate_data
+                else None
+            )
+            l2_json = (
+                json.dumps(gate_data["l2_gate"], ensure_ascii=False)
+                if isinstance(gate_data, dict) and "l2_gate" in gate_data
+                else None
+            )
+            _finalize_accepted_run_in_db(
+                db,
+                run_id=run_id,
+                round_id=round_id,
+                proposal_id=prop_id,
+                l1_json=l1_json,
+                l2_json=l2_json,
+                frozen_max_trajectory_id=frozen_max,
+                round_number=round_num,
+                accepted_at=now,
+            )
             recovered += 1
-        if run_ids:
+
+        if incomplete_ids:
+            db.execute(
+                update(EvolutionRun)
+                .where(
+                    EvolutionRun.id.in_(incomplete_ids),
+                    EvolutionRun.status == "running",
+                )
+                .values(
+                    status="incomplete",
+                    stop_reason="interrupted",
+                    error="Evolution run interrupted by application restart",
+                    finished_at=now,
+                )
+            )
             db.execute(
                 update(EvolutionRound)
                 .where(
-                    EvolutionRound.run_id.in_(run_ids),
+                    EvolutionRound.run_id.in_(incomplete_ids),
                     EvolutionRound.finished_at.is_(None),
                 )
                 .values(
                     decision="incomplete",
+                    proposal_id=None,
                     reject_reason="Evolution run interrupted by application restart",
                     finished_at=now,
                 )
             )
+            recovered += len(incomplete_ids)
+
     knowledge.cleanup_candidate_generations()
     return recovered
 
@@ -283,9 +449,9 @@ def _synthesize_deterministic_candidate(
             f"- 口径变体 {idx + 1}：{v.get('label')}（引用：`{v.get('ref') or '待补充'}`，出现 {v.get('count', 1)} 次）"
             for idx, v in enumerate(variants)
         ]
-        # Prefer editing/creating a knowledge/*.md document or table instructions preserving ALL variants
+        # Prefer editing an existing editable document or creating under knowledge/evolution/<file>.md
         slug = re.sub(r"[^A-Za-z0-9]+", "_", prompt_text)[:24].strip("_") or "caliber"
-        rel_path = f"knowledge/evolution_{slug}_variants.md"
+        rel_path = f"knowledge/evolution/{slug}_variants.md"
         doc_ref = f"document:{rel_path}"
         if signal.target_hint and signal.target_hint.startswith("document:"):
             src_file, existing_text = _load_editable_document(
@@ -297,8 +463,12 @@ def _synthesize_deterministic_candidate(
                 base_text = existing_text or ""
                 if src_root and (src_root / rel_path).is_file():
                     base_text = (src_root / rel_path).read_text(encoding="utf-8")
+            elif src_root and (src_root / rel_path).is_file():
+                base_text = (src_root / rel_path).read_text(encoding="utf-8")
             else:
                 base_text = ""
+        elif src_root and (src_root / rel_path).is_file():
+            base_text = (src_root / rel_path).read_text(encoding="utf-8")
         else:
             base_text = ""
 
@@ -449,7 +619,7 @@ def _synthesize_deterministic_candidate(
             "reason": signal.summary[:200],
         }
 
-    rel_doc = f"knowledge/evolution_gap_r{round_number}_{uuid.uuid4().hex[:6]}.md"
+    rel_doc = f"knowledge/evolution/gap_r{round_number}_{uuid.uuid4().hex[:6]}.md"
     content = "\n".join(
         [
             f"# 演化补充说明（第 {round_number} 轮）",
@@ -535,9 +705,7 @@ def _call_evolver_llm(
             resp.raise_for_status()
             body = resp.json()
         raw_text = provider_probe._response_text(provider, body).strip()
-        cleaned = _FENCE_RE.sub("", raw_text).strip()
-        parsed = json.loads(cleaned)
-        return parsed if isinstance(parsed, dict) else None
+        return provider_probe.parse_json_object(raw_text)
     except Exception:
         logger.debug("Evolver LLM call failed or returned invalid JSON", exc_info=True)
         return None
@@ -552,6 +720,18 @@ def _build_overlay_files(
     target = str(candidate.get("target") or "")
     structured_patch = candidate.get("structured_patch")
     patch_text = str(candidate.get("patch") or "")
+
+    if structured_patch is None and target_kind == "override":
+        structured_patch = semantic_overrides.legacy_target_to_patch(target, patch_text)
+        if structured_patch is None and patch_text.strip():
+            try:
+                loaded = yaml.safe_load(patch_text)
+            except yaml.YAMLError:
+                loaded = None
+            if isinstance(loaded, dict):
+                structured_patch = semantic_overrides.normalize_structured_patch(loaded)
+        if structured_patch is None:
+            raise ValueError("Missing structured_patch for override candidate")
 
     if structured_patch is not None:
         base_doc, _ = (
@@ -579,6 +759,25 @@ def _build_overlay_files(
     return {}
 
 
+def _extract_trajectory_sql(row: Mapping[str, Any]) -> tuple[str, str]:
+    sql = ""
+    dialect = "doris"
+    for item in row.get("final_sql") or ():
+        if isinstance(item, dict) and str(item.get("sql") or "").strip():
+            sql = str(item["sql"]).strip()
+            if item.get("dialect"):
+                dialect = str(item["dialect"]).lower()
+    if not sql:
+        for item in row.get("sql_validations") or ():
+            if isinstance(item, dict) and str(item.get("sql") or "").strip():
+                sql = str(item["sql"]).strip()
+                if item.get("dialect"):
+                    dialect = str(item["dialect"]).lower()
+    if dialect not in eval_mod.DIALECTS:
+        dialect = "doris"
+    return sql, dialect
+
+
 def _target_eval_inputs(
     project_id: str,
     signal: trajectory_miner.MinedSignal,
@@ -586,8 +785,17 @@ def _target_eval_inputs(
 ) -> tuple[list[str], list[eval_mod.Question]]:
     _, raw_rows = eval_questions._read_raw_rows(project_id)
     confirmed_rows = [r for r in raw_rows if r.get("answer_confirmed") is True]
-    if len(confirmed_rows) < evolution_gate.MIN_CONFIRMED_REGRESSION_QUESTIONS:
-        return [], []
+    holdout_canon = {
+        trajectory_miner.canonical_question(r.get("question"))
+        for r in raw_rows
+        if str(r.get("split") or "").strip().lower() == "holdout" and r.get("question")
+    }
+    confirmed_by_canon: dict[str, str] = {}
+    for row in confirmed_rows:
+        cq = trajectory_miner.canonical_question(row.get("question"))
+        if cq and row.get("id"):
+            confirmed_by_canon[cq] = str(row["id"])
+
     hint = str(signal.target_hint or "")
     hint_table = hint[len("table:") :] if hint.startswith("table:") else ""
     matched_ids: list[str] = []
@@ -595,9 +803,124 @@ def _target_eval_inputs(
         expected = [str(t) for t in (row.get("expected_tables") or ())]
         if hint_table and any(hint_table in exp_t for exp_t in expected):
             matched_ids.append(str(row["id"]))
-    if matched_ids:
-        return matched_ids, []
-    return [], []
+
+    evidence_ids = {int(tid) for tid in signal.evidence_trajectory_ids}
+    diag_rows_by_id: dict[int, dict[str, Any]] = {}
+    group_by_tid: dict[int, trajectory_miner.TrajectoryGroup] = {}
+    for grp in mining.diagnosis_groups:
+        for item in grp.trajectories:
+            tid = int(item["id"])
+            diag_rows_by_id[tid] = item
+            group_by_tid[tid] = grp
+
+    clarify = bool(
+        signal.preserve_multi_caliber or signal.signal_kind == "divergent_clarification"
+    )
+    seen_canon: set[str] = set()
+    target_qs: list[eval_mod.Question] = []
+
+    def _maybe_add_question(
+        qid: str,
+        q_text: str,
+        ref_sql: str,
+        dialect: str,
+        matched_refs: Sequence[str],
+    ) -> None:
+        cleaned_q = str(q_text or "").strip()
+        if not cleaned_q:
+            return
+        cq = trajectory_miner.canonical_question(cleaned_q)
+        if not cq or cq in holdout_canon or cq in seen_canon:
+            return
+        if cq in confirmed_by_canon:
+            cid = confirmed_by_canon[cq]
+            if cid not in matched_ids:
+                matched_ids.append(cid)
+            seen_canon.add(cq)
+            return
+        seen_canon.add(cq)
+
+        exp_tables: list[str] = []
+        exp_fields: list[str] = []
+        if ref_sql:
+            try:
+                exp_tables, exp_fields = eval_questions.extract_tables_and_fields(
+                    ref_sql, dialect=dialect
+                )
+            except ValueError:
+                exp_tables, exp_fields = [], []
+        if not exp_tables:
+            exp_tables = [
+                str(r)[len("table:") :]
+                for r in matched_refs
+                if str(r).startswith("table:")
+            ]
+        if not exp_tables and hint_table:
+            exp_tables = [hint_table]
+
+        target_qs.append(
+            eval_mod.Question(
+                id=qid,
+                question=cleaned_q,
+                expected_tables=exp_tables,
+                expected_fields=exp_fields,
+                caliber=signal.summary,
+                reference_sql=ref_sql,
+                dialect=dialect,
+                clarify=clarify,
+                split="dev",
+                answer_confirmed=False,
+            )
+        )
+
+    for tid in signal.evidence_trajectory_ids:
+        if len(target_qs) >= 5:
+            break
+        row = diag_rows_by_id.get(int(tid))
+        if row is None:
+            continue
+        grp = group_by_tid.get(int(tid))
+        q_text = str(row.get("question") or (grp.anchor_question if grp else "") or "")
+        ref_sql, dialect = _extract_trajectory_sql(row)
+        matched_refs = list(row.get("matched_refs") or ())
+        if not ref_sql and grp is not None:
+            for item in reversed(grp.trajectories):
+                grp_sql, grp_dialect = _extract_trajectory_sql(item)
+                if grp_sql:
+                    ref_sql, dialect = grp_sql, grp_dialect
+                    break
+            if not matched_refs:
+                for item in grp.trajectories:
+                    matched_refs.extend(item.get("matched_refs") or ())
+        _maybe_add_question(f"traj-{tid}", q_text, ref_sql, dialect, matched_refs)
+
+    if not target_qs and signal.signal_kind == "knowledge_gap_or_failure":
+        for idx, q_text in enumerate(signal.details.get("questions") or ()):
+            if len(target_qs) >= 5:
+                break
+            _maybe_add_question(
+                f"gap-{signal.evidence_trajectory_ids[0] if signal.evidence_trajectory_ids else idx}-{idx}",
+                str(q_text),
+                "",
+                "doris",
+                [],
+            )
+
+    if not target_qs and evidence_ids:
+        for grp in mining.diagnosis_groups:
+            if len(target_qs) >= 5:
+                break
+            if any(int(t["id"]) in evidence_ids for t in grp.trajectories):
+                ref_sql, dialect = _extract_trajectory_sql(grp.trajectories[-1])
+                _maybe_add_question(
+                    f"grp-{grp.max_id}",
+                    grp.anchor_question,
+                    ref_sql,
+                    dialect,
+                    grp.trajectories[-1].get("matched_refs") or (),
+                )
+
+    return matched_ids, target_qs
 
 
 def create_evolution_run(
@@ -855,11 +1178,17 @@ def execute_evolution_run(
                     mcp_url=mcp_url,
                     seed=seed,
                 )
-            except Exception as exc:  # noqa: BLE001 - fail closed on gate error
+            except Exception:
+                logger.warning(
+                    "L2 candidate gate failed for run %s round %s",
+                    run_id,
+                    round_num,
+                    exc_info=True,
+                )
                 l2_report = {
                     "passed": False,
                     "mode": "error",
-                    "error": f"{type(exc).__name__}: {exc}",
+                    "error": "Candidate gate evaluation failed",
                 }
 
             if l2_report.get("passed") is True:
@@ -871,6 +1200,19 @@ def execute_evolution_run(
                             run.status = "incomplete"
                             run.stop_reason = "project_frozen"
                             run.finished_at = finished
+                        db.execute(
+                            update(EvolutionRound)
+                            .where(
+                                EvolutionRound.run_id == run_id,
+                                EvolutionRound.decision == "running",
+                            )
+                            .values(
+                                decision="incomplete",
+                                reject_reason="project_frozen",
+                                finished_at=finished,
+                            )
+                        )
+                        if run is not None:
                             rounds = (
                                 db.query(EvolutionRound)
                                 .filter(EvolutionRound.run_id == run_id)
@@ -899,8 +1241,21 @@ def execute_evolution_run(
                         }
                     ],
                 }
+                l1_json = json.dumps(l1_dict, ensure_ascii=False)
+                l2_json = json.dumps(l2_report, ensure_ascii=False)
+                pre_proposal_id = uuid.uuid4().hex
+                with sessions().begin() as db:
+                    rnd = db.get(EvolutionRound, round_id)
+                    if rnd is not None:
+                        rnd.l1_gate_report = l1_json
+                        rnd.l2_gate_report = l2_json
+                        rnd.proposal_id = pre_proposal_id
+
                 evo_requester = Requester(id=actor_id, role="admin", token="")
-                with bind_mcp_context(evo_requester):
+                with (
+                    bind_mcp_context(evo_requester),
+                    corrections.trusted_evolution_source(),
+                ):
                     proposal = corrections.propose_in_project(
                         project_id,
                         target=target,
@@ -910,52 +1265,21 @@ def execute_evolution_run(
                         target_kind=target_kind,  # type: ignore[arg-type]
                         structured_patch=structured_patch,
                         extra_gate_report=extra_gate,
+                        proposal_id=pre_proposal_id,
                     )
                 proposal_id = str(proposal["id"])
                 accepted_at = datetime.now(UTC)
                 with sessions().begin() as db:
-                    rnd = db.get(EvolutionRound, round_id)
-                    if rnd is not None:
-                        rnd.l1_gate_report = json.dumps(l1_dict, ensure_ascii=False)
-                        rnd.l2_gate_report = json.dumps(l2_report, ensure_ascii=False)
-                        rnd.decision = "accept"
-                        rnd.proposal_id = proposal_id
-                        rnd.finished_at = accepted_at
-
-                    ckpt_row = db.get(EvolutionCheckpoint, project_id)
-                    if ckpt_row is None:
-                        ckpt_row = EvolutionCheckpoint(
-                            project_id=project_id,
-                            checkpoint_trajectory_id=mining.frozen_max_trajectory_id,
-                            checkpoint_at=accepted_at,
-                            last_run_id=run_id,
-                            updated_at=accepted_at,
-                        )
-                        db.add(ckpt_row)
-                    else:
-                        if mining.frozen_max_trajectory_id is not None:
-                            ckpt_row.checkpoint_trajectory_id = (
-                                mining.frozen_max_trajectory_id
-                            )
-                        ckpt_row.checkpoint_at = accepted_at
-                        ckpt_row.last_run_id = run_id
-                        ckpt_row.updated_at = accepted_at
-
-                    run = db.get(EvolutionRun, run_id)
-                    assert run is not None
-                    run.status = "accepted"
-                    run.stop_reason = "accepted"
-                    run.proposal_id = proposal_id
-                    run.checkpoint_after_trajectory_id = (
-                        ckpt_row.checkpoint_trajectory_id
-                    )
-                    run.rounds_completed = round_num
-                    run.finished_at = accepted_at
-                    rounds = (
-                        db.query(EvolutionRound)
-                        .filter(EvolutionRound.run_id == run_id)
-                        .order_by(EvolutionRound.round_number.asc())
-                        .all()
+                    run, rounds = _finalize_accepted_run_in_db(
+                        db,
+                        run_id=run_id,
+                        round_id=round_id,
+                        proposal_id=proposal_id,
+                        l1_json=l1_json,
+                        l2_json=l2_json,
+                        frozen_max_trajectory_id=mining.frozen_max_trajectory_id,
+                        round_number=round_num,
+                        accepted_at=accepted_at,
                     )
                     return serialize_run(run, rounds)
 
@@ -999,16 +1323,63 @@ def execute_evolution_run(
                 .all()
             )
             return serialize_run(run, rounds)
-    except Exception as exc:
+    except Exception:
         logger.exception("Evolution run %s failed unexpectedly", run_id)
+        safe_error = "Evolution run failed unexpectedly"
         finished = datetime.now(UTC)
         with sessions().begin() as db:
             run = db.get(EvolutionRun, run_id)
             if run is not None and run.status == "running":
-                run.status = "incomplete"
-                run.stop_reason = "error"
-                run.error = f"{type(exc).__name__}: {exc}"
-                run.finished_at = finished
+                rounds = (
+                    db.query(EvolutionRound)
+                    .filter(EvolutionRound.run_id == run_id)
+                    .order_by(EvolutionRound.round_number.asc())
+                    .all()
+                )
+                prop, matched_round = _find_emitted_proposal_for_run(
+                    db, project_id, run_id, rounds
+                )
+                if prop is not None:
+                    gate_data = _loads_json(prop.gate_report, {})
+                    _finalize_accepted_run_in_db(
+                        db,
+                        run_id=run_id,
+                        round_id=matched_round.id if matched_round else None,
+                        proposal_id=prop.id,
+                        l1_json=(
+                            json.dumps(gate_data["l1_gate"], ensure_ascii=False)
+                            if isinstance(gate_data, dict) and "l1_gate" in gate_data
+                            else None
+                        ),
+                        l2_json=(
+                            json.dumps(gate_data["l2_gate"], ensure_ascii=False)
+                            if isinstance(gate_data, dict) and "l2_gate" in gate_data
+                            else None
+                        ),
+                        frozen_max_trajectory_id=run.frozen_max_trajectory_id,
+                        round_number=(
+                            matched_round.round_number if matched_round else None
+                        ),
+                        accepted_at=finished,
+                    )
+                else:
+                    run.status = "incomplete"
+                    run.stop_reason = "error"
+                    run.error = safe_error
+                    run.finished_at = finished
+                    db.execute(
+                        update(EvolutionRound)
+                        .where(
+                            EvolutionRound.run_id == run_id,
+                            EvolutionRound.finished_at.is_(None),
+                        )
+                        .values(
+                            decision="incomplete",
+                            proposal_id=None,
+                            reject_reason=safe_error,
+                            finished_at=finished,
+                        )
+                    )
         knowledge.cleanup_candidate_generations(project_id)
         raise
 

@@ -11,6 +11,7 @@ import {
   Tag,
 } from "antd";
 import type { components } from "./api";
+import { readErrorDetail } from "./httpErrors";
 import type { Messages } from "./i18n";
 import { safeDecodePath } from "./paths";
 import { ProjectSelector, storedProject } from "./ProjectSelector";
@@ -59,8 +60,16 @@ type Proposal = {
   status: string;
   source?: string;
   target_kind?: string;
+  structured_patch?: Record<string, unknown> | null;
   gate_report?: GateReport | null;
 };
+
+function initialPatchForProposal(row: Proposal): string {
+  if (row.patch && row.patch.trim()) return row.patch;
+  if (row.structured_patch)
+    return JSON.stringify(row.structured_patch, null, 2);
+  return "";
+}
 
 type EvalQuestion = components["schemas"]["EvalQuestionView"];
 type Gap = { id: string; question: string; missing: string };
@@ -88,21 +97,6 @@ function sourceLabel(source: string | undefined, t: Messages): string {
   return source || "";
 }
 
-async function readErrorDetail(
-  response: Response,
-  fallback: string,
-): Promise<string> {
-  try {
-    const data = (await response.json()) as { detail?: unknown };
-    if (typeof data.detail === "string" && data.detail.trim()) {
-      return data.detail;
-    }
-  } catch {
-    // Ignore non-JSON error responses
-  }
-  return fallback;
-}
-
 export function CorrectionsPage({
   token,
   gaps = false,
@@ -128,6 +122,7 @@ export function CorrectionsPage({
     if (match) {
       setActiveTab("proposals");
       setSelected(match);
+      setPatch(initialPatchForProposal(match));
     }
   }, [rows, targetProposalId]);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
@@ -227,6 +222,33 @@ export function CorrectionsPage({
   async function review(action: "approve" | "reject", edited = false) {
     if (!selected) return;
     try {
+      let bodyPayload:
+        | { patch: string; structured_patch?: Record<string, unknown> }
+        | undefined;
+      if (action === "approve" && edited) {
+        bodyPayload = { patch };
+        const isStructured =
+          Boolean(selected.structured_patch) ||
+          selected.target_kind === "override";
+        const trimmed = patch.trim();
+        if (isStructured && trimmed.startsWith("{")) {
+          try {
+            const parsed = JSON.parse(trimmed) as unknown;
+            if (
+              parsed &&
+              typeof parsed === "object" &&
+              !Array.isArray(parsed)
+            ) {
+              bodyPayload = {
+                patch,
+                structured_patch: parsed as Record<string, unknown>,
+              };
+            }
+          } catch {
+            // Fall through so backend returns a 422 validation error on malformed JSON/YAML
+          }
+        }
+      }
       const response = await fetch(
         `/api/v1/corrections/${selected.id}/${action}?${projectQuery}`,
         {
@@ -235,10 +257,7 @@ export function CorrectionsPage({
             Authorization: `Bearer ${token}`,
             "Content-Type": "application/json",
           },
-          body:
-            action === "approve" && edited
-              ? JSON.stringify({ patch })
-              : undefined,
+          body: bodyPayload ? JSON.stringify(bodyPayload) : undefined,
         },
       );
       if (!response.ok) {
@@ -542,7 +561,7 @@ export function CorrectionsPage({
                             className={selected?.id === row.id ? "active" : ""}
                             onClick={() => {
                               setSelected(row);
-                              setPatch(row.patch);
+                              setPatch(initialPatchForProposal(row));
                             }}
                           >
                             <span className="mono">

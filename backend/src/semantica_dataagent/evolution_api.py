@@ -105,7 +105,7 @@ class EvolutionRoundView(BaseModel):
     candidate_change: dict[str, Any] = Field(default_factory=dict)
     l1_gate_report: dict[str, Any] | None = None
     l2_gate_report: dict[str, Any] | None = None
-    decision: str
+    decision: Literal["running", "accept", "reject", "incomplete"]
     reject_reason: str | None = None
     proposal_id: str | None = None
     started_at: UtcDatetime

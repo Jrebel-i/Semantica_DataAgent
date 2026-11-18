@@ -12,7 +12,7 @@ from cryptography.fernet import InvalidToken
 from fastapi import HTTPException
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from . import knowledge, project_context
+from . import knowledge, project_context, provider_probe
 from .auth import Requester
 from .crypto import decrypt
 from .db import Conversation, Provider, Turn, sessions
@@ -138,15 +138,7 @@ def generate_with_llm(context: dict[str, Any]) -> dict[str, Any] | None:
             text = ((data.get("choices") or [{}])[0].get("message") or {}).get(
                 "content"
             ) or ""
-        stripped = text.strip()
-        if stripped.startswith("```"):
-            lines = stripped.splitlines()
-            if len(lines) >= 2:
-                stripped = "\n".join(
-                    lines[1:-1] if lines[-1].strip().startswith("```") else lines[1:]
-                ).strip()
-        parsed = json.loads(stripped)
-        return parsed if isinstance(parsed, dict) else None
+        return provider_probe.parse_json_object(text)
     except (httpx.HTTPError, ValueError, KeyError, IndexError, TypeError):
         return None
 

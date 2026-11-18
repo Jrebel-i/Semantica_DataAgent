@@ -8,11 +8,14 @@ import logging
 import os
 import tempfile
 import uuid
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
+import yaml
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import text
@@ -47,6 +50,37 @@ Text = Annotated[str, Field(min_length=1, max_length=20000, pattern=r"\S")]
 TargetKind = Literal["document", "override", "ossie"]
 ProposalSource = Literal["manual", "mcp", "evolution"]
 
+_TRUSTED_EVOLUTION_SOURCE: ContextVar[bool] = ContextVar(
+    "trusted_evolution_source", default=False
+)
+
+
+@contextmanager
+def trusted_evolution_source():
+    """Authorize internal ``evolution_runner`` calls to emit ``source='evolution'`` proposals."""
+    token = _TRUSTED_EVOLUTION_SOURCE.set(True)
+    try:
+        yield
+    finally:
+        _TRUSTED_EVOLUTION_SOURCE.reset(token)
+
+
+def _evolution_doc_relpath(target: str) -> str:
+    if not target.startswith("document:"):
+        raise ValueError("Evolution document target must start with document:")
+    rel = relative(target[len("document:") :])
+    parts = rel.parts
+    if (
+        len(parts) < 3
+        or parts[0] != "knowledge"
+        or any(part.startswith(".") for part in parts)
+        or rel.suffix.lower() != ".md"
+    ):
+        raise ValueError(
+            "Evolution document target must live under knowledge/<category>/*.md"
+        )
+    return rel.as_posix()
+
 
 def _atomic_write(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -77,10 +111,13 @@ def _journal_path(root: Path, proposal_id: str) -> Path:
     return root / ".git" / f"dataagent-correction-{proposal_id}.json"
 
 
-def _write_journal(root: Path, proposal_id: str, payload: dict[str, Any]) -> None:
-    path = _journal_path(root, proposal_id)
+def _revert_journal_path(root: Path, proposal_id: str) -> Path:
+    return root / ".git" / f"dataagent-revert-{proposal_id}.json"
+
+
+def _write_json_file(path: Path, payload: dict[str, Any], prefix: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=".correction-journal-")
+    fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=prefix)
     tmp_path = Path(tmp_name)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
@@ -93,8 +130,7 @@ def _write_journal(root: Path, proposal_id: str, payload: dict[str, Any]) -> Non
             tmp_path.unlink(missing_ok=True)
 
 
-def _read_journal(root: Path, proposal_id: str) -> dict[str, Any] | None:
-    path = _journal_path(root, proposal_id)
+def _read_json_file(path: Path) -> dict[str, Any] | None:
     if not path.is_file():
         return None
     try:
@@ -104,8 +140,32 @@ def _read_journal(root: Path, proposal_id: str) -> dict[str, Any] | None:
         return None
 
 
+def _write_journal(root: Path, proposal_id: str, payload: dict[str, Any]) -> None:
+    _write_json_file(_journal_path(root, proposal_id), payload, ".correction-journal-")
+
+
+def _read_journal(root: Path, proposal_id: str) -> dict[str, Any] | None:
+    return _read_json_file(_journal_path(root, proposal_id))
+
+
 def _remove_journal(root: Path, proposal_id: str) -> None:
     _journal_path(root, proposal_id).unlink(missing_ok=True)
+
+
+def _write_revert_journal(
+    root: Path, proposal_id: str, payload: dict[str, Any]
+) -> None:
+    _write_json_file(
+        _revert_journal_path(root, proposal_id), payload, ".revert-journal-"
+    )
+
+
+def _read_revert_journal(root: Path, proposal_id: str) -> dict[str, Any] | None:
+    return _read_json_file(_revert_journal_path(root, proposal_id))
+
+
+def _remove_revert_journal(root: Path, proposal_id: str) -> None:
+    _revert_journal_path(root, proposal_id).unlink(missing_ok=True)
 
 
 def _validate_git_author(name: str) -> str:
@@ -198,17 +258,19 @@ def propose_correction(
     reason: Text = "",
     project_id: str = "default",
     *,
-    source: ProposalSource = "mcp",
+    source: Literal["mcp"] = "mcp",
     target_kind: TargetKind | None = None,
     structured_patch: dict[str, Any] | str | None = None,
 ) -> dict:
     """Propose a correction or structured semantic override from an MCP caller."""
+    if source != "mcp":
+        raise ValueError("MCP corrections must use source='mcp'")
     return propose_in_project(
         project_id or project_context.DEFAULT_PROJECT_ID,
         target,
         patch,
         reason,
-        source=source,
+        source="mcp",
         target_kind=target_kind,
         structured_patch=structured_patch,
     )
@@ -226,6 +288,7 @@ def propose_in_project(
     conversation_id: str | None = None,
     eval_candidate: dict[str, Any] | None = None,
     extra_gate_report: dict[str, Any] | None = None,
+    proposal_id: str | None = None,
 ) -> dict:
     """Propose replacement content or a structured semantic override inside one project."""
     requester = current_requester()
@@ -242,6 +305,10 @@ def propose_in_project(
         raise ValueError("Correction reason must not be blank")
     if source not in {"manual", "mcp", "evolution"}:
         raise ValueError(f"Unsupported correction source: {source}")
+    if source == "evolution" and not _TRUSTED_EVOLUTION_SOURCE.get():
+        raise ValueError(
+            "Evolution proposals can only be submitted by the evolution runner"
+        )
 
     parsed_patch = _parse_structured_patch_arg(structured_patch)
     resolved_kind = _resolve_target_kind(target, target_kind, parsed_patch)
@@ -297,13 +364,7 @@ def propose_in_project(
                 known = set()
             if target not in known:
                 if source == "evolution" and resolved_kind == "document":
-                    rel_doc = str(relative(target[len("document:") :]))
-                    if rel_doc.startswith(
-                        ("ossie/", "overrides/")
-                    ) or not rel_doc.endswith(".md"):
-                        raise ValueError(
-                            "Evolution document target must be an editable .md path"
-                        )
+                    rel_doc = _evolution_doc_relpath(target)
                     if project.source_directory_value:
                         cand = Path(project.source_directory_value) / rel_doc
                         if cand.is_file():
@@ -404,7 +465,7 @@ def propose_in_project(
         if cleaned_candidate:
             gate_payload["eval_candidate"] = cleaned_candidate
 
-    proposal_id = uuid.uuid4().hex
+    proposal_id = proposal_id or uuid.uuid4().hex
     with sessions().begin() as db:
         row = CorrectionProposal(
             id=proposal_id,
@@ -505,7 +566,7 @@ class ProposalCreate(BaseModel):
     target: Text
     patch: str = Field(default="", max_length=20000)
     reason: Text
-    source: ProposalSource | None = None
+    source: Literal["manual"] | None = None
     target_kind: TargetKind | None = None
     structured_patch: dict[str, Any] | None = None
     conversation_id: str | None = None
@@ -556,13 +617,15 @@ def create_proposal(
         "category": body.category,
     }
     try:
+        if body.source not in (None, "manual"):
+            raise ValueError("REST callers may only submit source='manual' proposals")
         with bind_mcp_context(requester):
             return propose_in_project(
                 scope.project_id,
                 body.target,
                 body.patch,
                 body.reason,
-                source=body.source or "manual",
+                source="manual",
                 target_kind=body.target_kind,
                 structured_patch=body.structured_patch,
                 conversation_id=body.conversation_id,
@@ -812,15 +875,26 @@ def _load_structured_from_row(
     if structured_override is not None:
         return normalize_structured_patch(structured_override)
     if row.structured_patch:
-        parsed = json.loads(row.structured_patch)
-        if (
-            row.target.startswith(("table:", "field:"))
-            and patch_text != row.original_patch
+        existing = json.loads(row.structured_patch)
+        if patch_text == row.patch:
+            return existing
+        try:
+            loaded = yaml.safe_load(patch_text)
+        except yaml.YAMLError as exc:
+            raise ValueError(
+                f"Edited structured patch is not valid YAML/JSON: {exc}"
+            ) from exc
+        if isinstance(loaded, dict):
+            return normalize_structured_patch(loaded)
+        if row.target.startswith(("table:", "field:")) and _is_plain_legacy_comment(
+            row.target, existing
         ):
             converted = legacy_target_to_patch(row.target, patch_text)
             if converted is not None:
                 return converted
-        return parsed
+        raise ValueError(
+            "Edited patch for a structured override must be valid YAML/JSON matching semantic_overrides schema"
+        )
     return legacy_target_to_patch(row.target, patch_text)
 
 
@@ -1009,7 +1083,7 @@ def _apply_proposal(
         if len(nodes) == 1 and nodes[0]["node"].get("source_file"):
             doc_source_file = nodes[0]["node"]["source_file"]
         elif row_source == "evolution" and row_target.startswith("document:"):
-            doc_source_file = str(relative(row_target[len("document:") :]))
+            doc_source_file = _evolution_doc_relpath(row_target)
         else:
             raise HTTPException(409, "Document no longer exists")
     elif (
@@ -1175,6 +1249,136 @@ def _abort_revert_if_active(root: Path) -> None:
         git(root, "revert", "--abort")
 
 
+def _restore_reverting_row(proposal_id: str, prior_status: str) -> None:
+    with sessions().begin() as db:
+        row = db.get(CorrectionProposal, proposal_id)
+        if row is not None and row.status == "reverting":
+            row.status = prior_status
+
+
+def _finalize_revert(
+    proposal_id: str, revert_sha: str, actor_name: str
+) -> ProposalView:
+    source_dir_val: str | None = None
+    with sessions().begin() as db:
+        db.execute(text("BEGIN IMMEDIATE"))
+        row = db.get(CorrectionProposal, proposal_id)
+        if row is None or row.status != "reverting":
+            raise ValueError("Proposal is not reverting")
+        source_dir_val = row.source_directory
+        row.status = "reverted"
+        row.revert_commit_sha = revert_sha
+        row.reverted_at = datetime.now(UTC)
+        if (
+            active_build(db, row.project_id, correction_proposal_id=f"revert:{row.id}")
+            is None
+        ):
+            add_queued_build(
+                db,
+                "incremental",
+                actor_name,
+                correction_proposal_id=f"revert:{row.id}",
+                project_id=row.project_id,
+            )
+        db.flush()
+        result = ProposalView.model_validate(row)
+    if source_dir_val:
+        _remove_revert_journal(Path(source_dir_val), proposal_id)
+    project_context.wake_build_queue()
+    return result
+
+
+def _find_revert_commit(root: Path, commit_sha: str) -> str | None:
+    needle = f"This reverts commit {commit_sha}."
+    try:
+        commits = (
+            git(
+                root,
+                "log",
+                "--all",
+                "--format=%H",
+                "--fixed-strings",
+                "--grep",
+                needle,
+            )
+            .decode()
+            .splitlines()
+        )
+    except ValueError:
+        return None
+    matches = [
+        sha
+        for sha in commits
+        if needle in git(root, "show", "-s", "--format=%B", sha).decode()
+    ]
+    if len(matches) > 1:
+        raise ValueError("Multiple revert commits for one correction")
+    return matches[0] if matches else None
+
+
+@dataclass(frozen=True)
+class _RevertingSnapshot:
+    id: str
+    repo_dir: str | None
+    commit_sha: str | None
+    reviewer_id: str | None
+    reviewer_name: str | None
+
+
+def _recover_git_reverting_row(snap: _RevertingSnapshot) -> None:
+    if not snap.repo_dir:
+        prior = "approved" if snap.reviewer_id is not None else "auto_applied"
+        _restore_reverting_row(snap.id, prior)
+        return
+    with repository(snap.repo_dir) as root:
+        journal = _read_revert_journal(root, snap.id)
+        prior_status = (
+            str(journal["prior_status"])
+            if journal and journal.get("prior_status") in {"approved", "auto_applied"}
+            else ("approved" if snap.reviewer_id is not None else "auto_applied")
+        )
+        commit_sha = (
+            str(journal["commit_sha"])
+            if journal and journal.get("commit_sha")
+            else (snap.commit_sha or "")
+        )
+        actor_name = (
+            str(journal["actor_name"])
+            if journal and journal.get("actor_name")
+            else (snap.reviewer_name or "system")
+        )
+        matched_sha = _find_revert_commit(root, commit_sha) if commit_sha else None
+        if matched_sha:
+            _finalize_revert(snap.id, matched_sha, actor_name)
+            return
+        _abort_revert_if_active(root)
+        _remove_revert_journal(root, snap.id)
+        _restore_reverting_row(snap.id, prior_status)
+
+
+def recover_reverting(only_id: str | None = None) -> None:
+    """Recover correction reverts interrupted around git revert or DB finalization."""
+    with sessions()() as db:
+        query = db.query(CorrectionProposal).filter_by(status="reverting")
+        if only_id is not None:
+            query = query.filter_by(id=only_id)
+        snapshots = [
+            _RevertingSnapshot(
+                id=r.id,
+                repo_dir=r.source_directory,
+                commit_sha=r.commit_sha,
+                reviewer_id=r.reviewer_id,
+                reviewer_name=r.reviewer_name,
+            )
+            for r in query.all()
+        ]
+    for snap in snapshots:
+        try:
+            _recover_git_reverting_row(snap)
+        except Exception:
+            logger.exception("Could not recover revert for correction %s", snap.id)
+
+
 @router.post("/api/v1/corrections/{proposal_id}/revert", response_model=ProposalView)
 def revert(
     proposal_id: str,
@@ -1182,7 +1386,8 @@ def revert(
     requester: Annotated[object, Depends(rest_requester)],
 ):
     project_id = scope.project_id
-    with sessions()() as db:
+    with sessions().begin() as db:
+        db.execute(text("BEGIN IMMEDIATE"))
         actor_name = _token_name(db, requester.id)
         row = db.get(CorrectionProposal, proposal_id)
         if row is None or row.project_id != project_id:
@@ -1193,59 +1398,49 @@ def revert(
             )
         if not row.commit_sha or not row.source_directory:
             raise HTTPException(409, "Proposal has no Git commit to revert")
+        try:
+            _validate_git_author(actor_name)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from None
+        prior_status = row.status
         commit_sha = row.commit_sha
         source_dir = row.source_directory
+        row.status = "reverting"
 
-    try:
-        _validate_git_author(actor_name)
-    except ValueError as exc:
-        raise HTTPException(422, str(exc)) from None
-
+    attempted_revert = False
     try:
         with repository(source_dir) as root:
-            with sessions()() as db:
-                current_row = db.get(CorrectionProposal, proposal_id)
-                if current_row is None or current_row.project_id != project_id:
-                    raise HTTPException(404, "Proposal not found")
-                if current_row.status not in {"approved", "auto_applied"}:
-                    raise HTTPException(
-                        409,
-                        f"Proposal cannot be reverted from status {current_row.status}",
-                    )
             if git(root, "diff", "--cached", "--name-only"):
                 raise HTTPException(409, "Source repository has staged changes")
+            pre_revert_head = git(root, "rev-parse", "HEAD").decode().strip()
+            _write_revert_journal(
+                root,
+                proposal_id,
+                {
+                    "proposal_id": proposal_id,
+                    "prior_status": prior_status,
+                    "commit_sha": commit_sha,
+                    "pre_revert_head": pre_revert_head,
+                    "actor_name": actor_name,
+                },
+            )
+            attempted_revert = True
             try:
                 git(root, "revert", "--no-edit", commit_sha, author=actor_name)
             except ValueError as exc:
                 _abort_revert_if_active(root)
+                _remove_revert_journal(root, proposal_id)
+                _restore_reverting_row(proposal_id, prior_status)
                 raise HTTPException(409, f"Git revert failed: {exc}") from exc
             revert_sha = git(root, "rev-parse", "HEAD").decode().strip()
-
-            with sessions().begin() as db:
-                db.execute(text("BEGIN IMMEDIATE"))
-                row = db.get(CorrectionProposal, proposal_id)
-                if row is None or row.project_id != project_id:
-                    raise HTTPException(404, "Proposal not found")
-                if row.status not in {"approved", "auto_applied"}:
-                    raise HTTPException(
-                        409, f"Proposal cannot be reverted from status {row.status}"
-                    )
-                row.status = "reverted"
-                row.revert_commit_sha = revert_sha
-                row.reverted_at = datetime.now(UTC)
-                add_queued_build(
-                    db,
-                    "incremental",
-                    actor_name,
-                    correction_proposal_id=f"revert:{row.id}",
-                    project_id=row.project_id,
-                )
-                db.flush()
-                result = ProposalView.model_validate(row)
+            return _finalize_revert(proposal_id, revert_sha, actor_name)
     except HTTPException:
+        if not attempted_revert:
+            _restore_reverting_row(proposal_id, prior_status)
         raise
     except (OSError, ValueError) as exc:
+        if attempted_revert:
+            recover_reverting(proposal_id)
+        else:
+            _restore_reverting_row(proposal_id, prior_status)
         raise HTTPException(409, str(exc)) from exc
-
-    project_context.wake_build_queue()
-    return result

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Button, Space, Tag } from "antd";
 import type { components } from "./api";
+import { readErrorDetail } from "./httpErrors";
 import type { Messages } from "./i18n";
 import { ProjectSelector, storedProject } from "./ProjectSelector";
 
@@ -26,21 +27,6 @@ const DEFAULT_CONFIG: EvolutionConfig = {
   pending_trajectories: 0,
 };
 
-async function readErrorDetail(
-  response: Response,
-  fallback: string,
-): Promise<string> {
-  try {
-    const data = (await response.json()) as { detail?: unknown };
-    if (typeof data.detail === "string" && data.detail.trim()) {
-      return data.detail;
-    }
-  } catch {
-    // Ignore non-JSON error payloads
-  }
-  return fallback;
-}
-
 function formatDateTime(value: string | null | undefined): string {
   if (!value) return "-";
   const date = new Date(value);
@@ -53,9 +39,10 @@ function runStatusColor(status: EvolutionRun["status"]): string {
   return "orange";
 }
 
-function decisionColor(decision: string): string {
-  if (decision === "accepted") return "green";
-  if (decision === "rejected") return "red";
+function decisionColor(decision: EvolutionRound["decision"]): string {
+  if (decision === "accept") return "green";
+  if (decision === "reject") return "red";
+  if (decision === "running") return "blue";
   return "orange";
 }
 
@@ -162,11 +149,15 @@ function RoundCard({ round, t }: { round: EvolutionRound; t: Messages }) {
   const l2 = round.l2_gate_report as Record<string, unknown> | null | undefined;
   const l1Errors = Array.isArray(l1?.errors) ? l1.errors : [];
   const decisionLabel =
-    round.decision === "accepted"
+    round.decision === "accept"
       ? t.evolutionDecisionAccepted
-      : round.decision === "rejected"
+      : round.decision === "reject"
         ? t.evolutionDecisionRejected
-        : t.evolutionDecisionError;
+        : round.decision === "running"
+          ? t.evolutionStatusRunning
+          : round.decision === "incomplete"
+            ? t.evolutionStatusIncomplete
+            : t.evolutionDecisionError;
 
   return (
     <article className="evolution-round-card">

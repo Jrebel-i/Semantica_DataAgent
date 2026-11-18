@@ -128,7 +128,7 @@ test("renders config, saves updates, triggers manual run, shows rounds/L1/L2 and
             errors: ["L1 静态校验失败"],
           },
           l2_gate_report: null,
-          decision: "rejected",
+          decision: "reject",
           reject_reason: "L1 failed",
           proposal_id: null,
           started_at: "2026-01-01T01:00:05Z",
@@ -159,7 +159,7 @@ test("renders config, saves updates, triggers manual run, shows rounds/L1/L2 and
             E_c: 0,
             new_validate_errors: 0,
           },
-          decision: "accepted",
+          decision: "accept",
           reject_reason: null,
           proposal_id: "prop-88",
           started_at: "2026-01-01T01:00:30Z",
@@ -239,6 +239,9 @@ test("renders config, saves updates, triggers manual run, shows rounds/L1/L2 and
   expect(await screen.findByText("明确已支付订单状态编码")).toBeTruthy();
   expect(screen.getByText(/W_c=4/)).toBeTruthy();
   expect(screen.getByText(/L1 静态校验失败/)).toBeTruthy();
+  expect(screen.getByText("通过")).toBeTruthy();
+  expect(screen.getByText("未通过")).toBeTruthy();
+  expect(screen.queryByText("异常")).toBeNull();
 
   // Navigate to generated proposal
   fireEvent.click(screen.getByRole("button", { name: "查看产出纠错提案" }));
@@ -381,7 +384,7 @@ test("project switch discards stale delayed fetch response from previous project
                   evaluated_cases: 3,
                   regressions: [],
                 },
-                decision: "accepted",
+                decision: "accept",
                 reject_reason: null,
                 proposal_id: null,
                 started_at: "2026-01-02T00:00:01Z",
@@ -405,7 +408,7 @@ test("project switch discards stale delayed fetch response from previous project
                   evaluated_cases: 3,
                   regressions: ["q-3", "q-4"],
                 },
-                decision: "rejected",
+                decision: "reject",
                 reject_reason: "L2 regressions",
                 proposal_id: null,
                 started_at: "2026-01-02T00:00:51Z",
