@@ -1282,17 +1282,43 @@ def describe(names=None, database=None, search=None, summary=False, project_id=N
             OPTIONAL MATCH (t)-[:HAS_FIELD]->(f:SDAField {generation:$generation})
             WITH t, collect(properties(f)) AS fields
             OPTIONAL MATCH (t)-[:HAS_DOCUMENT]->(d:SDADocument {generation:$generation})
-            RETURN properties(t) AS table, fields, collect({ref:d.ref, path:d.path, category:d.category}) AS documents ORDER BY coalesce(table.catalog, ''),table.database,table.name""",
+            WITH t, fields, collect({ref:d.ref, path:d.path, category:d.category, generated:coalesce(d.generated, false)}) AS documents
+            OPTIONAL MATCH (t)-[r_out:RELATES_TO]->(:SDATable {generation:$generation})
+            WITH t, fields, documents, collect(properties(r_out)) AS out_rels
+            OPTIONAL MATCH (:SDATable {generation:$generation})-[r_in:RELATES_TO]->(t)
+            RETURN properties(t) AS table, fields, documents, out_rels, collect(properties(r_in)) AS in_rels ORDER BY coalesce(table.catalog, ''),table.database,table.name""",
         parameters,
     )
-    return [
-        {
-            **r["table"],
-            "fields": r["fields"],
-            "documents": [d for d in r["documents"] if d["ref"]],
+
+    def _project_table_row(row):
+        docs = [
+            {**d, "generated": bool(d.get("generated", False))}
+            for d in (row.get("documents") or [])
+            if d and d.get("ref")
+        ]
+        rels_by_ref = {}
+        for rel in [*(row.get("out_rels") or []), *(row.get("in_rels") or [])]:
+            if not rel or not rel.get("ref"):
+                continue
+            rels_by_ref.setdefault(
+                rel["ref"],
+                {
+                    "name": rel.get("name", ""),
+                    "ref": rel["ref"],
+                    "from_table": rel.get("from_table", ""),
+                    "from_columns": list(rel.get("from_columns") or []),
+                    "to_table": rel.get("to_table", ""),
+                    "to_columns": list(rel.get("to_columns") or []),
+                },
+            )
+        return {
+            **row["table"],
+            "fields": row["fields"],
+            "documents": docs,
+            "relationships": [rels_by_ref[k] for k in sorted(rels_by_ref)],
         }
-        for r in rows
-    ]
+
+    return [_project_table_row(r) for r in rows]
 
 
 def dimension_values(database, table, field, project_id=None):

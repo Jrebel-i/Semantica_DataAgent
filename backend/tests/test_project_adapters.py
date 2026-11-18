@@ -838,6 +838,114 @@ def test_adapter_permissions(client):
     )
 
 
+def test_project_scoped_pulls_list_and_project_admin_trigger(client, monkeypatch):
+    from semantica_dataagent import project_context
+    from semantica_dataagent.dtb_ossie import DtbOssiePuller
+
+    c, admin = client
+    alpha = _create_project(c, admin, "Alpha Pull", "warehouse")
+    beta = _create_project(c, admin, "Beta Pull", "warehouse")
+    member = _create_token(c, admin, "PullMember")
+    project_admin = _create_token(c, admin, "PullProjectAdmin")
+    stranger = _create_token(c, admin, "PullStranger")
+    _add_member(c, admin, alpha["id"], member["id"], "member")
+    _add_member(c, admin, alpha["id"], project_admin["id"], "admin")
+
+    for pid in (alpha["id"], beta["id"]):
+        assert (
+            c.put(
+                f"/api/v1/projects/{pid}/adapters",
+                headers=_headers(admin),
+                json={
+                    "adapters": [
+                        {
+                            "id": "ossie",
+                            "enabled": True,
+                            "parameters": {},
+                            "pull": {
+                                "enabled": True,
+                                "parameters": {
+                                    "url": "https://dtb.example",
+                                    "token": "secret",
+                                },
+                            },
+                        }
+                    ]
+                },
+            ).status_code
+            == 200
+        )
+
+    monkeypatch.setattr(
+        DtbOssiePuller,
+        "fetch",
+        lambda *args, **kwargs: (
+            {"ossie/dtb_semantic_model.yaml": b"name: ok\n"},
+            {"tables": 1, "tasks": 0},
+        ),
+    )
+    monkeypatch.setattr(project_context, "wake_build_queue", lambda: None)
+
+    assert (
+        c.post(
+            "/api/v1/pulls/ossie",
+            headers=_headers(member["token"]),
+            params={"project": alpha["id"]},
+        ).status_code
+        == 403
+    )
+    assert (
+        c.post(
+            "/api/v1/pulls/ossie",
+            headers=_headers(stranger["token"]),
+            params={"project": alpha["id"]},
+        ).status_code
+        == 404
+    )
+
+    p_alpha = c.post(
+        "/api/v1/pulls/ossie",
+        headers=_headers(project_admin["token"]),
+        params={"project": alpha["id"]},
+    )
+    assert p_alpha.status_code == 200, p_alpha.text
+    p_beta = c.post(
+        "/api/v1/pulls/ossie",
+        headers=_headers(admin),
+        params={"project": beta["id"]},
+    )
+    assert p_beta.status_code == 200, p_beta.text
+
+    alpha_rows = c.get(
+        "/api/v1/pulls",
+        headers=_headers(member["token"]),
+        params={"project": alpha["id"]},
+    )
+    assert alpha_rows.status_code == 200
+    assert [row["id"] for row in alpha_rows.json()] == [p_alpha.json()["id"]]
+
+    assert (
+        c.get(
+            "/api/v1/pulls",
+            headers=_headers(member["token"]),
+            params={"project": beta["id"]},
+        ).status_code
+        == 404
+    )
+
+    # Without ?project=, member only sees accessible projects, not beta
+    default_member_rows = c.get("/api/v1/pulls", headers=_headers(member["token"]))
+    assert default_member_rows.status_code == 200
+    assert [row["id"] for row in default_member_rows.json()] == [p_alpha.json()["id"]]
+
+    all_admin_rows = c.get("/api/v1/pulls", headers=_headers(admin))
+    assert all_admin_rows.status_code == 200
+    assert {row["id"] for row in all_admin_rows.json()} >= {
+        p_alpha.json()["id"],
+        p_beta.json()["id"],
+    }
+
+
 def test_default_project_keeps_existing_global_adapter_configuration(client):
     c, admin = client
     headers = _headers(admin)

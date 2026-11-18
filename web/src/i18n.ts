@@ -58,6 +58,9 @@ const messages = {
     chatGreeting: "今天想查点什么数据？",
     sidebarSearch: "搜索",
     sidebarKnowledge: "知识库",
+    sidebarDataOps: "构建与数据",
+    sidebarProjects: "项目空间",
+    sidebarSystemConfig: "系统设置",
     management: "管理",
     exampleQuestions: "试着问",
     examples: [
@@ -579,6 +582,9 @@ const messages = {
     chatGreeting: "What data would you like to explore today?",
     sidebarSearch: "Search",
     sidebarKnowledge: "Knowledge base",
+    sidebarDataOps: "Builds & data",
+    sidebarProjects: "Project space",
+    sidebarSystemConfig: "System settings",
     management: "Manage",
     exampleQuestions: "Try asking",
     examples: [

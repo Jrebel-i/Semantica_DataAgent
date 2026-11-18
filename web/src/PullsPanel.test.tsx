@@ -135,3 +135,61 @@ test("仅有未启用的 puller/ossie 时显示面板且默认触发 /api/v1/pul
     ).toBe(true),
   );
 });
+
+test("指定 project 时从项目适配器读取模式并按项目拉取与列举记录", async () => {
+  stubDomEnvironment();
+  const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+    if (url === "/api/v1/projects/topic/adapters")
+      return Response.json([
+        {
+          id: "ossie",
+          name: "Apache Ossie",
+          project_types: ["warehouse"],
+          enabled: true,
+          parameters: {},
+          parameters_schema: { type: "object", properties: {} },
+          compatible: true,
+          reason: null,
+          pull: {
+            enabled: true,
+            parameters: { url: "https://dtb.example" },
+            parameters_schema: { type: "object", properties: {} },
+            token_configured: true,
+          },
+        },
+      ]);
+    if (url === "/api/v1/pulls?project=topic")
+      return Response.json([
+        {
+          id: 9,
+          status: "succeeded",
+          started_at: "2026-11-18T01:00:00Z",
+          finished_at: "2026-11-18T01:01:00Z",
+          tables: 4,
+          tasks: 2,
+          error: null,
+          commit: null,
+          build_id: 12,
+        },
+      ]);
+    if (url === "/api/v1/pulls/ossie?project=topic" && init?.method === "POST")
+      return Response.json({ id: 10 });
+    return new Response("", { status: 404 });
+  });
+  vi.stubGlobal("fetch", fetcher);
+  render(
+    <PullsPanel token="token" project="topic" messages={getMessages("zh")} />,
+  );
+  expect(await screen.findByText("DTB 拉取为 Ossie")).toBeTruthy();
+  const button = await screen.findByRole("button", { name: "立即拉取" });
+  fireEvent.click(button);
+  await waitFor(() =>
+    expect(
+      fetcher.mock.calls.some(
+        ([url, init]) =>
+          url === "/api/v1/pulls/ossie?project=topic" &&
+          init?.method === "POST",
+      ),
+    ).toBe(true),
+  );
+});

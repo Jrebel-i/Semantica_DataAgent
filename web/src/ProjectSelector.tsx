@@ -72,13 +72,26 @@ export function ProjectSelector({
   value,
   onChange,
   messages: t,
+  includeMemberProjects = false,
 }: {
   token: string;
   value: string;
   onChange: (project: string) => void;
   messages: Messages;
+  includeMemberProjects?: boolean;
 }) {
-  const { projects } = useProjects(token);
+  const { projects, loaded } = useProjects(token);
+  const available = includeMemberProjects
+    ? projects.filter((row) => row.status === "active")
+    : manageableProjects(projects);
+
+  useEffect(() => {
+    if (!loaded || available.length === 0) return;
+    if (available.some((row) => row.id === value)) return;
+    const next = available[0].id;
+    rememberProject(next);
+    onChange(next);
+  }, [available, loaded, onChange, value]);
 
   return (
     <label className="project-selector">
@@ -90,7 +103,7 @@ export function ProjectSelector({
           rememberProject(project);
           onChange(project);
         }}
-        options={manageableProjects(projects).map((project) => ({
+        options={available.map((project) => ({
           value: project.id,
           title: project.name,
           label: project.name,

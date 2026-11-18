@@ -722,6 +722,17 @@
             "title": "Category",
             "type": "string"
           },
+          "generated": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Generated"
+          },
           "path": {
             "title": "Path",
             "type": "string"
@@ -2262,6 +2273,50 @@
         "title": "PullView",
         "type": "object"
       },
+      "RelationshipLink": {
+        "properties": {
+          "from_columns": {
+            "items": {
+              "type": "string"
+            },
+            "title": "From Columns",
+            "type": "array"
+          },
+          "from_table": {
+            "title": "From Table",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "ref": {
+            "title": "Ref",
+            "type": "string"
+          },
+          "to_columns": {
+            "items": {
+              "type": "string"
+            },
+            "title": "To Columns",
+            "type": "array"
+          },
+          "to_table": {
+            "title": "To Table",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "ref",
+          "from_table",
+          "from_columns",
+          "to_table",
+          "to_columns"
+        ],
+        "title": "RelationshipLink",
+        "type": "object"
+      },
       "SearchHit": {
         "additionalProperties": true,
         "properties": {
@@ -2778,6 +2833,20 @@
           "ref": {
             "title": "Ref",
             "type": "string"
+          },
+          "relationships": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/RelationshipLink"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Relationships"
           }
         },
         "required": [
@@ -5921,6 +5990,24 @@
     "/api/v1/pulls": {
       "get": {
         "operationId": "list_pulls_api_v1_pulls_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "project",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Project"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -5935,6 +6022,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
           }
         },
         "security": [
