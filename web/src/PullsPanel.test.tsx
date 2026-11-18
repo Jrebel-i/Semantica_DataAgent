@@ -14,7 +14,8 @@ afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
 });
-test("拉取器可用时显示记录并能手动拉取", async () => {
+
+function stubDomEnvironment() {
   vi.stubGlobal(
     "ResizeObserver",
     class {
@@ -33,6 +34,10 @@ test("拉取器可用时显示记录并能手动拉取", async () => {
       removeEventListener() {},
     }),
   });
+}
+
+test("拉取器可用时显示记录并能手动拉取", async () => {
+  stubDomEnvironment();
   const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
     if (url === "/api/v1/plugins")
       return Response.json([{ category: "puller", id: "dtb" }]);
@@ -65,24 +70,7 @@ test("拉取器可用时显示记录并能手动拉取", async () => {
 });
 
 test("puller/ossie 启用时立即拉取调用 /api/v1/pulls/ossie", async () => {
-  vi.stubGlobal(
-    "ResizeObserver",
-    class {
-      observe() {}
-      unobserve() {}
-      disconnect() {}
-    },
-  );
-  Object.defineProperty(window, "matchMedia", {
-    configurable: true,
-    value: () => ({
-      matches: false,
-      addListener() {},
-      removeListener() {},
-      addEventListener() {},
-      removeEventListener() {},
-    }),
-  });
+  stubDomEnvironment();
   const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
     if (url === "/api/v1/plugins")
       return Response.json([
@@ -124,24 +112,7 @@ test("puller/ossie 启用时立即拉取调用 /api/v1/pulls/ossie", async () =>
 });
 
 test("仅有未启用的 puller/ossie 时显示面板且默认触发 /api/v1/pulls/dtb", async () => {
-  vi.stubGlobal(
-    "ResizeObserver",
-    class {
-      observe() {}
-      unobserve() {}
-      disconnect() {}
-    },
-  );
-  Object.defineProperty(window, "matchMedia", {
-    configurable: true,
-    value: () => ({
-      matches: false,
-      addListener() {},
-      removeListener() {},
-      addEventListener() {},
-      removeEventListener() {},
-    }),
-  });
+  stubDomEnvironment();
   const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
     if (url === "/api/v1/plugins")
       return Response.json([

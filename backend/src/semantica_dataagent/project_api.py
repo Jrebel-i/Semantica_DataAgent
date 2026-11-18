@@ -460,6 +460,30 @@ PULLER_MUTUAL_EXCLUSION_DETAIL = "同一项目不能同时启用 DTB 拉取与 D
 PROJECT_TYPE_LABELS = {"warehouse": "数仓型", "document": "文档型"}
 
 
+def ensure_puller_not_conflicting(project_id: str, puller_id: str) -> None:
+    """Reject enabling a puller when a sibling puller is already enabled on the project."""
+    for sibling in PULLER_ADAPTER_IDS:
+        if sibling == puller_id:
+            continue
+        cfg = project_context.plugin_config("puller", sibling, project_id)
+        if cfg and cfg[0]:
+            raise HTTPException(status_code=422, detail=PULLER_MUTUAL_EXCLUSION_DETAIL)
+
+
+def save_puller_token(db, project_id: str, puller_id: str, token: str | None) -> None:
+    """Persist or clear an encrypted puller credential, ignoring masked '***' placeholders."""
+    if token is None or token == "***":
+        return
+    from .crypto import encrypt
+
+    project_context.set_plugin_secret(
+        db,
+        project_id,
+        PULL_TOKEN_KEYS[puller_id],
+        encrypt(token) if token else None,
+    )
+
+
 def _adapter_reason(project_type: str, supported: tuple[str, ...]) -> str:
     labels = "、".join(PROJECT_TYPE_LABELS.get(item, item) for item in supported)
     return f"该适配器仅支持{labels}项目，不能用于{PROJECT_TYPE_LABELS.get(project_type, project_type)}项目"
@@ -549,7 +573,6 @@ def put_project_adapters(
 ):
     from jsonschema import Draft202012Validator
 
-    from .crypto import encrypt
     from .plugins import discover
     from .project_types import source_project_types, supports_project_type
 
@@ -648,13 +671,7 @@ def put_project_adapters(
                     parameters,
                     scope.project_id,
                 )
-                if token is not None and token != "***":
-                    project_context.set_plugin_secret(
-                        db,
-                        scope.project_id,
-                        PULL_TOKEN_KEYS[update.id],
-                        encrypt(token) if token else None,
-                    )
+                save_puller_token(db, scope.project_id, update.id, token)
     if pull_touched:
         from .scheduler import pull_scheduler
 

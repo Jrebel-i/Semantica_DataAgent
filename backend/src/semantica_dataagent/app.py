@@ -1246,31 +1246,19 @@ def update_plugin(
             ],
         )
     from .project_api import (
-        PULL_TOKEN_KEYS,
         PULLER_ADAPTER_IDS,
-        PULLER_MUTUAL_EXCLUSION_DETAIL,
+        ensure_puller_not_conflicting,
+        save_puller_token,
     )
 
     parameters = dict(body.parameters)
     is_puller = category == "puller" and plugin_id in PULLER_ADAPTER_IDS
     token = parameters.pop("token", None) if is_puller else None
     if is_puller and body.enabled:
-        for sibling in PULLER_ADAPTER_IDS:
-            if sibling == plugin_id:
-                continue
-            cfg = project_context.plugin_config("puller", sibling)
-            if cfg and cfg[0]:
-                raise HTTPException(422, PULLER_MUTUAL_EXCLUSION_DETAIL)
+        ensure_puller_not_conflicting(project_context.DEFAULT_PROJECT_ID, plugin_id)
     with sessions().begin() as db:
-        if is_puller and token is not None and token != "***":
-            from .crypto import encrypt
-
-            project_context.set_plugin_secret(
-                db,
-                project_context.DEFAULT_PROJECT_ID,
-                PULL_TOKEN_KEYS[plugin_id],
-                encrypt(token) if token else None,
-            )
+        if is_puller:
+            save_puller_token(db, project_context.DEFAULT_PROJECT_ID, plugin_id, token)
         project_context.upsert_plugin_config(
             db, category, plugin_id, body.enabled, parameters
         )

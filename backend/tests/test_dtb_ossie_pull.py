@@ -276,7 +276,7 @@ def test_dtb_ossie_puller_is_registered_and_transforms_fake_dtb_response():
     yaml_text = files["semantic/dims_pulled.yaml"].decode("utf-8")
     assert "name: dims_pulled" in yaml_text
     assert "示例取值（共 7 个去重值，抽样前 3 个）" in yaml_text
-    assert "枚举取值（共 2 个）" in yaml_text
+    assert "全部取值（共 2 个）" in yaml_text
     dim_rows = json.loads(files["dimension_values.json"].decode("utf-8"))
     assert len(dim_rows) == 14
     assert {r["table"] for r in dim_rows} == {"dim_city"}
