@@ -365,6 +365,8 @@ const messages = {
     projectGuideWarehouse: "数仓型项目 · 支持查表、上游依赖、SQL 校验与执行",
     projectGuideDocument: "文档型项目 · 支持基于知识文档检索与口径问答",
     browseProjectKnowledge: "浏览该项目知识库 →",
+    composerMore: "添加附件或切换项目",
+    switchProject: "切换项目",
     documentExamples: [
       "核心业务口径是如何定义的？",
       "有哪些常见问题或操作流程说明？",
@@ -937,6 +939,8 @@ const messages = {
     projectGuideDocument:
       "Document project · Document retrieval & definition Q&A",
     browseProjectKnowledge: "Browse project knowledge →",
+    composerMore: "Add files or switch project",
+    switchProject: "Switch project",
     documentExamples: [
       "How are the core business metrics defined?",
       "What FAQs or operating procedures are documented?",

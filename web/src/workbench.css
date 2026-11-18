@@ -3679,7 +3679,7 @@ code {
   color: var(--danger);
 }
 
-/* Chat sidebar & composer theme cohesive polish */
+/* Chat sidebar & Claude-style borderless composer polish */
 .chat-header {
   min-height: 58px;
   padding: 12px 24px 8px;
@@ -3690,6 +3690,10 @@ code {
 .chat-header-title .chat-header-project {
   background: var(--panel);
   border-color: var(--line-soft);
+}
+.chat-project-guide-badge {
+  border: 0;
+  background: rgba(48, 48, 46, 0.045);
 }
 .sidebar-sessions select.session-project-filter {
   min-height: 24px;
@@ -3749,123 +3753,245 @@ code {
   color: var(--ink);
 }
 
-.composer-divider {
-  flex: none;
-  width: 1px;
-  height: 14px;
-  margin: 0 2px;
-  background: var(--line-soft);
+.composer-box {
+  overflow: visible;
 }
-.composer-controls .chat-selectors {
-  gap: 4px;
-  justify-content: flex-start;
+.composer-left {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+.composer-right {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+  flex: none;
+}
+.composer-plus-wrap {
+  position: relative;
+  display: inline-flex;
   align-items: center;
 }
-.composer-controls .composer-attach-button {
-  width: 28px;
-  height: 28px;
-  border-radius: 999px;
-}
-.composer-controls .chat-selectors select {
-  height: 28px;
-  min-height: 28px;
-  max-width: 152px;
-  padding: 0 22px 0 10px;
-  border: 1px solid transparent;
-  border-radius: 999px;
-  background-color: rgba(48, 48, 46, 0.04);
+button.composer-plus-btn:not(.ant-btn) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  min-width: 30px;
+  height: 30px;
+  min-height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
   color: var(--ink-2);
-  font-size: 12px;
-  text-overflow: ellipsis;
+  font-size: 15px;
+  box-shadow: none;
+  cursor: pointer;
 }
-.composer-controls .chat-selectors select:not(:disabled):hover {
-  border-color: var(--line);
-  background-color: var(--panel);
+button.composer-plus-btn:not(.ant-btn):hover,
+button.composer-plus-btn:not(.ant-btn).active {
+  border-color: transparent;
+  background: rgba(48, 48, 46, 0.06);
   color: var(--ink);
 }
-.composer-controls .chat-selectors select:disabled {
-  padding-right: 10px;
-  background-image: none;
-  background-color: rgba(48, 48, 46, 0.035);
+button.composer-plus-btn:not(.ant-btn):focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+.composer-plus-menu {
+  position: absolute;
+  left: 0;
+  z-index: 1200;
+  min-width: 224px;
+  max-width: 280px;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: 0 10px 28px rgba(48, 48, 46, 0.14);
+}
+.composer-plus-menu--down {
+  top: calc(100% + 8px);
+}
+.composer-plus-menu--up {
+  bottom: calc(100% + 8px);
+}
+.composer-plus-section {
+  padding: 6px 10px 4px;
+  color: var(--ink-3);
+  font-size: 11px;
+}
+.composer-plus-divider {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--line-soft);
+}
+button.composer-plus-item:not(.ant-btn) {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  min-height: 34px;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+button.composer-plus-item:not(.ant-btn):hover:not(:disabled) {
+  border-color: transparent;
+  background: var(--panel);
+  color: var(--ink);
+}
+button.composer-plus-item:not(.ant-btn):disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.composer-plus-item-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.composer-plus-check {
+  color: var(--teal);
+  font-size: 12px;
+  flex: none;
+}
+.composer-plus-hint {
+  padding: 2px 10px 6px;
+  color: var(--ink-3);
+  font-size: 11px;
+}
+
+.composer-controls select.composer-ghost-select {
+  height: 28px;
+  min-height: 28px;
+  max-width: 140px;
+  padding: 0 20px 0 8px;
+  border: 0;
+  border-radius: 6px;
+  appearance: none;
+  background-color: transparent;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='9' height='6' viewBox='0 0 9 6'%3E%3Cpath d='M1 1l3.5 3.5L8 1' fill='none' stroke='%236F6B64' stroke-width='1.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 6px center;
+  background-size: 9px 6px;
   color: var(--ink-2);
-  opacity: 0.72;
+  font-size: 12.5px;
+  cursor: pointer;
+  text-overflow: ellipsis;
+}
+.composer-controls select.composer-ghost-select:not(:disabled):hover {
+  background-color: rgba(48, 48, 46, 0.05);
+  color: var(--ink);
+}
+.composer-controls select.composer-ghost-select:disabled {
+  padding-right: 8px;
+  background-image: none;
+  background-color: transparent;
+  color: var(--ink-3);
   cursor: default;
 }
+button.composer-project-chip:not(.ant-btn) {
+  display: inline-flex;
+  align-items: center;
+  height: 28px;
+  min-height: 28px;
+  max-width: 160px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink-2);
+  font-size: 12.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+button.composer-project-chip:not(.ant-btn):hover:not(:disabled) {
+  border-color: transparent;
+  background: rgba(48, 48, 46, 0.05);
+  color: var(--ink);
+}
+button.composer-project-chip:not(.ant-btn):disabled {
+  color: var(--ink-3);
+  cursor: default;
+  opacity: 0.8;
+}
+.composer-project-label {
+  height: 28px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink-2);
+  font-size: 12.5px;
+}
+
 .composer-controls .composer-select.ant-select {
   height: 28px;
   min-height: 28px;
   min-width: 0;
-  padding: 0 10px;
-  border: 1px solid transparent !important;
-  border-radius: 999px !important;
-  background: rgba(48, 48, 46, 0.04) !important;
+  padding: 0 6px;
+  border: 0 !important;
+  border-radius: 6px !important;
+  background: transparent !important;
   box-shadow: none !important;
-  color: var(--ink-2);
-  font-size: 12px;
+  color: var(--ink);
+  font-size: 13px;
 }
 .composer-controls .composer-select.ant-select:hover {
-  border-color: var(--line) !important;
-  background: var(--panel) !important;
-  color: var(--ink);
+  border: 0 !important;
+  background: rgba(48, 48, 46, 0.05) !important;
 }
 .composer-controls .composer-select.ant-select.ant-select-focused {
-  border-color: var(--teal) !important;
+  background: rgba(48, 48, 46, 0.05) !important;
   box-shadow: 0 0 0 2px var(--focus-ring) !important;
 }
 .composer-controls .composer-model-select {
   min-width: 0;
-  max-width: 200px;
+  max-width: 210px;
 }
-.composer-controls .composer-effort-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  height: 28px;
-  padding-left: 10px;
-  border: 1px solid transparent;
-  border-radius: 999px;
-  background: rgba(48, 48, 46, 0.04);
-  color: var(--ink-3);
-  font-size: 12px;
-  transition:
-    background-color 0.12s ease,
-    border-color 0.12s ease;
+.composer-controls .composer-model-select .ant-select-content {
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 500;
 }
-.composer-controls .composer-effort-pill:hover {
-  border-color: var(--line);
-  background: var(--panel);
-}
-.composer-controls .composer-effort-pill:has(.ant-select-focused) {
-  border-color: var(--teal);
-  box-shadow: 0 0 0 2px var(--focus-ring);
-}
-.composer-controls .composer-effort-prefix {
-  color: var(--ink-3);
-  font-size: 11.5px;
-  white-space: nowrap;
-}
-.composer-controls .composer-effort-pill .composer-effort-select.ant-select {
-  min-width: 0;
-  height: 26px;
-  min-height: 26px;
-  padding: 0 8px 0 4px;
-  border: 0 !important;
-  background: transparent !important;
-  box-shadow: none !important;
-}
-.composer-controls .composer-effort-pill .composer-effort-select.ant-select:hover,
-.composer-controls .composer-effort-pill .composer-effort-select.ant-select.ant-select-focused {
-  border: 0 !important;
-  background: transparent !important;
-  box-shadow: none !important;
+.composer-controls .composer-effort-select .ant-select-content {
+  color: var(--ink-2);
+  font-size: 12.5px;
 }
 .composer-controls .ant-select-selector {
-  height: 26px !important;
-  min-height: 26px !important;
+  height: 28px !important;
+  min-height: 28px !important;
   border: 0 !important;
   background: transparent !important;
   box-shadow: none !important;
   padding: 0 !important;
+  display: inline-flex;
+  align-items: center;
+}
+.composer-controls .ant-select .ant-select-content {
+  display: inline-flex;
+  align-items: center;
+  line-height: 28px;
+}
+.composer-controls .ant-select .ant-select-input {
+  min-height: 0 !important;
+  height: 20px !important;
+  padding: 0 !important;
+  border: 0 !important;
+  background: transparent !important;
 }
 .composer-lock-hints {
   display: flex;
@@ -3881,7 +4007,11 @@ code {
 .composer-lock-hints .chat-selector-hint {
   max-width: none;
 }
-.composer-box:has(select:disabled:hover, .composer-attach-button--disabled:hover)
+.composer-box:has(
+    select:disabled:hover,
+    button.composer-project-chip:disabled:hover,
+    .composer-attach-button--disabled:hover
+  )
   .composer-lock-hints {
   max-height: 32px;
   margin-top: 2px;

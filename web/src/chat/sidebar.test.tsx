@@ -342,3 +342,30 @@ test("置顶分组与归档阅读、恢复", async () => {
     ),
   );
 });
+
+test("点击菜单外部或按 Escape 可收起会话操作菜单", async () => {
+  const messages = getMessages("zh");
+  const rows = [conversationRow("conv-1", "订单分析")];
+  vi.stubGlobal(
+    "fetch",
+    conversationFetcher(rows, () => new Response(null, { status: 204 })),
+  );
+  const { container } = render(
+    <ChatPage token="token" role="user" messages={messages} />,
+  );
+
+  const toggle = await screen.findByRole("button", {
+    name: messages.conversationMenu,
+  });
+  fireEvent.click(toggle);
+  expect(container.querySelector(".session-menu")).toBeTruthy();
+
+  fireEvent.mouseDown(window.document.body);
+  expect(container.querySelector(".session-menu")).toBeNull();
+
+  fireEvent.click(toggle);
+  expect(container.querySelector(".session-menu")).toBeTruthy();
+
+  fireEvent.keyDown(window.document, { key: "Escape" });
+  expect(container.querySelector(".session-menu")).toBeNull();
+});
