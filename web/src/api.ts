@@ -297,6 +297,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/corrections/{proposal_id}/revert": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Revert */
+        post: operations["revert_api_v1_corrections__proposal_id__revert_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/document": {
         parameters: {
             query?: never;
@@ -568,6 +585,24 @@ export interface paths {
         put?: never;
         /** Delete Project Route */
         post: operations["delete_project_route_api_v1_projects__project_id__delete_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/evolution-policy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Project Evolution Policy */
+        get: operations["get_project_evolution_policy_api_v1_projects__project_id__evolution_policy_get"];
+        /** Set Project Evolution Policy */
+        put: operations["set_project_evolution_policy_api_v1_projects__project_id__evolution_policy_put"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1221,6 +1256,10 @@ export interface components {
         Approval: {
             /** Patch */
             patch?: string | null;
+            /** Structured Patch */
+            structured_patch?: {
+                [key: string]: unknown;
+            } | null;
         };
         /** AskRequest */
         AskRequest: {
@@ -1321,6 +1360,8 @@ export interface components {
             project_id: string;
             /** Source Commit */
             source_commit: string | null;
+            /** Stale Overrides */
+            stale_overrides?: components["schemas"]["StaleOverrideWarning"][];
             /**
              * Started At
              * Format: date-time
@@ -1497,6 +1538,20 @@ export interface components {
             /** Type */
             type: string;
         };
+        /** EvolutionPolicyUpdate */
+        EvolutionPolicyUpdate: {
+            /** Correction Require Review */
+            correction_require_review?: boolean | null;
+            /** Evolution Require Review */
+            evolution_require_review?: boolean | null;
+        };
+        /** EvolutionPolicyView */
+        EvolutionPolicyView: {
+            /** Correction Require Review */
+            correction_require_review: boolean;
+            /** Evolution Require Review */
+            evolution_require_review: boolean;
+        };
         /** ExecuteInput */
         ExecuteInput: {
             /** Limit */
@@ -1512,10 +1567,14 @@ export interface components {
             dimension_samples?: string[] | null;
             /** Dimension Too Many */
             dimension_too_many?: boolean | null;
+            /** Instructions */
+            instructions?: string | null;
             /** Name */
             name: string;
             /** Partition */
             partition: boolean;
+            /** Synonyms */
+            synonyms?: string[] | null;
             /** Type */
             type: string;
         };
@@ -1841,12 +1900,23 @@ export interface components {
         };
         /** ProposalCreate */
         ProposalCreate: {
-            /** Patch */
+            /**
+             * Patch
+             * @default
+             */
             patch: string;
             /** Reason */
             reason: string;
+            /** Source */
+            source?: ("manual" | "mcp" | "evolution") | null;
+            /** Structured Patch */
+            structured_patch?: {
+                [key: string]: unknown;
+            } | null;
             /** Target */
             target: string;
+            /** Target Kind */
+            target_kind?: ("document" | "override" | "ossie") | null;
         };
         /** ProposalView */
         ProposalView: {
@@ -1861,6 +1931,10 @@ export interface components {
             created_at: string;
             /** Diff */
             diff: string;
+            /** Gate Report */
+            gate_report?: {
+                [key: string]: unknown;
+            } | null;
             /** Id */
             id: string;
             /** Original */
@@ -1875,14 +1949,32 @@ export interface components {
             project_id: string;
             /** Reason */
             reason: string;
+            /** Revert Commit Sha */
+            revert_commit_sha?: string | null;
+            /** Reverted At */
+            reverted_at?: string | null;
             /** Reviewed At */
             reviewed_at: string | null;
             /** Reviewer Id */
             reviewer_id: string | null;
+            /**
+             * Source
+             * @default manual
+             */
+            source: string;
             /** Status */
             status: string;
+            /** Structured Patch */
+            structured_patch?: {
+                [key: string]: unknown;
+            } | null;
             /** Target */
             target: string;
+            /**
+             * Target Kind
+             * @default document
+             */
+            target_kind: string;
         };
         /** ProviderCreate */
         ProviderCreate: {
@@ -1994,10 +2086,14 @@ export interface components {
         };
         /** RelationshipLink */
         RelationshipLink: {
+            /** Description */
+            description?: string | null;
             /** From Columns */
             from_columns: string[];
             /** From Table */
             from_table: string;
+            /** Instructions */
+            instructions?: string | null;
             /** Name */
             name: string;
             /** Ref */
@@ -2131,6 +2227,15 @@ export interface components {
             /** Target */
             target?: string | null;
         };
+        /** StaleOverrideWarning */
+        StaleOverrideWarning: {
+            /** Key */
+            key: string;
+            /** Kind */
+            kind: string;
+            /** Reason */
+            reason: string;
+        };
         /** Status */
         Status: {
             /** Elapsed Ms */
@@ -2181,12 +2286,16 @@ export interface components {
             documents: components["schemas"]["DocumentLink"][];
             /** Fields */
             fields: components["schemas"]["FieldView"][];
+            /** Instructions */
+            instructions?: string | null;
             /** Name */
             name: string;
             /** Ref */
             ref: string;
             /** Relationships */
             relationships?: components["schemas"]["RelationshipLink"][] | null;
+            /** Synonyms */
+            synonyms?: string[] | null;
         };
         /** TaskView */
         TaskView: {
@@ -3000,6 +3109,39 @@ export interface operations {
             };
         };
     };
+    revert_api_v1_corrections__proposal_id__revert_post: {
+        parameters: {
+            query?: {
+                project?: string | null;
+            };
+            header?: never;
+            path: {
+                proposal_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProposalView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     document_route_api_v1_document_get: {
         parameters: {
             query: {
@@ -3618,6 +3760,72 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_project_evolution_policy_api_v1_projects__project_id__evolution_policy_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EvolutionPolicyView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_project_evolution_policy_api_v1_projects__project_id__evolution_policy_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EvolutionPolicyUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EvolutionPolicyView"];
+                };
             };
             /** @description Validation Error */
             422: {

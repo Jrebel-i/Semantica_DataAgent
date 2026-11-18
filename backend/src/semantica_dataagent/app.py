@@ -107,8 +107,10 @@ async def lifespan(application):
     await asyncio.to_thread(recover_interrupted_builds)
     await asyncio.to_thread(knowledge.cleanup_interrupted_generations)
     from .corrections import recover_applying
+    from .semantic_overrides import migrate_legacy_metadata_overrides
 
     await asyncio.to_thread(recover_applying)
+    await asyncio.to_thread(migrate_legacy_metadata_overrides)
     from .pull_service import recover_pulls
 
     try:
@@ -596,6 +598,12 @@ class BuildLog(BaseModel):
     message: str
 
 
+class StaleOverrideWarning(BaseModel):
+    kind: str
+    key: str
+    reason: str
+
+
 class BuildView(BaseModel):
     id: int
     project_id: str
@@ -605,6 +613,7 @@ class BuildView(BaseModel):
     counts: dict[str, int]
     error: str | None
     parse_failures: list[dict[str, str]]
+    stale_overrides: list[StaleOverrideWarning] = Field(default_factory=list)
     build_type: Literal["full", "incremental"]
     triggered_by: str | None
     source_commit: str | None
@@ -627,6 +636,20 @@ def build_logs(value: str | None) -> list[BuildLog]:
     ]
 
 
+def build_stale_overrides(value: str | None) -> list[StaleOverrideWarning]:
+    try:
+        entries = json.loads(value or "[]")
+    except (TypeError, json.JSONDecodeError):
+        return []
+    if not isinstance(entries, list):
+        return []
+    return [
+        StaleOverrideWarning.model_validate(entry)
+        for entry in entries
+        if isinstance(entry, dict)
+    ]
+
+
 def build_view(row: Build) -> BuildView:
     return BuildView(
         id=row.id,
@@ -637,6 +660,7 @@ def build_view(row: Build) -> BuildView:
         counts=json.loads(row.counts),
         error=row.error,
         parse_failures=json.loads(row.parse_failures or "[]"),
+        stale_overrides=build_stale_overrides(getattr(row, "stale_overrides", None)),
         build_type=row.build_type or "full",
         triggered_by=row.triggered_by,
         source_commit=row.source_commit,
@@ -938,10 +962,21 @@ def report_knowledge_gap(question: GapText, missing: GapText) -> dict:
 
 
 def propose_correction(
-    target: CorrectionText, patch: CorrectionText, reason: CorrectionText
+    target: CorrectionText,
+    patch: str,
+    reason: CorrectionText,
+    structured_patch: dict | str | None = None,
+    target_kind: Literal["document", "override", "ossie"] | None = None,
 ) -> dict:
-    """Propose a correction in the caller's project."""
-    return _propose_correction(target, patch, reason, project_id=_mcp_project_id())
+    """Propose a correction or structured semantic override in the caller's project."""
+    return _propose_correction(
+        target,
+        patch,
+        reason,
+        project_id=_mcp_project_id(),
+        target_kind=target_kind,
+        structured_patch=structured_patch,
+    )
 
 
 async def ask_dataagent(question: str, conversation_id: str | None = None) -> dict:

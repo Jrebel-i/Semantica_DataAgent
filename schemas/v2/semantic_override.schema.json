@@ -1,0 +1,134 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://semantica-dataagent.org/schemas/v2/semantic_override.schema.json",
+  "title": "semantic_override",
+  "description": "Structured semantic overrides stored in source_directory/overrides/semantic_overrides.yaml",
+  "type": "object",
+  "properties": {
+    "version": {
+      "type": "integer",
+      "const": 1
+    },
+    "tables": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/TableOverride" }
+    },
+    "fields": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/FieldOverride" }
+    },
+    "relationships": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/RelationshipOverride" }
+    },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/MetricOverride" }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "NonEmptyString": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "StringList": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/NonEmptyString" }
+    },
+    "TableOverride": {
+      "type": "object",
+      "properties": {
+        "catalog": { "$ref": "#/$defs/NonEmptyString" },
+        "database": { "$ref": "#/$defs/NonEmptyString" },
+        "name": { "$ref": "#/$defs/NonEmptyString" },
+        "comment": { "type": "string" },
+        "synonyms": { "$ref": "#/$defs/StringList" },
+        "instructions": { "type": "string" }
+      },
+      "required": ["database", "name"],
+      "anyOf": [
+        { "required": ["comment"] },
+        { "required": ["synonyms"] },
+        { "required": ["instructions"] }
+      ],
+      "additionalProperties": false
+    },
+    "FieldOverride": {
+      "type": "object",
+      "properties": {
+        "catalog": { "$ref": "#/$defs/NonEmptyString" },
+        "database": { "$ref": "#/$defs/NonEmptyString" },
+        "table": { "$ref": "#/$defs/NonEmptyString" },
+        "name": { "$ref": "#/$defs/NonEmptyString" },
+        "comment": { "type": "string" },
+        "synonyms": { "$ref": "#/$defs/StringList" },
+        "instructions": { "type": "string" }
+      },
+      "required": ["database", "table", "name"],
+      "anyOf": [
+        { "required": ["comment"] },
+        { "required": ["synonyms"] },
+        { "required": ["instructions"] }
+      ],
+      "additionalProperties": false
+    },
+    "RelationshipOverride": {
+      "type": "object",
+      "properties": {
+        "name": { "$ref": "#/$defs/NonEmptyString" },
+        "from_catalog": { "$ref": "#/$defs/NonEmptyString" },
+        "from_database": { "$ref": "#/$defs/NonEmptyString" },
+        "from_table": { "$ref": "#/$defs/NonEmptyString" },
+        "from_columns": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/NonEmptyString" }
+        },
+        "to_catalog": { "$ref": "#/$defs/NonEmptyString" },
+        "to_database": { "$ref": "#/$defs/NonEmptyString" },
+        "to_table": { "$ref": "#/$defs/NonEmptyString" },
+        "to_columns": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/NonEmptyString" }
+        },
+        "description": { "type": "string" },
+        "instructions": { "type": "string" }
+      },
+      "required": [
+        "name",
+        "from_database",
+        "from_table",
+        "from_columns",
+        "to_database",
+        "to_table",
+        "to_columns"
+      ],
+      "additionalProperties": false
+    },
+    "MetricOverride": {
+      "type": "object",
+      "properties": {
+        "name": { "$ref": "#/$defs/NonEmptyString" },
+        "description": { "type": "string" },
+        "expression": { "$ref": "#/$defs/NonEmptyString" },
+        "dialect": {
+          "type": "string",
+          "enum": ["hive", "spark", "doris", "OSSIE_SQL_2026", "ANSI_SQL"]
+        },
+        "table": { "$ref": "#/$defs/NonEmptyString" },
+        "tables": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/NonEmptyString" }
+        },
+        "filters": { "$ref": "#/$defs/StringList" },
+        "synonyms": { "$ref": "#/$defs/StringList" },
+        "instructions": { "type": "string" }
+      },
+      "required": ["name", "expression"],
+      "additionalProperties": false
+    }
+  }
+}

@@ -632,6 +632,13 @@ def read_sources(values, plugins):
                         f"Source adapter {plugin.id} did not report record provenance"
                     )
             records.extend(result.records)
+        from .semantic_overrides import OVERRIDE_RELATIVE_PATH, override_file_path
+
+        override_file = override_file_path(directory)
+        if override_file.is_file():
+            hashes[OVERRIDE_RELATIVE_PATH] = hashlib.sha256(
+                override_file.read_bytes()
+            ).hexdigest()
         commit = None
         if (directory / ".git").is_dir():
             from .source_directory import git
@@ -695,6 +702,7 @@ def _stage_name(stage):
 def run_build(build_id):
     status, counts, error = "failed", {}, None
     failures = []
+    stale_overrides = []
     new_values = None
     published = False
     stats = EmbeddingStats()
@@ -771,9 +779,28 @@ def run_build(build_id):
             build.config_hash = config_hash
         records, hashes, commit, adapter_stats = read_sources(values, plugins)
         records, filtered = filter_records(records, filters)
-        from .table_stage import apply_overrides
+        from . import table_stage
+        from .semantic_overrides import apply_overrides_detailed
 
-        records = apply_overrides(records, project.project_id)
+        if table_stage.apply_overrides.__module__ == table_stage.__name__:
+            override_result = apply_overrides_detailed(
+                records,
+                project.project_id,
+                source_dir=project.source_directory,
+            )
+            records = override_result.records
+            stale_overrides = list(override_result.stale_overrides)
+        else:
+            records = table_stage.apply_overrides(records, project.project_id)
+        if stale_overrides:
+            _record_log(
+                build_id,
+                logs,
+                "overrides",
+                f"Skipped {len(stale_overrides)} stale override(s): "
+                + ", ".join(item["key"] for item in stale_overrides),
+                level="info",
+            )
         validate_records(records)
         _record_log(
             build_id,
@@ -1057,9 +1084,13 @@ def run_build(build_id):
                     pointer.generation = generation
                 build = db.get(Build, build_id)
                 build.status = "succeeded"
-                build.counts = json.dumps({**counts, **stats.counts()})
+                final_counts = {**counts, **stats.counts()}
+                if stale_overrides:
+                    final_counts["stale_overrides"] = len(stale_overrides)
+                build.counts = json.dumps(final_counts)
                 build.error = None
                 build.parse_failures = json.dumps(failures, ensure_ascii=False)
+                build.stale_overrides = json.dumps(stale_overrides, ensure_ascii=False)
                 build.finished_at = datetime.now(UTC).isoformat()
             published = True
             new_values = None
@@ -1088,9 +1119,12 @@ def run_build(build_id):
             build = db.get(Build, build_id)
             if build is not None and not published:
                 build.status = status
+                if stale_overrides:
+                    counts["stale_overrides"] = len(stale_overrides)
                 build.counts = json.dumps(counts)
                 build.error = error
                 build.parse_failures = json.dumps(failures, ensure_ascii=False)
+                build.stale_overrides = json.dumps(stale_overrides, ensure_ascii=False)
                 build.finished_at = datetime.now(UTC).isoformat()
                 if status == "succeeded" and build.build_type == "incremental":
                     generation_row = db.get(KnowledgeGeneration, build.generation)
@@ -1300,17 +1334,19 @@ def describe(names=None, database=None, search=None, summary=False, project_id=N
         for rel in [*(row.get("out_rels") or []), *(row.get("in_rels") or [])]:
             if not rel or not rel.get("ref"):
                 continue
-            rels_by_ref.setdefault(
-                rel["ref"],
-                {
-                    "name": rel.get("name", ""),
-                    "ref": rel["ref"],
-                    "from_table": rel.get("from_table", ""),
-                    "from_columns": list(rel.get("from_columns") or []),
-                    "to_table": rel.get("to_table", ""),
-                    "to_columns": list(rel.get("to_columns") or []),
-                },
-            )
+            entry = {
+                "name": rel.get("name", ""),
+                "ref": rel["ref"],
+                "from_table": rel.get("from_table", ""),
+                "from_columns": list(rel.get("from_columns") or []),
+                "to_table": rel.get("to_table", ""),
+                "to_columns": list(rel.get("to_columns") or []),
+            }
+            if rel.get("description"):
+                entry["description"] = rel["description"]
+            if rel.get("instructions"):
+                entry["instructions"] = rel["instructions"]
+            rels_by_ref.setdefault(rel["ref"], entry)
         return {
             **row["table"],
             "fields": row["fields"],

@@ -2,30 +2,10 @@
 
 
 def apply_overrides(records, project_id="default"):
-    """Overlay approved comments on imported records without changing the source."""
-    from dataclasses import replace
+    """Overlay approved comments and structured semantic overrides onto records."""
+    from .semantic_overrides import apply_overrides_detailed
 
-    from .db import MetadataOverride, sessions
-    from .knowledge import reference
-
-    with sessions()() as db:
-        overrides = {
-            row.target: row.comment
-            for row in db.query(MetadataOverride)
-            .filter(MetadataOverride.project_id == project_id)
-            .all()
-        }
-    result = []
-    for record in records:
-        key = (
-            reference(record.kind, record.data)
-            if record.kind in {"table", "field"}
-            else None
-        )
-        if key in overrides:
-            record = replace(record, data={**record.data, "comment": overrides[key]})
-        result.append(record)
-    return result
+    return apply_overrides_detailed(records, project_id=project_id).records
 
 
 def write(records, generation, storage):
@@ -96,9 +76,19 @@ def write(records, generation, storage):
         {"rows": fields, "generation": generation},
     )
     entities = [("table", x) for x in tables] + [("field", x) for x in fields]
+
+    def _vector_text(x: dict) -> str:
+        parts = [
+            str(x.get("name") or ""),
+            str(x.get("comment") or ""),
+            " ".join(str(s) for s in (x.get("synonyms") or ()) if s),
+            str(x.get("instructions") or ""),
+        ]
+        return " ".join(part for part in parts if part).strip()
+
     storage.add_vectors(
         [x["ref"] for _, x in entities],
-        [f"{x['name']} {x['comment']}" for _, x in entities],
+        [_vector_text(x) for _, x in entities],
         [{"scope": kind + "s", **x} for kind, x in entities],
     )
     return StageResult(

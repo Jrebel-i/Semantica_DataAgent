@@ -53,10 +53,44 @@ GENERATION_RETENTION_KEY = "generation_retention"
 SCHEDULE_INTERVAL_KEY = "schedule_interval_seconds"
 DIMENSION_VALUE_LIMIT_KEY = "dimension_value_limit"
 GENERATION_PREFIX_KEY = "generation_prefix"
+CORRECTION_REQUIRE_REVIEW_KEY = "correction_require_review"
+EVOLUTION_REQUIRE_REVIEW_KEY = "evolution_require_review"
 
 PROJECTS_ROOT_ENV = "DATAAGENT_PROJECTS_ROOT"
 PROJECT_ID_PATTERN = re.compile(r"[a-z][a-z0-9]{0,23}")
 GENERATION_PREFIX_PATTERN = re.compile(r"[a-z0-9_]{1,25}")
+
+
+def parse_bool_setting(raw: str | None, *, default: bool = True) -> bool:
+    """Parse a persisted boolean setting, falling back on unset or blank values."""
+    if raw is None:
+        return default
+    normalized = raw.strip().lower()
+    if not normalized:
+        return default
+    if normalized in {"true", "1", "yes", "on"}:
+        return True
+    if normalized in {"false", "0", "no", "off"}:
+        return False
+    return default
+
+
+def evolution_policy(project_id: str, db=None) -> dict[str, bool]:
+    """Return a project's correction and evolution review switches."""
+    if db is None:
+        with sessions()() as own:
+            return evolution_policy(project_id, own)
+    corr = db.get(ProjectSetting, (project_id, CORRECTION_REQUIRE_REVIEW_KEY))
+    evol = db.get(ProjectSetting, (project_id, EVOLUTION_REQUIRE_REVIEW_KEY))
+    return {
+        "correction_require_review": parse_bool_setting(
+            corr.value if corr is not None else None, default=True
+        ),
+        "evolution_require_review": parse_bool_setting(
+            evol.value if evol is not None else None, default=True
+        ),
+    }
+
 
 PROJECT_SETTING_KEYS = frozenset(
     {
