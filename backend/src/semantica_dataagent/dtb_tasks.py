@@ -103,25 +103,30 @@ def _expand(text, assignments, cache):
     return _VARIABLE.sub(replace, text)
 
 
+def _inline_temp_views(sql: str, views: dict[str, str], dialect: str = "spark") -> str:
+    if not views:
+        return sql
+    try:
+        statements = sqlglot.parse(sql, read=dialect)
+        for statement in statements:
+            if statement is None:
+                continue
+            for table in statement.find_all(exp.Table):
+                if table_name := views.get(table.name):
+                    replacement = sqlglot.to_table(table_name)
+                    replacement.set(
+                        "alias",
+                        table.args.get("alias")
+                        or exp.TableAlias(this=exp.to_identifier(table.name)),
+                    )
+                    table.replace(replacement)
+        return "; ".join(s.sql(dialect=dialect) for s in statements if s is not None)
+    except sqlglot.errors.SqlglotError:
+        return sql
+
+
 def _parse_sql(sql, name, parameters, views):
-    if views:
-        try:
-            statements = sqlglot.parse(sql, read="spark")
-            for statement in statements:
-                if statement is None:
-                    continue
-                for table in statement.find_all(exp.Table):
-                    if table_name := views.get(table.name):
-                        replacement = sqlglot.to_table(table_name)
-                        replacement.set(
-                            "alias",
-                            table.args.get("alias")
-                            or exp.TableAlias(this=exp.to_identifier(table.name)),
-                        )
-                        table.replace(replacement)
-            sql = "; ".join(s.sql(dialect="spark") for s in statements if s is not None)
-        except sqlglot.errors.SqlglotError:
-            pass
+    sql = _inline_temp_views(sql, views)
     task = Record(
         "task",
         {"name": name, "type": "spark", "dialect": "spark", "sql": sql},
@@ -379,3 +384,49 @@ class DtbTaskParser:
             if column_reasons
             else (None if column_edges else "No column lineage recognized"),
         )
+
+
+def extract_task_sql_statements(task: Record) -> list[tuple[str, str]]:
+    """Extract normalized `(sql, dialect)` pairs from SQL or DTB shell tasks."""
+    task_type = _text(task.data.get("type")).strip().lower()
+    if task_type in {"sql", "hive", "spark", "doris"}:
+        dialect = _text(task.data.get("dialect") or task_type).strip().lower()
+        if dialect == "sql":
+            dialect = "hive"
+        normalized = _normalize_sql(_text(task.data.get("sql"))).strip()
+        if not normalized or _SKIP_SQL.match(normalized):
+            return []
+        return [(normalized, dialect)]
+    if task_type != "shell":
+        return []
+
+    source = re.sub(r"\\\r?\n", "", _text(task.data.get("sql")))
+    assignments = _assignments(source)
+    cache: dict[str, str] = {}
+    expanded = _expand(source, assignments, cache)
+    views = _temp_views(expanded)
+    unresolved: set[str] = set()
+    extracted: list[tuple[int, str, str]] = []
+
+    for regex, dialect in ((_LIVY_CALL, "spark"), (_BEELINE_E, "hive")):
+        for match in regex.finditer(source):
+            sql = _submission_sql(match, assignments, cache, unresolved)
+            if not sql:
+                continue
+            normalized = _normalize_sql(sql).strip()
+            if not normalized or _SKIP_SQL.match(normalized):
+                continue
+            if (
+                regex is _LIVY_CALL
+                and _TEMP_VIEW.search(sql)
+                and not _WRITE.search(sql)
+                and _dbtables(sql)
+            ):
+                continue
+            resolved = _inline_temp_views(normalized, views, dialect="spark")
+            resolved_clean = resolved.strip()
+            if resolved_clean:
+                extracted.append((match.start(), resolved_clean, dialect))
+
+    extracted.sort(key=lambda item: item[0])
+    return [(sql_text, dialect) for _, sql_text, dialect in extracted]
