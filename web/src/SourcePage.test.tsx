@@ -444,3 +444,95 @@ test("polls pending status every three seconds", async () => {
     vi.useRealTimers();
   }
 });
+
+test("supports semantic model target upload, path filtering, and quick incremental build", async () => {
+  const previews: Record<string, unknown>[] = [];
+  const uploads: Record<string, unknown>[] = [];
+  const builds: Record<string, unknown>[] = [];
+  const onNavigateBuilds = vi.fn();
+
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string, options?: RequestInit) => {
+      if (url === "/api/v1/projects") return Response.json(projects);
+      if (url.startsWith("/api/v1/categories")) return Response.json([]);
+      if (url === "/api/v1/source/files?project=default")
+        return Response.json([
+          "knowledge/metrics/sales.md",
+          "ossie/city_domain.yaml",
+          "dimension_values.json",
+        ]);
+      if (url === "/api/v1/source/upload/preview?project=default") {
+        const body = JSON.parse(String(options?.body)) as Record<
+          string,
+          unknown
+        >;
+        previews.push(body);
+        return Response.json({
+          category: "ossie",
+          target: "ossie",
+          added: ["ossie/topic_city.yaml"],
+          overwritten: [],
+          unchanged: [],
+          deleted: [],
+          counts: { added: 1, overwritten: 0, unchanged: 0, deleted: 0 },
+          truncated: false,
+        });
+      }
+      if (url === "/api/v1/source/upload?project=default") {
+        uploads.push(
+          JSON.parse(String(options?.body)) as Record<string, unknown>,
+        );
+        return Response.json({ commit: "e".repeat(40) });
+      }
+      if (
+        url === "/api/v1/builds?project=default" &&
+        options?.method === "POST"
+      ) {
+        builds.push(
+          JSON.parse(String(options?.body)) as Record<string, unknown>,
+        );
+        return Response.json({ id: 99 }, { status: 202 });
+      }
+      return Response.json([]);
+    }),
+  );
+
+  render(
+    <SourcePage
+      token="t"
+      messages={getMessages("zh")}
+      onNavigateBuilds={onNavigateBuilds}
+    />,
+  );
+
+  expect(await screen.findByText("city_domain.yaml")).toBeTruthy();
+  fireEvent.change(screen.getByLabelText("筛选源文件路径"), {
+    target: { value: "city_domain" },
+  });
+  expect(screen.getByText("city_domain.yaml")).toBeTruthy();
+  expect(screen.queryByText("sales.md")).toBeNull();
+
+  fireEvent.click(screen.getByRole("button", { name: "语义模型 / 指定目录" }));
+  fireEvent.change(screen.getByLabelText("选择文件"), {
+    target: { files: [new File(["name: city\n"], "topic_city.yaml")] },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "预览" }));
+  await waitFor(() => expect(previews).toHaveLength(1));
+  expect(previews[0]).toMatchObject({
+    target: "ossie",
+    replace: false,
+    files: [{ path: "topic_city.yaml" }],
+  });
+  expect(previews[0]).not.toHaveProperty("category");
+
+  fireEvent.click(await screen.findByRole("button", { name: "确认上传" }));
+  await waitFor(() => expect(uploads).toHaveLength(1));
+  expect(uploads[0]).toMatchObject({ target: "ossie" });
+
+  fireEvent.click(screen.getByRole("button", { name: "立即增量构建" }));
+  await waitFor(() => expect(builds).toEqual([{ build_type: "incremental" }]));
+
+  fireEvent.click(screen.getByRole("button", { name: "查看构建记录" }));
+  expect(onNavigateBuilds).toHaveBeenCalledTimes(1);
+});

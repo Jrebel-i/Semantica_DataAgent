@@ -366,7 +366,11 @@ export function App() {
       )
     ) : path === "/source" ? (
       canManageProject ? (
-        <SourcePage token={token} messages={t} />
+        <SourcePage
+          token={token}
+          messages={t}
+          onNavigateBuilds={() => navigate("/builds")}
+        />
       ) : (
         <Alert title={t.forbidden} type="warning" />
       )
