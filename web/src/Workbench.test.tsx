@@ -344,7 +344,7 @@ test("跨过断点拉宽窗口时抽屉自动关闭，恢复窄屏仍默认收�
   expect(screen.queryByRole("link", { name: "知识库" })).toBeNull();
 });
 
-test("项目管理员可通过侧栏一键进入构建与数据及项目空间", async () => {
+test("项目管理员可通过侧栏一键进入构建与数据及项目列表", async () => {
   localStorage.setItem("token", "pa-token");
   vi.stubGlobal(
     "fetch",
@@ -376,7 +376,7 @@ test("项目管理员可通过侧栏一键进入构建与数据及项目空间",
   const buildsShortcut = await screen.findByRole("link", {
     name: "构建与数据",
   });
-  expect(screen.getByRole("link", { name: "项目空间" })).toBeTruthy();
+  expect(screen.getByRole("link", { name: "项目列表" })).toBeTruthy();
   expect(screen.queryByRole("link", { name: "系统设置" })).toBeNull();
 
   fireEvent.click(buildsShortcut);

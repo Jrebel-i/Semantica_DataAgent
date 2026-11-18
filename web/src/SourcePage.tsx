@@ -404,6 +404,10 @@ export function SourcePage({
       setError(t.sourceError);
     }
   }
+  const trimmedFilter = fileFilter.trim().toLowerCase();
+  const visiblePaths = trimmedFilter
+    ? paths.filter((p) => p.toLowerCase().includes(trimmedFilter))
+    : paths;
   return (
     <section className="stack admin-page">
       <div className="page-header">
@@ -677,8 +681,8 @@ export function SourcePage({
             <div className="card-title-row">
               <h2 className="card-title">{t.sourceBrowse}</h2>
               <span className="muted">
-                {fileFilter.trim()
-                  ? `${paths.filter((p) => p.toLowerCase().includes(fileFilter.trim().toLowerCase())).length}/${paths.length}`
+                {trimmedFilter
+                  ? `${visiblePaths.length}/${paths.length}`
                   : paths.length}
               </span>
             </div>
@@ -713,15 +717,7 @@ export function SourcePage({
             </div>
             <div className="source-tree" key={treeExpand.seq}>
               <FileTree
-                node={tree(
-                  fileFilter.trim()
-                    ? paths.filter((p) =>
-                        p
-                          .toLowerCase()
-                          .includes(fileFilter.trim().toLowerCase()),
-                      )
-                    : paths,
-                )}
+                node={tree(visiblePaths)}
                 prefix=""
                 defaultOpen={treeExpand.open}
                 open={(p) => void open(p)}

@@ -28,3 +28,7 @@ export async function downloadOssieModel(
   link.remove();
   URL.revokeObjectURL(objectUrl);
 }
+
+export function exportErrorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error && error.message ? error.message : fallback;
+}

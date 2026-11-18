@@ -59,7 +59,7 @@ const messages = {
     sidebarSearch: "搜索",
     sidebarKnowledge: "知识库",
     sidebarDataOps: "构建与数据",
-    sidebarProjects: "项目空间",
+    sidebarProjects: "项目列表",
     sidebarSystemConfig: "系统设置",
     management: "管理",
     exampleQuestions: "试着问",
@@ -362,7 +362,7 @@ const messages = {
     generatedReadOnly: "语义模型自动生成（只读）",
     readingView: "阅读视图",
     rawLineView: "源码行号",
-    projectGuideWarehouse: "数仓型项目 · 支持查表、血缘、SQL 校验与执行",
+    projectGuideWarehouse: "数仓型项目 · 支持查表、上游依赖、SQL 校验与执行",
     projectGuideDocument: "文档型项目 · 支持基于知识文档检索与口径问答",
     browseProjectKnowledge: "浏览该项目知识库 →",
     documentExamples: [
@@ -615,7 +615,7 @@ const messages = {
     sidebarSearch: "Search",
     sidebarKnowledge: "Knowledge base",
     sidebarDataOps: "Builds & data",
-    sidebarProjects: "Project space",
+    sidebarProjects: "Projects",
     sidebarSystemConfig: "System settings",
     management: "Manage",
     exampleQuestions: "Try asking",
@@ -933,7 +933,7 @@ const messages = {
     readingView: "Formatted view",
     rawLineView: "Raw lines",
     projectGuideWarehouse:
-      "Warehouse project · Schema, lineage, SQL validation & execution",
+      "Warehouse project · Schema, upstream lineage, SQL validation & execution",
     projectGuideDocument:
       "Document project · Document retrieval & definition Q&A",
     browseProjectKnowledge: "Browse project knowledge →",

@@ -12,7 +12,7 @@ import {
 } from "antd";
 import type { components } from "./api";
 import type { Messages } from "./i18n";
-import { downloadOssieModel } from "./ossieExport";
+import { downloadOssieModel, exportErrorMessage } from "./ossieExport";
 import { TableScroll } from "./TableScroll";
 
 type ProjectRow = components["schemas"]["ProjectView"];
@@ -490,50 +490,29 @@ export function ProjectsPage({
             <p className="page-subtitle">{t.projectMembersHint}</p>
           </div>
           <div className="page-actions">
-            {selected.type === "warehouse" && selected.status === "active" && (
-              <>
+            {selected.type === "warehouse" &&
+              selected.status === "active" &&
+              (["yaml", "json"] as const).map((format) => (
                 <Button
+                  key={format}
                   autoInsertSpace={false}
-                  loading={exportingFormat === "yaml"}
+                  loading={exportingFormat === format}
                   disabled={exportingFormat !== null}
                   onClick={() => {
                     setAdapterError("");
-                    setExportingFormat("yaml");
-                    void downloadOssieModel(token, selected.id, "yaml")
+                    setExportingFormat(format);
+                    void downloadOssieModel(token, selected.id, format)
                       .catch((err: unknown) => {
                         setAdapterError(
-                          err instanceof Error && err.message
-                            ? err.message
-                            : t.exportOssieFailed,
+                          exportErrorMessage(err, t.exportOssieFailed),
                         );
                       })
                       .finally(() => setExportingFormat(null));
                   }}
                 >
-                  {t.exportOssieYaml}
+                  {format === "yaml" ? t.exportOssieYaml : t.exportOssieJson}
                 </Button>
-                <Button
-                  autoInsertSpace={false}
-                  loading={exportingFormat === "json"}
-                  disabled={exportingFormat !== null}
-                  onClick={() => {
-                    setAdapterError("");
-                    setExportingFormat("json");
-                    void downloadOssieModel(token, selected.id, "json")
-                      .catch((err: unknown) => {
-                        setAdapterError(
-                          err instanceof Error && err.message
-                            ? err.message
-                            : t.exportOssieFailed,
-                        );
-                      })
-                      .finally(() => setExportingFormat(null));
-                  }}
-                >
-                  {t.exportOssieJson}
-                </Button>
-              </>
-            )}
+              ))}
             <Button autoInsertSpace={false} onClick={() => setSelected(null)}>
               {t.backToProjects}
             </Button>
