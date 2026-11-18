@@ -109,6 +109,34 @@ Read `validate_sql` completely:
   Good incremental: `SELECT * FROM db.table WHERE dt >= '2025-01-01' AND dt <= '2025-01-31'`.
   Bad: no partition condition, or a snapshot table's partition column used as business time.
 
+## Time semantics and duration
+
+- Determine the business timezone from the request or a verified project definition.
+  Apply an authorized project default and disclose it. If no reliable timezone is
+  available and the choice affects the answer, clarify or explicitly disclose the
+  assumption. Interpret calendar boundaries and daylight-saving transitions in that
+  timezone, and check the database column and function timezone semantics for the dialect.
+- A complete past calendar month uses a half-open interval from its start to the next
+  month's start. For "as of now" or "to date", use the relevant starting point and
+  current time anchor; do not extend the upper bound to a future month or year end.
+  For "as of today", distinguish the current instant from the whole calendar day;
+  clarify or disclose an authorized assumption when the intent matters. An explicitly
+  requested complete month or future report remains valid, including its future boundary.
+- Identify the source and meaning of the current time anchor; do not assume a session's
+  stored UTC start time was provided to the model or is the business time. Distinguish
+  a turn's anchor from the actual SQL execution time, which may be later. A dynamic
+  database current-time function is evaluated according to its dialect and execution
+  semantics. Business-time bounds and partition availability are separate: a latest
+  partition is not a substitute for the requested business upper bound; disclose missing
+  partitions or late-arriving data when they affect completeness.
+- Compute durations from the original timestamps in seconds or finer precision; apply
+  thresholds and calculate averages before rounding only the final displayed result.
+  Preserve the requested inclusive or exclusive threshold, including exact boundary
+  values. Handle NULL timestamps and negative durations explicitly according to the
+  business definition; do not silently treat them as zero or valid durations. Account
+  for dates and timezone transitions across midnight, and verify the dialect's timestamp
+  subtraction, precision, NULL and rounding behavior before choosing an expression.
+
 ## Pagination and errors
 
 - If a tool returns `next_cursor`, call the same tool again with the same arguments plus
