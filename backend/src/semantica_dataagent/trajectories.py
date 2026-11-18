@@ -232,6 +232,11 @@ def _extract_validation(
     }
 
 
+def _parse_window_index(session_key: str) -> int:
+    match = re.search(r":w(\d+)(?::[0-9a-f]+)?$", session_key)
+    return int(match.group(1)) if match else 0
+
+
 def _next_local_window_identity(
     db: Session, project_id: str, token_id: str | None, now: datetime
 ) -> tuple[str, str]:
@@ -246,15 +251,15 @@ def _next_local_window_identity(
         )
         .all()
     ]
-    next_idx = len(existing_keys) + 1
+    existing_set = set(existing_keys)
+    next_idx = max((_parse_window_index(k) for k in existing_keys), default=0) + 1
     while True:
-        candidate_key = (
-            f"local_mcp:{project_id}:{tok}:{_as_utc(now).isoformat()}:w{next_idx}"
-        )
-        if candidate_key not in existing_keys:
+        window_key = f"{_as_utc(now).isoformat()}:w{next_idx}:{uuid.uuid4().hex[:8]}"
+        candidate_key = f"local_mcp:{project_id}:{tok}:{window_key}"
+        if candidate_key not in existing_set:
             break
         next_idx += 1
-    trace_id = telemetry.local_mcp_trace_id(project_id, tok, f"w{next_idx}")
+    trace_id = telemetry.local_mcp_trace_id(project_id, tok, window_key)
     return candidate_key, trace_id
 
 

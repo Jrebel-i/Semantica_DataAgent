@@ -327,9 +327,33 @@ def _evaluate_confirmed_regression(
     workspace: Path,
     timeout: float,
 ) -> dict[str, Any]:
-    eval_cases = _select_regression_cases(
-        confirmed, target_question_ids, max_eval_cases
-    )
+    confirmed_ids = {item.id for item in confirmed}
+    seen_extra: set[str] = set()
+    extra_targets: list[eval_mod.Question] = []
+    matched_confirmed_targets: list[str] = []
+    for q in target_questions or ():
+        if q.id in confirmed_ids:
+            if q.id not in matched_confirmed_targets:
+                matched_confirmed_targets.append(q.id)
+        elif q.id not in seen_extra:
+            seen_extra.add(q.id)
+            extra_targets.append(q)
+
+    effective_target_ids = list(target_question_ids or ())
+    for qid in matched_confirmed_targets:
+        if qid not in effective_target_ids:
+            effective_target_ids.append(qid)
+
+    if max_eval_cases <= 0:
+        extra_targets = []
+        eval_cases = []
+    else:
+        extra_targets = extra_targets[:max_eval_cases]
+        regression_budget = max(0, max_eval_cases - len(extra_targets))
+        eval_cases = _select_regression_cases(
+            confirmed, effective_target_ids, regression_budget
+        )
+
     active_scores: list[dict[str, Any]] = []
     cand_scores: list[dict[str, Any]] = []
     regressions: list[str] = []
@@ -395,11 +419,6 @@ def _evaluate_confirmed_regression(
             }
         )
 
-    extra_targets = [
-        q
-        for q in (target_questions or ())
-        if q.id not in {item.id for item in eval_cases}
-    ][: max(0, max_eval_cases - len(eval_cases))]
     target_active_scores: list[dict[str, Any]] = []
     target_cand_scores: list[dict[str, Any]] = []
     for q in extra_targets:
@@ -427,21 +446,34 @@ def _evaluate_confirmed_regression(
             workspace=workspace,
             timeout=timeout,
         )
-        target_active_scores.append(_score_regression_case(q, a_out))
-        target_cand_scores.append(_score_regression_case(q, c_out))
+        a_sc = _score_regression_case(q, a_out)
+        c_sc = _score_regression_case(q, c_out)
+        target_active_scores.append(a_sc)
+        target_cand_scores.append(c_sc)
+        case_summaries.append(
+            {
+                "id": q.id,
+                "split": q.split,
+                "target": True,
+                "redacted": q.split == "holdout",
+                "regressed": False,
+                "active_passed": _regression_passed(a_sc),
+                "candidate_passed": _regression_passed(c_sc),
+                "active_recall_at_5": a_sc["table_recall_at_5"],
+                "candidate_recall_at_5": c_sc["table_recall_at_5"],
+            }
+        )
 
-    target_id_set = set(target_question_ids or ())
-    if extra_targets:
-        active_target_slice = target_active_scores
-        cand_target_slice = target_cand_scores
-    elif target_id_set:
-        indices = [i for i, q in enumerate(eval_cases) if q.id in target_id_set]
-        active_target_slice = (
-            [active_scores[i] for i in indices] if indices else active_scores
-        )
-        cand_target_slice = (
-            [cand_scores[i] for i in indices] if indices else cand_scores
-        )
+    target_id_set = set(effective_target_ids)
+    matched_active = [
+        active_scores[i] for i, q in enumerate(eval_cases) if q.id in target_id_set
+    ]
+    matched_cand = [
+        cand_scores[i] for i, q in enumerate(eval_cases) if q.id in target_id_set
+    ]
+    if target_active_scores or matched_active:
+        active_target_slice = [*matched_active, *target_active_scores]
+        cand_target_slice = [*matched_cand, *target_cand_scores]
     else:
         active_target_slice = active_scores
         cand_target_slice = cand_scores
@@ -460,11 +492,12 @@ def _evaluate_confirmed_regression(
         or target_cand_m["table_recall_at_5"]
         > target_active_m["table_recall_at_5"] + 1e-9
     )
-    passed = (len(eval_cases) > 0) and (not regressions) and strict_improvement
+    total_evaluated = len(eval_cases) + len(extra_targets)
+    passed = (total_evaluated > 0) and (not regressions) and strict_improvement
     return {
         "passed": passed,
         "mode": "confirmed_regression",
-        "evaluated_cases": len(eval_cases),
+        "evaluated_cases": total_evaluated,
         "regressions": regressions,
         "strict_improvement": strict_improvement,
         "active_metrics": active_metrics,
@@ -601,14 +634,25 @@ def _evaluate_cold_start_ab(
     seed: int | None,
 ) -> dict[str, Any]:
     diag_ids = set(diagnosis_trajectory_ids or ())
-    all_rows = trajectories.list_trajectories(project_id)
-    eligible = [
-        row
+    all_rows = sorted(
+        trajectories.list_trajectories(project_id),
+        key=lambda r: (r["recorded_at"], r["id"]),
+    )
+    diag_questions = {
+        _norm_question(row.get("question"))
         for row in all_rows
-        if row["id"] not in diag_ids
-        and (row.get("question") or "").strip()
-        and _norm_question(row.get("question")) not in holdout_questions
-    ]
+        if row["id"] in diag_ids and (row.get("question") or "").strip()
+    }
+    excluded_questions = holdout_questions | diag_questions
+
+    latest_by_question: dict[str, dict[str, Any]] = {}
+    for row in all_rows:
+        norm_q = _norm_question(row.get("question"))
+        if row["id"] in diag_ids or not norm_q or norm_q in excluded_questions:
+            continue
+        latest_by_question.pop(norm_q, None)
+        latest_by_question[norm_q] = row
+    eligible = list(latest_by_question.values())
     if not eligible:
         return {
             "passed": False,

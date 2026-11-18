@@ -744,3 +744,181 @@ def test_gate_builds_candidate_routes_mcp_eval_without_trajectory_pollution(
             assert generation_pointer(db, project_id).generation == active_gen
         # Synthetic eval MCP calls did NOT pollute interaction_trajectories
         assert len(trajectories.list_trajectories(project_id)) == 1
+
+
+def test_cold_start_ab_deduplicates_questions_and_excludes_diagnosis_question_variants(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from semantica_dataagent import evolution_gate
+
+    c, admin_token = _setup_client(tmp_path, monkeypatch)
+    with c:
+        project_id, _active_gen, cand_gen = _prepare_project_with_generations(
+            c, admin_token, monkeypatch, "Gate Dedup"
+        )
+        base_time = datetime(2026, 11, 18, 9, 0, 0, tzinfo=UTC)
+        # Trajectories:
+        # 0: diag question "诊断错题 口径" (in diagnosis_trajectory_ids)
+        # 1: repeat of diag question with different whitespace " 诊断错题\n口径 " (MUST also be excluded!)
+        # 2: "重复问题A"
+        # 3: "重复问题A" (duplicate)
+        # 4: "唯一问题B"
+        # 5: "唯一问题C"
+        # 6: " 重复问题A " (latest chronological repeat -> deduplicated eligible = [B, C, A, D] -> recent 30% = ceil(4*0.3)=2 -> [A, D])
+        # 7: "唯一问题D"
+        questions_seq = [
+            "诊断错题 口径",
+            " 诊断错题\n口径 ",
+            "重复问题A",
+            "重复问题A",
+            "唯一问题B",
+            "唯一问题C",
+            " 重复问题A ",
+            "唯一问题D",
+        ]
+        for idx, q_text in enumerate(questions_seq):
+            t = base_time + timedelta(minutes=idx * 5)
+            conv = f"dedup-{idx}"
+            trajectories.start_online_trajectory(
+                project_id=project_id,
+                conversation_id=conv,
+                turn_id=idx + 1,
+                question=q_text,
+                now=t,
+            )
+            trajectories.finish_online_trajectory(
+                conversation_id=conv,
+                turn_id=idx + 1,
+                status="completed",
+                answer="ok",
+                final_sql=[
+                    {"sql": "SELECT amount FROM shop.orders", "dialect": "doris"}
+                ],
+                now=t,
+            )
+        all_rows = trajectories.list_trajectories(project_id)
+        diag_ids = [all_rows[0]["id"]]
+
+        monkeypatch.setattr(
+            sql_validation,
+            "validate_sql",
+            lambda sql, dialect="doris", project_id=None: {
+                "status": "pass",
+                "issues": [],
+            },
+        )
+        runner = _StubRunner(
+            project_id,
+            {
+                (
+                    "cand",
+                    " 重复问题A ",
+                ): "SELECT amount FROM shop.orders /* CAND_TAG */",
+                ("cand", "唯一问题D"): "SELECT amount FROM shop.orders /* CAND_TAG */",
+            },
+        )
+        judged_prompts: list[str] = []
+
+        def judge(prompt: str) -> dict:
+            judged_prompts.append(prompt)
+            a_part = prompt.split("Option B:")[0]
+            winner = "A" if "CAND_TAG" in a_part else "B"
+            return {
+                "winner": winner,
+                "critical_error_a": False,
+                "critical_error_b": False,
+            }
+
+        report = evolution_gate.evaluate_candidate_gate(
+            project_id,
+            candidate_generation=cand_gen,
+            diagnosis_trajectory_ids=diag_ids,
+            runner=runner,
+            judge_fn=judge,
+            seed=3,
+        )
+        assert report["passed"] is True
+        assert report["evaluated_cases"] == 2
+        assert report["W_c"] == 2 and report["W_p"] == 0
+        joined = "\n".join(judged_prompts)
+        assert "诊断错题" not in joined
+        assert "重复问题A" in joined
+        assert "唯一问题D" in joined
+
+
+def test_confirmed_regression_reserves_budget_for_explicit_target_questions_when_over_20(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from semantica_dataagent import evolution_gate
+    from semantica_dataagent.eval import Question
+
+    c, admin_token = _setup_client(tmp_path, monkeypatch)
+    with c:
+        project_id, _active_gen, cand_gen = _prepare_project_with_generations(
+            c, admin_token, monkeypatch, "Gate Budget"
+        )
+        q_rows = [
+            {
+                "id": f"q-{i}",
+                "question": f"已确认回归题{i}",
+                "expected_tables": ["shop.orders"],
+                "expected_fields": ["shop.orders.amount"],
+                "caliber": "orders amount",
+                "reference_sql": "SELECT amount FROM shop.orders",
+                "dialect": "doris",
+                "split": "dev",
+                "answer_confirmed": True,
+            }
+            for i in range(1, 26)
+        ]
+        q_path = project_context.eval_questions_path(project_id)
+        q_path.parent.mkdir(parents=True, exist_ok=True)
+        q_path.write_text(
+            yaml.safe_dump({"questions": q_rows}, allow_unicode=True),
+            encoding="utf-8",
+        )
+
+        monkeypatch.setattr(
+            knowledge,
+            "search",
+            lambda *a, **kw: [
+                {"ref": "table:shop.orders", "type": "table", "score": 0.9}
+            ],
+        )
+        monkeypatch.setattr(
+            sql_validation,
+            "validate_sql",
+            lambda sql, dialect="doris", project_id=None: (
+                {"status": "issues", "issues": [{"kind": "missing_table"}]}
+                if "bad_table" in sql
+                else {"status": "pass", "issues": []}
+            ),
+        )
+
+        explicit_target = Question(
+            id="target-extra-1",
+            question="新增目标题：修复退款金额口径",
+            expected_tables=["shop.orders"],
+            expected_fields=["shop.orders.amount"],
+            caliber="orders amount",
+            reference_sql="SELECT amount FROM shop.orders",
+            dialect="doris",
+            answer_confirmed=False,
+        )
+        runner = _StubRunner(
+            project_id,
+            {
+                ("active", explicit_target.question): "SELECT x FROM shop.bad_table",
+                ("cand", explicit_target.question): "SELECT amount FROM shop.orders",
+            },
+        )
+        report = evolution_gate.evaluate_candidate_gate(
+            project_id,
+            candidate_generation=cand_gen,
+            target_questions=[explicit_target],
+            runner=runner,
+        )
+        assert report["passed"] is True
+        assert report["strict_improvement"] is True
+        assert report["evaluated_cases"] == 20
+        assert explicit_target.question in runner.seen_prompts

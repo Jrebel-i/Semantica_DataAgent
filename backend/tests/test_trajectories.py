@@ -394,3 +394,82 @@ def test_trajectories_lock_is_fork_safe(
     finally:
         release.set()
         thread.join(5)
+
+
+def test_local_mcp_trace_id_never_collides_after_old_window_expiry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    _setup_db(tmp_path, monkeypatch)
+    from semantica_dataagent import trajectories
+    from semantica_dataagent.db import sessions
+
+    t0 = datetime(2026, 11, 18, 9, 0, 0, tzinfo=UTC)
+    t1 = t0 + timedelta(minutes=40)
+    t2 = t1 + timedelta(minutes=40)
+    t3 = t2 + timedelta(minutes=40)
+
+    trace_1 = trajectories.record_mcp_tool_call(
+        project_id="default",
+        token_id="tok-exp",
+        conversation_id=None,
+        turn_id=None,
+        is_online_turn=False,
+        tool_name="validate_sql",
+        arguments={"sql": "SELECT 1", "dialect": "doris"},
+        output={"status": "pass", "issues": []},
+        is_error=False,
+        now=t0,
+    )
+    trace_2 = trajectories.record_mcp_tool_call(
+        project_id="default",
+        token_id="tok-exp",
+        conversation_id=None,
+        turn_id=None,
+        is_online_turn=False,
+        tool_name="validate_sql",
+        arguments={"sql": "SELECT 2", "dialect": "doris"},
+        output={"status": "pass", "issues": []},
+        is_error=False,
+        now=t1,
+    )
+    assert trace_2 != trace_1
+
+    # Expire window 1 while window 2 stays active
+    with sessions().begin() as db:
+        deleted = trajectories.delete_expired_local_trajectories(
+            db, t0 + timedelta(minutes=20)
+        )
+        assert deleted == 1
+
+    trace_3 = trajectories.record_mcp_tool_call(
+        project_id="default",
+        token_id="tok-exp",
+        conversation_id=None,
+        turn_id=None,
+        is_online_turn=False,
+        tool_name="validate_sql",
+        arguments={"sql": "SELECT 3", "dialect": "doris"},
+        output={"status": "pass", "issues": []},
+        is_error=False,
+        now=t2,
+    )
+    assert trace_3 != trace_2
+    assert trace_3 != trace_1
+
+    # Also expire all windows and create a fresh one -> still unique
+    with sessions().begin() as db:
+        trajectories.delete_expired_local_trajectories(db, t2 + timedelta(minutes=5))
+
+    trace_4 = trajectories.record_mcp_tool_call(
+        project_id="default",
+        token_id="tok-exp",
+        conversation_id=None,
+        turn_id=None,
+        is_online_turn=False,
+        tool_name="validate_sql",
+        arguments={"sql": "SELECT 4", "dialect": "doris"},
+        output={"status": "pass", "issues": []},
+        is_error=False,
+        now=t3,
+    )
+    assert len({trace_1, trace_2, trace_3, trace_4}) == 4
