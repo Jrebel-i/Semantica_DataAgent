@@ -3517,6 +3517,25 @@ code {
   padding-top: 0;
 }
 
+.chat-header-meta {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.chat-header-title .chat-header-project {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--ink-2);
+  font-family: var(--font-sans);
+  font-size: 11.5px;
+  font-weight: 500;
+}
+
 .chat-project-guide {
   display: flex;
   align-items: center;
@@ -3629,6 +3648,15 @@ code {
 .admin-page .form-card button:not(.ant-btn):hover {
   border-color: var(--teal);
   color: var(--teal);
+}
+.admin-page > .page-header > button:focus-visible,
+.admin-page .save-bar > button:focus-visible,
+.admin-page .source-compare > button:focus-visible,
+.admin-page .plugin-card button:not(.ant-btn):focus-visible,
+.admin-page .form-card button:not(.ant-btn):focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+  border-color: var(--teal);
 }
 .admin-page .save-bar > button.primary,
 .admin-page .plugin-card button.primary:not(.ant-btn),

@@ -1290,7 +1290,7 @@ def describe(names=None, database=None, search=None, summary=False, project_id=N
         parameters,
     )
 
-    def _project_table_row(row):
+    def _format_table_row(row):
         docs = [
             {**d, "generated": bool(d.get("generated", False))}
             for d in (row.get("documents") or [])
@@ -1318,7 +1318,7 @@ def describe(names=None, database=None, search=None, summary=False, project_id=N
             "relationships": [rels_by_ref[k] for k in sorted(rels_by_ref)],
         }
 
-    return [_project_table_row(r) for r in rows]
+    return [_format_table_row(r) for r in rows]
 
 
 def dimension_values(database, table, field, project_id=None):

@@ -1054,7 +1054,7 @@ test("展示 catalog 前缀、外键关系跳转、Markdown 文档及派生只�
           },
         ]);
       if (url.startsWith("/api/v1/tables?"))
-        return Response.json([orders, dimCity]);
+        return Response.json(url.includes("search=") ? [] : [orders, dimCity]);
       if (url.startsWith("/api/v1/tables/dwd/orders?"))
         return Response.json(orders);
       if (url.startsWith("/api/v1/tables/dim/city?"))
@@ -1079,7 +1079,7 @@ test("展示 catalog 前缀、外键关系跳转、Markdown 文档及派生只�
   expect(
     await screen.findByRole("heading", { level: 1, name: "lake.dwd.orders" }),
   ).toBeTruthy();
-  expect(screen.getByText("外键关系")).toBeTruthy();
+  expect(await screen.findByText("外键关系")).toBeTruthy();
   expect(screen.getByText(/fk_orders_city/)).toBeTruthy();
 
   fireEvent.click(screen.getByRole("button", { name: "dim.city" }));
@@ -1087,15 +1087,32 @@ test("展示 catalog 前缀、外键关系跳转、Markdown 文档及派生只�
     await screen.findByRole("heading", { level: 1, name: "dim.city" }),
   ).toBeTruthy();
 
-  fireEvent.click(await screen.findByText("知识文档 (1)"));
-  fireEvent.click(await screen.findByText("ossie"));
-  fireEvent.click(
-    await screen.findByRole("button", { name: "ossie/orders.md" }),
-  );
+  await waitFor(() => {
+    if (!screen.queryByText("ossie")) {
+      fireEvent.click(screen.getByText("知识文档 (1)"));
+    }
+    expect(screen.getByText("ossie")).toBeTruthy();
+  });
+  await waitFor(() => {
+    if (!screen.queryByRole("button", { name: "ossie/orders.md" })) {
+      fireEvent.click(screen.getByText("ossie"));
+    }
+    expect(
+      screen.getByRole("button", { name: "ossie/orders.md" }),
+    ).toBeTruthy();
+  });
+  fireEvent.click(screen.getByRole("button", { name: "ossie/orders.md" }));
 
   expect(await screen.findByText("语义模型自动生成（只读）")).toBeTruthy();
   expect(
     screen.getByRole("heading", { level: 2, name: "指标定义" }),
   ).toBeTruthy();
   expect(screen.queryByRole("button", { name: "提出纠错" })).toBeNull();
+
+  fireEvent.change(screen.getByLabelText("搜索表或文档"), {
+    target: { value: "不存在的过滤词" },
+  });
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: "导出 Ossie" })).toBeTruthy(),
+  );
 });

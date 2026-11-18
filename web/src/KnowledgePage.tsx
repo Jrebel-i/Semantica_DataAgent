@@ -16,7 +16,7 @@ import type { Messages } from "./i18n";
 import { ColumnLineage } from "./ColumnLineage";
 import { DimensionStatus } from "./DimensionStatus";
 import { Markdown } from "./Markdown";
-import { downloadOssieModel } from "./ossieExport";
+import { downloadOssieModel, exportErrorMessage } from "./ossieExport";
 import { safeDecodePath } from "./paths";
 import { ProjectSelector, storedProject, useProjects } from "./ProjectSelector";
 import {
@@ -83,6 +83,7 @@ export function KnowledgePage({
   const warehouse =
     projects.find((row) => row.id === project)?.type !== "document";
   const [tables, setTables] = useState<TableSummary[]>([]);
+  const [hasAnyTables, setHasAnyTables] = useState(false);
   const [categories, setCategories] = useState<Category[]>([]);
   const [selection, setSelection] = useState<ProjectBound<TableSummary> | null>(
     null,
@@ -129,6 +130,7 @@ export function KnowledgePage({
     projectGeneration.current += 1;
     autoSelect.current = false;
     setTables([]);
+    setHasAnyTables(false);
     setCategories([]);
     setSelected(null);
     setReadingDoc(null);
@@ -160,6 +162,7 @@ export function KnowledgePage({
     if (!projectsLoaded) return;
     if (!warehouse) {
       setTables([]);
+      setHasAnyTables(false);
       setError(false);
       return;
     }
@@ -185,6 +188,11 @@ export function KnowledgePage({
         )
           return;
         setTables(data);
+        if (!search.trim() && !database) {
+          setHasAnyTables(data.length > 0);
+        } else if (data.length > 0) {
+          setHasAnyTables(true);
+        }
         setError(false);
         if (autoSelect.current && !readingDoc && data.length > 0) {
           autoSelect.current = false;
@@ -668,7 +676,7 @@ export function KnowledgePage({
               value={search}
               onChange={(event) => setSearch(event.target.value)}
             />
-            {warehouse && tables.length > 0 && (
+            {warehouse && (hasAnyTables || tables.length > 0) && (
               <Button
                 size="small"
                 loading={exportingOssie}
@@ -678,9 +686,7 @@ export function KnowledgePage({
                   void downloadOssieModel(token, project, "yaml")
                     .catch((err: unknown) => {
                       setExportError(
-                        err instanceof Error && err.message
-                          ? err.message
-                          : messages.exportOssieFailed,
+                        exportErrorMessage(err, messages.exportOssieFailed),
                       );
                     })
                     .finally(() => setExportingOssie(false));

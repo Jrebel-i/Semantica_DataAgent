@@ -1618,29 +1618,28 @@ def list_pulls(
     from sqlalchemy import func
 
     from .db import PullRecord
-    from .project_api import _resolve_project_context, accessible_projects
+    from .project_api import accessible_projects, resolve_project_scope
 
+    if project is not None:
+        allowed_ids = [
+            resolve_project_scope(project, requester, allow_frozen=True).project_id
+        ]
+    else:
+        allowed_ids = [row.id for row in accessible_projects(requester)]
+    if not allowed_ids:
+        return []
     with sessions()() as db:
-        query = db.query(PullRecord)
-        if project is not None:
-            scope = _resolve_project_context(project, requester, allow_frozen=True)
-            query = query.filter(
-                func.coalesce(PullRecord.project_id, project_context.DEFAULT_PROJECT_ID)
-                == scope.project_id
-            )
-        elif requester.role != "admin":
-            allowed_ids = [row.id for row in accessible_projects(requester)]
-            if not allowed_ids:
-                return []
-            query = query.filter(
+        rows = (
+            db.query(PullRecord)
+            .filter(
                 func.coalesce(
                     PullRecord.project_id, project_context.DEFAULT_PROJECT_ID
                 ).in_(allowed_ids)
             )
-        return [
-            PullView.model_validate(row)
-            for row in query.order_by(PullRecord.id.desc()).all()
-        ]
+            .order_by(PullRecord.id.desc())
+            .all()
+        )
+        return [PullView.model_validate(row) for row in rows]
 
 
 if static_dir := os.environ.get("DATAAGENT_STATIC_DIR"):

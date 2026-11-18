@@ -425,9 +425,9 @@ test("新对话空白态显示项目类型引导、知识库入口，并随项�
   expect(container.querySelector(".chat-header strong")?.textContent).toBe(
     messages.newConversation,
   );
-  expect(
-    container.querySelector(".chat-header-title span")?.textContent,
-  ).toContain("业务数据");
+  expect(container.querySelector(".chat-header-project")?.textContent).toBe(
+    "业务数据",
+  );
   expect(container.querySelector(".chat-project-guide")?.textContent).toContain(
     "数仓型项目",
   );
@@ -447,9 +447,9 @@ test("新对话空白态显示项目类型引导、知识库入口，并随项�
       container.querySelector(".chat-project-guide")?.textContent,
     ).toContain("文档型项目"),
   );
-  expect(
-    container.querySelector(".chat-header-title span")?.textContent,
-  ).toContain("文档规范库");
+  expect(container.querySelector(".chat-header-project")?.textContent).toBe(
+    "文档规范库",
+  );
   expect(
     screen.getByRole("button", { name: "核心业务口径是如何定义的？" }),
   ).toBeTruthy();
