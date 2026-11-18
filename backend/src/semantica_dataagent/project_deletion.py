@@ -27,6 +27,9 @@ from .db import (
     Clarification,
     Conversation,
     CorrectionProposal,
+    EvolutionCheckpoint,
+    EvolutionRound,
+    EvolutionRun,
     GenerationPointer,
     KnowledgeGap,
     KnowledgeGeneration,
@@ -220,6 +223,15 @@ def _delete_database(project_id: str, settings: dict) -> None:
         from . import trajectories
 
         trajectories.delete_project_trajectories(db, project_id)
+        db.query(EvolutionRound).filter(EvolutionRound.project_id == project_id).delete(
+            synchronize_session=False
+        )
+        db.query(EvolutionRun).filter(EvolutionRun.project_id == project_id).delete(
+            synchronize_session=False
+        )
+        db.query(EvolutionCheckpoint).filter(
+            EvolutionCheckpoint.project_id == project_id
+        ).delete(synchronize_session=False)
         db.query(Conversation).filter(Conversation.project_id == project_id).delete(
             synchronize_session=False
         )

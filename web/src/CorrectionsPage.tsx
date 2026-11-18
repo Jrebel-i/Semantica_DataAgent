@@ -14,12 +14,40 @@ import type { components } from "./api";
 import type { Messages } from "./i18n";
 import { safeDecodePath } from "./paths";
 import { ProjectSelector, storedProject } from "./ProjectSelector";
+import { formatRegressions } from "./EvolutionPage";
 import { TableScroll } from "./TableScroll";
+
+type L2GateReport = {
+  passed?: boolean;
+  mode?: string;
+  evaluated_cases?: number;
+  regressions?: string[] | number;
+  W_c?: number;
+  W_p?: number;
+  E_c?: number;
+  new_validate_errors?: number;
+  errors?: string[];
+};
+
+type ProvenanceReport = {
+  evolution_run_id?: string;
+  round_number?: number;
+  signal_kind?: string;
+  hypothesis?: string;
+  evidence_trajectory_ids?: number[];
+};
 
 type GateReport = {
   passed?: boolean;
   checks?: { name?: string; passed?: boolean; details?: string[] }[];
   errors?: string[];
+  l1_gate?: {
+    passed?: boolean;
+    checks?: { name?: string; passed?: boolean; details?: string[] }[];
+    errors?: string[];
+  };
+  l2_gate?: L2GateReport;
+  provenance?: ProvenanceReport;
 };
 
 type Proposal = {
@@ -79,16 +107,29 @@ export function CorrectionsPage({
   token,
   gaps = false,
   messages: t,
+  initialProposalId,
 }: {
   token: string;
   gaps?: boolean;
   messages: Messages;
+  initialProposalId?: string | null;
 }) {
   const [project, setProject] = useState(storedProject);
   const [activeTab, setActiveTab] = useState<"proposals" | "eval">("proposals");
   const [rows, setRows] = useState<Proposal[]>([]);
   const [missing, setMissing] = useState<Gap[]>([]);
   const [selected, setSelected] = useState<Proposal | null>(null);
+  const targetProposalId =
+    initialProposalId ??
+    new URLSearchParams(window.location.search).get("proposal_id");
+  useEffect(() => {
+    if (!targetProposalId || rows.length === 0) return;
+    const match = rows.find((row) => row.id === targetProposalId);
+    if (match) {
+      setActiveTab("proposals");
+      setSelected(match);
+    }
+  }, [rows, targetProposalId]);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>("all");
   const [patch, setPatch] = useState("");
@@ -541,25 +582,72 @@ export function CorrectionsPage({
                     </div>
                     <p className="muted">{selected.reason}</p>
                     {selected.gate_report && (
-                      <Alert
-                        style={{ marginBottom: 12 }}
-                        type={selected.gate_report.passed ? "success" : "error"}
-                        showIcon
-                        title={
-                          selected.gate_report.passed
-                            ? t.gatePassed
-                            : t.gateFailed
-                        }
-                        description={
-                          (selected.gate_report.errors?.length ?? 0) > 0 ? (
-                            <ul className="stale-overrides-list">
-                              {selected.gate_report.errors?.map((err, i) => (
-                                <li key={i}>{err}</li>
-                              ))}
-                            </ul>
-                          ) : undefined
-                        }
-                      />
+                      <>
+                        <Alert
+                          style={{ marginBottom: 12 }}
+                          type={
+                            selected.gate_report.passed ? "success" : "error"
+                          }
+                          showIcon
+                          title={
+                            selected.gate_report.passed
+                              ? t.gatePassed
+                              : t.gateFailed
+                          }
+                          description={
+                            (selected.gate_report.errors?.length ?? 0) > 0 ? (
+                              <ul className="stale-overrides-list">
+                                {selected.gate_report.errors?.map((err, i) => (
+                                  <li key={i}>{err}</li>
+                                ))}
+                              </ul>
+                            ) : undefined
+                          }
+                        />
+                        {(selected.gate_report.provenance ||
+                          selected.gate_report.l2_gate) && (
+                          <div className="evolution-gate-meta">
+                            {selected.gate_report.provenance && (
+                              <div>
+                                <strong>{t.evolutionProposalProvenance}</strong>
+                                <div className="muted mono">
+                                  {selected.gate_report.provenance
+                                    .evolution_run_id ?? "-"}{" "}
+                                  · #
+                                  {selected.gate_report.provenance
+                                    .round_number ?? "-"}{" "}
+                                  ·{" "}
+                                  {selected.gate_report.provenance
+                                    .signal_kind ?? "-"}
+                                </div>
+                                {selected.gate_report.provenance.hypothesis && (
+                                  <div>
+                                    {selected.gate_report.provenance.hypothesis}
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                            {selected.gate_report.l2_gate && (
+                              <div>
+                                <strong>{t.evolutionL2Gate}</strong>
+                                <div className="muted mono">
+                                  {selected.gate_report.l2_gate.mode ?? "-"} ·
+                                  cases=
+                                  {selected.gate_report.l2_gate
+                                    .evaluated_cases ?? 0}
+                                  {selected.gate_report.l2_gate.mode ===
+                                  "cold_start_ab"
+                                    ? ` · W_c=${selected.gate_report.l2_gate.W_c ?? 0} W_p=${selected.gate_report.l2_gate.W_p ?? 0} E_c=${selected.gate_report.l2_gate.E_c ?? 0}`
+                                    : selected.gate_report.l2_gate
+                                          .regressions !== undefined
+                                      ? ` · regressions=${formatRegressions(selected.gate_report.l2_gate.regressions)}`
+                                      : ""}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </>
                     )}
                     <pre className="diff-block">{selected.diff}</pre>
                     {canRevert && (

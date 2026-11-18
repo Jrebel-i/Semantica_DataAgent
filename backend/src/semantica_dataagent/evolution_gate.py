@@ -621,6 +621,7 @@ def _evaluate_cold_start_ab(
     cand_generation: str,
     holdout_questions: set[str],
     diagnosis_trajectory_ids: Sequence[int] | None,
+    reserve_trajectory_ids: Sequence[int] | None = None,
     max_eval_cases: int,
     runner: Any,
     provider: ProviderConfig,
@@ -634,6 +635,9 @@ def _evaluate_cold_start_ab(
     seed: int | None,
 ) -> dict[str, Any]:
     diag_ids = set(diagnosis_trajectory_ids or ())
+    reserve_id_filter = (
+        set(reserve_trajectory_ids) if reserve_trajectory_ids is not None else None
+    )
     all_rows = sorted(
         trajectories.list_trajectories(project_id),
         key=lambda r: (r["recorded_at"], r["id"]),
@@ -647,6 +651,8 @@ def _evaluate_cold_start_ab(
 
     latest_by_question: dict[str, dict[str, Any]] = {}
     for row in all_rows:
+        if reserve_id_filter is not None and row["id"] not in reserve_id_filter:
+            continue
         norm_q = _norm_question(row.get("question"))
         if row["id"] in diag_ids or not norm_q or norm_q in excluded_questions:
             continue
@@ -667,8 +673,11 @@ def _evaluate_cold_start_ab(
             "cases": [],
         }
 
-    reserve_count = max(1, math.ceil(len(eligible) * COLD_START_RESERVE_RATIO))
-    reserved = eligible[-reserve_count:]
+    if reserve_id_filter is not None:
+        reserved = eligible
+    else:
+        reserve_count = max(1, math.ceil(len(eligible) * COLD_START_RESERVE_RATIO))
+        reserved = eligible[-reserve_count:]
     if max_eval_cases > 0:
         reserved = reserved[-max_eval_cases:]
     else:
@@ -809,6 +818,7 @@ def evaluate_candidate_gate(
     target_question_ids: Sequence[str] | None = None,
     target_questions: Sequence[eval_mod.Question] | None = None,
     diagnosis_trajectory_ids: Sequence[int] | None = None,
+    reserve_trajectory_ids: Sequence[int] | None = None,
     max_eval_cases: int = DEFAULT_MAX_EVAL_CASES,
     agent: str = "pi",
     runner: Any | None = None,
@@ -870,6 +880,7 @@ def evaluate_candidate_gate(
                     cand_generation=cand_gen,
                     holdout_questions=holdout_questions,
                     diagnosis_trajectory_ids=diagnosis_trajectory_ids,
+                    reserve_trajectory_ids=reserve_trajectory_ids,
                     max_eval_cases=max_eval_cases,
                     runner=resolved_runner,
                     provider=resolved_provider,

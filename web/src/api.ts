@@ -401,6 +401,41 @@ export interface paths {
         patch: operations["update_eval_question_api_v1_eval_questions__question_id__patch"];
         trace?: never;
     };
+    "/api/v1/evolution/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Evolution Runs */
+        get: operations["list_evolution_runs_api_v1_evolution_runs_get"];
+        put?: never;
+        /** Trigger Evolution Run */
+        post: operations["trigger_evolution_run_api_v1_evolution_runs_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/evolution/runs/{run_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Evolution Run */
+        get: operations["get_evolution_run_api_v1_evolution_runs__run_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/filters": {
         parameters: {
             query?: never;
@@ -655,6 +690,24 @@ export interface paths {
         put?: never;
         /** Delete Project Route */
         post: operations["delete_project_route_api_v1_projects__project_id__delete_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/evolution-config": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Project Evolution Config */
+        get: operations["get_project_evolution_config_api_v1_projects__project_id__evolution_config_get"];
+        /** Put Project Evolution Config */
+        put: operations["put_project_evolution_config_api_v1_projects__project_id__evolution_config_put"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1826,6 +1879,61 @@ export interface components {
             /** Type */
             type: string;
         };
+        /** EvolutionConfigUpdate */
+        EvolutionConfigUpdate: {
+            /** Auto Evolve Enabled */
+            auto_evolve_enabled?: boolean | null;
+            /** Evolution Model */
+            evolution_model?: string | null;
+            /** Evolution Provider Id */
+            evolution_provider_id?: string | null;
+            /** Judge Model */
+            judge_model?: string | null;
+            /** Judge Provider Id */
+            judge_provider_id?: string | null;
+            /** Max Eval Cases */
+            max_eval_cases?: number | null;
+            /** Max Idle Days */
+            max_idle_days?: number | null;
+            /** Max Rounds */
+            max_rounds?: number | null;
+            /** Min Interval Hours */
+            min_interval_hours?: number | null;
+            /** Min Trajectories */
+            min_trajectories?: number | null;
+        };
+        /** EvolutionConfigView */
+        EvolutionConfigView: {
+            /** Auto Evolve Enabled */
+            auto_evolve_enabled: boolean;
+            /** Checkpoint At */
+            checkpoint_at?: string | null;
+            /** Checkpoint Trajectory Id */
+            checkpoint_trajectory_id?: number | null;
+            /** Evolution Model */
+            evolution_model?: string | null;
+            /** Evolution Provider Id */
+            evolution_provider_id?: string | null;
+            /** Judge Model */
+            judge_model?: string | null;
+            /** Judge Provider Id */
+            judge_provider_id?: string | null;
+            /** Max Eval Cases */
+            max_eval_cases: number;
+            /** Max Idle Days */
+            max_idle_days: number;
+            /** Max Rounds */
+            max_rounds: number;
+            /** Min Interval Hours */
+            min_interval_hours: number;
+            /** Min Trajectories */
+            min_trajectories: number;
+            /**
+             * Pending Trajectories
+             * @default 0
+             */
+            pending_trajectories: number;
+        };
         /** EvolutionPolicyUpdate */
         EvolutionPolicyUpdate: {
             /** Correction Require Review */
@@ -1839,6 +1947,121 @@ export interface components {
             correction_require_review: boolean;
             /** Evolution Require Review */
             evolution_require_review: boolean;
+        };
+        /** EvolutionRoundView */
+        EvolutionRoundView: {
+            /** Candidate Change */
+            candidate_change?: {
+                [key: string]: unknown;
+            };
+            /** Decision */
+            decision: string;
+            /** Evidence Trajectory Ids */
+            evidence_trajectory_ids?: number[];
+            /** Finished At */
+            finished_at?: string | null;
+            /** Hypothesis */
+            hypothesis: string;
+            /** Id */
+            id: string;
+            /** L1 Gate Report */
+            l1_gate_report?: {
+                [key: string]: unknown;
+            } | null;
+            /** L2 Gate Report */
+            l2_gate_report?: {
+                [key: string]: unknown;
+            } | null;
+            /** Project Id */
+            project_id: string;
+            /** Proposal Id */
+            proposal_id?: string | null;
+            /** Reject Reason */
+            reject_reason?: string | null;
+            /** Round Number */
+            round_number: number;
+            /** Run Id */
+            run_id: string;
+            /** Signal Kind */
+            signal_kind: string;
+            /**
+             * Started At
+             * Format: date-time
+             */
+            started_at: string;
+            /**
+             * Target
+             * @default
+             */
+            target: string;
+            /**
+             * Target Kind
+             * @default override
+             */
+            target_kind: string;
+        };
+        /** EvolutionRunTrigger */
+        EvolutionRunTrigger: {
+            /** Max Eval Cases */
+            max_eval_cases?: number | null;
+            /** Max Rounds */
+            max_rounds?: number | null;
+        };
+        /** EvolutionRunView */
+        EvolutionRunView: {
+            /** Checkpoint After Trajectory Id */
+            checkpoint_after_trajectory_id?: number | null;
+            /** Checkpoint Before Trajectory Id */
+            checkpoint_before_trajectory_id?: number | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Created By */
+            created_by?: string | null;
+            /** Diagnosis Trajectory Ids */
+            diagnosis_trajectory_ids?: number[];
+            /** Error */
+            error?: string | null;
+            /** Finished At */
+            finished_at?: string | null;
+            /** Frozen Max Trajectory Id */
+            frozen_max_trajectory_id?: number | null;
+            /** Id */
+            id: string;
+            /** Max Eval Cases */
+            max_eval_cases: number;
+            /** Max Rounds */
+            max_rounds: number;
+            /** Project Id */
+            project_id: string;
+            /** Proposal Id */
+            proposal_id?: string | null;
+            /** Reserve Trajectory Ids */
+            reserve_trajectory_ids?: number[];
+            /** Rounds */
+            rounds?: components["schemas"]["EvolutionRoundView"][];
+            /** Rounds Completed */
+            rounds_completed: number;
+            /** Signal Summary */
+            signal_summary?: {
+                [key: string]: unknown;
+            };
+            /**
+             * Started At
+             * Format: date-time
+             */
+            started_at: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "running" | "accepted" | "incomplete";
+            /** Stop Reason */
+            stop_reason?: string | null;
+            /** Trigger Type */
+            trigger_type: string;
         };
         /** ExecuteInput */
         ExecuteInput: {
@@ -3749,6 +3972,105 @@ export interface operations {
             };
         };
     };
+    list_evolution_runs_api_v1_evolution_runs_get: {
+        parameters: {
+            query?: {
+                project?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EvolutionRunView"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    trigger_evolution_run_api_v1_evolution_runs_post: {
+        parameters: {
+            query?: {
+                project?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["EvolutionRunTrigger"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EvolutionRunView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_evolution_run_api_v1_evolution_runs__run_id__get: {
+        parameters: {
+            query?: {
+                project?: string | null;
+            };
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EvolutionRunView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     read_filters_api_v1_filters_get: {
         parameters: {
             query?: never;
@@ -4334,6 +4656,72 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_project_evolution_config_api_v1_projects__project_id__evolution_config_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EvolutionConfigView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    put_project_evolution_config_api_v1_projects__project_id__evolution_config_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EvolutionConfigUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EvolutionConfigView"];
+                };
             };
             /** @description Validation Error */
             422: {

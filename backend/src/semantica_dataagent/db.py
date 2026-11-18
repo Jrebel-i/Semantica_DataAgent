@@ -418,3 +418,92 @@ class InteractionTrajectory(Base):
     )
     recorded_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC))
     updated_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC))
+
+
+class EvolutionCheckpoint(Base):
+    """Per-project trajectory checkpoint advanced only on accepted evolution runs."""
+
+    __tablename__ = "evolution_checkpoints"
+
+    project_id: Mapped[str] = mapped_column(primary_key=True)
+    checkpoint_trajectory_id: Mapped[int | None]
+    checkpoint_at: Mapped[datetime | None]
+    last_run_id: Mapped[str | None]
+    updated_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC))
+
+
+class EvolutionRun(Base):
+    """Persisted state machine record for one autonomous or manual evolution run."""
+
+    __tablename__ = "evolution_runs"
+    __table_args__ = (
+        Index(
+            "ix_evolution_runs_project_created",
+            "project_id",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(primary_key=True, default=lambda: uuid.uuid4().hex)
+    project_id: Mapped[str] = mapped_column(default="default", server_default="default")
+    trigger_type: Mapped[str] = mapped_column(default="manual", server_default="manual")
+    status: Mapped[str] = mapped_column(default="running", server_default="running")
+    checkpoint_before_trajectory_id: Mapped[int | None]
+    checkpoint_after_trajectory_id: Mapped[int | None]
+    frozen_max_trajectory_id: Mapped[int | None]
+    diagnosis_trajectory_ids: Mapped[str] = mapped_column(
+        default="[]", server_default="[]"
+    )
+    reserve_trajectory_ids: Mapped[str] = mapped_column(
+        default="[]", server_default="[]"
+    )
+    signal_summary: Mapped[str] = mapped_column(default="{}", server_default="{}")
+    max_rounds: Mapped[int] = mapped_column(default=3, server_default="3")
+    max_eval_cases: Mapped[int] = mapped_column(default=20, server_default="20")
+    rounds_completed: Mapped[int] = mapped_column(default=0, server_default="0")
+    stop_reason: Mapped[str | None]
+    error: Mapped[str | None]
+    proposal_id: Mapped[str | None]
+    created_by: Mapped[str | None]
+    started_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC))
+    finished_at: Mapped[datetime | None]
+    created_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC))
+
+
+class EvolutionRound(Base):
+    """Single-hypothesis round record within an evolution run."""
+
+    __tablename__ = "evolution_rounds"
+    __table_args__ = (
+        Index(
+            "ix_evolution_rounds_run_round",
+            "run_id",
+            "round_number",
+        ),
+        Index(
+            "ix_evolution_rounds_project",
+            "project_id",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(primary_key=True, default=lambda: uuid.uuid4().hex)
+    run_id: Mapped[str]
+    project_id: Mapped[str] = mapped_column(default="default", server_default="default")
+    round_number: Mapped[int]
+    signal_kind: Mapped[str]
+    hypothesis: Mapped[str]
+    evidence_trajectory_ids: Mapped[str] = mapped_column(
+        default="[]", server_default="[]"
+    )
+    target: Mapped[str] = mapped_column(default="", server_default="")
+    target_kind: Mapped[str] = mapped_column(
+        default="override", server_default="override"
+    )
+    candidate_change: Mapped[str] = mapped_column(default="{}", server_default="{}")
+    l1_gate_report: Mapped[str | None]
+    l2_gate_report: Mapped[str | None]
+    decision: Mapped[str] = mapped_column(default="running", server_default="running")
+    reject_reason: Mapped[str | None]
+    proposal_id: Mapped[str | None]
+    started_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC))
+    finished_at: Mapped[datetime | None]

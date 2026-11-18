@@ -154,6 +154,12 @@ def _mcp_eval_lock():
         pass
 
 
+def _evolution_scheduler_lock():
+    from semantica_dataagent import evolution_scheduler
+
+    evolution_scheduler.evolution_scheduler.wake()
+
+
 @pytest.mark.parametrize(
     "name",
     [
@@ -161,6 +167,7 @@ def _mcp_eval_lock():
         "pending_builds",
         "scheduler",
         "pull_scheduler",
+        "evolution_scheduler",
         "embedding_limiter",
         "project_deletion",
         "pull_service",
@@ -193,6 +200,11 @@ def test_forked_child_resets_other_process_global_locks(name):
 
         lock = scheduler.pull_scheduler._condition
         action = scheduler.pull_scheduler.due_projects
+    elif name == "evolution_scheduler":
+        from semantica_dataagent import evolution_scheduler
+
+        lock = evolution_scheduler.evolution_scheduler._condition
+        action = _evolution_scheduler_lock
     elif name == "embedding_limiter":
         from semantica_dataagent.embedding_client import _LIMITER
 
