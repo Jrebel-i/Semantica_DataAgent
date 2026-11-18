@@ -38,6 +38,7 @@ codex = "semantica_dataagent.codex_runner:CodexRunner"
 
 [project.entry-points."semantica_dataagent.pullers"]
 dtb = "semantica_dataagent.dtb_puller:DtbPuller"
+ossie = "semantica_dataagent.dtb_ossie:DtbOssiePuller"
 
 [project.scripts]
 semantica-dataagent = "semantica_dataagent.cli:main"

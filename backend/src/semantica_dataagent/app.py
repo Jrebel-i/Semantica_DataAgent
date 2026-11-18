@@ -1245,29 +1245,39 @@ def update_plugin(
                 for error in errors
             ],
         )
-    parameters = dict(body.parameters)
-    token = (
-        parameters.pop("token", None)
-        if (category, plugin_id) == ("puller", "dtb")
-        else None
+    from .project_api import (
+        PULL_TOKEN_KEYS,
+        PULLER_ADAPTER_IDS,
+        PULLER_MUTUAL_EXCLUSION_DETAIL,
     )
+
+    parameters = dict(body.parameters)
+    is_puller = category == "puller" and plugin_id in PULLER_ADAPTER_IDS
+    token = parameters.pop("token", None) if is_puller else None
+    if is_puller and body.enabled:
+        for sibling in PULLER_ADAPTER_IDS:
+            if sibling == plugin_id:
+                continue
+            cfg = project_context.plugin_config("puller", sibling)
+            if cfg and cfg[0]:
+                raise HTTPException(422, PULLER_MUTUAL_EXCLUSION_DETAIL)
     with sessions().begin() as db:
-        if token:
+        if is_puller and token is not None and token != "***":
             from .crypto import encrypt
 
             project_context.set_plugin_secret(
                 db,
                 project_context.DEFAULT_PROJECT_ID,
-                "puller.dtb.token",
-                encrypt(token),
+                PULL_TOKEN_KEYS[plugin_id],
+                encrypt(token) if token else None,
             )
         project_context.upsert_plugin_config(
             db, category, plugin_id, body.enabled, parameters
         )
-    if (category, plugin_id) == ("puller", "dtb"):
-        pull_scheduler.configure(
-            parameters.get("interval_seconds", 0) if body.enabled else 0
-        )
+    if is_puller:
+        from .pull_service import interval as pull_interval
+
+        pull_scheduler.configure(pull_interval())
     return PluginView(
         category=category,
         id=plugin.id,
@@ -1582,17 +1592,28 @@ class PullView(BaseModel):
     model_config = {"from_attributes": True}
 
 
-@app.post("/api/v1/pulls/dtb", response_model=PullView)
-def trigger_pull(
-    _: Annotated[str, Depends(admin)], project: Annotated[str | None, Query()] = None
-):
+def _trigger_named_pull(project: str | None, *, puller_id: str) -> PullView:
     from .pull_service import run_pull
 
     project_id = project_context.resolve_project_id(project)
     try:
-        return run_pull(project_id)
+        return run_pull(project_id, puller_id=puller_id)
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
+
+
+@app.post("/api/v1/pulls/dtb", response_model=PullView)
+def trigger_pull(
+    _: Annotated[str, Depends(admin)], project: Annotated[str | None, Query()] = None
+):
+    return _trigger_named_pull(project, puller_id="dtb")
+
+
+@app.post("/api/v1/pulls/ossie", response_model=PullView)
+def trigger_ossie_pull(
+    _: Annotated[str, Depends(admin)], project: Annotated[str | None, Query()] = None
+):
+    return _trigger_named_pull(project, puller_id="ossie")
 
 
 @app.get("/api/v1/pulls", response_model=list[PullView])

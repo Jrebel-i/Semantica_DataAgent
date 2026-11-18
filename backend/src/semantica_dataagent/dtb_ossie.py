@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import json
 import re
+import tempfile
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from functools import cache
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import sqlglot
 from jsonschema import Draft202012Validator
@@ -1153,3 +1154,111 @@ def write_dtb_ossie_output(
         )
         written["dimension_values"] = dim_target
     return written
+
+
+class DtbOssiePuller:
+    """Pull DTB metadata and dimensions and convert them into Ossie outputs."""
+
+    id = "ossie"
+    version = "1"
+    display_name = "DTB 拉取为 Ossie"
+    parameters_schema: ClassVar[dict] = {
+        "type": "object",
+        "properties": {
+            "url": {"type": "string", "format": "uri", "title": "DTB 服务地址"},
+            "token": {"type": "string", "format": "password", "title": "DTB 访问凭据"},
+            "interval_seconds": {
+                "type": "integer",
+                "minimum": 0,
+                "title": "自动拉取间隔（秒）",
+            },
+            "layer": {
+                "type": "string",
+                "enum": ["dimensions"],
+                "title": "拉取层级",
+            },
+            "max_tables": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 100,
+                "title": "最大拉取表数",
+            },
+            "model_name": {
+                "type": "string",
+                "pattern": r"^[A-Za-z0-9_][A-Za-z0-9_-]{0,63}$",
+                "default": "dtb_semantic_model",
+                "title": "语义模型名称",
+            },
+            "low_cardinality_limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 500,
+                "default": 20,
+                "title": "低基数枚举阈值",
+            },
+            "sample_limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 50,
+                "default": 5,
+                "title": "高基数抽样数量",
+            },
+        },
+        "additionalProperties": False,
+    }
+
+    def fetch(
+        self,
+        client,
+        base_url: str,
+        token: str,
+        parameters: dict[str, Any] | None = None,
+        *,
+        ossie_path: str = "ossie",
+    ) -> tuple[dict[str, bytes], dict[str, Any]]:
+        """Pull DTB snapshot & dimensions and convert them to Ossie + dimension files."""
+        from .dtb_puller import DtbPuller
+
+        params = parameters or {}
+        model_name = str(params.get("model_name") or "dtb_semantic_model")
+        low_limit = int(params.get("low_cardinality_limit", 20))
+        sample_limit = int(params.get("sample_limit", 5))
+        rel_ossie = safe_name(ossie_path).as_posix()
+
+        dtb_scope = {k: params[k] for k in ("layer", "max_tables") if k in params}
+        raw_files, dtb_counts = DtbPuller().fetch(
+            client, base_url, token, dtb_scope or None
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for name, content in raw_files.items():
+                dest = root / "dtb" / "snapshot" / name
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_bytes(content)
+            converted = convert_dtb_to_ossie(
+                root,
+                snapshot_path="dtb",
+                dimensions_path="dtb/snapshot/dimensions",
+                model_name=model_name,
+                format="yaml",
+                low_cardinality_limit=low_limit,
+                sample_limit=sample_limit,
+            )
+
+        out_files: dict[str, bytes] = {
+            f"{rel_ossie}/{model_name}.yaml": converted.ossie_content.encode("utf-8")
+        }
+        if converted.dimension_values:
+            out_files["dimension_values.json"] = (
+                json.dumps(converted.dimension_values, ensure_ascii=False, indent=2)
+                + "\n"
+            ).encode("utf-8")
+
+        counts = {
+            **dtb_counts,
+            "datasets": converted.stats.get("datasets", 0),
+            "relationships": converted.stats.get("relationships", 0),
+            "dimension_values": converted.stats.get("dimension_values", 0),
+        }
+        return out_files, counts
