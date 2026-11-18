@@ -90,6 +90,16 @@ _INJECTION_PATTERNS: tuple[re.Pattern[str], ...] = (
 )
 
 
+def scrub_untrusted_text(value: str) -> str:
+    """Redact credentials/secrets and neutralize prompt-injection directives in text."""
+    cleaned = str(value or "")
+    for _, pattern in _SECRET_PATTERNS:
+        cleaned = pattern.sub("[REDACTED]", cleaned)
+    for pattern in _INJECTION_PATTERNS:
+        cleaned = pattern.sub("[FILTERED]", cleaned)
+    return cleaned
+
+
 @dataclass(frozen=True)
 class OverrideApplyResult:
     """Result of overlaying structured semantic overrides onto build records."""

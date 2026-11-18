@@ -88,6 +88,75 @@
       },
       "Approval": {
         "properties": {
+          "caliber": {
+            "anyOf": [
+              {
+                "maxLength": 5000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Caliber"
+          },
+          "category": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Category"
+          },
+          "dialect": {
+            "anyOf": [
+              {
+                "enum": [
+                  "hive",
+                  "spark",
+                  "doris"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dialect"
+          },
+          "expected_fields": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Fields"
+          },
+          "expected_tables": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Tables"
+          },
           "patch": {
             "anyOf": [
               {
@@ -102,6 +171,30 @@
             ],
             "title": "Patch"
           },
+          "question": {
+            "anyOf": [
+              {
+                "maxLength": 20000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Question"
+          },
+          "reference_sql": {
+            "anyOf": [
+              {
+                "maxLength": 20000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reference Sql"
+          },
           "structured_patch": {
             "anyOf": [
               {
@@ -113,6 +206,17 @@
               }
             ],
             "title": "Structured Patch"
+          },
+          "turn_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Turn Id"
           }
         },
         "title": "Approval",
@@ -830,6 +934,201 @@
         "title": "DocumentView",
         "type": "object"
       },
+      "DraftCorrectionRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "category": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Category"
+          },
+          "conversation_id": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Conversation Id"
+          },
+          "description": {
+            "maxLength": 10000,
+            "minLength": 1,
+            "pattern": "\\S",
+            "title": "Description",
+            "type": "string"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "project": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project"
+          },
+          "provider_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider Id"
+          },
+          "target": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target"
+          },
+          "turn_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Turn Id"
+          }
+        },
+        "required": [
+          "description"
+        ],
+        "title": "DraftCorrectionRequest",
+        "type": "object"
+      },
+      "DraftCorrectionResponse": {
+        "properties": {
+          "caliber": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Caliber"
+          },
+          "diff": {
+            "title": "Diff",
+            "type": "string"
+          },
+          "gate_report": {
+            "additionalProperties": true,
+            "title": "Gate Report",
+            "type": "object"
+          },
+          "patch": {
+            "title": "Patch",
+            "type": "string"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "reference_sql": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reference Sql"
+          },
+          "resolved_path": {
+            "title": "Resolved Path",
+            "type": "string"
+          },
+          "source_generated": {
+            "default": false,
+            "title": "Source Generated",
+            "type": "boolean"
+          },
+          "structured_patch": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Structured Patch"
+          },
+          "target": {
+            "title": "Target",
+            "type": "string"
+          },
+          "target_kind": {
+            "enum": [
+              "document",
+              "override",
+              "ossie"
+            ],
+            "title": "Target Kind",
+            "type": "string"
+          },
+          "used_llm": {
+            "default": false,
+            "title": "Used Llm",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "target",
+          "target_kind",
+          "patch",
+          "diff",
+          "gate_report",
+          "resolved_path",
+          "reason"
+        ],
+        "title": "DraftCorrectionResponse",
+        "type": "object"
+      },
       "DtbTokenInput": {
         "properties": {
           "token": {
@@ -893,6 +1192,442 @@
           "ref"
         ],
         "title": "EdgeView",
+        "type": "object"
+      },
+      "EvalQuestionCreate": {
+        "additionalProperties": false,
+        "properties": {
+          "answer_confirmed": {
+            "default": true,
+            "title": "Answer Confirmed",
+            "type": "boolean"
+          },
+          "caliber": {
+            "maxLength": 20000,
+            "minLength": 1,
+            "pattern": "\\S",
+            "title": "Caliber",
+            "type": "string"
+          },
+          "category": {
+            "default": "未分类",
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Category",
+            "type": "string"
+          },
+          "clarify": {
+            "default": false,
+            "title": "Clarify",
+            "type": "boolean"
+          },
+          "dialect": {
+            "default": "hive",
+            "enum": [
+              "hive",
+              "spark",
+              "doris"
+            ],
+            "title": "Dialect",
+            "type": "string"
+          },
+          "expected_fields": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Fields"
+          },
+          "expected_tables": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Tables"
+          },
+          "id": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Id"
+          },
+          "notes": {
+            "default": "",
+            "maxLength": 5000,
+            "title": "Notes",
+            "type": "string"
+          },
+          "question": {
+            "maxLength": 20000,
+            "minLength": 1,
+            "pattern": "\\S",
+            "title": "Question",
+            "type": "string"
+          },
+          "reference_sql": {
+            "maxLength": 20000,
+            "minLength": 1,
+            "pattern": "\\S",
+            "title": "Reference Sql",
+            "type": "string"
+          },
+          "split": {
+            "anyOf": [
+              {
+                "enum": [
+                  "dev",
+                  "holdout"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Split"
+          }
+        },
+        "required": [
+          "question",
+          "caliber",
+          "reference_sql"
+        ],
+        "title": "EvalQuestionCreate",
+        "type": "object"
+      },
+      "EvalQuestionPatch": {
+        "additionalProperties": false,
+        "properties": {
+          "answer_confirmed": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Answer Confirmed"
+          },
+          "caliber": {
+            "anyOf": [
+              {
+                "maxLength": 20000,
+                "minLength": 1,
+                "pattern": "\\S",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Caliber"
+          },
+          "category": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Category"
+          },
+          "clarify": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Clarify"
+          },
+          "dialect": {
+            "anyOf": [
+              {
+                "enum": [
+                  "hive",
+                  "spark",
+                  "doris"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dialect"
+          },
+          "expected_fields": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Fields"
+          },
+          "expected_tables": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Tables"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "maxLength": 5000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
+          },
+          "question": {
+            "anyOf": [
+              {
+                "maxLength": 20000,
+                "minLength": 1,
+                "pattern": "\\S",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Question"
+          },
+          "reference_sql": {
+            "anyOf": [
+              {
+                "maxLength": 20000,
+                "minLength": 1,
+                "pattern": "\\S",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reference Sql"
+          },
+          "split": {
+            "anyOf": [
+              {
+                "enum": [
+                  "dev",
+                  "holdout"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Split"
+          }
+        },
+        "title": "EvalQuestionPatch",
+        "type": "object"
+      },
+      "EvalQuestionView": {
+        "properties": {
+          "answer_confirmed": {
+            "default": false,
+            "title": "Answer Confirmed",
+            "type": "boolean"
+          },
+          "caliber": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Caliber"
+          },
+          "category": {
+            "default": "未分类",
+            "title": "Category",
+            "type": "string"
+          },
+          "clarify": {
+            "default": false,
+            "title": "Clarify",
+            "type": "boolean"
+          },
+          "conversation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Conversation Id"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "created_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created By"
+          },
+          "dialect": {
+            "default": "hive",
+            "title": "Dialect",
+            "type": "string"
+          },
+          "expected_fields": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Expected Fields",
+            "type": "array"
+          },
+          "expected_tables": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Expected Tables",
+            "type": "array"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "notes": {
+            "default": "",
+            "title": "Notes",
+            "type": "string"
+          },
+          "proposal_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Proposal Id"
+          },
+          "question": {
+            "title": "Question",
+            "type": "string"
+          },
+          "redacted": {
+            "default": false,
+            "title": "Redacted",
+            "type": "boolean"
+          },
+          "reference_sql": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reference Sql"
+          },
+          "source": {
+            "default": "manual",
+            "enum": [
+              "manual",
+              "feedback",
+              "correction"
+            ],
+            "title": "Source",
+            "type": "string"
+          },
+          "split": {
+            "default": "dev",
+            "enum": [
+              "dev",
+              "holdout"
+            ],
+            "title": "Split",
+            "type": "string"
+          },
+          "turn_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Turn Id"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "question",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "EvalQuestionView",
         "type": "object"
       },
       "EventView": {
@@ -1880,11 +2615,103 @@
       },
       "ProposalCreate": {
         "properties": {
+          "caliber": {
+            "anyOf": [
+              {
+                "maxLength": 5000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Caliber"
+          },
+          "category": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Category"
+          },
+          "conversation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Conversation Id"
+          },
+          "dialect": {
+            "anyOf": [
+              {
+                "enum": [
+                  "hive",
+                  "spark",
+                  "doris"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dialect"
+          },
+          "expected_fields": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Fields"
+          },
+          "expected_tables": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Tables"
+          },
           "patch": {
             "default": "",
             "maxLength": 20000,
             "title": "Patch",
             "type": "string"
+          },
+          "question": {
+            "anyOf": [
+              {
+                "maxLength": 20000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Question"
           },
           "reason": {
             "maxLength": 20000,
@@ -1892,6 +2719,18 @@
             "pattern": "\\S",
             "title": "Reason",
             "type": "string"
+          },
+          "reference_sql": {
+            "anyOf": [
+              {
+                "maxLength": 20000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reference Sql"
           },
           "source": {
             "anyOf": [
@@ -1943,6 +2782,17 @@
               }
             ],
             "title": "Target Kind"
+          },
+          "turn_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Turn Id"
           }
         },
         "required": [
@@ -3345,6 +4195,143 @@
         "title": "TokenProjectView",
         "type": "object"
       },
+      "TurnFeedbackRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "caliber": {
+            "anyOf": [
+              {
+                "maxLength": 5000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Caliber"
+          },
+          "category": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Category"
+          },
+          "dialect": {
+            "anyOf": [
+              {
+                "enum": [
+                  "hive",
+                  "spark",
+                  "doris"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dialect"
+          },
+          "expected_fields": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Fields"
+          },
+          "expected_tables": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Tables"
+          },
+          "notes": {
+            "default": "",
+            "maxLength": 5000,
+            "title": "Notes",
+            "type": "string"
+          },
+          "rating": {
+            "const": "accurate",
+            "default": "accurate",
+            "title": "Rating",
+            "type": "string"
+          },
+          "reference_sql": {
+            "anyOf": [
+              {
+                "maxLength": 20000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reference Sql"
+          }
+        },
+        "title": "TurnFeedbackRequest",
+        "type": "object"
+      },
+      "TurnFeedbackView": {
+        "properties": {
+          "answer_confirmed": {
+            "title": "Answer Confirmed",
+            "type": "boolean"
+          },
+          "eval_question": {
+            "$ref": "#/components/schemas/EvalQuestionView"
+          },
+          "question_id": {
+            "title": "Question Id",
+            "type": "string"
+          },
+          "rating": {
+            "const": "accurate",
+            "default": "accurate",
+            "title": "Rating",
+            "type": "string"
+          },
+          "split": {
+            "enum": [
+              "dev",
+              "holdout"
+            ],
+            "title": "Split",
+            "type": "string"
+          }
+        },
+        "required": [
+          "question_id",
+          "answer_confirmed",
+          "split",
+          "eval_question"
+        ],
+        "title": "TurnFeedbackView",
+        "type": "object"
+      },
       "TurnView": {
         "properties": {
           "answer": {
@@ -3381,6 +4368,28 @@
             ],
             "title": "Error"
           },
+          "eval_answer_confirmed": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Eval Answer Confirmed"
+          },
+          "eval_question_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Eval Question Id"
+          },
           "events": {
             "default": [],
             "items": {
@@ -3388,6 +4397,11 @@
             },
             "title": "Events",
             "type": "array"
+          },
+          "feedback_accurate": {
+            "default": false,
+            "title": "Feedback Accurate",
+            "type": "boolean"
           },
           "finished_at": {
             "anyOf": [
@@ -3400,6 +4414,11 @@
               }
             ],
             "title": "Finished At"
+          },
+          "has_validated_sql": {
+            "default": false,
+            "title": "Has Validated Sql",
+            "type": "boolean"
           },
           "id": {
             "title": "Id",
@@ -4278,6 +5297,76 @@
         "summary": "End Conversation"
       }
     },
+    "/api/v1/conversations/{conversation_id}/turns/{turn_id}/feedback": {
+      "post": {
+        "operationId": "record_turn_feedback_api_v1_conversations__conversation_id__turns__turn_id__feedback_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "turn_id",
+            "required": true,
+            "schema": {
+              "title": "Turn Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/TurnFeedbackRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TurnFeedbackView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Record Turn Feedback"
+      }
+    },
     "/api/v1/conversations/{conversation_id}/turns/{turn_id}/queries/{query_id}/execute": {
       "post": {
         "operationId": "confirm_query_api_v1_conversations__conversation_id__turns__turn_id__queries__query_id__execute_post",
@@ -4448,6 +5537,67 @@
           }
         ],
         "summary": "Create Proposal"
+      }
+    },
+    "/api/v1/corrections/draft": {
+      "post": {
+        "operationId": "draft_proposal_api_v1_corrections_draft_post",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "project",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Project"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DraftCorrectionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DraftCorrectionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Draft Proposal"
       }
     },
     "/api/v1/corrections/{proposal_id}": {
@@ -4781,6 +5931,314 @@
           }
         ],
         "summary": "Document Route"
+      }
+    },
+    "/api/v1/eval-questions": {
+      "get": {
+        "operationId": "list_eval_questions_api_v1_eval_questions_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "split",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "dev",
+                    "holdout"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Split"
+            }
+          },
+          {
+            "in": "query",
+            "name": "answer_confirmed",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Answer Confirmed"
+            }
+          },
+          {
+            "in": "query",
+            "name": "category",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Category"
+            }
+          },
+          {
+            "in": "query",
+            "name": "source",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "manual",
+                    "feedback",
+                    "correction"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Source"
+            }
+          },
+          {
+            "in": "query",
+            "name": "project",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Project"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/EvalQuestionView"
+                  },
+                  "title": "Response List Eval Questions Api V1 Eval Questions Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Eval Questions"
+      },
+      "post": {
+        "operationId": "create_eval_question_api_v1_eval_questions_post",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "project",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Project"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EvalQuestionCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvalQuestionView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Eval Question"
+      }
+    },
+    "/api/v1/eval-questions/{question_id}": {
+      "delete": {
+        "operationId": "delete_eval_question_api_v1_eval_questions__question_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "question_id",
+            "required": true,
+            "schema": {
+              "title": "Question Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "project",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Project"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Delete Eval Question"
+      },
+      "patch": {
+        "operationId": "update_eval_question_api_v1_eval_questions__question_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "question_id",
+            "required": true,
+            "schema": {
+              "title": "Question Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "project",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Project"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EvalQuestionPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvalQuestionView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Update Eval Question"
       }
     },
     "/api/v1/filters": {

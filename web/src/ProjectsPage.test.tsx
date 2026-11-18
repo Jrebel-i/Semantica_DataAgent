@@ -763,3 +763,66 @@ test("exports Ossie YAML and JSON from active warehouse project detail and surfa
   fireEvent.click(yamlBtn);
   expect(await screen.findByText("当前知识代暂无可导出的物理表")).toBeTruthy();
 });
+
+test("admin can view and toggle correction and evolution review policy switches", async () => {
+  const requests: { url: string; method: string; body: unknown }[] = [];
+  let policy = {
+    correction_require_review: true,
+    evolution_require_review: false,
+  };
+  let failPut = false;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string, options?: RequestInit) => {
+      if (url === "/api/v1/projects") return Response.json([projectRow()]);
+      if (url === "/api/v1/projects/default/adapters")
+        return Response.json(adapterRows());
+      if (url === "/api/v1/projects/default/members") return Response.json([]);
+      if (url === "/api/v1/users") return Response.json([]);
+      if (
+        url === "/api/v1/projects/default/evolution-policy" &&
+        options?.method === "PUT"
+      ) {
+        const body = JSON.parse(String(options.body));
+        requests.push({ url, method: "PUT", body });
+        if (failPut) {
+          return Response.json({ detail: "项目已归档" }, { status: 409 });
+        }
+        policy = { ...policy, ...body };
+        return Response.json(policy);
+      }
+      if (url === "/api/v1/projects/default/evolution-policy")
+        return Response.json(policy);
+      return Response.json({});
+    }),
+  );
+
+  render(<ProjectsPage token="admin" messages={getMessages("zh")} />);
+  fireEvent.click(await screen.findByRole("button", { name: "项目成员" }));
+
+  const corrSwitch = await screen.findByRole("switch", {
+    name: "人工纠错需要审核",
+  });
+  const evoSwitch = screen.getByRole("switch", {
+    name: "知识演化需要审核",
+  });
+  expect(corrSwitch.getAttribute("aria-checked")).toBe("true");
+  expect(evoSwitch.getAttribute("aria-checked")).toBe("false");
+
+  fireEvent.click(evoSwitch);
+  await waitFor(() =>
+    expect(requests).toContainEqual({
+      url: "/api/v1/projects/default/evolution-policy",
+      method: "PUT",
+      body: { evolution_require_review: true },
+    }),
+  );
+  await waitFor(() =>
+    expect(evoSwitch.getAttribute("aria-checked")).toBe("true"),
+  );
+
+  failPut = true;
+  fireEvent.click(corrSwitch);
+  expect(await screen.findByText("项目已归档")).toBeTruthy();
+  expect(corrSwitch.getAttribute("aria-checked")).toBe("true");
+});

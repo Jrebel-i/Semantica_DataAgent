@@ -24,6 +24,22 @@ import {
 } from "./turnEvents";
 import type { Clarification, QueryPlan, QueryResult, Turn } from "./types";
 
+function hasLocalValidatedSql(turn: Turn, sqlCount: number): boolean {
+  if (sqlCount === 0) return false;
+  return (turn.events ?? []).some((event) => {
+    if (event.type !== "tool_end" || !event.data) return false;
+    const data = event.data as Record<string, unknown>;
+    const name = String(data.name ?? "")
+      .split("__")
+      .pop();
+    return (
+      name === "validate_sql" &&
+      !data.is_error &&
+      String(data.summary ?? "").includes("status=pass")
+    );
+  });
+}
+
 export function TurnBlock({
   turn,
   messages,
@@ -36,6 +52,10 @@ export function TurnBlock({
   onCopyLink,
   executing,
   expiredPlans,
+  onMarkAccurate,
+  onOpenCorrection,
+  markingAccurate = false,
+  actionsDisabled = false,
 }: {
   turn: Turn;
   messages: Messages;
@@ -51,6 +71,10 @@ export function TurnBlock({
   onCopyLink: (id: string) => void;
   executing: boolean;
   expiredPlans: string[];
+  onMarkAccurate?: (turn: Turn) => void;
+  onOpenCorrection?: (turn: Turn) => void;
+  markingAccurate?: boolean;
+  actionsDisabled?: boolean;
 }) {
   const plan = queryEvent<QueryPlan>(turn.events ?? [], "query_plan");
   const result = queryEvent<QueryResult>(turn.events ?? [], "query_result");
@@ -169,6 +193,49 @@ export function TurnBlock({
             disabled={false}
             onSelect={onClarify}
           />
+          {turn.status !== "running" &&
+            (onMarkAccurate || onOpenCorrection) && (
+              <div className="turn-actions">
+                {onMarkAccurate && (
+                  <Button
+                    size="small"
+                    autoInsertSpace={false}
+                    type={turn.feedback_accurate ? "primary" : "default"}
+                    loading={markingAccurate}
+                    disabled={
+                      actionsDisabled ||
+                      markingAccurate ||
+                      Boolean(turn.feedback_accurate) ||
+                      !(
+                        turn.has_validated_sql ||
+                        hasLocalValidatedSql(turn, sql.length)
+                      )
+                    }
+                    title={
+                      turn.has_validated_sql ||
+                      hasLocalValidatedSql(turn, sql.length)
+                        ? undefined
+                        : messages.turnAccurateNeedsSql
+                    }
+                    onClick={() => onMarkAccurate(turn)}
+                  >
+                    {turn.feedback_accurate
+                      ? messages.turnAccurateDone
+                      : messages.turnAccurateBtn}
+                  </Button>
+                )}
+                {onOpenCorrection && (
+                  <Button
+                    size="small"
+                    autoInsertSpace={false}
+                    disabled={actionsDisabled}
+                    onClick={() => onOpenCorrection(turn)}
+                  >
+                    {messages.turnCorrectBtn}
+                  </Button>
+                )}
+              </div>
+            )}
         </div>
       </div>
     </article>

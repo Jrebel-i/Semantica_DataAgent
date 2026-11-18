@@ -232,15 +232,20 @@ def resolve_project_scope(
     return _resolve_project_context(project_id, requester, allow_frozen=allow_frozen)
 
 
+def is_project_admin(scope: ProjectContext, requester: Requester) -> bool:
+    """Return True when the caller is a system admin or an admin of this project."""
+    if requester.role == "admin":
+        return True
+    with sessions()() as db:
+        member = db.get(ProjectMember, (scope.project_id, requester.id))
+        return member is not None and member.role == "admin"
+
+
 def _require_project_admin(
     scope: ProjectContext, requester: Requester
 ) -> ProjectContext:
-    if requester.role == "admin":
+    if is_project_admin(scope, requester):
         return scope
-    with sessions()() as db:
-        member = db.get(ProjectMember, (scope.project_id, requester.id))
-        if member is not None and member.role == "admin":
-            return scope
     raise HTTPException(status_code=403, detail="Project admin required")
 
 

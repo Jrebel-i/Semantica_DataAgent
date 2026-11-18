@@ -85,6 +85,10 @@ class TurnView(BaseModel):
     started_at: UtcDatetime
     finished_at: UtcDatetime | None
     events: list[EventView] = []
+    has_validated_sql: bool = False
+    feedback_accurate: bool = False
+    eval_question_id: str | None = None
+    eval_answer_confirmed: bool | None = None
 
 
 class ConversationView(BaseModel):
@@ -219,7 +223,12 @@ def _turn(
     events: list[TurnEvent],
     provider_id: str | None = None,
     model: str | None = None,
+    feedback_entry: dict | None = None,
 ) -> TurnView:
+    from .eval_questions import turn_validated_sql
+
+    sql_blocks = json.loads(row.sql)
+    validated = turn_validated_sql(sql_blocks, events)
     return TurnView(
         id=row.id,
         sequence=row.sequence,
@@ -229,12 +238,24 @@ def _turn(
         question=row.question,
         status=row.status,
         answer=row.answer,
-        sql=json.loads(row.sql),
+        sql=sql_blocks,
         citations=json.loads(row.citations),
         error=row.error,
         started_at=row.started_at,
         finished_at=row.finished_at,
         events=[_event(item) for item in events],
+        has_validated_sql=validated is not None,
+        feedback_accurate=feedback_entry is not None,
+        eval_question_id=(
+            str(feedback_entry["id"])
+            if feedback_entry and feedback_entry.get("id")
+            else None
+        ),
+        eval_answer_confirmed=(
+            bool(feedback_entry.get("answer_confirmed", False))
+            if feedback_entry is not None
+            else None
+        ),
     )
 
 
@@ -394,13 +415,22 @@ def conversation_detail(
             if turns
             else []
         )
+        from .eval_questions import list_feedback_turn_ids
+
         by_turn: dict[int, list[TurnEvent]] = {turn.id: [] for turn in turns}
         for event in events:
             by_turn[event.turn_id].append(event)
+        feedback_by_turn = list_feedback_turn_ids(row.project_id, conversation_id)
         return ConversationDetail(
             **_view(row, len(turns), _project_name(db, row.project_id)).model_dump(),
             turns=[
-                _turn(turn, by_turn[turn.id], row.provider_id, row.model)
+                _turn(
+                    turn,
+                    by_turn[turn.id],
+                    row.provider_id,
+                    row.model,
+                    feedback_entry=feedback_by_turn.get(turn.id),
+                )
                 for turn in turns
             ],
         )
