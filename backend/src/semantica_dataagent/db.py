@@ -156,6 +156,7 @@ class Build(Base):
     affected_files: Mapped[str | None]
     dimension_tables: Mapped[str | None]
     generated_files: Mapped[str | None]
+    stale_overrides: Mapped[str] = mapped_column(default="[]", server_default="[]")
 
 
 class PluginConfig(Base):
@@ -275,6 +276,10 @@ class CorrectionProposal(Base):
     project_id: Mapped[str] = mapped_column(default="default", server_default="default")
     owner_id: Mapped[str]
     conversation_id: Mapped[str | None]
+    source: Mapped[str] = mapped_column(default="manual", server_default="manual")
+    target_kind: Mapped[str] = mapped_column(
+        default="document", server_default="document"
+    )
     target: Mapped[str]
     patch: Mapped[str]
     original: Mapped[str]
@@ -282,12 +287,16 @@ class CorrectionProposal(Base):
     reason: Mapped[str]
     status: Mapped[str] = mapped_column(default="pending")
     original_patch: Mapped[str | None]
+    structured_patch: Mapped[str | None]
+    gate_report: Mapped[str | None]
     source_directory: Mapped[str | None]
     source_path: Mapped[str | None]
     reviewer_name: Mapped[str | None]
     commit_sha: Mapped[str | None]
+    revert_commit_sha: Mapped[str | None]
     reviewer_id: Mapped[str | None]
     reviewed_at: Mapped[datetime | None]
+    reverted_at: Mapped[datetime | None]
     created_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC))
 
 

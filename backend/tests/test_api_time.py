@@ -118,9 +118,11 @@ def test_rest_time_fields_have_utc_offset(client, monkeypatch):
                     original="old",
                     diff="diff",
                     reason="reason",
-                    status="approved",
+                    status="reverted",
                     reviewer_id=owner.id,
                     reviewed_at=datetime(2026, 1, 1),
+                    reverted_at=datetime(2026, 1, 2),
+                    revert_commit_sha="deadbeef",
                     created_at=datetime(2026, 1, 1),
                 ),
                 KnowledgeGap(

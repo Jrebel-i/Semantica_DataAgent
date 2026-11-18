@@ -101,6 +101,18 @@
               }
             ],
             "title": "Patch"
+          },
+          "structured_patch": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Structured Patch"
           }
         },
         "title": "Approval",
@@ -442,6 +454,13 @@
               }
             ],
             "title": "Source Commit"
+          },
+          "stale_overrides": {
+            "items": {
+              "$ref": "#/components/schemas/StaleOverrideWarning"
+            },
+            "title": "Stale Overrides",
+            "type": "array"
           },
           "started_at": {
             "format": "date-time",
@@ -900,6 +919,53 @@
         "title": "EventView",
         "type": "object"
       },
+      "EvolutionPolicyUpdate": {
+        "additionalProperties": false,
+        "properties": {
+          "correction_require_review": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Correction Require Review"
+          },
+          "evolution_require_review": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evolution Require Review"
+          }
+        },
+        "title": "EvolutionPolicyUpdate",
+        "type": "object"
+      },
+      "EvolutionPolicyView": {
+        "properties": {
+          "correction_require_review": {
+            "title": "Correction Require Review",
+            "type": "boolean"
+          },
+          "evolution_require_review": {
+            "title": "Evolution Require Review",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "correction_require_review",
+          "evolution_require_review"
+        ],
+        "title": "EvolutionPolicyView",
+        "type": "object"
+      },
       "ExecuteInput": {
         "properties": {
           "limit": {
@@ -960,6 +1026,17 @@
             ],
             "title": "Dimension Too Many"
           },
+          "instructions": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Instructions"
+          },
           "name": {
             "title": "Name",
             "type": "string"
@@ -967,6 +1044,20 @@
           "partition": {
             "title": "Partition",
             "type": "boolean"
+          },
+          "synonyms": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Synonyms"
           },
           "type": {
             "title": "Type",
@@ -1790,9 +1881,8 @@
       "ProposalCreate": {
         "properties": {
           "patch": {
+            "default": "",
             "maxLength": 20000,
-            "minLength": 1,
-            "pattern": "\\S",
             "title": "Patch",
             "type": "string"
           },
@@ -1803,17 +1893,60 @@
             "title": "Reason",
             "type": "string"
           },
+          "source": {
+            "anyOf": [
+              {
+                "enum": [
+                  "manual",
+                  "mcp",
+                  "evolution"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
+          },
+          "structured_patch": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Structured Patch"
+          },
           "target": {
             "maxLength": 20000,
             "minLength": 1,
             "pattern": "\\S",
             "title": "Target",
             "type": "string"
+          },
+          "target_kind": {
+            "anyOf": [
+              {
+                "enum": [
+                  "document",
+                  "override",
+                  "ossie"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Kind"
           }
         },
         "required": [
           "target",
-          "patch",
           "reason"
         ],
         "title": "ProposalCreate",
@@ -1852,6 +1985,18 @@
             "title": "Diff",
             "type": "string"
           },
+          "gate_report": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gate Report"
+          },
           "id": {
             "title": "Id",
             "type": "string"
@@ -1887,6 +2032,29 @@
             "title": "Reason",
             "type": "string"
           },
+          "revert_commit_sha": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revert Commit Sha"
+          },
+          "reverted_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reverted At"
+          },
           "reviewed_at": {
             "anyOf": [
               {
@@ -1910,12 +2078,34 @@
             ],
             "title": "Reviewer Id"
           },
+          "source": {
+            "default": "manual",
+            "title": "Source",
+            "type": "string"
+          },
           "status": {
             "title": "Status",
             "type": "string"
           },
+          "structured_patch": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Structured Patch"
+          },
           "target": {
             "title": "Target",
+            "type": "string"
+          },
+          "target_kind": {
+            "default": "document",
+            "title": "Target Kind",
             "type": "string"
           }
         },
@@ -2275,6 +2465,17 @@
       },
       "RelationshipLink": {
         "properties": {
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
           "from_columns": {
             "items": {
               "type": "string"
@@ -2285,6 +2486,17 @@
           "from_table": {
             "title": "From Table",
             "type": "string"
+          },
+          "instructions": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Instructions"
           },
           "name": {
             "title": "Name",
@@ -2682,6 +2894,29 @@
         "title": "SourceUpload",
         "type": "object"
       },
+      "StaleOverrideWarning": {
+        "properties": {
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "key",
+          "reason"
+        ],
+        "title": "StaleOverrideWarning",
+        "type": "object"
+      },
       "Status": {
         "properties": {
           "elapsed_ms": {
@@ -2826,6 +3061,17 @@
             "title": "Fields",
             "type": "array"
           },
+          "instructions": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Instructions"
+          },
           "name": {
             "title": "Name",
             "type": "string"
@@ -2847,6 +3093,20 @@
               }
             ],
             "title": "Relationships"
+          },
+          "synonyms": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Synonyms"
           }
         },
         "required": [
@@ -4387,6 +4647,66 @@
         "summary": "Reject"
       }
     },
+    "/api/v1/corrections/{proposal_id}/revert": {
+      "post": {
+        "operationId": "revert_api_v1_corrections__proposal_id__revert_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "proposal_id",
+            "required": true,
+            "schema": {
+              "title": "Proposal Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "project",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Project"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProposalView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Revert"
+      }
+    },
     "/api/v1/document": {
       "get": {
         "operationId": "document_route_api_v1_document_get",
@@ -5356,6 +5676,102 @@
           }
         ],
         "summary": "Delete Project Route"
+      }
+    },
+    "/api/v1/projects/{project_id}/evolution-policy": {
+      "get": {
+        "operationId": "get_project_evolution_policy_api_v1_projects__project_id__evolution_policy_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvolutionPolicyView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Project Evolution Policy"
+      },
+      "put": {
+        "operationId": "set_project_evolution_policy_api_v1_projects__project_id__evolution_policy_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EvolutionPolicyUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvolutionPolicyView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Set Project Evolution Policy"
       }
     },
     "/api/v1/projects/{project_id}/export/ossie": {
