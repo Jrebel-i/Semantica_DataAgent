@@ -146,14 +146,17 @@ export function CorrectionDraftDrawer({
     }
   }
 
+  const isStructuredOnly = Boolean(
+    sourceGenerated || targetInput.trim().startsWith("relationship:"),
+  );
   const showDirectFields =
-    (allowDirectEdit && !sourceGenerated) || draft !== null;
+    (allowDirectEdit && !isStructuredOnly) || draft !== null;
   const gatePassed = draft ? Boolean(draft.gate_report?.passed) : true;
   const canSubmit = draft
     ? gatePassed && Boolean(reason.trim())
     : Boolean(
         allowDirectEdit &&
-        !sourceGenerated &&
+        !isStructuredOnly &&
         targetInput.trim() &&
         patch.trim() &&
         reason.trim(),

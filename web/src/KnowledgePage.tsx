@@ -1052,7 +1052,10 @@ export function KnowledgePage({
         targetLabel={correctionTarget?.label}
         sourceGenerated={Boolean(correctionTarget?.sourceGenerated)}
         defaultCategory={correctionTarget?.category || "caliber"}
-        allowDirectEdit={!correctionTarget?.sourceGenerated}
+        allowDirectEdit={
+          !correctionTarget?.sourceGenerated &&
+          !correctionTarget?.target.startsWith("relationship:")
+        }
         onClose={() => setCorrectionTarget(null)}
         onSubmitted={() => setProposalStatus(messages.correctionSubmitted)}
       />

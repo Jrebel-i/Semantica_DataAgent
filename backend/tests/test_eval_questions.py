@@ -230,6 +230,43 @@ def test_eval_questions_source_isolation_and_crud_redaction(
             == 404
         )
 
+        # Verify spark & doris dialects are accepted and unsupported dialects rejected
+        for dialect_name in ("spark", "doris"):
+            d_res = client.post(
+                "/api/v1/eval-questions",
+                params={"project": project.id},
+                json={
+                    "id": f"q-{dialect_name}",
+                    "question": f"{dialect_name} 方言订单统计",
+                    "caliber": "统计订单总数",
+                    "reference_sql": "SELECT COUNT(*) FROM shop.orders",
+                    "dialect": dialect_name,
+                    "answer_confirmed": True,
+                },
+            )
+            assert d_res.status_code == 201, d_res.text
+            assert d_res.json()["dialect"] == dialect_name
+            assert (
+                client.delete(
+                    f"/api/v1/eval-questions/q-{dialect_name}",
+                    params={"project": project.id},
+                ).status_code
+                == 204
+            )
+        assert (
+            client.post(
+                "/api/v1/eval-questions",
+                params={"project": project.id},
+                json={
+                    "question": "unsupported dialect",
+                    "caliber": "c",
+                    "reference_sql": "SELECT COUNT(*) FROM shop.orders",
+                    "dialect": "mysql",
+                },
+            ).status_code
+            == 422
+        )
+
         # Archive project -> 409 on GET and mutations
         archive_res = client.post(f"/api/v1/projects/{project.id}/archive")
         assert archive_res.status_code == 200

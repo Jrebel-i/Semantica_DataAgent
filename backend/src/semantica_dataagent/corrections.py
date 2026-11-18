@@ -444,7 +444,7 @@ class Approval(BaseModel):
     caliber: str | None = Field(default=None, max_length=5000)
     expected_tables: list[str] | None = None
     expected_fields: list[str] | None = None
-    dialect: Literal["hive", "mysql", "clickhouse", "postgresql", "trino"] | None = None
+    dialect: Literal["hive", "spark", "doris"] | None = None
     category: str | None = Field(default=None, min_length=1, max_length=120)
     turn_id: int | None = None
 
@@ -463,7 +463,7 @@ class ProposalCreate(BaseModel):
     caliber: str | None = Field(default=None, max_length=5000)
     expected_tables: list[str] | None = None
     expected_fields: list[str] | None = None
-    dialect: Literal["hive", "mysql", "clickhouse", "postgresql", "trino"] | None = None
+    dialect: Literal["hive", "spark", "doris"] | None = None
     category: str | None = Field(default=None, min_length=1, max_length=120)
 
 

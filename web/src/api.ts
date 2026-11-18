@@ -1329,7 +1329,7 @@ export interface components {
             /** Category */
             category?: string | null;
             /** Dialect */
-            dialect?: ("hive" | "mysql" | "clickhouse" | "postgresql" | "trino") | null;
+            dialect?: ("hive" | "spark" | "doris") | null;
             /** Expected Fields */
             expected_fields?: string[] | null;
             /** Expected Tables */
@@ -1696,7 +1696,7 @@ export interface components {
              * @default hive
              * @enum {string}
              */
-            dialect: "hive" | "mysql" | "clickhouse" | "postgresql" | "trino";
+            dialect: "hive" | "spark" | "doris";
             /** Expected Fields */
             expected_fields?: string[] | null;
             /** Expected Tables */
@@ -1726,7 +1726,7 @@ export interface components {
             /** Clarify */
             clarify?: boolean | null;
             /** Dialect */
-            dialect?: ("hive" | "mysql" | "clickhouse" | "postgresql" | "trino") | null;
+            dialect?: ("hive" | "spark" | "doris") | null;
             /** Expected Fields */
             expected_fields?: string[] | null;
             /** Expected Tables */
@@ -2195,7 +2195,7 @@ export interface components {
             /** Conversation Id */
             conversation_id?: string | null;
             /** Dialect */
-            dialect?: ("hive" | "mysql" | "clickhouse" | "postgresql" | "trino") | null;
+            dialect?: ("hive" | "spark" | "doris") | null;
             /** Expected Fields */
             expected_fields?: string[] | null;
             /** Expected Tables */
@@ -2697,7 +2697,7 @@ export interface components {
             /** Category */
             category?: string | null;
             /** Dialect */
-            dialect?: ("hive" | "mysql" | "clickhouse" | "postgresql" | "trino") | null;
+            dialect?: ("hive" | "spark" | "doris") | null;
             /** Expected Fields */
             expected_fields?: string[] | null;
             /** Expected Tables */

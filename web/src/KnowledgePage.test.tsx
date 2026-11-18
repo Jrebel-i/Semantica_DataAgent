@@ -1204,6 +1204,35 @@ test("支持在字段、表关联与派生文档上通过语义覆盖草案发�
         });
       }
       if (url === "/api/v1/corrections/draft" && init?.method === "POST") {
+        const target = (body as { target?: string })?.target;
+        if (target === "relationship:fk_orders_city") {
+          return Response.json({
+            target: "relationship:fk_orders_city",
+            target_kind: "override",
+            patch: "version: 1",
+            structured_patch: {
+              version: 1,
+              relationships: {
+                fk_orders_city: {
+                  name: "fk_orders_city",
+                  from_database: "dwd",
+                  from_table: "orders",
+                  from_columns: ["city_id"],
+                  to_database: "dim",
+                  to_table: "city",
+                  to_columns: ["id"],
+                  instructions: "仅关联有效城市记录",
+                },
+              },
+            },
+            diff: "--- overrides/semantic_overrides.yaml\n+++ overrides/semantic_overrides.yaml\n+fk_orders_city",
+            gate_report: { passed: true, checks: [], errors: [] },
+            resolved_path: "overrides/semantic_overrides.yaml",
+            reason: "补充外键过滤规则",
+            source_generated: false,
+            used_llm: false,
+          });
+        }
         return Response.json({
           target: "document:ossie_orders",
           target_kind: "override",
@@ -1255,7 +1284,7 @@ test("支持在字段、表关联与派生文档上通过语义覆盖草案发�
     }),
   ).toBeTruthy();
 
-  // Trigger relationship correction draft
+  // Trigger relationship correction draft and submit structured override
   fireEvent.click(
     screen.getByRole("button", { name: /提出纠错 fk_orders_city/ }),
   );
@@ -1264,7 +1293,34 @@ test("支持在字段、表关联与派生文档上通过语义覆盖草案发�
     (within(relDialog).getByLabelText("目标引用（可选）") as HTMLInputElement)
       .value,
   ).toBe("relationship:fk_orders_city");
-  fireEvent.click(within(relDialog).getByRole("button", { name: "取消" }));
+  // Relationships disallow un-drafted direct submission
+  expect(
+    (
+      within(relDialog).getByRole("button", {
+        name: "提出纠错",
+      }) as HTMLButtonElement
+    ).disabled,
+  ).toBe(true);
+  fireEvent.change(within(relDialog).getByLabelText("纠错问题描述"), {
+    target: { value: "仅关联有效城市记录" },
+  });
+  fireEvent.click(
+    within(relDialog).getByRole("button", { name: "生成草稿预览" }),
+  );
+  expect(await within(relDialog).findByText("L1 预检通过")).toBeTruthy();
+  fireEvent.click(within(relDialog).getByRole("button", { name: "提出纠错" }));
+  await waitFor(() =>
+    expect(
+      requests.some(
+        (req) =>
+          req.url === "/api/v1/corrections?project=default" &&
+          req.method === "POST" &&
+          (req.body as { target?: string; target_kind?: string })?.target ===
+            "relationship:fk_orders_city" &&
+          (req.body as { target_kind?: string })?.target_kind === "override",
+      ),
+    ).toBe(true),
+  );
 
   // Open generated Ossie doc and verify override draft & submit
   await waitFor(() => {

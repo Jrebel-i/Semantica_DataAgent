@@ -118,10 +118,8 @@
               {
                 "enum": [
                   "hive",
-                  "mysql",
-                  "clickhouse",
-                  "postgresql",
-                  "trino"
+                  "spark",
+                  "doris"
                 ],
                 "type": "string"
               },
@@ -1227,10 +1225,8 @@
             "default": "hive",
             "enum": [
               "hive",
-              "mysql",
-              "clickhouse",
-              "postgresql",
-              "trino"
+              "spark",
+              "doris"
             ],
             "title": "Dialect",
             "type": "string"
@@ -1377,10 +1373,8 @@
               {
                 "enum": [
                   "hive",
-                  "mysql",
-                  "clickhouse",
-                  "postgresql",
-                  "trino"
+                  "spark",
+                  "doris"
                 ],
                 "type": "string"
               },
@@ -2662,10 +2656,8 @@
               {
                 "enum": [
                   "hive",
-                  "mysql",
-                  "clickhouse",
-                  "postgresql",
-                  "trino"
+                  "spark",
+                  "doris"
                 ],
                 "type": "string"
               },
@@ -4236,10 +4228,8 @@
               {
                 "enum": [
                   "hive",
-                  "mysql",
-                  "clickhouse",
-                  "postgresql",
-                  "trino"
+                  "spark",
+                  "doris"
                 ],
                 "type": "string"
               },

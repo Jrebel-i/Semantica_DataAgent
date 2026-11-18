@@ -110,9 +110,9 @@ export function CorrectionsPage({
   const [eqCaliber, setEqCaliber] = useState("");
   const [eqSql, setEqSql] = useState("");
   const [eqCategory, setEqCategory] = useState("单表聚合");
-  const [eqDialect, setEqDialect] = useState<
-    "hive" | "mysql" | "clickhouse" | "postgresql" | "trino"
-  >("hive");
+  const [eqDialect, setEqDialect] = useState<"hive" | "spark" | "doris">(
+    "hive",
+  );
   const [eqSplit, setEqSplit] = useState<"dev" | "holdout">("dev");
   const [eqConfirmed, setEqConfirmed] = useState(true);
   const [eqSaving, setEqSaving] = useState(false);
@@ -265,12 +265,7 @@ export function CorrectionsPage({
     setEqSql(row.reference_sql || "");
     setEqCategory(row.category || "单表聚合");
     setEqDialect(
-      (row.dialect as
-        | "hive"
-        | "mysql"
-        | "clickhouse"
-        | "postgresql"
-        | "trino") || "hive",
+      row.dialect === "spark" || row.dialect === "doris" ? row.dialect : "hive",
     );
     setEqSplit(row.split === "holdout" ? "holdout" : "dev");
     setEqConfirmed(row.answer_confirmed);
@@ -813,10 +808,8 @@ export function CorrectionsPage({
                         style={{ minWidth: 120 }}
                         options={[
                           { value: "hive", label: "hive" },
-                          { value: "mysql", label: "mysql" },
-                          { value: "clickhouse", label: "clickhouse" },
-                          { value: "postgresql", label: "postgresql" },
-                          { value: "trino", label: "trino" },
+                          { value: "spark", label: "spark" },
+                          { value: "doris", label: "doris" },
                         ]}
                       />
                     </div>

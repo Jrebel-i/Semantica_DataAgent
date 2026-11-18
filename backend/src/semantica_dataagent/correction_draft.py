@@ -166,6 +166,19 @@ def _fetch_node(
     values: dict[str, Any], generation: str, ref: str
 ) -> dict[str, Any] | None:
     try:
+        if ref.startswith("relationship:"):
+            rel_rows = knowledge.execute(
+                knowledge.read_graph(values),
+                (
+                    "MATCH (a:SDATable {generation:$generation})-[r:RELATES_TO {ref:$ref}]->(b:SDATable {generation:$generation}) "
+                    "RETURN {ref: r.ref, name: r.name, description: r.description, instructions: r.instructions, "
+                    "from_catalog: a.catalog, from_database: a.database, from_table: a.name, from_columns: r.from_columns, "
+                    "to_catalog: b.catalog, to_database: b.database, to_table: b.name, to_columns: r.to_columns} AS node"
+                ),
+                {"generation": generation, "ref": ref},
+            )
+            if rel_rows and isinstance(rel_rows[0].get("node"), dict):
+                return dict(rel_rows[0]["node"])
         rows = knowledge.execute(
             knowledge.read_graph(values),
             "MATCH (n:SDAEntity {generation:$generation, ref:$ref}) RETURN properties(n) AS node",
@@ -176,6 +189,32 @@ def _fetch_node(
     if len(rows) == 1 and isinstance(rows[0].get("node"), dict):
         return dict(rows[0]["node"])
     return None
+
+
+def _fetch_document_linked_tables(
+    values: dict[str, Any], generation: str, ref: str
+) -> list[dict[str, Any]]:
+    try:
+        rows = knowledge.execute(
+            knowledge.read_graph(values),
+            (
+                "MATCH (t:SDATable {generation:$generation})-[:HAS_DOCUMENT]->(d:SDADocument {generation:$generation, ref:$ref}) "
+                "RETURN t.catalog AS catalog, t.database AS database, t.name AS name "
+                "ORDER BY t.database, t.name"
+            ),
+            {"generation": generation, "ref": ref},
+        )
+    except (KeyError, StorageUnavailable, ValueError, RuntimeError):
+        return []
+    return [
+        {
+            "catalog": row.get("catalog"),
+            "database": row.get("database"),
+            "name": row.get("name"),
+        }
+        for row in rows
+        if isinstance(row, dict) and row.get("database") and row.get("name")
+    ]
 
 
 def _infer_target_from_context(
@@ -242,6 +281,9 @@ def _structured_from_target(
     description: str,
     node: dict[str, Any] | None,
     sql_blocks: list[dict[str, Any]],
+    *,
+    linked_tables: list[dict[str, Any]] | None = None,
+    described_tables: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     if target.startswith("table:"):
         parsed = _parse_table_parts(target[len("table:") :])
@@ -309,21 +351,56 @@ def _structured_from_target(
         to_cols = [str(c) for c in (node.get("to_columns") or []) if str(c).strip()]
         if from_db and from_tbl and to_db and to_tbl and from_cols and to_cols:
             rel_name = str(node.get("name") or target.split(":", 1)[1]).strip()
+            rel_entry: dict[str, Any] = {
+                "name": rel_name,
+                "from_database": from_db,
+                "from_table": from_tbl,
+                "from_columns": from_cols,
+                "to_database": to_db,
+                "to_table": to_tbl,
+                "to_columns": to_cols,
+                "instructions": description,
+            }
+            if node.get("from_catalog"):
+                rel_entry["from_catalog"] = str(node["from_catalog"])
+            if node.get("to_catalog"):
+                rel_entry["to_catalog"] = str(node["to_catalog"])
             return {
                 "version": 1,
-                "relationships": {
-                    rel_name: {
-                        "name": rel_name,
-                        "from_database": from_db,
-                        "from_table": from_tbl,
-                        "from_columns": from_cols,
-                        "to_database": to_db,
-                        "to_table": to_tbl,
-                        "to_columns": to_cols,
-                        "instructions": description,
-                    }
-                },
+                "relationships": {rel_name: rel_entry},
             }
+    for tbl in linked_tables or []:
+        database = str(tbl.get("database") or "").strip()
+        name = str(tbl.get("name") or "").strip()
+        if database and name:
+            catalog = str(tbl.get("catalog") or "").strip()
+            key = f"{catalog}.{database}.{name}" if catalog else f"{database}.{name}"
+            entry = {"database": database, "name": name, "instructions": description}
+            if catalog:
+                entry["catalog"] = catalog
+            return {"version": 1, "tables": {key: entry}}
+    doc_content = str((node or {}).get("content") or "")
+    if doc_content and described_tables:
+        lowered = doc_content.casefold()
+        for tbl in described_tables:
+            database = str(tbl.get("database") or "").strip()
+            name = str(tbl.get("name") or "").strip()
+            if not database or not name:
+                continue
+            full_ref = f"{database}.{name}".casefold()
+            if full_ref in lowered:
+                catalog = str(tbl.get("catalog") or "").strip()
+                key = (
+                    f"{catalog}.{database}.{name}" if catalog else f"{database}.{name}"
+                )
+                entry = {
+                    "database": database,
+                    "name": name,
+                    "instructions": description,
+                }
+                if catalog:
+                    entry["catalog"] = catalog
+                return {"version": 1, "tables": {key: entry}}
     # Fallback to first SQL table when drafting for a derived doc or metric without explicit schema node
     for block in reversed(sql_blocks):
         if isinstance(block, dict) and str(block.get("sql") or "").strip():
@@ -518,11 +595,29 @@ def draft_correction_in_project(
             patch = f"{base}\n\n{addition}" if base else addition
         diff = _unified_diff(resolved_path, original, patch)
     else:
+        linked_tables = (
+            _fetch_document_linked_tables(values, project.generation, target)
+            if is_document_ref and source_generated
+            else []
+        )
+        described_tables: list[dict[str, Any]] = []
+        if is_document_ref and source_generated and not linked_tables:
+            try:
+                described_tables = knowledge.describe(
+                    summary=False, project_id=scope.project_id
+                )
+            except (KeyError, StorageUnavailable, ValueError, RuntimeError):
+                described_tables = []
         raw_structured = (
             llm_output.get("structured_patch")
             if llm_output and isinstance(llm_output.get("structured_patch"), dict)
             else _structured_from_target(
-                target, body.description.strip(), node, sql_blocks
+                target,
+                body.description.strip(),
+                node,
+                sql_blocks,
+                linked_tables=linked_tables,
+                described_tables=described_tables,
             )
         )
         try:

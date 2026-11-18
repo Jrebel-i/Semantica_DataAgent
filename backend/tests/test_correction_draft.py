@@ -100,16 +100,27 @@ def _seed_turn(
 
 
 def _mock_graph(
-    monkeypatch, doc_contents: dict[str, str], nodes_by_ref: dict[str, dict]
+    monkeypatch,
+    doc_contents: dict[str, str],
+    nodes_by_ref: dict[str, dict],
+    *,
+    has_document_links: dict[str, list[dict]] | None = None,
+    relates_to_edges: dict[str, dict] | None = None,
 ):
     from semantica_dataagent import knowledge
 
     def fake_existing_refs(refs, project_id=None):
-        return {r for r in refs if r in nodes_by_ref}
+        all_refs = set(nodes_by_ref) | set(relates_to_edges or {})
+        return {r for r in refs if r in all_refs}
 
     def fake_execute(_store, query, parameters):
         ref = parameters.get("ref")
-        if ref and ref in nodes_by_ref:
+        if "HAS_DOCUMENT" in query and ref:
+            return list((has_document_links or {}).get(ref, []))
+        if "RELATES_TO" in query and ref:
+            edge = (relates_to_edges or {}).get(ref)
+            return [{"node": dict(edge)}] if edge else []
+        if "SDAEntity" in query and ref and ref in nodes_by_ref:
             node = dict(nodes_by_ref[ref])
             if ref in doc_contents:
                 node["content"] = doc_contents[ref]
@@ -182,14 +193,18 @@ def test_correction_draft_routing_preview_and_guardrails(tmp_path: Path, monkeyp
             "source_file": "ossie/orders.yaml",
             "generated": True,
             "content": "自动生成摘要：订单表说明",
-            "database": "shop",
-            "name": "orders",
         },
         "table:shop.orders": {
             "ref": "table:shop.orders",
             "database": "shop",
             "name": "orders",
             "comment": "订单明细表",
+        },
+        "table:shop.users": {
+            "ref": "table:shop.users",
+            "database": "shop",
+            "name": "users",
+            "comment": "用户表",
         },
         "field:shop.orders.status": {
             "ref": "field:shop.orders.status",
@@ -198,11 +213,45 @@ def test_correction_draft_routing_preview_and_guardrails(tmp_path: Path, monkeyp
             "name": "status",
             "comment": "状态码",
         },
+        "field:shop.orders.user_id": {
+            "ref": "field:shop.orders.user_id",
+            "database": "shop",
+            "table": "orders",
+            "name": "user_id",
+            "comment": "用户ID",
+        },
+        "field:shop.users.id": {
+            "ref": "field:shop.users.id",
+            "database": "shop",
+            "table": "users",
+            "name": "id",
+            "comment": "主键",
+        },
+    }
+    relates_edges = {
+        "relationship:shop.orders:shop.users:fk_orders_user": {
+            "ref": "relationship:shop.orders:shop.users:fk_orders_user",
+            "name": "fk_orders_user",
+            "from_database": "shop",
+            "from_table": "orders",
+            "from_columns": ["user_id"],
+            "to_database": "shop",
+            "to_table": "users",
+            "to_columns": ["id"],
+            "description": "订单用户外键",
+        }
+    }
+    has_doc_links = {
+        "document:ossie_orders": [
+            {"catalog": None, "database": "shop", "name": "orders"}
+        ]
     }
     _mock_graph(
         monkeypatch,
         {"document:gmv": "# GMV\n\n原口径描述。\n"},
         nodes,
+        has_document_links=has_doc_links,
+        relates_to_edges=relates_edges,
     )
 
     with TestClient(app, headers=headers) as client:
@@ -330,11 +379,44 @@ def test_correction_draft_routing_preview_and_guardrails(tmp_path: Path, monkeyp
         assert "fields" in f_body["structured_patch"]
         assert f_body["gate_report"]["passed"] is True
 
-        # Draft endpoint is pure preview: no proposals created, no override file written
+        # 4) RELATES_TO relationship edge draft & submit -> override on semantic_overrides.yaml
+        rel_draft = client.post(
+            "/api/v1/corrections/draft",
+            headers=member_headers,
+            json={
+                "project": project.id,
+                "target": "relationship:shop.orders:shop.users:fk_orders_user",
+                "category": "relationship",
+                "description": "补充说明：关联时仅使用未注销用户。",
+            },
+        )
+        assert rel_draft.status_code == 200, rel_draft.text
+        r_body = rel_draft.json()
+        assert r_body["target"] == "relationship:shop.orders:shop.users:fk_orders_user"
+        assert r_body["target_kind"] == "override"
+        assert r_body["resolved_path"] == "overrides/semantic_overrides.yaml"
+        assert "relationships" in r_body["structured_patch"]
+        assert r_body["gate_report"]["passed"] is True
+
+        rel_submit = client.post(
+            "/api/v1/corrections",
+            params={"project": project.id},
+            headers=member_headers,
+            json={
+                "target": r_body["target"],
+                "target_kind": r_body["target_kind"],
+                "patch": r_body["patch"],
+                "structured_patch": r_body["structured_patch"],
+                "reason": r_body["reason"],
+            },
+        )
+        assert rel_submit.status_code == 201, rel_submit.text
+
+        # Draft endpoint is pure preview: no override file written, only submitted rel_submit exists
         src_dir = project_context.project_source_directory(project.id)
         assert not (src_dir / "overrides" / "semantic_overrides.yaml").exists()
         with sessions()() as db:
-            assert db.query(CorrectionProposal).count() == 0
+            assert db.query(CorrectionProposal).count() == 1
 
         # Submitting the generated-doc override draft succeeds via POST /api/v1/corrections -> approve
         submit_res = client.post(

@@ -430,7 +430,7 @@ test("manages eval questions tab (confirm, create, delete)", async () => {
   );
   expect(await screen.findByText("已确认")).toBeTruthy();
 
-  // Create new eval question
+  // Create new eval question with doris dialect (and confirm spark option is available)
   fireEvent.click(screen.getByRole("button", { name: "新增评测题" }));
   fireEvent.change(screen.getByLabelText("评测问题"), {
     target: { value: "近7日退款金额" },
@@ -441,6 +441,9 @@ test("manages eval questions tab (confirm, create, delete)", async () => {
   fireEvent.change(screen.getByLabelText("参考 SQL"), {
     target: { value: "SELECT SUM(refund_amount) FROM shop.refunds" },
   });
+  fireEvent.mouseDown(screen.getByLabelText("SQL 方言"));
+  expect(await screen.findByTitle("spark")).toBeTruthy();
+  fireEvent.click(await screen.findByTitle("doris"));
   fireEvent.click(screen.getByRole("button", { name: "保存评测题" }));
 
   await waitFor(() =>
@@ -448,7 +451,8 @@ test("manages eval questions tab (confirm, create, delete)", async () => {
       calls.some(
         (c) =>
           c.url === "/api/v1/eval-questions?project=default" &&
-          c.method === "POST",
+          c.method === "POST" &&
+          (c.body as { dialect?: string })?.dialect === "doris",
       ),
     ).toBe(true),
   );

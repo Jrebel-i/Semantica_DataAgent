@@ -45,7 +45,7 @@ router = APIRouter()
 
 EvalSplit = Literal["dev", "holdout"]
 EvalSource = Literal["manual", "feedback", "correction"]
-EvalDialect = Literal["hive", "mysql", "clickhouse", "postgresql", "trino"]
+EvalDialect = Literal["hive", "spark", "doris"]
 
 NonEmptyText = Annotated[str, Field(min_length=1, max_length=20000, pattern=r"\S")]
 
