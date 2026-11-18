@@ -210,18 +210,39 @@ export function ChatPage({
     setMarkingTurnId(turn.id);
     setError("");
     setFeedbackNotice("");
+    const url = `/api/v1/conversations/${encodeURIComponent(currentConversationId)}/turns/${turn.id}/feedback`;
     try {
-      const response = await fetch(
-        `/api/v1/conversations/${encodeURIComponent(currentConversationId)}/turns/${turn.id}/feedback`,
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${token}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ rating: "accurate" }),
+      if (turn.feedback_accurate) {
+        const response = await fetch(url, {
+          method: "DELETE",
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!response.ok) {
+          throw new Error(await readErrorDetail(response, t.operationFailed));
+        }
+        setTurns((prev) =>
+          prev.map((row) =>
+            row.id === turn.id
+              ? {
+                  ...row,
+                  feedback_accurate: false,
+                  eval_question_id: null,
+                  eval_answer_confirmed: null,
+                }
+              : row,
+          ),
+        );
+        setFeedbackNotice(t.turnAccurateCancelled);
+        return;
+      }
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
         },
-      );
+        body: JSON.stringify({ rating: "accurate" }),
+      });
       if (!response.ok) {
         throw new Error(await readErrorDetail(response, t.operationFailed));
       }

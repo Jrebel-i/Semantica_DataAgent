@@ -981,3 +981,167 @@ def test_eval_questions_500_scrubs_internal_yaml_parse_errors(
             detail = resp.json()["detail"]
             assert "sk-secret-leak" not in detail
             assert "invalid question YAML" not in detail
+
+
+def test_revoke_turn_feedback_removes_draft_and_respects_confirmations(
+    tmp_path: Path, monkeypatch
+):
+    from semantica_dataagent import knowledge, sql_validation
+    from semantica_dataagent.app import app
+    from semantica_dataagent.db import Token, digest, sessions
+    from semantica_dataagent.project_api import create_project_record
+
+    admin_token = _configure(tmp_path, monkeypatch)
+    admin_headers = {"Authorization": f"Bearer {admin_token}"}
+    with sessions()() as db:
+        admin_id = db.get(Token, digest(admin_token)).id
+    project = create_project_record("Revoke Feedback Project", "warehouse")
+
+    member_token, member_id = _create_user_token("revoke-member")
+    outsider_token, _ = _create_user_token("revoke-outsider")
+    member_headers = {"Authorization": f"Bearer {member_token}"}
+    outsider_headers = {"Authorization": f"Bearer {outsider_token}"}
+
+    monkeypatch.setattr(
+        sql_validation,
+        "validate_sql",
+        lambda sql, dialect="hive", project_id=None: {"status": "pass", "issues": []},
+    )
+    monkeypatch.setattr(
+        knowledge, "existing_refs", lambda refs, project_id=None: set(refs)
+    )
+
+    with TestClient(app, headers=admin_headers) as client:
+        assert (
+            client.put(
+                f"/api/v1/projects/{project.id}/members/{member_id}",
+                json={"role": "member"},
+            ).status_code
+            == 200
+        )
+
+        # 1. Member marks turn accurate -> DELETE removes draft and resets turn flags
+        conv_m, turn_m = _seed_conversation_turn(
+            project.id,
+            member_id,
+            question="昨日活跃用户数是多少",
+            sql_blocks=[
+                {
+                    "sql": "SELECT COUNT(DISTINCT user_id) FROM shop.orders",
+                    "dialect": "hive",
+                }
+            ],
+            with_validate_sql_pass=True,
+        )
+        post_res = client.post(
+            f"/api/v1/conversations/{conv_m}/turns/{turn_m}/feedback",
+            headers=member_headers,
+            json={"rating": "accurate"},
+        )
+        assert post_res.status_code == 201, post_res.text
+
+        # Non-owner DELETE -> 404
+        assert (
+            client.delete(
+                f"/api/v1/conversations/{conv_m}/turns/{turn_m}/feedback",
+                headers=outsider_headers,
+            ).status_code
+            == 404
+        )
+        assert (
+            client.delete(
+                f"/api/v1/conversations/{conv_m}/turns/{turn_m}/feedback",
+                headers=admin_headers,
+            ).status_code
+            == 404
+        )
+
+        del_res = client.delete(
+            f"/api/v1/conversations/{conv_m}/turns/{turn_m}/feedback",
+            headers=member_headers,
+        )
+        assert del_res.status_code == 204
+        # Repeat DELETE is idempotent
+        assert (
+            client.delete(
+                f"/api/v1/conversations/{conv_m}/turns/{turn_m}/feedback",
+                headers=member_headers,
+            ).status_code
+            == 204
+        )
+        conv_detail = client.get(
+            f"/api/v1/conversations/{conv_m}", headers=member_headers
+        ).json()
+        assert conv_detail["turns"][0]["feedback_accurate"] is False
+        assert conv_detail["turns"][0]["eval_question_id"] is None
+        assert conv_detail["turns"][0]["eval_answer_confirmed"] is None
+        assert (
+            client.get("/api/v1/eval-questions", params={"project": project.id}).json()
+            == []
+        )
+
+        # 2. Member marks accurate, admin confirms via PATCH -> member DELETE blocked (409)
+        repost_res = client.post(
+            f"/api/v1/conversations/{conv_m}/turns/{turn_m}/feedback",
+            headers=member_headers,
+            json={"rating": "accurate"},
+        )
+        assert repost_res.status_code == 201
+        confirmed_qid = repost_res.json()["question_id"]
+        assert (
+            client.patch(
+                f"/api/v1/eval-questions/{confirmed_qid}",
+                params={"project": project.id},
+                json={"answer_confirmed": True},
+            ).status_code
+            == 200
+        )
+        blocked_del = client.delete(
+            f"/api/v1/conversations/{conv_m}/turns/{turn_m}/feedback",
+            headers=member_headers,
+        )
+        assert blocked_del.status_code == 409
+        assert (
+            len(
+                client.get(
+                    "/api/v1/eval-questions", params={"project": project.id}
+                ).json()
+            )
+            == 1
+        )
+
+        # 3. Admin marks own turn accurate (answer_confirmed=True) -> admin DELETE succeeds
+        conv_a, turn_a = _seed_conversation_turn(
+            project.id,
+            admin_id,
+            question="昨日客单价是多少",
+            sql_blocks=[
+                {"sql": "SELECT AVG(pay_amount) FROM shop.orders", "dialect": "hive"}
+            ],
+            with_validate_sql_pass=True,
+        )
+        adm_post = client.post(
+            f"/api/v1/conversations/{conv_a}/turns/{turn_a}/feedback",
+            json={"rating": "accurate"},
+        )
+        assert adm_post.status_code == 201
+        assert adm_post.json()["answer_confirmed"] is True
+
+        assert (
+            client.delete(
+                f"/api/v1/conversations/{conv_a}/turns/{turn_a}/feedback",
+            ).status_code
+            == 204
+        )
+        adm_detail = client.get(f"/api/v1/conversations/{conv_a}").json()
+        assert adm_detail["turns"][0]["feedback_accurate"] is False
+        assert adm_detail["turns"][0]["eval_question_id"] is None
+
+        # 4. Archived project -> 409 on DELETE
+        assert client.post(f"/api/v1/projects/{project.id}/archive").status_code == 200
+        assert (
+            client.delete(
+                f"/api/v1/conversations/{conv_a}/turns/{turn_a}/feedback",
+            ).status_code
+            == 409
+        )

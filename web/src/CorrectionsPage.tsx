@@ -554,18 +554,20 @@ export function CorrectionsPage({
                       const srcText = row.source
                         ? sourceLabel(row.source, t)
                         : "";
+                      const targetLabel = safeDecodePath(row.target);
                       return (
                         <li key={row.id}>
                           <button
                             type="button"
                             className={selected?.id === row.id ? "active" : ""}
+                            title={targetLabel}
                             onClick={() => {
                               setSelected(row);
                               setPatch(initialPatchForProposal(row));
                             }}
                           >
-                            <span className="mono">
-                              {safeDecodePath(row.target)}
+                            <span className="mono" title={targetLabel}>
+                              {targetLabel}
                             </span>
                             <Space size={4}>
                               {srcText && <Tag>{srcText}</Tag>}

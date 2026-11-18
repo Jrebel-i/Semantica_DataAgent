@@ -5874,6 +5874,50 @@
       }
     },
     "/api/v1/conversations/{conversation_id}/turns/{turn_id}/feedback": {
+      "delete": {
+        "operationId": "revoke_turn_feedback_api_v1_conversations__conversation_id__turns__turn_id__feedback_delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "turn_id",
+            "required": true,
+            "schema": {
+              "title": "Turn Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Revoke Turn Feedback"
+      },
       "post": {
         "operationId": "record_turn_feedback_api_v1_conversations__conversation_id__turns__turn_id__feedback_post",
         "parameters": [

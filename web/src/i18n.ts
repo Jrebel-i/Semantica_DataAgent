@@ -596,6 +596,8 @@ const messages = {
     turnAccurateNeedsSql: "仅支持对通过 validate_sql 校验 SQL 的回答标注准确",
     turnAccurateSavedDraft: "已标为准确，已暂存至评测题集草稿（待确认）",
     turnAccurateSavedConfirmed: "已标为准确，并已纳入已确认评测题集",
+    turnAccurateCancelHint: "点击取消准确标记",
+    turnAccurateCancelled: "已取消准确标记，已从评测题集移除",
     turnCorrectBtn: "🛠️ 纠错",
     proposeCorrectionShort: "纠错",
     proposeOverrideCorrection: "语义覆盖纠错",
@@ -1290,6 +1292,8 @@ const messages = {
       "Marked accurate and saved as an unconfirmed eval question draft",
     turnAccurateSavedConfirmed:
       "Marked accurate and added to confirmed eval questions",
+    turnAccurateCancelHint: "Click to undo accurate mark",
+    turnAccurateCancelled: "Accurate mark removed from eval questions",
     turnCorrectBtn: "🛠️ Correct",
     proposeCorrectionShort: "Correct",
     proposeOverrideCorrection: "Propose override",

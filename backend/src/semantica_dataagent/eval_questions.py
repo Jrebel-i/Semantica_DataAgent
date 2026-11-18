@@ -518,6 +518,7 @@ def find_feedback_question_by_turn(
             for row in rows
             if row.get("conversation_id") == conversation_id
             and row.get("turn_id") == turn_id
+            and str(row.get("source") or "") == "feedback"
         ),
         None,
     )
@@ -536,8 +537,10 @@ def list_feedback_turn_ids(
         return {}
     result: dict[int, dict[str, Any]] = {}
     for row in rows:
-        if row.get("conversation_id") == conversation_id and isinstance(
-            row.get("turn_id"), int
+        if (
+            row.get("conversation_id") == conversation_id
+            and isinstance(row.get("turn_id"), int)
+            and str(row.get("source") or "") == "feedback"
         ):
             result[int(row["turn_id"])] = row
     return result
@@ -915,6 +918,80 @@ def record_turn_feedback(
         split="holdout" if saved.get("split") == "holdout" else "dev",
         eval_question=view,
     )
+
+
+@router.delete(
+    "/api/v1/conversations/{conversation_id}/turns/{turn_id}/feedback",
+    status_code=204,
+)
+def revoke_turn_feedback(
+    conversation_id: str,
+    turn_id: int,
+    requester: Annotated[Requester, Depends(rest_requester)],
+):
+    with sessions()() as db:
+        conversation = db.get(Conversation, conversation_id)
+        turn = db.get(Turn, turn_id)
+        if (
+            conversation is None
+            or conversation.owner_id != requester.id
+            or turn is None
+            or turn.conversation_id != conversation_id
+        ):
+            raise HTTPException(404, detail="Conversation or turn not found")
+        turn_project_id = conversation.project_id
+
+    scope = resolve_project_scope(turn_project_id, requester, allow_frozen=False)
+    is_admin = is_project_admin(scope, requester)
+
+    with _project_eval_lock(scope.project_id):
+        path = project_context.eval_questions_path(scope.project_id)
+        if not path.exists():
+            return Response(status_code=204)
+        try:
+            payload, rows = _read_raw_rows(scope.project_id)
+        except (ValueError, TypeError):
+            logger.exception(
+                "Failed to read eval questions for project %s", scope.project_id
+            )
+            raise HTTPException(
+                500, detail="Failed to load evaluation questions"
+            ) from None
+
+        def _is_turn_feedback(row: dict[str, Any]) -> bool:
+            return (
+                row.get("conversation_id") == conversation_id
+                and row.get("turn_id") == turn_id
+                and str(row.get("source") or "") == "feedback"
+            )
+
+        matched = [row for row in rows if _is_turn_feedback(row)]
+        if not matched:
+            return Response(status_code=204)
+
+        if not is_admin and any(
+            bool(row.get("answer_confirmed", False)) for row in matched
+        ):
+            raise HTTPException(
+                409,
+                detail="该评测题已由管理员确认纳入评测题集，如需移除请联系项目管理员",
+            )
+
+        now_iso = datetime.now(UTC).isoformat()
+        next_rows: list[dict[str, Any]] = []
+        for row in rows:
+            if not _is_turn_feedback(row):
+                next_rows.append(row)
+                continue
+            if row.get("proposal_id"):
+                updated = dict(row)
+                updated["source"] = "correction"
+                updated["updated_at"] = now_iso
+                next_rows.append(updated)
+
+        payload["questions"] = next_rows
+        _atomic_write_yaml(path, payload)
+    return Response(status_code=204)
 
 
 def promote_correction_to_eval_question(

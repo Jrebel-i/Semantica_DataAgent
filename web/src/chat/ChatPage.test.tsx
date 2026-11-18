@@ -551,6 +551,13 @@ test("轮次底部 👍 准确 仅对通过 SQL 校验的回答开放并写入�
           { status: 201 },
         );
       }
+      if (
+        url === "/api/v1/conversations/conv-fb/turns/102/feedback" &&
+        init?.method === "DELETE"
+      ) {
+        feedbackCalls.push({ url, body: { method: "DELETE" } });
+        return new Response(null, { status: 204 });
+      }
       return new Response("", { status: 404 });
     }),
   );
@@ -573,9 +580,33 @@ test("轮次底部 👍 准确 仅对通过 SQL 校验的回答开放并写入�
       },
     ]),
   );
+  const doneBtn = (await screen.findByRole("button", {
+    name: /已标为准确/,
+  })) as HTMLButtonElement;
+  expect(doneBtn.disabled).toBe(false);
+  expect(doneBtn.title).toBe("点击取消准确标记");
+
+  fireEvent.click(doneBtn);
+  await waitFor(() =>
+    expect(feedbackCalls).toEqual([
+      {
+        url: "/api/v1/conversations/conv-fb/turns/102/feedback",
+        body: { rating: "accurate" },
+      },
+      {
+        url: "/api/v1/conversations/conv-fb/turns/102/feedback",
+        body: { method: "DELETE" },
+      },
+    ]),
+  );
   expect(
-    await screen.findByRole("button", { name: /已标为准确/ }),
+    await screen.findByText("已取消准确标记，已从评测题集移除"),
   ).toBeTruthy();
+  const revertedBtns = screen.getAllByRole("button", { name: /准确/ });
+  expect((revertedBtns[1] as HTMLButtonElement).textContent).toContain("准确");
+  expect((revertedBtns[1] as HTMLButtonElement).textContent).not.toContain(
+    "已标为准确",
+  );
 });
 
 test("轮次底部 🛠️ 纠错抽屉支持生成草稿预览、门禁拦截与提交提案", async () => {

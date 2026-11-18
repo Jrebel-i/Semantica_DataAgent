@@ -709,3 +709,44 @@ test("deep-link initialProposalId populates patch and supports Edit & Approve on
     ).toBe(true),
   );
 });
+
+test("long proposal targets expose decoded title tooltips for ellipsis overflow", async () => {
+  const longTarget =
+    "relationship:hive_prod.dwd.dwd_orders:hive_prod.dim.dim_city:fk_orders_city";
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) => {
+      if (url === "/api/v1/projects") {
+        return Response.json([
+          {
+            id: "default",
+            name: "业务数据",
+            type: "warehouse",
+            status: "active",
+            created_at: "2026-01-01T00:00:00Z",
+            my_role: "admin",
+          },
+        ]);
+      }
+      return Response.json([
+        {
+          id: "prop-long",
+          target: longTarget,
+          reason: "强化外键说明",
+          diff: "-old\n+new",
+          patch: "new",
+          status: "pending",
+          source: "evolution",
+        },
+      ]);
+    }),
+  );
+
+  render(<CorrectionsPage token="token" messages={getMessages("zh")} />);
+  const itemBtn = await screen.findByRole("button", {
+    name: /relationship:hive_prod\.dwd\.dwd_orders/,
+  });
+  expect(itemBtn.getAttribute("title")).toBe(longTarget);
+  const monoSpan = itemBtn.querySelector(".mono");
+  expect(monoSpan?.getAttribute("title")).toBe(longTarget);
+});
