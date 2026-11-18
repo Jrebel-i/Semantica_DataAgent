@@ -629,6 +629,7 @@ export function KnowledgePage({
               value={project}
               onChange={setProject}
               messages={messages}
+              includeMemberProjects
             />
             <Input
               allowClear

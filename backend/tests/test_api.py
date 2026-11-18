@@ -1452,3 +1452,78 @@ def test_describe_summary_counts_without_materializing_fields(monkeypatch):
 
     assert knowledge.describe() == []
     assert "collect(properties(f))" in queries[-1]
+
+
+def test_table_view_includes_deduplicated_relationships_and_generated_documents(
+    client, monkeypatch
+):
+    from semantica_dataagent import knowledge
+
+    c, token = client
+    headers = {"Authorization": f"Bearer {token}"}
+    rel_out = {
+        "name": "fk_orders_user",
+        "ref": "rel:orders_user",
+        "from_table": "shop.orders",
+        "from_columns": ["user_id"],
+        "to_table": "dim.users",
+        "to_columns": ["id"],
+    }
+    rel_in = {
+        "name": "fk_items_orders",
+        "ref": "rel:items_orders",
+        "from_table": "shop.order_items",
+        "from_columns": ["order_id"],
+        "to_table": "shop.orders",
+        "to_columns": ["id"],
+    }
+
+    monkeypatch.setattr(knowledge, "read_graph", lambda values: object())
+    monkeypatch.setattr(
+        knowledge,
+        "execute",
+        lambda store, query, parameters: [
+            {
+                "table": {
+                    "catalog": "lake",
+                    "database": "shop",
+                    "name": "orders",
+                    "comment": "订单表",
+                    "ref": "table:shop.orders",
+                },
+                "fields": [
+                    {
+                        "name": "id",
+                        "type": "bigint",
+                        "comment": "主键",
+                        "partition": False,
+                    }
+                ],
+                "documents": [
+                    {
+                        "ref": "document:ossie/sales.md",
+                        "path": "sales.md",
+                        "category": "ossie",
+                        "generated": True,
+                    },
+                    {"ref": None, "path": None, "category": None, "generated": False},
+                ],
+                "out_rels": [rel_out, None],
+                "in_rels": [rel_in, rel_out],
+            }
+        ],
+    )
+
+    resp = c.get("/api/v1/tables/shop/orders", headers=headers)
+    assert resp.status_code == 200, resp.text
+    payload = resp.json()
+    assert payload["catalog"] == "lake"
+    assert payload["documents"] == [
+        {
+            "ref": "document:ossie/sales.md",
+            "path": "sales.md",
+            "category": "ossie",
+            "generated": True,
+        }
+    ]
+    assert payload["relationships"] == [rel_in, rel_out]

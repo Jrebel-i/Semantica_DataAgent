@@ -343,3 +343,45 @@ test("跨过断点拉宽窗口时抽屉自动关闭，恢复窄屏仍默认收�
   expect(screen.getByRole("button", { name: "打开导航" })).toBeTruthy();
   expect(screen.queryByRole("link", { name: "知识库" })).toBeNull();
 });
+
+test("项目管理员可通过侧栏一键进入构建与数据及项目空间", async () => {
+  localStorage.setItem("token", "pa-token");
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/v1/me") return Response.json({ role: "user" });
+      if (url === "/api/v1/projects")
+        return Response.json([
+          {
+            id: "alpha",
+            name: "Alpha 主题域",
+            type: "warehouse",
+            status: "active",
+            created_at: "2026-01-01T00:00:00Z",
+            my_role: "admin",
+          },
+        ]);
+      if (url === "/api/v1/builds?project=alpha") return Response.json([]);
+      if (url === "/api/v1/generations?project=alpha")
+        return Response.json({
+          generations: [],
+          behind: false,
+          source_head: null,
+        });
+      return Response.json([]);
+    }),
+  );
+  render(<App />);
+  const buildsShortcut = await screen.findByRole("link", {
+    name: "构建与数据",
+  });
+  expect(screen.getByRole("link", { name: "项目空间" })).toBeTruthy();
+  expect(screen.queryByRole("link", { name: "系统设置" })).toBeNull();
+
+  fireEvent.click(buildsShortcut);
+  expect(
+    await screen.findByRole("heading", { level: 1, name: "构建记录" }),
+  ).toBeTruthy();
+  expect(await screen.findByRole("link", { name: "源文件" })).toBeTruthy();
+});

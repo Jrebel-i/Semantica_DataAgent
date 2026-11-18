@@ -27,6 +27,16 @@ class DocumentLink(BaseModel):
     ref: str
     path: str
     category: str
+    generated: bool | None = Field(default=None, exclude_if=lambda value: value is None)
+
+
+class RelationshipLink(BaseModel):
+    name: str
+    ref: str
+    from_table: str
+    from_columns: list[str]
+    to_table: str
+    to_columns: list[str]
 
 
 class TableSummary(BaseModel):
@@ -48,6 +58,9 @@ class TableView(BaseModel):
     ref: str
     fields: list[FieldView]
     documents: list[DocumentLink]
+    relationships: list[RelationshipLink] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
 
 @router.get("/api/v1/tables", response_model=list[TableView | TableSummary])

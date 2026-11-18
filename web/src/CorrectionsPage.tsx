@@ -93,6 +93,7 @@ export function CorrectionsPage({
           value={project}
           onChange={setProject}
           messages={t}
+          includeMemberProjects={gaps}
         />
       </div>
       {error && <Alert type="error" title={error} />}
