@@ -13,7 +13,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import text
 
@@ -23,7 +23,7 @@ from .auth import Requester
 from .auth import current_requester as rest_requester
 from .build_queue import active_build
 from .clarification import _owned_conversation
-from .db import CorrectionProposal, MetadataOverride, Token, sessions
+from .db import Conversation, CorrectionProposal, MetadataOverride, Token, sessions
 from .mcp_context import bind_mcp_context, current_conversation_id, current_requester
 from .project_api import admin_project_scope, project_scope
 from .project_context import add_queued_build
@@ -223,12 +223,20 @@ def propose_in_project(
     source: ProposalSource = "mcp",
     target_kind: TargetKind | None = None,
     structured_patch: dict[str, Any] | str | None = None,
+    conversation_id: str | None = None,
+    eval_candidate: dict[str, Any] | None = None,
 ) -> dict:
     """Propose replacement content or a structured semantic override inside one project."""
     requester = current_requester()
-    conversation_id = current_conversation_id()
-    if conversation_id:
-        _owned_conversation(conversation_id, requester.id)
+    resolved_conversation_id = (
+        conversation_id if conversation_id is not None else current_conversation_id()
+    )
+    if resolved_conversation_id:
+        _owned_conversation(resolved_conversation_id, requester.id)
+        with sessions()() as db:
+            conv = db.get(Conversation, resolved_conversation_id)
+            if conv is None or conv.project_id != project_id:
+                raise ValueError("Conversation not found in project")
     if not str(reason or "").strip():
         raise ValueError("Correction reason must not be blank")
     if source not in {"manual", "mcp", "evolution"}:
@@ -336,13 +344,21 @@ def propose_in_project(
     else:
         author = None
 
+    gate_payload = gate_report.to_dict()
+    if eval_candidate:
+        cleaned_candidate = {
+            key: value for key, value in eval_candidate.items() if value is not None
+        }
+        if cleaned_candidate:
+            gate_payload["eval_candidate"] = cleaned_candidate
+
     proposal_id = uuid.uuid4().hex
     with sessions().begin() as db:
         row = CorrectionProposal(
             id=proposal_id,
             project_id=project_id,
             owner_id=requester.id,
-            conversation_id=conversation_id,
+            conversation_id=resolved_conversation_id,
             target=target,
             patch=patch_text,
             original_patch=patch_text,
@@ -357,7 +373,7 @@ def propose_in_project(
                 if stored_structured_patch is not None
                 else None
             ),
-            gate_report=json.dumps(gate_report.to_dict(), ensure_ascii=False),
+            gate_report=json.dumps(gate_payload, ensure_ascii=False),
         )
         db.add(row)
         db.flush()
@@ -423,6 +439,14 @@ class ProposalView(BaseModel):
 class Approval(BaseModel):
     patch: Text | None = None
     structured_patch: dict[str, Any] | None = None
+    question: str | None = Field(default=None, max_length=20000)
+    reference_sql: str | None = Field(default=None, max_length=20000)
+    caliber: str | None = Field(default=None, max_length=5000)
+    expected_tables: list[str] | None = None
+    expected_fields: list[str] | None = None
+    dialect: Literal["hive", "mysql", "clickhouse", "postgresql", "trino"] | None = None
+    category: str | None = Field(default=None, min_length=1, max_length=120)
+    turn_id: int | None = None
 
 
 class ProposalCreate(BaseModel):
@@ -432,6 +456,31 @@ class ProposalCreate(BaseModel):
     source: ProposalSource | None = None
     target_kind: TargetKind | None = None
     structured_patch: dict[str, Any] | None = None
+    conversation_id: str | None = None
+    turn_id: int | None = None
+    question: str | None = Field(default=None, max_length=20000)
+    reference_sql: str | None = Field(default=None, max_length=20000)
+    caliber: str | None = Field(default=None, max_length=5000)
+    expected_tables: list[str] | None = None
+    expected_fields: list[str] | None = None
+    dialect: Literal["hive", "mysql", "clickhouse", "postgresql", "trino"] | None = None
+    category: str | None = Field(default=None, min_length=1, max_length=120)
+
+
+from .correction_draft import (
+    DraftCorrectionRequest,
+    DraftCorrectionResponse,
+    draft_correction_in_project,
+)
+
+
+@router.post("/api/v1/corrections/draft", response_model=DraftCorrectionResponse)
+def draft_proposal(
+    body: DraftCorrectionRequest,
+    requester: Annotated[Requester, Depends(rest_requester)],
+    project: Annotated[str | None, Query()] = None,
+):
+    return draft_correction_in_project(body, requester, query_project=project)
 
 
 @router.post("/api/v1/corrections", status_code=201)
@@ -444,6 +493,16 @@ def create_proposal(
         raise HTTPException(
             422, "patch must not be blank when structured_patch is omitted"
         )
+    eval_candidate = {
+        "turn_id": body.turn_id,
+        "question": body.question,
+        "reference_sql": body.reference_sql,
+        "caliber": body.caliber,
+        "expected_tables": body.expected_tables,
+        "expected_fields": body.expected_fields,
+        "dialect": body.dialect,
+        "category": body.category,
+    }
     try:
         with bind_mcp_context(requester):
             return propose_in_project(
@@ -454,6 +513,10 @@ def create_proposal(
                 source=body.source or "manual",
                 target_kind=body.target_kind,
                 structured_patch=body.structured_patch,
+                conversation_id=body.conversation_id,
+                eval_candidate=eval_candidate
+                if any(v is not None for v in eval_candidate.values())
+                else None,
             )
     except ValueError as exc:
         raise HTTPException(422, detail=str(exc)) from None
@@ -511,6 +574,8 @@ def reject(
 
 
 def _finalize(proposal_id: str, commit_sha: str) -> ProposalView:
+    from .eval_questions import promote_correction_to_eval_question
+
     source_dir_val: str | None = None
     with sessions().begin() as db:
         db.execute(text("BEGIN IMMEDIATE"))
@@ -536,6 +601,7 @@ def _finalize(proposal_id: str, commit_sha: str) -> ProposalView:
         result = ProposalView.model_validate(row)
     if source_dir_val:
         _remove_journal(Path(source_dir_val), proposal_id)
+    promote_correction_to_eval_question(proposal_id)
     project_context.wake_build_queue()
     return result
 
@@ -732,6 +798,32 @@ def _is_plain_legacy_comment(target: str, structured: dict[str, Any] | None) -> 
     )
 
 
+def _merged_gate_report_json(
+    existing_json: str | None,
+    gate_report,
+    approval_eval: dict[str, Any] | None = None,
+) -> str:
+    """Serialize L1 gate_report while preserving any attached eval_candidate metadata."""
+    payload = gate_report.to_dict()
+    merged_candidate: dict[str, Any] = {}
+    if existing_json:
+        try:
+            existing = json.loads(existing_json)
+            if isinstance(existing, dict) and isinstance(
+                existing.get("eval_candidate"), dict
+            ):
+                merged_candidate.update(existing["eval_candidate"])
+        except ValueError:
+            pass
+    if approval_eval:
+        for key, value in approval_eval.items():
+            if value is not None:
+                merged_candidate[key] = value
+    if merged_candidate:
+        payload["eval_candidate"] = merged_candidate
+    return json.dumps(payload, ensure_ascii=False)
+
+
 def _apply_proposal(
     proposal_id: str,
     *,
@@ -742,6 +834,7 @@ def _apply_proposal(
     structured_override: dict[str, Any] | None,
     auto_apply: bool,
     project_id: str | None = None,
+    approval_eval: dict[str, Any] | None = None,
 ) -> ProposalView:
     with sessions().begin() as db:
         db.execute(text("BEGIN IMMEDIATE"))
@@ -813,14 +906,20 @@ def _apply_proposal(
                 override.comment = effective_patch
             row.patch = effective_patch
             row.diff = _unified_diff(row.target, row.original, effective_patch)
-            row.gate_report = json.dumps(gate_report.to_dict(), ensure_ascii=False)
+            row.gate_report = _merged_gate_report_json(
+                row.gate_report, gate_report, approval_eval
+            )
             row.status = "auto_applied" if auto_apply else "approved"
             row.reviewer_id = reviewer_id
             row.reviewer_name = reviewer_name
             if not auto_apply:
                 row.reviewed_at = datetime.now(UTC)
             db.flush()
-            return ProposalView.model_validate(row)
+            result = ProposalView.model_validate(row)
+        from .eval_questions import promote_correction_to_eval_question
+
+        promote_correction_to_eval_question(proposal_id, approval_eval=approval_eval)
+        return result
 
     if row_kind != "document":
         migrate_legacy_metadata_overrides(row_project_id)
@@ -852,7 +951,9 @@ def _apply_proposal(
         row.patch = effective_patch
         if effective_structured is not None:
             row.structured_patch = json.dumps(effective_structured, ensure_ascii=False)
-        row.gate_report = json.dumps(gate_report.to_dict(), ensure_ascii=False)
+        row.gate_report = _merged_gate_report_json(
+            row.gate_report, gate_report, approval_eval
+        )
         row.diff = _unified_diff(row.source_path, row.original, effective_patch)
         row.status = "applying"
         row.reviewer_id = reviewer_id
@@ -945,6 +1046,20 @@ def approve(
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from None
 
+    approval_eval = (
+        {
+            "question": body.question,
+            "reference_sql": body.reference_sql,
+            "caliber": body.caliber,
+            "expected_tables": body.expected_tables,
+            "expected_fields": body.expected_fields,
+            "dialect": body.dialect,
+            "category": body.category,
+            "turn_id": body.turn_id,
+        }
+        if body
+        else None
+    )
     return _apply_proposal(
         proposal_id,
         reviewer_id=requester.id,
@@ -954,6 +1069,9 @@ def approve(
         structured_override=body.structured_patch if body else None,
         auto_apply=False,
         project_id=project_id,
+        approval_eval=approval_eval
+        if approval_eval and any(v is not None for v in approval_eval.values())
+        else None,
     )
 
 

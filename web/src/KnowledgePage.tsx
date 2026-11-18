@@ -1,16 +1,8 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
-import {
-  Alert,
-  Button,
-  Input,
-  Modal,
-  Table,
-  Tag,
-  Tree,
-  Typography,
-} from "antd";
+import { Alert, Button, Input, Table, Tag, Tree, Typography } from "antd";
 import type { TreeDataNode } from "antd";
 import type { paths } from "./api";
+import { CorrectionDraftDrawer } from "./chat/CorrectionDraftDrawer";
 import { TaskLineage, type TableLineage } from "./TaskLineage";
 import type { Messages } from "./i18n";
 import { ColumnLineage } from "./ColumnLineage";
@@ -110,9 +102,12 @@ export function KnowledgePage({
   const [tableLimits, setTableLimits] = useState<Record<string, number>>({});
   const [treeHeight, setTreeHeight] = useState(0);
   const [error, setError] = useState(false);
-  const [correctionOpen, setCorrectionOpen] = useState(false);
-  const [patch, setPatch] = useState("");
-  const [reason, setReason] = useState("");
+  const [correctionTarget, setCorrectionTarget] = useState<{
+    target: string;
+    label?: string;
+    sourceGenerated?: boolean;
+    category?: string;
+  } | null>(null);
   const [proposalStatus, setProposalStatus] = useState("");
   const [showRawDoc, setShowRawDoc] = useState(false);
   const [exportingOssie, setExportingOssie] = useState(false);
@@ -141,9 +136,7 @@ export function KnowledgePage({
     setDatabase("");
     setExpandedKeys([]);
     setTableLimits({});
-    setCorrectionOpen(false);
-    setPatch("");
-    setReason("");
+    setCorrectionTarget(null);
     setProposalStatus("");
     setShowRawDoc(false);
     setExportError("");
@@ -153,8 +146,7 @@ export function KnowledgePage({
   useEffect(() => {
     setLinkedDocument(null);
     setLineage(null);
-    setPatch("");
-    setReason("");
+    setCorrectionTarget(null);
     setProposalStatus("");
   }, [selected]);
 
@@ -355,38 +347,6 @@ export function KnowledgePage({
       setError(false);
     } catch {
       if (generation === projectGeneration.current) setError(true);
-    }
-  }
-
-  async function submitCorrection() {
-    const target = selected
-      ? selected.ref
-      : readingDoc
-        ? readingDoc.ref || `document:${readingDoc.path}`
-        : "";
-    if (!target) return;
-    const generation = projectGeneration.current;
-    try {
-      const response = await fetch(
-        `/api/v1/corrections?${new URLSearchParams({ project })}`,
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${token}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ target, patch, reason }),
-        },
-      );
-      if (!response.ok) throw new Error();
-      if (generation !== projectGeneration.current) return;
-      setProposalStatus(messages.correctionSubmitted);
-      setPatch("");
-      setReason("");
-      setCorrectionOpen(false);
-    } catch {
-      if (generation === projectGeneration.current)
-        setProposalStatus(messages.error);
     }
   }
 
@@ -727,7 +687,15 @@ export function KnowledgePage({
                     {selected.comment || messages.noDescription}
                   </p>
                 </div>
-                <Button onClick={() => setCorrectionOpen(true)}>
+                <Button
+                  onClick={() =>
+                    setCorrectionTarget({
+                      target: selected.ref,
+                      label: `${selected.database}.${selected.name}`,
+                      category: "metadata",
+                    })
+                  }
+                >
                   {messages.proposeCorrection}
                 </Button>
               </div>
@@ -781,6 +749,9 @@ export function KnowledgePage({
                             <th className="field-partition">
                               {messages.partition}
                             </th>
+                            <th className="field-actions">
+                              {messages.actions}
+                            </th>
                           </tr>
                         </thead>
                         <tbody>
@@ -824,11 +795,26 @@ export function KnowledgePage({
                                 <td className="field-partition">
                                   {field.partition ? messages.yes : messages.no}
                                 </td>
+                                <td className="field-actions">
+                                  <Button
+                                    size="small"
+                                    aria-label={`${messages.proposeCorrection} ${field.name}`}
+                                    onClick={() =>
+                                      setCorrectionTarget({
+                                        target: `field:${selected.catalog ? `${selected.catalog}.` : ""}${selected.database}.${selected.name}.${field.name}`,
+                                        label: `${selected.database}.${selected.name}.${field.name}`,
+                                        category: "metadata",
+                                      })
+                                    }
+                                  >
+                                    {messages.proposeCorrectionShort}
+                                  </Button>
+                                </td>
                               </tr>
                               {expandedColumn ===
                                 `${selected.database}.${selected.name}.${field.name}` && (
                                 <tr>
-                                  <td colSpan={5}>
+                                  <td colSpan={6}>
                                     <ColumnLineage
                                       table={`${selected.database}.${selected.name}`}
                                       column={field.name}
@@ -878,6 +864,19 @@ export function KnowledgePage({
                                 onClick={() => void selectTableByName(peer)}
                               >
                                 {peer}
+                              </Button>{" "}
+                              <Button
+                                size="small"
+                                aria-label={`${messages.proposeCorrection} ${rel.name}`}
+                                onClick={() =>
+                                  setCorrectionTarget({
+                                    target: rel.ref,
+                                    label: rel.name,
+                                    category: "relationship",
+                                  })
+                                }
+                              >
+                                {messages.proposeCorrectionShort}
                               </Button>
                             </li>
                           );
@@ -931,6 +930,28 @@ export function KnowledgePage({
                             )?.generated) && (
                             <Tag>{messages.generatedReadOnly}</Tag>
                           )}
+                          <Button
+                            size="small"
+                            aria-label={`${messages.proposeCorrection} ${safeDecodePath(linkedDocument.path)}`}
+                            onClick={() => {
+                              const isGen = Boolean(
+                                linkedDocument.generated ||
+                                (detail.documents ?? []).find(
+                                  (item) => item.ref === linkedDocument.ref,
+                                )?.generated,
+                              );
+                              setCorrectionTarget({
+                                target:
+                                  linkedDocument.ref ||
+                                  `document:${linkedDocument.path}`,
+                                label: safeDecodePath(linkedDocument.path),
+                                sourceGenerated: isGen,
+                                category: isGen ? "metadata" : "caliber",
+                              });
+                            }}
+                          >
+                            {messages.proposeCorrectionShort}
+                          </Button>
                         </div>
                         <Markdown text={linkedDocument.content} />
                       </div>
@@ -976,11 +997,20 @@ export function KnowledgePage({
                   >
                     {showRawDoc ? messages.readingView : messages.rawLineView}
                   </Button>
-                  {!readingDoc.generated && (
-                    <Button onClick={() => setCorrectionOpen(true)}>
-                      {messages.proposeCorrection}
-                    </Button>
-                  )}
+                  <Button
+                    onClick={() =>
+                      setCorrectionTarget({
+                        target: readingDoc.ref || `document:${readingDoc.path}`,
+                        label: safeDecodePath(readingDoc.path),
+                        sourceGenerated: Boolean(readingDoc.generated),
+                        category: readingDoc.generated ? "metadata" : "caliber",
+                      })
+                    }
+                  >
+                    {readingDoc.generated
+                      ? messages.proposeOverrideCorrection
+                      : messages.proposeCorrection}
+                  </Button>
                 </div>
               </div>
               {proposalStatus && (
@@ -1013,43 +1043,19 @@ export function KnowledgePage({
           )}
         </main>
       </div>
-      <Modal
-        open={correctionOpen}
-        title={messages.proposeCorrection}
-        onCancel={() => setCorrectionOpen(false)}
-        onOk={() => void submitCorrection()}
-        okText={messages.proposeCorrection}
-        cancelText={messages.cancel}
-        okButtonProps={{ disabled: !patch.trim() || !reason.trim() }}
-      >
-        <div className="correction-form">
-          <div className="field">
-            <label className="field-label" htmlFor="correction-patch">
-              {messages.correctionReplacement}
-            </label>
-            <Input.TextArea
-              id="correction-patch"
-              aria-label={messages.correctionReplacement}
-              rows={5}
-              value={patch}
-              onChange={(event) => setPatch(event.target.value)}
-            />
-            <p className="field-hint">{messages.correctionPatchHint}</p>
-          </div>
-          <div className="field">
-            <label className="field-label" htmlFor="correction-reason">
-              {messages.correctionReason}
-            </label>
-            <Input
-              id="correction-reason"
-              aria-label={messages.correctionReason}
-              value={reason}
-              onChange={(event) => setReason(event.target.value)}
-            />
-            <p className="field-hint">{messages.correctionReasonHint}</p>
-          </div>
-        </div>
-      </Modal>
+      <CorrectionDraftDrawer
+        open={correctionTarget !== null}
+        token={token}
+        project={project}
+        messages={messages}
+        target={correctionTarget?.target}
+        targetLabel={correctionTarget?.label}
+        sourceGenerated={Boolean(correctionTarget?.sourceGenerated)}
+        defaultCategory={correctionTarget?.category || "caliber"}
+        allowDirectEdit={!correctionTarget?.sourceGenerated}
+        onClose={() => setCorrectionTarget(null)}
+        onSubmitted={() => setProposalStatus(messages.correctionSubmitted)}
+      />
     </>
   );
 }

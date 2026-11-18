@@ -226,9 +226,19 @@ export function BuildPage({
                   {
                     title: t.buildStatus,
                     render: (_, row) => (
-                      <Tag color={statusColors[row.status]}>
-                        {t[row.status]}
-                      </Tag>
+                      <div className="build-status-tags">
+                        <Tag color={statusColors[row.status]}>
+                          {t[row.status]}
+                        </Tag>
+                        {(row.stale_overrides?.length ?? 0) > 0 && (
+                          <Tag color="warning">
+                            {t.staleOverridesBadge.replace(
+                              "{count}",
+                              String(row.stale_overrides?.length ?? 0),
+                            )}
+                          </Tag>
+                        )}
+                      </div>
                     ),
                   },
                   {
@@ -334,6 +344,26 @@ export function BuildPage({
                     : []),
                 ]}
               />
+              {(selected.stale_overrides?.length ?? 0) > 0 && (
+                <Alert
+                  style={{ marginTop: 16 }}
+                  type="warning"
+                  showIcon
+                  title={t.staleOverridesTitle}
+                  description={
+                    <ul className="stale-overrides-list">
+                      {(selected.stale_overrides ?? []).map((item, idx) => (
+                        <li key={`${item.kind}-${item.key}-${idx}`}>
+                          <strong>
+                            [{item.kind}] {item.key}
+                          </strong>
+                          ：{item.reason}
+                        </li>
+                      ))}
+                    </ul>
+                  }
+                />
+              )}
               <h3 className="card-title" style={{ marginTop: 16 }}>
                 {t.buildStats}
               </h3>

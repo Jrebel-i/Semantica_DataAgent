@@ -7,6 +7,7 @@ import {
   Modal,
   Select,
   Space,
+  Switch,
   Table,
   Tag,
 } from "antd";
@@ -16,6 +17,7 @@ import { downloadOssieModel, exportErrorMessage } from "./ossieExport";
 import { TableScroll } from "./TableScroll";
 
 type ProjectRow = components["schemas"]["ProjectView"];
+type EvolutionPolicy = components["schemas"]["EvolutionPolicyView"];
 type ProjectRole = "admin" | "member";
 
 type MemberRow = {
@@ -184,6 +186,13 @@ export function ProjectsPage({
   const [exportingFormat, setExportingFormat] = useState<
     "yaml" | "json" | null
   >(null);
+  const [policy, setPolicy] = useState<EvolutionPolicy>({
+    correction_require_review: true,
+    evolution_require_review: true,
+  });
+  const [policyBusy, setPolicyBusy] = useState(false);
+  const [policyError, setPolicyError] = useState("");
+  const [policyNotice, setPolicyNotice] = useState("");
 
   const authHeaders = { Authorization: `Bearer ${token}` };
   const refresh = useCallback(async () => {
@@ -254,17 +263,81 @@ export function ProjectsPage({
     [token, t.adapterSaveFailed],
   );
 
+  const loadPolicy = useCallback(
+    async (projectId: string) => {
+      try {
+        const response = await fetch(
+          `/api/v1/projects/${projectId}/evolution-policy`,
+          { headers: authHeaders },
+        );
+        if (!response.ok) return;
+        const data = (await response.json()) as Partial<EvolutionPolicy>;
+        setPolicy({
+          correction_require_review: data.correction_require_review ?? true,
+          evolution_require_review: data.evolution_require_review ?? true,
+        });
+        setPolicyError("");
+      } catch {
+        // Keep safe defaults if the policy endpoint fails transiently
+      }
+    },
+    [token],
+  );
+
   async function openProject(project: ProjectRow) {
     setSelected(project);
     setMemberError("");
     setAdapterError("");
+    setPolicyError("");
+    setPolicyNotice("");
     setAdapters([]);
     setAddUserId(undefined);
     setAddRole("member");
     await Promise.all([
       project.my_role === "admin" ? loadMembers(project.id) : undefined,
+      project.my_role === "admin" ? loadPolicy(project.id) : undefined,
       loadAdapters(project.id),
     ]);
+  }
+
+  async function togglePolicy(field: keyof EvolutionPolicy, checked: boolean) {
+    if (!selected) return;
+    setPolicyBusy(true);
+    setPolicyError("");
+    setPolicyNotice("");
+    try {
+      const response = await fetch(
+        `/api/v1/projects/${selected.id}/evolution-policy`,
+        {
+          method: "PUT",
+          headers: { ...authHeaders, "Content-Type": "application/json" },
+          body: JSON.stringify({ [field]: checked }),
+        },
+      );
+      if (!response.ok) {
+        throw new Error(await errorDetail(response, t.evolutionPolicyFailed));
+      }
+      const updated = (await response.json()) as Partial<EvolutionPolicy>;
+      setPolicy({
+        correction_require_review:
+          updated.correction_require_review ??
+          (field === "correction_require_review"
+            ? checked
+            : policy.correction_require_review),
+        evolution_require_review:
+          updated.evolution_require_review ??
+          (field === "evolution_require_review"
+            ? checked
+            : policy.evolution_require_review),
+      });
+      setPolicyNotice(t.evolutionPolicySaved);
+    } catch (failure) {
+      setPolicyError(
+        failure instanceof Error ? failure.message : t.evolutionPolicyFailed,
+      );
+    } finally {
+      setPolicyBusy(false);
+    }
   }
 
   function updateAdapter(id: string, patch: Partial<AdapterRow>) {
@@ -629,6 +702,58 @@ export function ProjectsPage({
             </Button>
           )}
         </div>
+        {selected.my_role === "admin" && (
+          <div className="card section-card">
+            <h2 className="card-title">{t.evolutionPolicyTitle}</h2>
+            <p className="page-subtitle">{t.evolutionPolicyHint}</p>
+            {policyError && <Alert type="error" title={policyError} />}
+            {policyNotice && <Alert type="success" title={policyNotice} />}
+            <div className="stack">
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: 12,
+                }}
+              >
+                <span id="policy-correction-label">
+                  {t.correctionRequireReview}
+                </span>
+                <Switch
+                  aria-labelledby="policy-correction-label"
+                  aria-label={t.correctionRequireReview}
+                  checked={policy.correction_require_review}
+                  disabled={policyBusy || selected.status !== "active"}
+                  onChange={(checked) =>
+                    void togglePolicy("correction_require_review", checked)
+                  }
+                />
+              </div>
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: 12,
+                }}
+              >
+                <span id="policy-evolution-label">
+                  {t.evolutionRequireReview}
+                </span>
+                <Switch
+                  aria-labelledby="policy-evolution-label"
+                  aria-label={t.evolutionRequireReview}
+                  checked={policy.evolution_require_review}
+                  disabled={policyBusy || selected.status !== "active"}
+                  onChange={(checked) =>
+                    void togglePolicy("evolution_require_review", checked)
+                  }
+                />
+              </div>
+            </div>
+          </div>
+        )}
         {selected.my_role === "admin" && (
           <div className="card section-card">
             <h2 className="card-title">{t.projectMembers}</h2>

@@ -1108,11 +1108,205 @@ test("展示 catalog 前缀、外键关系跳转、Markdown 文档及派生只�
     screen.getByRole("heading", { level: 2, name: "指标定义" }),
   ).toBeTruthy();
   expect(screen.queryByRole("button", { name: "提出纠错" })).toBeNull();
+  expect(screen.getByRole("button", { name: "语义覆盖纠错" })).toBeTruthy();
 
   fireEvent.change(screen.getByLabelText("搜索表或文档"), {
     target: { value: "不存在的过滤词" },
   });
   await waitFor(() =>
     expect(screen.getByRole("button", { name: "导出 Ossie" })).toBeTruthy(),
+  );
+});
+
+test("支持在字段、表关联与派生文档上通过语义覆盖草案发起纠错", async () => {
+  const requests: { url: string; method?: string; body?: unknown }[] = [];
+  const ordersTable: TableRow & {
+    relationships?: {
+      name: string;
+      ref: string;
+      from_table: string;
+      from_columns: string[];
+      to_table: string;
+      to_columns: string[];
+    }[];
+  } = {
+    ...table("dwd", "orders"),
+    relationships: [
+      {
+        ref: "relationship:fk_orders_city",
+        name: "fk_orders_city",
+        from_table: "dwd.orders",
+        from_columns: ["city_id"],
+        to_table: "dim.city",
+        to_columns: ["id"],
+      },
+    ],
+    documents: [
+      {
+        ref: "document:linked_rule",
+        path: "knowledge/metrics/linked_rule.md",
+        category: "metrics",
+      },
+    ],
+  };
+
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string, init?: RequestInit) => {
+      const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+      requests.push({ url, method: init?.method, body });
+      if (url === "/api/v1/projects") return Response.json(projects);
+      if (url.startsWith("/api/v1/categories")) {
+        return Response.json([
+          {
+            ref: "category:ossie",
+            name: "ossie",
+            description: "Derived Ossie docs",
+            documents: [
+              {
+                ref: "document:ossie_orders",
+                path: "ossie/orders.md",
+                title: "订单语义文档",
+                generated: true,
+              },
+            ],
+          },
+        ]);
+      }
+      if (url.startsWith("/api/v1/tables?"))
+        return Response.json([ordersTable]);
+      if (url.startsWith("/api/v1/tables/dwd/orders?"))
+        return Response.json(ordersTable);
+      if (url.startsWith("/api/v1/table-lineage"))
+        return Response.json({ upstream: [], downstream: [], tasks: [] });
+      if (url.startsWith("/api/v1/document")) {
+        if (url.includes("linked_rule")) {
+          return Response.json({
+            ref: "document:linked_rule",
+            category: "knowledge",
+            path: "knowledge/metrics/linked_rule.md",
+            title: "关联规则",
+            content: "# 关联规则\n\n仅计入有效订单。",
+            start_line: 1,
+            end_line: 3,
+            generated: false,
+          });
+        }
+        return Response.json({
+          ref: "document:ossie_orders",
+          category: "ossie",
+          path: "ossie/orders.md",
+          title: "订单语义文档",
+          content: "## 指标定义\n自动生成内容",
+          start_line: 1,
+          end_line: 2,
+          generated: true,
+        });
+      }
+      if (url === "/api/v1/corrections/draft" && init?.method === "POST") {
+        return Response.json({
+          target: "document:ossie_orders",
+          target_kind: "override",
+          patch: "version: 1",
+          structured_patch: {
+            version: 1,
+            tables: {
+              "dwd.orders": {
+                database: "dwd",
+                name: "orders",
+                instructions: "排除取消订单",
+              },
+            },
+          },
+          diff: "--- overrides/semantic_overrides.yaml\n+++ overrides/semantic_overrides.yaml\n+instructions: 排除取消订单",
+          gate_report: { passed: true, checks: [], errors: [] },
+          resolved_path: "overrides/semantic_overrides.yaml",
+          reason: "补充订单模型排除条件",
+          source_generated: true,
+          used_llm: false,
+        });
+      }
+      if (
+        url === "/api/v1/corrections?project=default" &&
+        init?.method === "POST"
+      ) {
+        return Response.json({ id: "prop-ossie", status: "pending" });
+      }
+      return Response.json({});
+    }),
+  );
+
+  render(<KnowledgePage token="token" messages={getMessages("zh")} />);
+
+  expect(
+    await screen.findByRole("button", { name: /提出纠错 dt/ }),
+  ).toBeTruthy();
+  expect(
+    screen.getByRole("button", { name: /提出纠错 fk_orders_city/ }),
+  ).toBeTruthy();
+
+  // Open linked document and verify inline correction button appears
+  fireEvent.click(
+    screen.getByRole("button", { name: "knowledge/metrics/linked_rule.md" }),
+  );
+  expect(
+    await screen.findByRole("button", {
+      name: /提出纠错 knowledge\/metrics\/linked_rule\.md/,
+    }),
+  ).toBeTruthy();
+
+  // Trigger relationship correction draft
+  fireEvent.click(
+    screen.getByRole("button", { name: /提出纠错 fk_orders_city/ }),
+  );
+  const relDialog = await screen.findByRole("dialog");
+  expect(
+    (within(relDialog).getByLabelText("目标引用（可选）") as HTMLInputElement)
+      .value,
+  ).toBe("relationship:fk_orders_city");
+  fireEvent.click(within(relDialog).getByRole("button", { name: "取消" }));
+
+  // Open generated Ossie doc and verify override draft & submit
+  await waitFor(() => {
+    if (!screen.queryByText("ossie")) {
+      fireEvent.click(screen.getByText("知识文档 (1)"));
+    }
+    expect(screen.getByText("ossie")).toBeTruthy();
+  });
+  await waitFor(() => {
+    if (!screen.queryByRole("button", { name: "ossie/orders.md" })) {
+      fireEvent.click(screen.getByText("ossie"));
+    }
+    expect(
+      screen.getByRole("button", { name: "ossie/orders.md" }),
+    ).toBeTruthy();
+  });
+  fireEvent.click(screen.getByRole("button", { name: "ossie/orders.md" }));
+
+  fireEvent.click(await screen.findByRole("button", { name: "语义覆盖纠错" }));
+  const ossieDialog = await screen.findByRole("dialog");
+  expect(
+    within(ossieDialog).getByText(/overrides\/semantic_overrides\.yaml/),
+  ).toBeTruthy();
+  fireEvent.change(within(ossieDialog).getByLabelText("纠错问题描述"), {
+    target: { value: "排除已取消的订单" },
+  });
+  fireEvent.click(
+    within(ossieDialog).getByRole("button", { name: "生成草稿预览" }),
+  );
+  expect(await within(ossieDialog).findByText("L1 预检通过")).toBeTruthy();
+  fireEvent.click(
+    within(ossieDialog).getByRole("button", { name: "提出纠错" }),
+  );
+
+  await waitFor(() =>
+    expect(
+      requests.some(
+        (req) =>
+          req.url === "/api/v1/corrections?project=default" &&
+          req.method === "POST" &&
+          (req.body as { target_kind?: string })?.target_kind === "override",
+      ),
+    ).toBe(true),
   );
 });

@@ -211,6 +211,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/conversations/{conversation_id}/turns/{turn_id}/feedback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Record Turn Feedback */
+        post: operations["record_turn_feedback_api_v1_conversations__conversation_id__turns__turn_id__feedback_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/conversations/{conversation_id}/turns/{turn_id}/queries/{query_id}/execute": {
         parameters: {
             query?: never;
@@ -240,6 +257,23 @@ export interface paths {
         put?: never;
         /** Create Proposal */
         post: operations["create_proposal_api_v1_corrections_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/corrections/draft": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Draft Proposal */
+        post: operations["draft_proposal_api_v1_corrections_draft_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -329,6 +363,42 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/api/v1/eval-questions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Eval Questions */
+        get: operations["list_eval_questions_api_v1_eval_questions_get"];
+        put?: never;
+        /** Create Eval Question */
+        post: operations["create_eval_question_api_v1_eval_questions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/eval-questions/{question_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete Eval Question */
+        delete: operations["delete_eval_question_api_v1_eval_questions__question_id__delete"];
+        options?: never;
+        head?: never;
+        /** Update Eval Question */
+        patch: operations["update_eval_question_api_v1_eval_questions__question_id__patch"];
         trace?: never;
     };
     "/api/v1/filters": {
@@ -1254,12 +1324,28 @@ export interface components {
         };
         /** Approval */
         Approval: {
+            /** Caliber */
+            caliber?: string | null;
+            /** Category */
+            category?: string | null;
+            /** Dialect */
+            dialect?: ("hive" | "mysql" | "clickhouse" | "postgresql" | "trino") | null;
+            /** Expected Fields */
+            expected_fields?: string[] | null;
+            /** Expected Tables */
+            expected_tables?: string[] | null;
             /** Patch */
             patch?: string | null;
+            /** Question */
+            question?: string | null;
+            /** Reference Sql */
+            reference_sql?: string | null;
             /** Structured Patch */
             structured_patch?: {
                 [key: string]: unknown;
             } | null;
+            /** Turn Id */
+            turn_id?: number | null;
         };
         /** AskRequest */
         AskRequest: {
@@ -1502,6 +1588,65 @@ export interface components {
             /** Start Line */
             start_line: number;
         };
+        /** DraftCorrectionRequest */
+        DraftCorrectionRequest: {
+            /** Category */
+            category?: string | null;
+            /** Conversation Id */
+            conversation_id?: string | null;
+            /** Description */
+            description: string;
+            /** Model */
+            model?: string | null;
+            /** Project */
+            project?: string | null;
+            /** Provider Id */
+            provider_id?: string | null;
+            /** Target */
+            target?: string | null;
+            /** Turn Id */
+            turn_id?: number | null;
+        };
+        /** DraftCorrectionResponse */
+        DraftCorrectionResponse: {
+            /** Caliber */
+            caliber?: string | null;
+            /** Diff */
+            diff: string;
+            /** Gate Report */
+            gate_report: {
+                [key: string]: unknown;
+            };
+            /** Patch */
+            patch: string;
+            /** Reason */
+            reason: string;
+            /** Reference Sql */
+            reference_sql?: string | null;
+            /** Resolved Path */
+            resolved_path: string;
+            /**
+             * Source Generated
+             * @default false
+             */
+            source_generated: boolean;
+            /** Structured Patch */
+            structured_patch?: {
+                [key: string]: unknown;
+            } | null;
+            /** Target */
+            target: string;
+            /**
+             * Target Kind
+             * @enum {string}
+             */
+            target_kind: "document" | "override" | "ossie";
+            /**
+             * Used Llm
+             * @default false
+             */
+            used_llm: boolean;
+        };
         /** DtbTokenInput */
         DtbTokenInput: {
             /** Token */
@@ -1526,6 +1671,149 @@ export interface components {
             task_id: string;
             /** Upstream */
             upstream: string;
+        };
+        /** EvalQuestionCreate */
+        EvalQuestionCreate: {
+            /**
+             * Answer Confirmed
+             * @default true
+             */
+            answer_confirmed: boolean;
+            /** Caliber */
+            caliber: string;
+            /**
+             * Category
+             * @default 未分类
+             */
+            category: string;
+            /**
+             * Clarify
+             * @default false
+             */
+            clarify: boolean;
+            /**
+             * Dialect
+             * @default hive
+             * @enum {string}
+             */
+            dialect: "hive" | "mysql" | "clickhouse" | "postgresql" | "trino";
+            /** Expected Fields */
+            expected_fields?: string[] | null;
+            /** Expected Tables */
+            expected_tables?: string[] | null;
+            /** Id */
+            id?: string | null;
+            /**
+             * Notes
+             * @default
+             */
+            notes: string;
+            /** Question */
+            question: string;
+            /** Reference Sql */
+            reference_sql: string;
+            /** Split */
+            split?: ("dev" | "holdout") | null;
+        };
+        /** EvalQuestionPatch */
+        EvalQuestionPatch: {
+            /** Answer Confirmed */
+            answer_confirmed?: boolean | null;
+            /** Caliber */
+            caliber?: string | null;
+            /** Category */
+            category?: string | null;
+            /** Clarify */
+            clarify?: boolean | null;
+            /** Dialect */
+            dialect?: ("hive" | "mysql" | "clickhouse" | "postgresql" | "trino") | null;
+            /** Expected Fields */
+            expected_fields?: string[] | null;
+            /** Expected Tables */
+            expected_tables?: string[] | null;
+            /** Notes */
+            notes?: string | null;
+            /** Question */
+            question?: string | null;
+            /** Reference Sql */
+            reference_sql?: string | null;
+            /** Split */
+            split?: ("dev" | "holdout") | null;
+        };
+        /** EvalQuestionView */
+        EvalQuestionView: {
+            /**
+             * Answer Confirmed
+             * @default false
+             */
+            answer_confirmed: boolean;
+            /** Caliber */
+            caliber?: string | null;
+            /**
+             * Category
+             * @default 未分类
+             */
+            category: string;
+            /**
+             * Clarify
+             * @default false
+             */
+            clarify: boolean;
+            /** Conversation Id */
+            conversation_id?: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Created By */
+            created_by?: string | null;
+            /**
+             * Dialect
+             * @default hive
+             */
+            dialect: string;
+            /** Expected Fields */
+            expected_fields?: string[];
+            /** Expected Tables */
+            expected_tables?: string[];
+            /** Id */
+            id: string;
+            /**
+             * Notes
+             * @default
+             */
+            notes: string;
+            /** Proposal Id */
+            proposal_id?: string | null;
+            /** Question */
+            question: string;
+            /**
+             * Redacted
+             * @default false
+             */
+            redacted: boolean;
+            /** Reference Sql */
+            reference_sql?: string | null;
+            /**
+             * Source
+             * @default manual
+             * @enum {string}
+             */
+            source: "manual" | "feedback" | "correction";
+            /**
+             * Split
+             * @default dev
+             * @enum {string}
+             */
+            split: "dev" | "holdout";
+            /** Turn Id */
+            turn_id?: number | null;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
         };
         /** EventView */
         EventView: {
@@ -1900,13 +2188,29 @@ export interface components {
         };
         /** ProposalCreate */
         ProposalCreate: {
+            /** Caliber */
+            caliber?: string | null;
+            /** Category */
+            category?: string | null;
+            /** Conversation Id */
+            conversation_id?: string | null;
+            /** Dialect */
+            dialect?: ("hive" | "mysql" | "clickhouse" | "postgresql" | "trino") | null;
+            /** Expected Fields */
+            expected_fields?: string[] | null;
+            /** Expected Tables */
+            expected_tables?: string[] | null;
             /**
              * Patch
              * @default
              */
             patch: string;
+            /** Question */
+            question?: string | null;
             /** Reason */
             reason: string;
+            /** Reference Sql */
+            reference_sql?: string | null;
             /** Source */
             source?: ("manual" | "mcp" | "evolution") | null;
             /** Structured Patch */
@@ -1917,6 +2221,8 @@ export interface components {
             target: string;
             /** Target Kind */
             target_kind?: ("document" | "override" | "ossie") | null;
+            /** Turn Id */
+            turn_id?: number | null;
         };
         /** ProposalView */
         ProposalView: {
@@ -2384,6 +2690,51 @@ export interface components {
              */
             role: "admin" | "member";
         };
+        /** TurnFeedbackRequest */
+        TurnFeedbackRequest: {
+            /** Caliber */
+            caliber?: string | null;
+            /** Category */
+            category?: string | null;
+            /** Dialect */
+            dialect?: ("hive" | "mysql" | "clickhouse" | "postgresql" | "trino") | null;
+            /** Expected Fields */
+            expected_fields?: string[] | null;
+            /** Expected Tables */
+            expected_tables?: string[] | null;
+            /**
+             * Notes
+             * @default
+             */
+            notes: string;
+            /**
+             * Rating
+             * @default accurate
+             * @constant
+             */
+            rating: "accurate";
+            /** Reference Sql */
+            reference_sql?: string | null;
+        };
+        /** TurnFeedbackView */
+        TurnFeedbackView: {
+            /** Answer Confirmed */
+            answer_confirmed: boolean;
+            eval_question: components["schemas"]["EvalQuestionView"];
+            /** Question Id */
+            question_id: string;
+            /**
+             * Rating
+             * @default accurate
+             * @constant
+             */
+            rating: "accurate";
+            /**
+             * Split
+             * @enum {string}
+             */
+            split: "dev" | "holdout";
+        };
         /** TurnView */
         TurnView: {
             /** Answer */
@@ -2396,13 +2747,27 @@ export interface components {
             effort: string | null;
             /** Error */
             error: string | null;
+            /** Eval Answer Confirmed */
+            eval_answer_confirmed?: boolean | null;
+            /** Eval Question Id */
+            eval_question_id?: string | null;
             /**
              * Events
              * @default []
              */
             events: components["schemas"]["EventView"][];
+            /**
+             * Feedback Accurate
+             * @default false
+             */
+            feedback_accurate: boolean;
             /** Finished At */
             finished_at: string | null;
+            /**
+             * Has Validated Sql
+             * @default false
+             */
+            has_validated_sql: boolean;
             /** Id */
             id: number;
             /** Model */
@@ -2907,6 +3272,42 @@ export interface operations {
             };
         };
     };
+    record_turn_feedback_api_v1_conversations__conversation_id__turns__turn_id__feedback_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                conversation_id: string;
+                turn_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["TurnFeedbackRequest"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TurnFeedbackView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     confirm_query_api_v1_conversations__conversation_id__turns__turn_id__queries__query_id__execute_post: {
         parameters: {
             query?: never;
@@ -2993,6 +3394,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    draft_proposal_api_v1_corrections_draft_post: {
+        parameters: {
+            query?: {
+                project?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DraftCorrectionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DraftCorrectionResponse"];
                 };
             };
             /** @description Validation Error */
@@ -3162,6 +3598,144 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DocumentView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_eval_questions_api_v1_eval_questions_get: {
+        parameters: {
+            query?: {
+                split?: ("dev" | "holdout") | null;
+                answer_confirmed?: boolean | null;
+                category?: string | null;
+                source?: ("manual" | "feedback" | "correction") | null;
+                project?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EvalQuestionView"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_eval_question_api_v1_eval_questions_post: {
+        parameters: {
+            query?: {
+                project?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EvalQuestionCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EvalQuestionView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_eval_question_api_v1_eval_questions__question_id__delete: {
+        parameters: {
+            query?: {
+                project?: string | null;
+            };
+            header?: never;
+            path: {
+                question_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_eval_question_api_v1_eval_questions__question_id__patch: {
+        parameters: {
+            query?: {
+                project?: string | null;
+            };
+            header?: never;
+            path: {
+                question_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EvalQuestionPatch"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EvalQuestionView"];
                 };
             };
             /** @description Validation Error */

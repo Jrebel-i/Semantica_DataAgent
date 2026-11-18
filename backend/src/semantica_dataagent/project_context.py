@@ -425,6 +425,42 @@ def project_source_directory(project_id: str) -> Path:
     return projects_root() / project_id / "source"
 
 
+def project_eval_directory(project_id: str) -> Path:
+    """Return the source-isolated eval directory for a project."""
+    root = projects_root().resolve()
+    project_dir = (root / project_id).resolve()
+    if project_dir.parent != root or project_dir == root:
+        raise ValueError(f"Invalid project directory for eval questions: {project_id}")
+    return project_dir / "eval"
+
+
+def eval_questions_path(project_id: str) -> Path:
+    """Return the per-project questions.yaml path, verified outside source_directory."""
+    target = (project_eval_directory(project_id) / "questions.yaml").resolve()
+    candidates = [project_source_directory(project_id)]
+    configured_source = source_directory_value(project_id)
+    if configured_source:
+        candidates.append(Path(configured_source))
+    if project_id == DEFAULT_PROJECT_ID and os.environ.get("DATAAGENT_SOURCE_DIR"):
+        candidates.append(Path(os.environ["DATAAGENT_SOURCE_DIR"]))
+    for source_path in candidates:
+        source_root = source_path.expanduser().resolve()
+        if target == source_root or target.is_relative_to(source_root):
+            raise RuntimeError(
+                f"Eval questions path {target} must stay isolated outside source directory {source_root}"
+            )
+    return target
+
+
+def delete_project_eval_directory(project_id: str) -> None:
+    """Remove a project's source-isolated eval directory if present."""
+    eval_dir = project_eval_directory(project_id)
+    if eval_dir.is_symlink():
+        eval_dir.unlink()
+    elif eval_dir.exists():
+        shutil.rmtree(eval_dir)
+
+
 def generation_is_built(project_id: str, generation: str) -> bool:
     """True when the generation has been produced by a successful build."""
     with sessions()() as db:
@@ -459,9 +495,10 @@ def recover_projects() -> None:
         if status == DELETING_STATUS:
             shutil.rmtree(entry, ignore_errors=True)
             continue
-        source = entry / "source"
-        if not source.exists():
-            source.mkdir(parents=True, exist_ok=True)
+        if entry.name != DEFAULT_PROJECT_ID:
+            source = entry / "source"
+            if not source.exists():
+                source.mkdir(parents=True, exist_ok=True)
     for project_id, status in known.items():
         if project_id == DEFAULT_PROJECT_ID or status == DELETING_STATUS:
             continue

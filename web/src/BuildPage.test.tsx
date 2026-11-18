@@ -210,3 +210,68 @@ test("loads and saves the scheduled build interval", async () => {
     expect(requests).toEqual([{ values: { schedule_interval_seconds: "5" } }]),
   );
 });
+
+test("renders stale_overrides warning badge and detail list on build cards", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) => {
+      if (url === "/api/v1/projects")
+        return Response.json([
+          {
+            id: "default",
+            name: "业务数据",
+            type: "warehouse",
+            status: "active",
+            created_at: "2026-01-01T00:00:00Z",
+            my_role: "admin",
+          },
+        ]);
+      if (url === "/api/v1/projects/default/schedule")
+        return Response.json({ interval_seconds: 0 });
+      if (url === "/api/v1/generations?project=default")
+        return Response.json({
+          generations: [],
+          behind: false,
+          source_head: null,
+        });
+      if (url === "/api/v1/builds?project=default")
+        return Response.json([
+          {
+            id: 7,
+            project_id: "default",
+            status: "succeeded",
+            started_at: "2026-01-02T00:00:00Z",
+            finished_at: "2026-01-02T00:01:00Z",
+            counts: { table: 3 },
+            error: null,
+            build_type: "incremental",
+            triggered_by: "Alice",
+            source_commit: "b".repeat(40),
+            logs: [],
+            stale_overrides: [
+              {
+                kind: "field",
+                key: "shop.orders.legacy_col",
+                reason: "Field shop.orders.legacy_col not found",
+              },
+            ],
+          },
+        ]);
+      return Response.json([]);
+    }),
+  );
+
+  render(<BuildPage token="token" messages={getMessages("zh")} />);
+  const badge = await screen.findByText("失效覆盖 1");
+  expect(badge).toBeTruthy();
+  fireEvent.click(badge.closest("tr")!);
+  expect(
+    await screen.findByText("部分语义覆盖条目在本次构建中已失效"),
+  ).toBeTruthy();
+  expect(
+    screen.getAllByText(/shop\.orders\.legacy_col/).length,
+  ).toBeGreaterThan(0);
+  expect(
+    screen.getByText(/Field shop\.orders\.legacy_col not found/),
+  ).toBeTruthy();
+});

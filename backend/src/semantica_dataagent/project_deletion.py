@@ -93,6 +93,7 @@ def is_project_collection(name: str, project_id: str) -> bool:
 
 
 def _delete_source(project_id: str, settings: dict) -> None:
+    project_context.delete_project_eval_directory(project_id)
     root = project_context.projects_root().resolve()
     target = (root / project_id).resolve()
     if target.parent != root or target == root:

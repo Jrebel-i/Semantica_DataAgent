@@ -865,6 +865,10 @@ from .project_api import router as projects_router
 
 app.include_router(projects_router)
 
+from .eval_questions import router as eval_questions_router
+
+app.include_router(eval_questions_router)
+
 
 def _mcp_project_id() -> str:
     """Project bound to this MCP request by the transport middleware."""

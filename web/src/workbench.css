@@ -4018,6 +4018,18 @@ button.composer-project-chip:not(.ant-btn):disabled {
   opacity: 0.9;
 }
 
+.turn-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.stale-overrides-list {
+  margin: 4px 0 0;
+  padding-left: 18px;
+}
+
 /* Narrow screens: overlay navigation drawer and full-width content */
 .mobile-topbar {
   display: none;
