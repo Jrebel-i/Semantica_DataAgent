@@ -464,6 +464,118 @@ def diff(root, path, before, after):
     ).decode("utf-8", errors="replace")
 
 
+def _last_commit_author(root, rel_path):
+    result = subprocess.run(
+        [
+            "git",
+            "-c",
+            "core.hooksPath=/dev/null",
+            "-C",
+            str(root),
+            "log",
+            "-1",
+            "--format=%an",
+            "--",
+            rel_path,
+        ],
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return None
+    author = result.stdout.decode("utf-8", errors="replace").strip()
+    return author or None
+
+
+def _atomic_write_bytes(target, data, *, temp_prefix):
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            dir=target.parent,
+            prefix=temp_prefix,
+            suffix=".tmp",
+            delete=False,
+        ) as temp:
+            temp_path = Path(temp.name)
+            temp.write(data)
+            temp.flush()
+            os.fsync(temp.fileno())
+        os.replace(temp_path, target)
+        temp_path = None
+    finally:
+        if temp_path is not None:
+            temp_path.unlink(missing_ok=True)
+
+
+def _recover_ossie_pull(root, record, journal):
+    version = record["version"]
+    backup_dir = root / ".git" / "dataagent-pull-backup"
+    paths = record.get("paths") or []
+    existed = record.get("existed") or {}
+    backups = record.get("backups") or {}
+    try:
+        head = git(root, "rev-parse", "--verify", "HEAD").decode().strip()
+        subject = git(root, "log", "-1", "--format=%s").decode().strip()
+    except ValueError:
+        head, subject = None, None
+    if subject == f"定时拉取 {version}":
+        if backup_dir.exists():
+            shutil.rmtree(backup_dir)
+        journal.unlink()
+        return
+    if head != record["head"]:
+        raise ValueError("Source HEAD changed during pull recovery")
+    staged = [
+        item
+        for item in git(root, "diff", "--cached", "--name-only", "-z")
+        .decode()
+        .split("\0")
+        if item
+    ]
+    allowed = set(paths)
+    if any(item not in allowed for item in staged):
+        raise ValueError("Source repository has staged changes during pull recovery")
+    if paths:
+        if head:
+            git(root, "reset", "--quiet", "HEAD", "--", *paths)
+        else:
+            git(root, "rm", "-r", "-f", "--cached", "--ignore-unmatch", "--", *paths)
+
+    # Remove any partial temp files created before crash
+    for p_rel in paths:
+        target = safe(root, relative(p_rel))
+        if target.parent.is_dir():
+            for leftover in target.parent.glob(f".pull-{version}-*"):
+                leftover.unlink(missing_ok=True)
+
+    for p_rel in paths:
+        target = safe(root, relative(p_rel))
+        if existed.get(p_rel):
+            bak_name = backups.get(p_rel)
+            if bak_name:
+                bak_file = backup_dir / bak_name
+                if bak_file.is_file():
+                    _atomic_write_bytes(
+                        target,
+                        bak_file.read_bytes(),
+                        temp_prefix=f".recover-{version}-",
+                    )
+        else:
+            target.unlink(missing_ok=True)
+            parent = target.parent
+            while parent != root and parent.is_dir():
+                if any(parent.iterdir()):
+                    break
+                parent.rmdir()
+                parent = parent.parent
+
+    if backup_dir.exists():
+        shutil.rmtree(backup_dir)
+    journal.unlink()
+
+
 def recover_pulls(root):
     """Recover a pull interrupted before or after its git commit."""
     journal = root / ".git" / "dataagent-pull.json"
@@ -473,6 +585,9 @@ def recover_pulls(root):
     version = record["version"]
     if not re.fullmatch(r"[0-9]{8}T[0-9]{12}Z-[0-9a-f]{32}", version):
         raise ValueError("Invalid pull recovery journal")
+    if record.get("mode") == "ossie":
+        _recover_ossie_pull(root, record, journal)
+        return
     path = f"dtb/{version}"
     try:
         head = git(root, "rev-parse", "--verify", "HEAD").decode().strip()
@@ -495,6 +610,135 @@ def recover_pulls(root):
         if item.exists():
             shutil.rmtree(item)
     journal.unlink()
+
+
+def publish_ossie_pull(root, files, *, ossie_path="ossie", operation_id=None):
+    """Publish DTB-derived Ossie outputs atomically while protecting manual files."""
+    import uuid
+
+    recover_pulls(root)
+    if git(root, "diff", "--cached", "--name-only"):
+        raise ValueError("Source repository has staged changes")
+    if not files:
+        raise ValueError("Empty pull snapshot")
+    rel_ossie = safe_name(ossie_path).as_posix()
+    paths = {relative(name): content for name, content in files.items()}
+    if len(paths) != len(files):
+        raise ValueError("Duplicate pull snapshot path")
+
+    new_paths_str: set[str] = set()
+    for rel_p in paths:
+        p_str = rel_p.as_posix()
+        safe(root, rel_p)
+        if not (p_str == "dimension_values.json" or p_str.startswith(rel_ossie + "/")):
+            raise ValueError(f"Unexpected Ossie pull path: {p_str}")
+        new_paths_str.add(p_str)
+
+    if operation_id is not None and not re.fullmatch(
+        r"[A-Za-z0-9_-]{1,80}", operation_id
+    ):
+        raise ValueError("Invalid pull operation identifier")
+
+    stale_delete: list[str] = []
+    ossie_dir = safe(root, relative(rel_ossie))
+    if ossie_dir.is_dir():
+        for existing in sorted(ossie_dir.rglob("*")):
+            if not existing.is_file():
+                continue
+            p_str = existing.relative_to(root).as_posix()
+            if (
+                existing.suffix.lower() in {".yaml", ".yml", ".json"}
+                and p_str not in new_paths_str
+                and _last_commit_author(root, p_str) == "定时拉取"
+            ):
+                stale_delete.append(p_str)
+
+    dim_file = safe(root, relative("dimension_values.json"))
+    if (
+        dim_file.is_file()
+        and "dimension_values.json" not in new_paths_str
+        and _last_commit_author(root, "dimension_values.json") == "定时拉取"
+    ):
+        stale_delete.append("dimension_values.json")
+
+    all_paths = sorted(new_paths_str | set(stale_delete))
+    try:
+        head = git(root, "rev-parse", "--verify", "HEAD").decode().strip()
+    except ValueError:
+        head = None
+
+    version = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ-") + uuid.uuid4().hex
+    backup_dir = root / ".git" / "dataagent-pull-backup"
+    if backup_dir.exists():
+        shutil.rmtree(backup_dir)
+    backup_dir.mkdir(parents=True, exist_ok=True)
+
+    existed: dict[str, bool] = {}
+    backups: dict[str, str] = {}
+    for idx, p_str in enumerate(all_paths):
+        target = safe(root, relative(p_str))
+        if target.exists():
+            if not target.is_file() or target.is_symlink():
+                raise ValueError(f"Conflicting path in source directory: {p_str}")
+            bak_name = f"{idx}.bak"
+            _atomic_write_bytes(
+                backup_dir / bak_name,
+                target.read_bytes(),
+                temp_prefix=f".backup-{version}-",
+            )
+            existed[p_str] = True
+            backups[p_str] = bak_name
+        else:
+            existed[p_str] = False
+
+    journal = root / ".git" / "dataagent-pull.json"
+    with tempfile.NamedTemporaryFile(
+        mode="w", dir=journal.parent, prefix="dataagent-pull-journal-", delete=False
+    ) as temp:
+        try:
+            json.dump(
+                {
+                    "mode": "ossie",
+                    "version": version,
+                    "head": head,
+                    "paths": all_paths,
+                    "existed": existed,
+                    "backups": backups,
+                },
+                temp,
+            )
+            temp.flush()
+            os.fsync(temp.fileno())
+            os.replace(temp.name, journal)
+        finally:
+            Path(temp.name).unlink(missing_ok=True)
+
+    try:
+        for rel_p, content in paths.items():
+            target = safe(root, rel_p)
+            _atomic_write_bytes(target, content, temp_prefix=f".pull-{version}-")
+        for p_str in stale_delete:
+            safe(root, relative(p_str)).unlink(missing_ok=True)
+        git(root, "add", "-A", "--", *all_paths)
+        message = ["-m", f"Pull-Operation: {operation_id}"] if operation_id else []
+        git(
+            root,
+            "commit",
+            "--allow-empty",
+            "--quiet",
+            "-m",
+            f"定时拉取 {version}",
+            *message,
+            author="定时拉取",
+        )
+        commit = git(root, "rev-parse", "HEAD").decode().strip()
+        if backup_dir.exists():
+            shutil.rmtree(backup_dir)
+        journal.unlink()
+        return commit
+    except BaseException:
+        recover_pulls(root)
+        raise
 
 
 def publish_pull(root, files, operation_id=None):

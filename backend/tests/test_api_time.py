@@ -79,6 +79,7 @@ def test_rest_time_fields_have_utc_offset(client):
         KnowledgeGeneration,
         ProjectAudit,
         Provider,
+        PullRecord,
         Token,
         Turn,
         digest,
@@ -168,6 +169,14 @@ def test_rest_time_fields_have_utc_offset(client):
                     citations="[]",
                     started_at=datetime(2026, 1, 1),
                     finished_at=datetime(2026, 1, 1, 0, 1),
+                ),
+                PullRecord(
+                    project_id="default",
+                    status="succeeded",
+                    started_at=datetime(2026, 1, 1),
+                    finished_at=datetime(2026, 1, 1, 0, 1),
+                    tables=1,
+                    tasks=0,
                 ),
             ]
         )
