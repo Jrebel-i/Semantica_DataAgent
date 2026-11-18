@@ -712,3 +712,54 @@ test("renders DTB 拉取为 Ossie configuration and keeps puller enablement mutu
     });
   });
 });
+
+test("exports Ossie YAML and JSON from active warehouse project detail and surfaces 409 errors", async () => {
+  const urls: string[] = [];
+  const createObjectURL = vi.fn(() => "blob:ossie-url");
+  const revokeObjectURL = vi.fn();
+  vi.stubGlobal("URL", { ...URL, createObjectURL, revokeObjectURL });
+  let failExport = false;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) => {
+      urls.push(url);
+      if (url === "/api/v1/projects") return Response.json([projectRow()]);
+      if (url === "/api/v1/projects/default/adapters")
+        return Response.json(adapterRows());
+      if (url === "/api/v1/projects/default/members") return Response.json([]);
+      if (url === "/api/v1/users") return Response.json([]);
+      if (url.startsWith("/api/v1/projects/default/export/ossie")) {
+        if (failExport) {
+          return Response.json(
+            { detail: "当前知识代暂无可导出的物理表" },
+            { status: 409 },
+          );
+        }
+        return new Response("version: 0.3.0.dev0\n", { status: 200 });
+      }
+      return Response.json({});
+    }),
+  );
+  render(<ProjectsPage token="admin" messages={getMessages("zh")} />);
+  fireEvent.click(await screen.findByRole("button", { name: "项目成员" }));
+
+  const yamlBtn = await screen.findByRole("button", {
+    name: "导出 Ossie (YAML)",
+  });
+  const jsonBtn = screen.getByRole("button", { name: "导出 Ossie (JSON)" });
+  fireEvent.click(yamlBtn);
+  await waitFor(() =>
+    expect(urls).toContain("/api/v1/projects/default/export/ossie?format=yaml"),
+  );
+  expect(createObjectURL).toHaveBeenCalledTimes(1);
+  expect(revokeObjectURL).toHaveBeenCalledWith("blob:ossie-url");
+
+  fireEvent.click(jsonBtn);
+  await waitFor(() =>
+    expect(urls).toContain("/api/v1/projects/default/export/ossie?format=json"),
+  );
+
+  failExport = true;
+  fireEvent.click(yamlBtn);
+  expect(await screen.findByText("当前知识代暂无可导出的物理表")).toBeTruthy();
+});

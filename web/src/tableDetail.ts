@@ -43,6 +43,7 @@ export function loadTableDetail(
 
 export function summaryFromDetail(row: TableDetail): TableSummary {
   return {
+    ...(row.catalog ? { catalog: row.catalog } : {}),
     name: row.name,
     database: row.database,
     comment: row.comment,

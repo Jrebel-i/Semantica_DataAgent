@@ -1,11 +1,22 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
-import { Alert, Button, Input, Modal, Table, Tree, Typography } from "antd";
+import {
+  Alert,
+  Button,
+  Input,
+  Modal,
+  Table,
+  Tag,
+  Tree,
+  Typography,
+} from "antd";
 import type { TreeDataNode } from "antd";
 import type { paths } from "./api";
 import { TaskLineage, type TableLineage } from "./TaskLineage";
 import type { Messages } from "./i18n";
 import { ColumnLineage } from "./ColumnLineage";
 import { DimensionStatus } from "./DimensionStatus";
+import { Markdown } from "./Markdown";
+import { downloadOssieModel } from "./ossieExport";
 import { safeDecodePath } from "./paths";
 import { ProjectSelector, storedProject, useProjects } from "./ProjectSelector";
 import {
@@ -102,6 +113,9 @@ export function KnowledgePage({
   const [patch, setPatch] = useState("");
   const [reason, setReason] = useState("");
   const [proposalStatus, setProposalStatus] = useState("");
+  const [showRawDoc, setShowRawDoc] = useState(false);
+  const [exportingOssie, setExportingOssie] = useState(false);
+  const [exportError, setExportError] = useState("");
   const treeScrollRef = useRef<HTMLDivElement>(null);
   const treeLoaded = useRef(false);
   const previousSearch = useRef("");
@@ -129,6 +143,8 @@ export function KnowledgePage({
     setPatch("");
     setReason("");
     setProposalStatus("");
+    setShowRawDoc(false);
+    setExportError("");
     setError(false);
   }, [project]);
 
@@ -275,6 +291,8 @@ export function KnowledgePage({
       if (!response.ok) throw new Error();
       const document = (await response.json()) as Document;
       if (generation !== projectGeneration.current) return;
+      setShowRawDoc(false);
+      setProposalStatus("");
       setReadingDoc(document);
       setSelected(null);
       setError(false);
@@ -301,20 +319,26 @@ export function KnowledgePage({
   }
 
   async function selectTableByName(name: string) {
-    const found = tables.find((row) => `${row.database}.${row.name}` === name);
+    const found = tables.find(
+      (row) =>
+        `${row.database}.${row.name}` === name ||
+        (row.catalog && `${row.catalog}.${row.database}.${row.name}` === name),
+    );
     if (found) {
       setSelected(found);
       setReadingDoc(null);
       return;
     }
-    const separator = name.indexOf(".");
-    if (separator < 1) return;
+    const parts = name.split(".");
+    if (parts.length < 2) return;
+    const databaseName = parts.length >= 3 ? parts[1] : parts[0];
+    const tableName = parts.length >= 3 ? parts.slice(2).join(".") : parts[1];
     const generation = projectGeneration.current;
     try {
       const row = await loadTableDetail(
         token,
-        name.slice(0, separator),
-        name.slice(separator + 1),
+        databaseName,
+        tableName,
         project,
       );
       if (generation !== projectGeneration.current) return;
@@ -327,7 +351,12 @@ export function KnowledgePage({
   }
 
   async function submitCorrection() {
-    if (!selected) return;
+    const target = selected
+      ? selected.ref
+      : readingDoc
+        ? readingDoc.ref || `document:${readingDoc.path}`
+        : "";
+    if (!target) return;
     const generation = projectGeneration.current;
     try {
       const response = await fetch(
@@ -338,7 +367,7 @@ export function KnowledgePage({
             Authorization: `Bearer ${token}`,
             "Content-Type": "application/json",
           },
-          body: JSON.stringify({ target: selected.ref, patch, reason }),
+          body: JSON.stringify({ target, patch, reason }),
         },
       );
       if (!response.ok) throw new Error();
@@ -621,6 +650,7 @@ export function KnowledgePage({
   return (
     <>
       {error && <Alert type="error" title={messages.error} />}
+      {exportError && <Alert type="error" title={exportError} />}
       <div className="knowledge-layout admin-page">
         <aside className="knowledge-tree-panel">
           <div className="knowledge-tree-head">
@@ -638,6 +668,27 @@ export function KnowledgePage({
               value={search}
               onChange={(event) => setSearch(event.target.value)}
             />
+            {warehouse && tables.length > 0 && (
+              <Button
+                size="small"
+                loading={exportingOssie}
+                onClick={() => {
+                  setExportError("");
+                  setExportingOssie(true);
+                  void downloadOssieModel(token, project, "yaml")
+                    .catch((err: unknown) => {
+                      setExportError(
+                        err instanceof Error && err.message
+                          ? err.message
+                          : messages.exportOssieFailed,
+                      );
+                    })
+                    .finally(() => setExportingOssie(false));
+                }}
+              >
+                {messages.exportOssie}
+              </Button>
+            )}
           </div>
           <div className="knowledge-tree-scroll" ref={treeScrollRef}>
             <Tree
@@ -663,6 +714,7 @@ export function KnowledgePage({
               <div className="detail-header">
                 <div>
                   <h1 className="detail-title">
+                    {selected.catalog ? `${selected.catalog}.` : ""}
                     {selected.database}.{selected.name}
                   </h1>
                   <p className="detail-subtitle">
@@ -786,6 +838,47 @@ export function KnowledgePage({
                       </table>
                     </div>
                   </section>
+                  {(detail.relationships ?? []).length > 0 && (
+                    <section className="detail-section">
+                      <h2 className="detail-section-title">
+                        {messages.foreignKeys}
+                        <span className="count">
+                          {(detail.relationships ?? []).length}
+                        </span>
+                      </h2>
+                      <ul className="fk-relationship-list">
+                        {(detail.relationships ?? []).map((rel) => {
+                          const twoPart = `${selected.database}.${selected.name}`;
+                          const fullName = selected.catalog
+                            ? `${selected.catalog}.${twoPart}`
+                            : twoPart;
+                          const isOutgoing =
+                            rel.from_table === fullName ||
+                            rel.from_table === twoPart;
+                          const peer = isOutgoing
+                            ? rel.to_table
+                            : rel.from_table;
+                          return (
+                            <li key={rel.ref}>
+                              <code>{rel.name}</code>:{" "}
+                              <span>
+                                {rel.from_table} ({rel.from_columns.join(", ")})
+                                {" → "}
+                                {rel.to_table} ({rel.to_columns.join(", ")})
+                              </span>{" "}
+                              <Button
+                                type="link"
+                                size="small"
+                                onClick={() => void selectTableByName(peer)}
+                              >
+                                {peer}
+                              </Button>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    </section>
+                  )}
                   <section className="detail-section">
                     <h2 className="detail-section-title">
                       {messages.contextLineage}
@@ -825,9 +918,15 @@ export function KnowledgePage({
                     {linkedDocument && (
                       <div className="doc-content">
                         <div className="context-ref">
-                          {safeDecodePath(linkedDocument.path)}
+                          <span>{safeDecodePath(linkedDocument.path)}</span>
+                          {(linkedDocument.generated ||
+                            (detail.documents ?? []).find(
+                              (item) => item.ref === linkedDocument.ref,
+                            )?.generated) && (
+                            <Tag>{messages.generatedReadOnly}</Tag>
+                          )}
                         </div>
-                        <pre>{linkedDocument.content}</pre>
+                        <Markdown text={linkedDocument.content} />
                       </div>
                     )}
                   </section>
@@ -856,23 +955,51 @@ export function KnowledgePage({
                   </h1>
                   <p className="detail-subtitle">
                     {readingDoc.category}
-                    {readingDoc.generated ? ` · ${messages.generated}` : ""}
+                    {readingDoc.generated && (
+                      <>
+                        {" "}
+                        <Tag>{messages.generatedReadOnly}</Tag>
+                      </>
+                    )}
                   </p>
                 </div>
+                <div className="page-actions">
+                  <Button
+                    size="small"
+                    onClick={() => setShowRawDoc((value) => !value)}
+                  >
+                    {showRawDoc ? messages.readingView : messages.rawLineView}
+                  </Button>
+                  {!readingDoc.generated && (
+                    <Button onClick={() => setCorrectionOpen(true)}>
+                      {messages.proposeCorrection}
+                    </Button>
+                  )}
+                </div>
               </div>
+              {proposalStatus && (
+                <Alert
+                  type={proposalStatus === messages.error ? "error" : "success"}
+                  title={proposalStatus}
+                />
+              )}
               <div className="doc-content">
-                <pre>
-                  {readingDoc.content
-                    .split("\n")
-                    .map(
-                      (line, index) =>
-                        `${String(readingDoc.start_line + index).padStart(
-                          4,
-                          " ",
-                        )}  ${line}`,
-                    )
-                    .join("\n")}
-                </pre>
+                {showRawDoc ? (
+                  <pre>
+                    {readingDoc.content
+                      .split("\n")
+                      .map(
+                        (line, index) =>
+                          `${String(readingDoc.start_line + index).padStart(
+                            4,
+                            " ",
+                          )}  ${line}`,
+                      )
+                      .join("\n")}
+                  </pre>
+                ) : (
+                  <Markdown text={readingDoc.content} />
+                )}
               </div>
             </>
           ) : (
