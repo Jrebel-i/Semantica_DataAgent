@@ -86,10 +86,10 @@ MCP 请求必须解析出**一个**项目，所有读知识库的工具都只经
 
 `plugin_config` 的主键是 `(project_id, category, plugin_id)`，迁移 `0036` 把旧行原样归到默认项目。默认项目继续接受旧的 `GET/PUT /api/v1/plugins` 接口，行为与迁移前一致；新接口按项目读写：
 
-- `GET /api/v1/projects/{id}/adapters` 使用 `project_path_scope`，成员可读。返回每个已注册源适配器的 `id`、名称、支持的项目类型、是否启用、参数 schema、参数、兼容性；不兼容时 `compatible=false` 并给出 `reason`。DTB 额外返回 `pull`（拉取器启用状态、非凭据参数、`token_configured`），凭据只报告是否已保存，不回显明文。
-- `PUT /api/v1/projects/{id}/adapters` 使用 `admin_project_path_scope`，项目管理员或系统管理员可改；已归档项目返回 409 `项目已归档`，`GET` 仍可读。请求体为 `{"adapters":[{"id","enabled","parameters","pull"}]}`；按给出的适配器逐项更新，未给出者保持不变。服务端用适配器自己的 JSON Schema 校验参数，并在启用时校验项目类型兼容性：文档型启用 DTB 源或 DTB 拉取配置返回 422，数仓型允许。
-- DTB 拉取凭据按项目保存在项目级加密设置中；默认项目读取时先看项目级值，再回退到旧的全局 `puller.dtb.token`，所以迁移不会丢已有配置。拉取入队使用该项目的源目录与构建队列。
-- `pull_records` 增加 `project_id`（迁移 `0037`，旧行回填 `default`）。手动拉取、定时拉取与启动时的中断恢复都按记录所属项目入队构建；同项目的拉取仍串行，不同项目可以使用各自的锁。各项目启用 DTB 且 `interval_seconds > 0` 时，服务启动会把每个项目的间隔注册到 `pull_scheduler`，保存拉取配置时也会立即更新该项目的时间表。归档（`archived`）与删除中（`deleting`）项目冻结为只读：`POST /api/v1/pulls/dtb` 返回 409 `项目已归档`，不创建拉取记录、不调用拉取器、不写源目录；`pull_scheduler` 跳过冻结项目但不丢弃已保存的间隔，恢复后继续按原间隔执行；启动恢复把冻结项目的未完成记录标为失败并说明归档/删除原因，不再进入源目录做清理或发布。
+- `GET /api/v1/projects/{id}/adapters` 使用 `project_path_scope`，成员可读。返回每个已注册源适配器的 `id`、名称、支持的项目类型、是否启用、参数 schema、参数、兼容性；不兼容时 `compatible=false` 并给出 `reason`。`dtb` 与 `ossie` 额外返回 `pull`（拉取器启用状态、非凭据参数、`token_configured`），凭据只报告是否已保存，不回显明文。
+- `PUT /api/v1/projects/{id}/adapters` 使用 `admin_project_path_scope`，项目管理员或系统管理员可改；已归档项目返回 409 `项目已归档`，`GET` 仍可读。请求体为 `{"adapters":[{"id","enabled","parameters","pull"}]}`；按给出的适配器逐项更新，未给出者保持不变。服务端用适配器自己的 JSON Schema 校验参数，并在启用时校验项目类型兼容性与拉取互斥性：文档型启用 DTB/`ossie` 源或拉取配置返回 422；同一项目同时启用 `dtb` 与 `ossie` 拉取（结合已保存状态与本次提交状态计算）返回 422（需原子关闭另一方或前端自动互斥切换），数仓型允许启用其中之一。
+- DTB 与 `ossie` 拉取凭据按项目保存在项目级加密设置（`pull_token` / `ossie_pull_token`）中；默认项目读取 `dtb` 时回退到旧的全局 `puller.dtb.token`，`ossie` 回退到全局 `puller.ossie.token`，回传 `"***"` 保留已保存凭据。拉取入队使用该项目的源目录与构建队列。
+- `pull_records` 增加 `project_id`（迁移 `0037`，旧行回填 `default`）。手动拉取、定时拉取与启动时的中断恢复都按记录所属项目入队构建；同项目的拉取仍串行，不同项目可以使用各自的锁。各项目启用 `dtb` 或 `ossie` 且 `interval_seconds > 0` 时，服务启动会把每个项目的生效间隔注册到 `pull_scheduler`，保存拉取配置时也会计算有效间隔并立即更新该项目的时间表。归档（`archived`）与删除中（`deleting`）项目冻结为只读：`POST /api/v1/pulls/dtb` 与 `POST /api/v1/pulls/ossie` 均返回 409 `项目已归档`，不创建拉取记录、不调用拉取器、不写源目录；`pull_scheduler` 跳过冻结项目但不丢弃已保存的间隔，恢复后继续按原间隔执行；启动恢复把冻结项目的未完成记录标为失败并说明归档/删除原因，不再进入源目录做清理或发布。
 - 默认启用集合仍是 `canonical` + `markdown`（按类型过滤后）；启用 canonical/DTB 的数仓型项目才能读到对应来源。前端项目管理页的“来源适配器”区沿用现有管理页样式：不兼容项灰显并显示原因，管理员可改，成员只读。
 
 ## 项目隔离与存储命名
@@ -141,7 +141,7 @@ PYTHONPYCACHEPREFIX="$(mktemp -d)" uv run --directory backend pytest -p no:cache
 
 ## 已拍板的决定
 
-架构决策见 [ADR 目录](adr/)。尤其注意 [存储边界](adr/0002-neo4j-plus-milvus-without-cross-store-release.md)、[插件边界](adr/0006-pluggable-ingestion-for-open-source.md) 和 [Apache Ossie 语义模型双向交换](adr/0007-ossie-semantic-interchange.md)。
+架构决策见 [ADR 目录](adr/)。尤其注意 [存储边界](adr/0002-neo4j-plus-milvus-without-cross-store-release.md)、[插件边界](adr/0006-pluggable-ingestion-for-open-source.md)、[Apache Ossie 语义模型双向交换](adr/0007-ossie-semantic-interchange.md) 和 [DTB 到 Ossie 自动转换与拉取管道](adr/0008-dtb-to-ossie-pipeline.md)。
 
 ## 存量失败基线
 
@@ -403,3 +403,7 @@ MCP 认证层对绑定项目已归档或删除中的 agent 凭据仍在工具分
   - 核心导出读取当前项目当前知识代的 `SDATable`、`SDAField`（`HAS_FIELD`）、非索引 `SDADocument`（`HAS_DOCUMENT`，排除 `is_index` 与 `index.md`）与 `RELATES_TO` 边，按 `(catalog or '', database, name)` 排序输出 `0.3.0.dev0` 扁平根文档（`name` 为 `project_id`）。表短名在导出集合内唯一时用作 `dataset.name`，重名时依次按 `{database}__{name}`、`{catalog}__{database}__{name}` 及确定性后缀消歧；`source` 拼装完整两段或三段物理表名；物理列输出 `OSSIE_SQL_2026` 单列引用（非常规标识符或关键字自动双引号转义）、`DataType` 枚举映射（未知为 `Opaque`）、`comment` 到 `description` 及 `SEMANTICA_DATAAGENT` 的 `nonportable_extensions`（`{"partition": bool, "raw_type": 非空字符串}`）；仅导出两端均在本次数据集内的 `RELATES_TO`；关联非索引文档按 `ref` 排序写入数据集 `ai_context.instructions`，不强转自由文本指标。返回或写盘前强制通过内置 `ossie-schema.json` 的 `Draft202012Validator` 自校验。
   - REST 接口 `GET /api/v1/projects/{project_id}/export/ossie` 接受 `format: Literal["yaml", "json"] = "yaml"` 与可选 `database` 过滤。访问与生命周期校验复用 `resolve_project_scope(project_id, requester, allow_frozen=False)`：未认证 `401`，无权限或项目不存在统一 `404`，`archived`/`deleting` 返回 `409 项目已归档`，`document` 项目返回 `422`，当前知识代无匹配物理表返回 `409`。响应使用 `application/yaml; charset=utf-8` 或 `application/json; charset=utf-8` 与 `Content-Disposition: attachment; filename="<project_id>.ossie.<ext>"`。
   - CLI 子命令 `semantica-dataagent export-ossie` 支持 `--project`（默认 `"default"`）、`--database`、`--format`（`yaml` | `json`，默认 `yaml`）与 `-o` / `--output`。默认输出到 stdout；指定 `-o` 时先完成全部导出与 Schema 校验，再通过同目录临时文件 + `os.replace` 原子写盘，失败时不留半成品且不改写已有目标文件；`--help` 与非法参数按 argparse 规范处理。
+- **DTB 自动加工为 Ossie 与混合维度落盘（`dtb_ossie.py`）**：
+  - 核心转换 `convert_dtb_to_ossie` 从 DTB 元数据、数仓任务 SQL（`extract_task_sql_statements` 兼容 `shell` / `merge_onself` / `spark sql`）与维度表行确定性生成 `0.3.0.dev0` Ossie 模型，通过 `ossie-schema.json` `Draft202012Validator` 自校验并原子写入 `<model_name>.yaml`。仅提取物理表真实列上的显式等值连接（去除 `partition=true` 对）为 `relationships`；仅在目标表全部产数 SQL 对主键键组一致时写入 `primary_key`；分区策略与直接上游表摘要写入数据集 `ai_context.instructions`。
+  - 混合维度阈值由 `low_cardinality_limit`（默认 `20`）和 `sample_limit`（默认 `5`）控制：低基数列排序取值原样内联写入字段 `ai_context.instructions`；包含任一高基数列的表写入前 `sample_limit` 个示例至字段说明，并由 `write_dtb_ossie_output` 将该表全部有效物理行（带同行 `row_id`）写出到 `dimension_values.json`（通过 `schemas/v2/dimension_value.schema.json` 校验）。
+  - 离线入口为 CLI `semantica-dataagent convert-dtb-ossie`；在线入口为 `DtbOssiePuller`（`puller/ossie`，前端配置称 `DTB 拉取为 Ossie`）与 `POST /api/v1/pulls/ossie`。`publish_ossie_pull` 与 `"mode": "ossie"` 启动恢复支持 `SIGKILL` 断点回放、保留人工提交的文件、仅清理历史 `"定时拉取"` 残留文件并兼容无变更空提交；项目尚未存在成功 `full` 知识代时首次 `ossie` 拉取自动入队 `full` 构建，之后入队 `incremental`。
