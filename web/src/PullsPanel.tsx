@@ -19,6 +19,7 @@ export function PullsPanel({
   messages: Messages;
 }) {
   const [available, setAvailable] = useState(false);
+  const [pullerId, setPullerId] = useState<"dtb" | "ossie">("dtb");
   const [pulls, setPulls] = useState<Pull[]>([]);
   const [error, setError] = useState(false);
   const [running, setRunning] = useState(false);
@@ -41,9 +42,18 @@ export function PullsPanel({
         if (
           Array.isArray(plugins) &&
           plugins.some(
-            (plugin) => plugin.category === "puller" && plugin.id === "dtb",
+            (plugin) =>
+              plugin.category === "puller" &&
+              (plugin.id === "dtb" || plugin.id === "ossie"),
           )
         ) {
+          const ossieEnabled = plugins.some(
+            (plugin) =>
+              plugin.category === "puller" &&
+              plugin.id === "ossie" &&
+              plugin.enabled === true,
+          );
+          setPullerId(ossieEnabled ? "ossie" : "dtb");
           setAvailable(true);
           await refresh();
         }
@@ -56,7 +66,7 @@ export function PullsPanel({
   async function pull() {
     setRunning(true);
     try {
-      const response = await fetch("/api/v1/pulls/dtb", {
+      const response = await fetch(`/api/v1/pulls/${pullerId}`, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}` },
       });
