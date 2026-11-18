@@ -54,6 +54,7 @@ export function Composer({
   addAttachments,
   removeAttachment,
   visionEnabled,
+  onNavigateKnowledge,
 }: {
   messages: Messages;
   question: string;
@@ -89,6 +90,7 @@ export function Composer({
   addAttachments: (files: File[]) => void;
   removeAttachment: (id: string) => void;
   visionEnabled: boolean;
+  onNavigateKnowledge?: () => void;
 }) {
   const fileInput = useRef<HTMLInputElement>(null);
   const imageInput = useRef<HTMLInputElement>(null);
@@ -118,7 +120,33 @@ export function Composer({
   const showProjectSelect = !projectArchived && activeProjects.length > 1;
   return (
     <div className="chat-composer">
-      {emptyConversation && <h1 className="chat-greeting">{t.chatGreeting}</h1>}
+      {emptyConversation && (
+        <>
+          <h1 className="chat-greeting">{t.chatGreeting}</h1>
+          {currentProject && (
+            <div className="chat-project-guide">
+              <span className="chat-project-guide-badge">
+                {currentProject.name} ·{" "}
+                {currentProject.type === "document"
+                  ? t.projectGuideDocument
+                  : t.projectGuideWarehouse}
+              </span>
+              <a
+                href="/knowledge"
+                className="chat-project-guide-link"
+                onClick={(event) => {
+                  if (onNavigateKnowledge) {
+                    event.preventDefault();
+                    onNavigateKnowledge();
+                  }
+                }}
+              >
+                {t.browseProjectKnowledge}
+              </a>
+            </div>
+          )}
+        </>
+      )}
       <form className="composer-box" onSubmit={(event) => onAsk(event)}>
         {attachments.length > 0 && (
           <div className="composer-attachments" aria-label={t.attachments}>
@@ -374,19 +402,24 @@ export function Composer({
         <div className="chat-examples">
           <span className="example-title">{t.exampleQuestions}</span>
           <div className="example-chips">
-            {t.examples.slice(0, 3).map((example) => (
-              <Button
-                key={example}
-                disabled={
-                  !resumable ||
-                  projectArchived ||
-                  Boolean(currentConversation?.archived)
-                }
-                onClick={() => setQuestion(example)}
-              >
-                {example}
-              </Button>
-            ))}
+            {(currentProject?.type === "document"
+              ? t.documentExamples
+              : t.examples
+            )
+              .slice(0, 3)
+              .map((example) => (
+                <Button
+                  key={example}
+                  disabled={
+                    !resumable ||
+                    projectArchived ||
+                    Boolean(currentConversation?.archived)
+                  }
+                  onClick={() => setQuestion(example)}
+                >
+                  {example}
+                </Button>
+              ))}
           </div>
         </div>
       )}

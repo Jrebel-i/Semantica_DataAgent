@@ -360,3 +360,100 @@ test("keeps the previous answer when a second question is sent", async () => {
   expect(await screen.findByText("第二轮回答")).toBeTruthy();
   expect(screen.getByText("第一轮回答")).toBeTruthy();
 });
+
+test("新对话空白态显示项目类型引导、知识库入口，并随项目类型切换示例问题", async () => {
+  localStorage.clear();
+  const messages = getMessages("zh");
+  const onNavigateKnowledge = vi.fn();
+  const projects = [
+    {
+      id: "default",
+      name: "业务数据",
+      type: "warehouse",
+      status: "active",
+      created_at: "2026-11-05T00:00:00Z",
+      my_role: "member",
+    },
+    {
+      id: "docs-proj",
+      name: "文档规范库",
+      type: "document",
+      status: "active",
+      created_at: "2026-11-05T00:00:00Z",
+      my_role: "member",
+    },
+  ];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/v1/projects") return json(projects);
+      if (url === "/api/v1/conversations") return json([]);
+      if (url === "/api/v1/conversations?archived=true") return json([]);
+      if (url === "/api/v1/agents")
+        return json([{ id: "pi", name: "pi", available: true }]);
+      if (url === "/api/v1/providers") return json([provider]);
+      if (url === "/api/v1/assistant-defaults")
+        return json({
+          assistant_agent: "pi",
+          assistant_provider_id: provider.id,
+          assistant_model: provider.models[0],
+        });
+      return new Response("", { status: 404 });
+    }),
+  );
+
+  const ChatPageWithNav = ChatPage as unknown as (props: {
+    token: string;
+    role: string;
+    messages: typeof messages;
+    onNavigateKnowledge?: () => void;
+  }) => ReturnType<typeof ChatPage>;
+
+  const { container } = render(
+    <ChatPageWithNav
+      token="token"
+      role="user"
+      messages={messages}
+      onNavigateKnowledge={onNavigateKnowledge}
+    />,
+  );
+
+  await waitFor(() =>
+    expect(container.querySelector(".chat-project-guide")).toBeTruthy(),
+  );
+  expect(container.querySelector(".chat-header strong")?.textContent).toBe(
+    messages.newConversation,
+  );
+  expect(
+    container.querySelector(".chat-header-title span")?.textContent,
+  ).toContain("业务数据");
+  expect(container.querySelector(".chat-project-guide")?.textContent).toContain(
+    "数仓型项目",
+  );
+  expect(
+    screen.getByRole("button", { name: messages.examples[0] }),
+  ).toBeTruthy();
+
+  fireEvent.click(screen.getByRole("link", { name: "浏览该项目知识库 →" }));
+  expect(onNavigateKnowledge).toHaveBeenCalledTimes(1);
+
+  fireEvent.change(screen.getByLabelText("项目"), {
+    target: { value: "docs-proj" },
+  });
+
+  await waitFor(() =>
+    expect(
+      container.querySelector(".chat-project-guide")?.textContent,
+    ).toContain("文档型项目"),
+  );
+  expect(
+    container.querySelector(".chat-header-title span")?.textContent,
+  ).toContain("文档规范库");
+  expect(
+    screen.getByRole("button", { name: "核心业务口径是如何定义的？" }),
+  ).toBeTruthy();
+  expect(
+    screen.queryByRole("button", { name: messages.examples[0] }),
+  ).toBeNull();
+});
