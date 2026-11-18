@@ -1946,6 +1946,12 @@
             "type": "object"
           },
           "decision": {
+            "enum": [
+              "running",
+              "accept",
+              "reject",
+              "incomplete"
+            ],
             "title": "Decision",
             "type": "string"
           },
@@ -3309,11 +3315,7 @@
           "source": {
             "anyOf": [
               {
-                "enum": [
-                  "manual",
-                  "mcp",
-                  "evolution"
-                ],
+                "const": "manual",
                 "type": "string"
               },
               {

@@ -29,6 +29,7 @@ import { rememberProject, storedProject } from "./ProjectSelector";
 import { useCitations } from "./chat/useCitations";
 import { useAsk } from "./chat/useAsk";
 import { turnFailed } from "./chat/turnEvents";
+import { readErrorDetail } from "./httpErrors";
 
 export {
   citationDisplayName,
@@ -222,16 +223,7 @@ export function ChatPage({
         },
       );
       if (!response.ok) {
-        let message = t.operationFailed;
-        try {
-          const data = (await response.json()) as { detail?: unknown };
-          if (typeof data.detail === "string" && data.detail.trim()) {
-            message = data.detail;
-          }
-        } catch {
-          // Ignore non-JSON failure responses
-        }
-        throw new Error(message);
+        throw new Error(await readErrorDetail(response, t.operationFailed));
       }
       const saved = (await response.json()) as {
         question_id: string;

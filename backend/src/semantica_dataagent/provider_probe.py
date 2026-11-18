@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import re
 import struct
 import threading
 import time
@@ -12,11 +13,24 @@ import zlib
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from functools import lru_cache
+from typing import Any
 from urllib.parse import quote
 
 import httpx
 
 from .agent_types import ProviderConfig
+
+_JSON_FENCE_RE = re.compile(r"^```[A-Za-z0-9_-]*\s*|\s*```$", re.MULTILINE)
+
+
+def parse_json_object(raw_text: str) -> dict[str, Any]:
+    """Strip optional markdown code fences from an LLM response and parse a JSON object."""
+    cleaned = _JSON_FENCE_RE.sub("", str(raw_text or "").strip()).strip()
+    parsed = json.loads(cleaned)
+    if not isinstance(parsed, dict):
+        raise TypeError("Response must be a JSON object")
+    return parsed
+
 
 EFFORT_LEVELS = ("low", "medium", "high", "extra", "max")
 EFFORT_VALUES = {

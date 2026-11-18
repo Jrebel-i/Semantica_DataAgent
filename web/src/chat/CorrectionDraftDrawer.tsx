@@ -1,24 +1,10 @@
 import { useEffect, useState } from "react";
 import { Alert, Button, Drawer, Input, Select, Space, Tag } from "antd";
 import type { components } from "../api";
+import { readErrorDetail } from "../httpErrors";
 import type { Messages } from "../i18n";
 
 type DraftResponse = components["schemas"]["DraftCorrectionResponse"];
-
-async function readErrorDetail(
-  response: Response,
-  fallback: string,
-): Promise<string> {
-  try {
-    const data = (await response.json()) as { detail?: unknown };
-    if (typeof data.detail === "string" && data.detail.trim()) {
-      return data.detail;
-    }
-  } catch {
-    // Ignore non-JSON error responses
-  }
-  return fallback;
-}
 
 export function CorrectionDraftDrawer({
   open,

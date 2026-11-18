@@ -610,3 +610,102 @@ test("displays confirmed_regression regressions list on evolution proposal", asy
   expect(await screen.findByText("展示回归题目列表")).toBeTruthy();
   expect(screen.getByText(/regressions=1 \(q-3\)/)).toBeTruthy();
 });
+
+test("deep-link initialProposalId populates patch and supports Edit & Approve on structured relationship proposal", async () => {
+  const calls: { url: string; method?: string; body?: unknown }[] = [];
+  const structuredPatch = {
+    version: 1,
+    relationships: {
+      orders_to_users: {
+        name: "orders_to_users",
+        from_database: "shop",
+        from_table: "orders",
+        from_columns: ["user_id"],
+        to_database: "shop",
+        to_table: "users",
+        to_columns: ["id"],
+        instructions: "原始连接说明",
+      },
+    },
+  };
+  const initialYaml =
+    "version: 1\nrelationships:\n  orders_to_users:\n    name: orders_to_users\n    instructions: 原始连接说明\n";
+
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string, options?: RequestInit) => {
+      const body = options?.body ? JSON.parse(String(options.body)) : undefined;
+      calls.push({ url, method: options?.method, body });
+      if (url === "/api/v1/projects") {
+        return Response.json([
+          {
+            id: "default",
+            name: "业务数据",
+            type: "warehouse",
+            status: "active",
+            created_at: "2026-01-01T00:00:00Z",
+            my_role: "admin",
+          },
+        ]);
+      }
+      if (url === "/api/v1/corrections?project=default") {
+        return Response.json([
+          {
+            id: "prop-rel",
+            target: "relationship:orders_to_users",
+            target_kind: "override",
+            reason: "外键关联",
+            diff: "-old\n+new",
+            patch: initialYaml,
+            structured_patch: structuredPatch,
+            status: "pending",
+            source: "evolution",
+          },
+        ]);
+      }
+      return Response.json({ id: "prop-rel", status: "approved" });
+    }),
+  );
+
+  render(
+    <CorrectionsPage
+      token="token"
+      messages={getMessages("zh")}
+      initialProposalId="prop-rel"
+    />,
+  );
+
+  const patchInput = (await screen.findByLabelText(
+    "修改内容",
+  )) as HTMLTextAreaElement;
+  expect(patchInput.value).toBe(initialYaml);
+
+  // Edit JSON structured patch directly and approve with edits -> sends both patch and structured_patch
+  const editedObj = {
+    version: 1,
+    relationships: {
+      orders_to_users: {
+        ...structuredPatch.relationships.orders_to_users,
+        instructions: "界面编辑后的连接说明",
+      },
+    },
+  };
+  const editedJson = JSON.stringify(editedObj, null, 2);
+  fireEvent.change(patchInput, { target: { value: editedJson } });
+  fireEvent.click(screen.getByRole("button", { name: "修改后批准" }));
+
+  await waitFor(() =>
+    expect(
+      calls.some(
+        (c) =>
+          c.url === "/api/v1/corrections/prop-rel/approve?project=default" &&
+          c.method === "POST" &&
+          (c.body as { patch?: string; structured_patch?: unknown })?.patch ===
+            editedJson &&
+          JSON.stringify(
+            (c.body as { structured_patch?: unknown })?.structured_patch,
+          ) === JSON.stringify(editedObj),
+      ),
+    ).toBe(true),
+  );
+});

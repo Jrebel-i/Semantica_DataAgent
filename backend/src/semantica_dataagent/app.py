@@ -107,13 +107,13 @@ async def lifespan(application):
     await asyncio.to_thread(recover_interrupted_builds)
     await asyncio.to_thread(knowledge.cleanup_interrupted_generations)
     await asyncio.to_thread(knowledge.cleanup_candidate_generations)
+    from .corrections import recover_applying, recover_reverting
     from .evolution_runner import recover_interrupted_evolution_runs
-
-    await asyncio.to_thread(recover_interrupted_evolution_runs)
-    from .corrections import recover_applying
     from .semantic_overrides import migrate_legacy_metadata_overrides
 
     await asyncio.to_thread(recover_applying)
+    await asyncio.to_thread(recover_reverting)
+    await asyncio.to_thread(recover_interrupted_evolution_runs)
     await asyncio.to_thread(migrate_legacy_metadata_overrides)
     from .pull_service import recover_pulls
 

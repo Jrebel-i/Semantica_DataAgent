@@ -8,18 +8,11 @@ import threading
 from datetime import UTC, datetime, timedelta
 
 from . import evolution_runner, project_context, trajectory_miner
+from .api_time import as_utc as _as_utc
 from .db import EvolutionCheckpoint, EvolutionRun, Project, sessions
 
 LOGGER = logging.getLogger(__name__)
 DEFAULT_POLL_INTERVAL_SECONDS = 60.0
-
-
-def _as_utc(value: datetime | None) -> datetime | None:
-    if value is None:
-        return None
-    if value.tzinfo is None:
-        return value.replace(tzinfo=UTC)
-    return value.astimezone(UTC)
 
 
 def should_trigger_project(project_id: str, *, now: datetime | None = None) -> bool:

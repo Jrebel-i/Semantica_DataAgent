@@ -7,7 +7,6 @@ import json
 import logging
 import math
 import random
-import re
 import secrets as py_secrets
 import shutil
 import tempfile
@@ -44,7 +43,6 @@ COLD_START_RESERVE_RATIO = 0.30
 DEFAULT_JUDGE_TIMEOUT_SECONDS = 60.0
 
 logger = logging.getLogger(__name__)
-_FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.MULTILINE)
 
 
 def _norm_question(text: str | None) -> str:
@@ -87,7 +85,7 @@ def _revoke_eval_token(plaintext: str, token_id: str, project_id: str) -> None:
             member = db.get(ProjectMember, (project_id, token_id))
             if member is not None:
                 db.delete(member)
-        row = db.get(Token, token_id)
+        row = db.query(Token).filter(Token.id == token_id).first()
         if row is not None:
             db.delete(row)
 
@@ -174,11 +172,17 @@ async def _collect_single_agent_answer(
                 elif event.type == CLARIFICATION:
                     clarified = True
                 elif event.type == ERROR:
-                    error = str(event.data.get("message") or "agent error")
+                    raw_msg = str(event.data.get("message") or "").strip()
+                    error = (
+                        trajectories.scrub_text(raw_msg)
+                        if raw_msg.startswith("Agent failed:")
+                        else "Agent failed: unknown/unknown"
+                    )
     except TimeoutError:
         error = f"agent timed out after {timeout:.0f}s"
-    except Exception as exc:  # noqa: BLE001 - capture agent failures for gate scoring
-        error = f"{type(exc).__name__}: {exc}"
+    except Exception:
+        logger.warning("Candidate gate agent execution failed", exc_info=True)
+        error = "Agent failed: unknown/unknown"
     return sqls, final_text or "".join(text_parts), clarified, error
 
 
@@ -573,11 +577,10 @@ def _call_judge_http(
         resp.raise_for_status()
         body = resp.json()
     raw_text = provider_probe._response_text(provider, body).strip()
-    cleaned = _FENCE_RE.sub("", raw_text).strip()
-    parsed = json.loads(cleaned)
-    if not isinstance(parsed, dict):
-        raise TypeError("Judge response must be a JSON object")
-    return parsed
+    try:
+        return provider_probe.parse_json_object(raw_text)
+    except TypeError as exc:
+        raise TypeError("Judge response must be a JSON object") from exc
 
 
 def _parse_judge_verdict(

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import fcntl
 import json
+import logging
 import os
 import tempfile
 import uuid
@@ -23,7 +24,15 @@ from . import project_context, sql_validation
 from .api_time import UtcDatetime
 from .auth import Requester
 from .auth import current_requester as rest_requester
-from .db import Conversation, CorrectionProposal, Turn, TurnEvent, sessions
+from .db import (
+    Conversation,
+    CorrectionProposal,
+    ProjectMember,
+    Token,
+    Turn,
+    TurnEvent,
+    sessions,
+)
 from .eval import (
     DEFAULT_CATEGORY,
     DIALECTS,
@@ -41,6 +50,7 @@ from .project_api import (
 )
 from .storage_errors import StorageUnavailable
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 EvalSplit = Literal["dev", "holdout"]
@@ -545,8 +555,11 @@ def list_eval_questions(
     is_admin = is_project_admin(scope, requester)
     try:
         _, rows = _read_raw_rows(scope.project_id)
-    except (ValueError, TypeError) as exc:
-        raise HTTPException(500, detail=str(exc)) from None
+    except (ValueError, TypeError):
+        logger.exception(
+            "Failed to read eval questions for project %s", scope.project_id
+        )
+        raise HTTPException(500, detail="Failed to load evaluation questions") from None
     filtered: list[EvalQuestionView] = []
     for row in rows:
         if split is not None and str(row.get("split") or "dev").lower() != split:
@@ -609,8 +622,13 @@ def update_eval_question(
         path = project_context.eval_questions_path(scope.project_id)
         try:
             payload, rows = _read_raw_rows(scope.project_id)
-        except (ValueError, TypeError) as exc:
-            raise HTTPException(500, detail=str(exc)) from None
+        except (ValueError, TypeError):
+            logger.exception(
+                "Failed to read eval questions for project %s", scope.project_id
+            )
+            raise HTTPException(
+                500, detail="Failed to load evaluation questions"
+            ) from None
         target = next((row for row in rows if str(row.get("id")) == question_id), None)
         if target is None:
             raise HTTPException(404, detail="Eval question not found")
@@ -684,8 +702,13 @@ def delete_eval_question(
         path = project_context.eval_questions_path(scope.project_id)
         try:
             payload, rows = _read_raw_rows(scope.project_id)
-        except (ValueError, TypeError) as exc:
-            raise HTTPException(500, detail=str(exc)) from None
+        except (ValueError, TypeError):
+            logger.exception(
+                "Failed to read eval questions for project %s", scope.project_id
+            )
+            raise HTTPException(
+                500, detail="Failed to load evaluation questions"
+            ) from None
         remaining = [row for row in rows if str(row.get("id")) != question_id]
         if len(remaining) == len(rows):
             raise HTTPException(404, detail="Eval question not found")
@@ -911,6 +934,18 @@ def promote_correction_to_eval_question(
         reason = row.reason
         gate_raw = json.loads(row.gate_report) if row.gate_report else {}
         structured = json.loads(row.structured_patch) if row.structured_patch else None
+        is_approved = row.status == "approved" and reviewer_id is not None
+        author_is_admin = False
+        if not is_approved and row.source != "evolution" and owner_id:
+            owner_token = db.query(Token).filter(Token.id == owner_id).first()
+            if owner_token is not None and not owner_token.revoked:
+                if owner_token.role == "admin":
+                    author_is_admin = True
+                else:
+                    member = db.get(ProjectMember, (project_id, owner_id))
+                    if member is not None and member.role == "admin":
+                        author_is_admin = True
+        should_confirm = is_approved or author_is_admin
 
     candidate: dict[str, Any] = {}
     if isinstance(gate_raw, dict) and isinstance(gate_raw.get("eval_candidate"), dict):
@@ -1033,7 +1068,7 @@ def promote_correction_to_eval_question(
             expected_fields=expected_fields,
             dialect=dialect,
             category=category,
-            answer_confirmed=True,
+            answer_confirmed=should_confirm,
             source="correction",
             conversation_id=conversation_id,
             turn_id=turn_id,

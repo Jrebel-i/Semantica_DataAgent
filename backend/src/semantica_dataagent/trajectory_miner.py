@@ -7,7 +7,7 @@ import math
 import re
 from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from difflib import SequenceMatcher
 from typing import Any
 
@@ -15,6 +15,7 @@ import sqlglot
 from sqlglot import exp
 
 from . import eval_questions, trajectories
+from .api_time import as_utc_or_now as _as_utc
 from .db import Conversation, KnowledgeGap, QueryExecution, Setting, Turn, sessions
 
 _PUNCT_RE = re.compile(
@@ -28,14 +29,6 @@ _CORRECTION_CUE_RE = re.compile(
     r"(不对|不是|错了|有误|搞错|写错|应该用|改用|改为|换成|替换成|漏了|少写了|加上|过滤|条件|口径是|口径为|应该是|instead|wrong|should use|filter by|actually)",
     re.IGNORECASE,
 )
-
-
-def _as_utc(value: datetime | None) -> datetime:
-    if value is None:
-        return datetime.now(UTC)
-    if value.tzinfo is None:
-        return value.replace(tzinfo=UTC)
-    return value.astimezone(UTC)
 
 
 def canonical_question(text: str | None) -> str:

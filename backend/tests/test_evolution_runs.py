@@ -1024,7 +1024,7 @@ def test_evolver_preserves_divergent_clarification_variants_and_deletion_cleans_
             has_variants = (
                 any(
                     "严禁" in p.read_text(encoding="utf-8")
-                    for p in (cand_dir / "knowledge").glob("*.md")
+                    for p in (cand_dir / "knowledge").rglob("*.md")
                 )
                 if (cand_dir / "knowledge").is_dir()
                 else False
@@ -1190,21 +1190,21 @@ def test_build_overlay_files_prepares_real_candidate_workspace_for_doc_and_ossie
             )
         )
 
-    # 1) Direct document path target
+    # 1) Direct document path target under knowledge/<category>/
     doc_overlay = evolution_runner._build_overlay_files(
         "default",
         {
             "target_kind": "document",
-            "target": "document:knowledge/clarifications.md",
+            "target": "document:knowledge/evolution/clarifications.md",
             "patch": "# Clarifications\n- Variant A\n- Variant B\n",
             "structured_patch": None,
         },
     )
     assert all(isinstance(k, str) for k in doc_overlay)
     knowledge._prepare_candidate_workspace(src_dir, work_dir, doc_overlay)
-    assert (work_dir / "knowledge/clarifications.md").read_text(encoding="utf-8") == (
-        "# Clarifications\n- Variant A\n- Variant B\n"
-    )
+    assert (work_dir / "knowledge/evolution/clarifications.md").read_text(
+        encoding="utf-8"
+    ) == ("# Clarifications\n- Variant A\n- Variant B\n")
 
     # 2) Existing SDADocument ref mapped to its Neo4j source_file
     monkeypatch.setattr(knowledge, "read_graph", lambda values: None)
@@ -1246,3 +1246,738 @@ def test_build_overlay_files_prepares_real_candidate_workspace_for_doc_and_ossie
     assert (work_dir / "ossie/orders.yaml").read_text(encoding="utf-8") == (
         "ossie_version: 0.3.0.dev0\nname: default\n"
     )
+
+
+def test_evolution_docs_placed_under_category_subdir_and_indexed_by_build(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from contextlib import contextmanager
+
+    _setup_env(tmp_path, monkeypatch)
+    from semantica_dataagent import evolution_runner, knowledge
+    from semantica_dataagent.db import (
+        Build,
+        Project,
+        ProjectSetting,
+        Setting,
+        sessions,
+    )
+    from semantica_dataagent.markdown import MarkdownAdapter
+    from semantica_dataagent.stage_contract import StorageHandles
+    from semantica_dataagent.trajectory_miner import MinedSignal
+
+    src_dir = tmp_path / "evo_doc_src"
+    _init_git_repo(src_dir, {"README.md": "doc project\n"})
+    with sessions().begin() as db:
+        db.add(Project(id="docproj", name="Doc Proj", type="document"))
+        db.add(
+            ProjectSetting(
+                project_id="docproj", key="source_directory", value=str(src_dir)
+            )
+        )
+
+    clar_sig = MinedSignal(
+        signal_kind="divergent_clarification",
+        summary="销售额口径分化",
+        evidence_trajectory_ids=[1, 2],
+        caliber_variants=[
+            {"label": "支付销售额", "ref": "document:evolution/paid.md", "count": 2},
+            {"label": "下单销售额", "ref": "document:evolution/gross.md", "count": 2},
+        ],
+        details={"clarification_prompt": "销售额口径"},
+    )
+    cand1 = evolution_runner._synthesize_deterministic_candidate(
+        "docproj", clar_sig, round_number=1, tables_meta=[]
+    )
+    assert cand1["target"].startswith("document:knowledge/evolution/")
+    assert cand1["target"].endswith(".md")
+
+    gap_sig = MinedSignal(
+        signal_kind="knowledge_gap_or_failure",
+        summary="缺少退货率说明",
+        evidence_trajectory_ids=[3],
+    )
+    cand2 = evolution_runner._synthesize_deterministic_candidate(
+        "docproj", gap_sig, round_number=2, tables_meta=[]
+    )
+    assert cand2["target"].startswith("document:knowledge/evolution/")
+    assert cand2["target"].endswith(".md")
+
+    overlay1 = evolution_runner._build_overlay_files("docproj", cand1)
+    overlay2 = evolution_runner._build_overlay_files("docproj", cand2)
+    cand_dir = tmp_path / "cand_workspace"
+    knowledge._prepare_candidate_workspace(src_dir, cand_dir, {**overlay1, **overlay2})
+
+    read_res = MarkdownAdapter().read(cand_dir, {})
+    indexed_sources = {
+        rec.source_file for rec in read_res.records if rec.kind == "document"
+    }
+    rel1 = cand1["target"][len("document:") :]
+    rel2 = cand2["target"][len("document:") :]
+    assert rel1 in indexed_sources
+    assert rel2 in indexed_sources
+    assert any(
+        rec.data.get("category") == "evolution"
+        and "支付销售额" in rec.data.get("content", "")
+        for rec in read_res.records
+        if rec.kind == "document"
+    )
+
+    # Also verify full build pipeline indexes those evolution docs into graph & vectors
+    class _MinimalGraph:
+        def __init__(self):
+            self.nodes: list[dict] = []
+            self._next_id = 1
+
+        def execute_query(self, query: str, params: dict) -> dict:
+            gen = params.get("generation")
+            q = " ".join(query.split())
+            if " AS deleted" in q:
+                return {"success": True, "records": [{"deleted": 0}]}
+            if "CREATE (d:SDAEntity:SDADocument) SET d = row" in q:
+                for row in params["rows"]:
+                    self.nodes.append(
+                        {
+                            "id": self._next_id,
+                            "labels": {"SDAEntity", "SDADocument"},
+                            "props": {**row, "generation": gen},
+                        }
+                    )
+                    self._next_id += 1
+            elif "RETURN elementId(n) AS id" in q and ":SDADocument" in q:
+                return {
+                    "success": True,
+                    "records": [
+                        {"id": n["id"]}
+                        for n in self.nodes
+                        if "SDADocument" in n["labels"]
+                        and n["props"].get("generation") == gen
+                    ],
+                }
+            return {"success": True, "records": []}
+
+        def close(self):
+            pass
+
+    class _MinimalVectors:
+        def __init__(self):
+            self.items: dict[str, dict] = {}
+            self.collection = type("C", (), {"load": lambda self: None})()
+            self.client = type("Cl", (), {"disconnect": lambda self: None})()
+
+        def create_collection(self, *args, **kwargs):
+            pass
+
+        def get_collection(self, *args, **kwargs):
+            pass
+
+        def add_vectors(self, vectors, ids, metadata):
+            for vid, meta in zip(ids, metadata, strict=True):
+                self.items[vid] = dict(meta)
+
+        def delete_vectors(self, ids):
+            for vid in ids:
+                self.items.pop(vid, None)
+
+    graph_store, vector_store = _MinimalGraph(), _MinimalVectors()
+
+    @contextmanager
+    def fake_storage(values, stats=None):
+        yield StorageHandles(
+            values["knowledge_generation"],
+            graph_store,
+            vector_store,
+            values,
+            _embedding_dimension=4,
+        )
+
+    monkeypatch.setattr(knowledge, "build_storage", fake_storage)
+    monkeypatch.setattr(knowledge, "read_graph", lambda values: graph_store)
+    monkeypatch.setattr(knowledge, "read_vectors", lambda values: vector_store)
+    monkeypatch.setattr(
+        knowledge,
+        "embed",
+        lambda values, texts, stats=None: [[0.1, 0.2, 0.3, 0.4]] * len(texts),
+    )
+    monkeypatch.setattr(knowledge, "prune_generations", lambda values: None)
+
+    with sessions().begin() as db:
+        db.merge(
+            ProjectSetting(
+                project_id="docproj", key="source_directory", value=str(cand_dir)
+            )
+        )
+        import os
+
+        cipher = Fernet(os.environ["DATAAGENT_ENCRYPTION_KEY"].encode())
+        for k, v in {
+            "neo4j_uri": "bolt://127.0.0.1:7687",
+            "neo4j_user": "neo4j",
+            "neo4j_password": cipher.encrypt(b"secret").decode(),
+            "milvus_uri": "http://127.0.0.1:19530",
+            "embedding_url": "http://127.0.0.1:8000",
+            "embedding_model": "test-model",
+        }.items():
+            db.merge(Setting(key=k, value=v))
+        build_row = Build(
+            project_id="docproj",
+            build_type="full",
+            status="running",
+            started_at="2026-11-18T00:00:00Z",
+            counts="{}",
+        )
+        db.add(build_row)
+        db.flush()
+        bid = build_row.id
+
+    knowledge.run_build(bid)
+    with sessions()() as db:
+        finished = db.get(Build, bid)
+        assert finished is not None
+        assert finished.status == "succeeded", (finished.error, finished.logs)
+        import json
+
+        counts = json.loads(finished.counts or "{}")
+        assert counts.get("document", 0) >= 2, counts
+    assert any(
+        "SDADocument" in n["labels"]
+        and n["props"].get("category") == "evolution"
+        and "支付销售额" in n["props"].get("content", "")
+        for n in graph_store.nodes
+    )
+    assert any(
+        meta.get("category") == "evolution" for meta in vector_store.items.values()
+    )
+
+
+def test_target_eval_inputs_populates_trajectory_questions_for_strict_improvement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    import json
+    from datetime import timedelta
+
+    _setup_env(tmp_path, monkeypatch)
+    from semantica_dataagent import (
+        eval_questions,
+        evolution_runner,
+        knowledge,
+        project_context,
+        sql_validation,
+        trajectories,
+    )
+    from semantica_dataagent.agent_runner import DONE, AgentEvent, AgentTurnRequest
+    from semantica_dataagent.db import Setting, sessions
+
+    src_dir = tmp_path / "src_reg"
+    _init_git_repo(
+        src_dir,
+        {
+            "tables.json": json.dumps([{"database": "shop", "name": "orders"}]),
+            "fields.json": json.dumps(
+                [
+                    {
+                        "database": "shop",
+                        "table": "orders",
+                        "name": "amount",
+                        "type": "decimal",
+                    }
+                ]
+            ),
+        },
+    )
+    with sessions().begin() as db:
+        db.add(Setting(key=project_context.SOURCE_DIRECTORY_KEY, value=str(src_dir)))
+
+    tables_meta = [
+        {
+            "database": "shop",
+            "name": "orders",
+            "fields": [{"name": "amount", "type": "decimal"}],
+        }
+    ]
+    _install_mock_graph_and_candidate(
+        monkeypatch, project_id="default", src_dir=src_dir, tables_meta=tables_meta
+    )
+
+    # Seed 5 confirmed regression questions that already pass 100% on active
+    for i in range(5):
+        eval_questions.upsert_eval_question(
+            "default",
+            question_id=f"reg-{i}",
+            question=f"已确认基线问题 {i}",
+            caliber="基线口径",
+            reference_sql="SELECT SUM(amount) FROM shop.orders",
+            expected_tables=["shop.orders"],
+            expected_fields=["shop.orders.amount"],
+            dialect="doris",
+            split="dev" if i < 4 else "holdout",
+            answer_confirmed=True,
+        )
+
+    # Seed trajectories: 3 diagnosis + 1 reserve, where diagnosis has search detour on "退款总额"
+    base = datetime(2026, 11, 18, 8, 0, 0, tzinfo=UTC)
+    for idx in range(4):
+        ts = base + timedelta(minutes=idx * 5)
+        cid = f"reg-conv-{idx}"
+        q_text = "本月退款总额是多少" if idx == 0 else f"其他咨询_{idx}"
+        trajectories.start_online_trajectory(
+            project_id="default",
+            conversation_id=cid,
+            turn_id=idx + 1,
+            question=q_text,
+            now=ts,
+        )
+        if idx == 0:
+            trajectories.record_mcp_tool_call(
+                project_id="default",
+                token_id="u1",
+                conversation_id=cid,
+                turn_id=idx + 1,
+                is_online_turn=True,
+                tool_name="search_knowledge",
+                arguments={"query": "退款总额", "scope": "all"},
+                output={"result": []},
+                is_error=False,
+                now=ts,
+            )
+            trajectories.record_mcp_tool_call(
+                project_id="default",
+                token_id="u1",
+                conversation_id=cid,
+                turn_id=idx + 1,
+                is_online_turn=True,
+                tool_name="search_knowledge",
+                arguments={"query": "shop.orders", "scope": "tables"},
+                output={"result": [{"ref": "table:shop.orders"}]},
+                is_error=False,
+                now=ts + timedelta(seconds=5),
+            )
+        trajectories.finish_online_trajectory(
+            conversation_id=cid,
+            turn_id=idx + 1,
+            status="completed",
+            answer="ok",
+            final_sql=[
+                {"sql": "SELECT SUM(amount) FROM shop.orders", "dialect": "doris"}
+            ],
+            now=ts + timedelta(seconds=10),
+        )
+
+    class _TargetFixRunner:
+        agent_id = "pi"
+
+        def available(self):
+            return True
+
+        async def run(self, request: AgentTurnRequest):
+            ctx = project_context.current_project("default")
+            cand_dir = (
+                project_context.candidate_generations_dir("default") / ctx.generation
+            )
+            is_cand = (cand_dir / "overrides" / "semantic_overrides.yaml").is_file()
+            if "退款总额" in request.prompt and not is_cand:
+                sql = "SELECT bad FROM shop.missing_tbl"
+            else:
+                sql = "SELECT SUM(amount) FROM shop.orders"
+            yield AgentEvent(
+                DONE,
+                {
+                    "text": sql,
+                    "sql": [{"sql": sql, "dialect": "doris"}],
+                    "citations": [{"ref": "table:shop.orders"}],
+                },
+            )
+
+    monkeypatch.setattr(
+        knowledge,
+        "search",
+        lambda *a, **kw: [{"ref": "table:shop.orders", "type": "table", "score": 0.9}],
+    )
+    monkeypatch.setattr(
+        sql_validation,
+        "validate_sql",
+        lambda sql, dialect="doris", project_id=None: (
+            {"status": "issues", "issues": [{"kind": "missing_table"}]}
+            if "missing_tbl" in sql
+            else {"status": "pass", "issues": []}
+        ),
+    )
+
+    res = evolution_runner.run_evolution(
+        "default",
+        trigger_type="manual",
+        max_rounds=1,
+        runner=_TargetFixRunner(),
+    )
+    assert res["status"] == "accepted", res
+    assert res["rounds"][0]["l2_gate_report"]["mode"] == "confirmed_regression"
+    assert res["rounds"][0]["l2_gate_report"]["strict_improvement"] is True
+    assert res["rounds"][0]["l2_gate_report"]["evaluated_cases"] == 6
+
+
+def test_unexpected_exception_cleans_round_scrubs_errors_and_builds_legacy_overlay(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    import json
+
+    _setup_env(tmp_path, monkeypatch)
+    from semantica_dataagent import (
+        evolution_gate,
+        evolution_runner,
+        project_context,
+        trajectories,
+    )
+    from semantica_dataagent.agent_runner import AgentTurnRequest
+    from semantica_dataagent.agent_types import ProviderConfig
+    from semantica_dataagent.db import EvolutionRound, EvolutionRun, Setting, sessions
+
+    src_dir = tmp_path / "src_err"
+    _init_git_repo(
+        src_dir,
+        {"tables.json": json.dumps([{"database": "shop", "name": "orders"}])},
+    )
+    with sessions().begin() as db:
+        db.add(Setting(key=project_context.SOURCE_DIRECTORY_KEY, value=str(src_dir)))
+
+    # 1) _build_overlay_files must convert target_kind='override' with structured_patch=None
+    overlay = evolution_runner._build_overlay_files(
+        "default",
+        {
+            "target_kind": "override",
+            "target": "table:shop.orders",
+            "patch": "覆盖表说明",
+            "structured_patch": None,
+        },
+    )
+    assert "overrides/semantic_overrides.yaml" in overlay
+    assert "覆盖表说明" in (overlay["overrides/semantic_overrides.yaml"] or "")
+
+    # 2) evolution_gate must never capture raw exception message / secrets
+    class _CrashingRunner:
+        agent_id = "pi"
+
+        async def run(self, request: AgentTurnRequest):
+            raise RuntimeError("secret=sk-raw-leak-1234567890abcd")
+            yield  # pragma: no cover
+
+    _sqls, _ans, _clarified, err = evolution_gate._run_coro(
+        evolution_gate._collect_single_agent_answer(
+            _CrashingRunner(),
+            prompt="q",
+            provider=ProviderConfig(
+                id="p",
+                name="p",
+                type="openai-completions",
+                base_url="http://127.0.0.1:0",
+                models=["m"],
+            ),
+            model="m",
+            mcp_url="http://127.0.0.1:0/mcp",
+            mcp_token="tok",
+            workspace=tmp_path / "ws",
+            timeout=5.0,
+        )
+    )
+    assert err is not None
+    assert "sk-raw-leak" not in err
+    assert "RuntimeError" not in err
+
+    # 3) Unhandled exception inside execute_evolution_run must mark EvolutionRound incomplete and scrub error
+    _install_mock_graph_and_candidate(
+        monkeypatch,
+        project_id="default",
+        src_dir=src_dir,
+        tables_meta=[
+            {"database": "shop", "name": "orders", "fields": [{"name": "amount"}]}
+        ],
+    )
+    trajectories.start_online_trajectory(
+        project_id="default",
+        conversation_id="err-c1",
+        turn_id=1,
+        question="查订单",
+    )
+    trajectories.record_mcp_tool_call(
+        project_id="default",
+        token_id="u1",
+        conversation_id="err-c1",
+        turn_id=1,
+        is_online_turn=True,
+        tool_name="search_knowledge",
+        arguments={"query": "订单", "scope": "all"},
+        output={"result": []},
+        is_error=False,
+    )
+    trajectories.record_mcp_tool_call(
+        project_id="default",
+        token_id="u1",
+        conversation_id="err-c1",
+        turn_id=1,
+        is_online_turn=True,
+        tool_name="search_knowledge",
+        arguments={"query": "shop.orders", "scope": "tables"},
+        output={"result": [{"ref": "table:shop.orders"}]},
+        is_error=False,
+    )
+    trajectories.finish_online_trajectory(
+        conversation_id="err-c1",
+        turn_id=1,
+        status="completed",
+        answer="ok",
+    )
+
+    monkeypatch.setattr(
+        evolution_runner,
+        "_target_eval_inputs",
+        lambda *a, **kw: (_ for _ in ()).throw(
+            RuntimeError("db_password=supersecret_token_leaked")
+        ),
+    )
+    created = evolution_runner.create_evolution_run("default")
+    with pytest.raises(RuntimeError):
+        evolution_runner.execute_evolution_run(created["id"])
+
+    with sessions()() as db:
+        run_row = db.get(EvolutionRun, created["id"])
+        assert run_row is not None
+        assert run_row.status == "incomplete"
+        assert run_row.error is not None
+        assert "supersecret_token_leaked" not in run_row.error
+        assert "RuntimeError" not in run_row.error
+        rounds = (
+            db.query(EvolutionRound)
+            .filter(EvolutionRound.run_id == created["id"])
+            .all()
+        )
+        assert len(rounds) == 1
+        assert rounds[0].decision == "incomplete"
+        assert rounds[0].finished_at is not None
+        assert "supersecret_token_leaked" not in (rounds[0].reject_reason or "")
+
+
+@pytest.mark.parametrize("crash_at", ["before_proposal", "after_proposal"])
+def test_evolution_run_crash_reconciles_emitted_proposals_without_duplicates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, crash_at: str
+):
+    import json
+    import os
+    import signal
+    from datetime import timedelta
+
+    _setup_env(tmp_path, monkeypatch)
+    from semantica_dataagent import (
+        corrections,
+        evolution_runner,
+        knowledge,
+        project_context,
+        sql_validation,
+        trajectories,
+    )
+    from semantica_dataagent.agent_runner import DONE, AgentEvent, AgentTurnRequest
+    from semantica_dataagent.db import (
+        Build,
+        CorrectionProposal,
+        EvolutionCheckpoint,
+        EvolutionRound,
+        EvolutionRun,
+        ProjectSetting,
+        Setting,
+        sessions,
+    )
+
+    src_dir = tmp_path / f"src_crash_{crash_at}"
+    _init_git_repo(
+        src_dir,
+        {
+            "tables.json": json.dumps([{"database": "shop", "name": "orders"}]),
+            "fields.json": json.dumps(
+                [
+                    {
+                        "database": "shop",
+                        "table": "orders",
+                        "name": "amount",
+                        "type": "decimal",
+                    }
+                ]
+            ),
+        },
+    )
+    with sessions().begin() as db:
+        db.add(Setting(key=project_context.SOURCE_DIRECTORY_KEY, value=str(src_dir)))
+        db.add(
+            ProjectSetting(
+                project_id="default",
+                key=project_context.EVOLUTION_REQUIRE_REVIEW_KEY,
+                value="false",
+            )
+        )
+
+    _install_mock_graph_and_candidate(
+        monkeypatch,
+        project_id="default",
+        src_dir=src_dir,
+        tables_meta=[
+            {
+                "database": "shop",
+                "name": "orders",
+                "fields": [{"name": "amount", "type": "decimal"}],
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        knowledge,
+        "search",
+        lambda *a, **kw: [{"ref": "table:shop.orders", "type": "table", "score": 0.9}],
+    )
+    monkeypatch.setattr(
+        sql_validation,
+        "validate_sql",
+        lambda sql, dialect="doris", project_id=None: {"status": "pass", "issues": []},
+    )
+    monkeypatch.setattr(project_context, "wake_build_queue", lambda: None)
+
+    base = datetime(2026, 11, 18, 9, 0, 0, tzinfo=UTC)
+    for idx in range(3):
+        ts = base + timedelta(minutes=idx * 5)
+        cid = f"evo-rec-{idx}"
+        trajectories.start_online_trajectory(
+            project_id="default",
+            conversation_id=cid,
+            turn_id=idx + 1,
+            question=f"统计退单_{idx}",
+            now=ts,
+        )
+        if idx == 0:
+            trajectories.record_mcp_tool_call(
+                project_id="default",
+                token_id="u1",
+                conversation_id=cid,
+                turn_id=idx + 1,
+                is_online_turn=True,
+                tool_name="search_knowledge",
+                arguments={"query": "退单", "scope": "all"},
+                output={"result": []},
+                is_error=False,
+                now=ts,
+            )
+            trajectories.record_mcp_tool_call(
+                project_id="default",
+                token_id="u1",
+                conversation_id=cid,
+                turn_id=idx + 1,
+                is_online_turn=True,
+                tool_name="search_knowledge",
+                arguments={"query": "shop.orders", "scope": "tables"},
+                output={"result": [{"ref": "table:shop.orders"}]},
+                is_error=False,
+                now=ts + timedelta(seconds=5),
+            )
+        trajectories.finish_online_trajectory(
+            conversation_id=cid,
+            turn_id=idx + 1,
+            status="completed",
+            answer="ok",
+            final_sql=[{"sql": "SELECT amount FROM shop.orders", "dialect": "doris"}],
+            now=ts + timedelta(seconds=10),
+        )
+
+    class _CandWinRunner:
+        agent_id = "pi"
+
+        def available(self):
+            return True
+
+        async def run(self, request: AgentTurnRequest):
+            ctx = project_context.current_project("default")
+            cand_dir = (
+                project_context.candidate_generations_dir("default") / ctx.generation
+            )
+            tag = (
+                "CAND_OK"
+                if (cand_dir / "overrides" / "semantic_overrides.yaml").is_file()
+                else "ACTIVE"
+            )
+            yield AgentEvent(
+                DONE,
+                {
+                    "text": tag,
+                    "sql": [
+                        {"sql": "SELECT amount FROM shop.orders", "dialect": "doris"}
+                    ],
+                    "citations": [{"ref": "table:shop.orders"}],
+                },
+            )
+
+    def judge_cand(prompt: str):
+        a_part = prompt.split("Option B:")[0]
+        return {
+            "winner": "A" if "CAND_OK" in a_part else "B",
+            "critical_error_a": False,
+            "critical_error_b": False,
+            "reason": "cand wins",
+        }
+
+    created = evolution_runner.create_evolution_run("default", max_rounds=1)
+    pid = os.fork()
+    if pid == 0:
+        try:
+            real_propose = corrections.propose_in_project
+
+            def propose_crash(*args, **kwargs):
+                if crash_at == "before_proposal":
+                    os.kill(os.getpid(), signal.SIGKILL)
+                res = real_propose(*args, **kwargs)
+                os.kill(os.getpid(), signal.SIGKILL)
+                return res
+
+            corrections.propose_in_project = propose_crash
+            evolution_runner.execute_evolution_run(
+                created["id"],
+                runner=_CandWinRunner(),
+                judge_fn=judge_cand,
+                seed=1,
+            )
+        finally:
+            os._exit(2)
+
+    _, status = os.waitpid(pid, 0)
+    assert os.WIFSIGNALED(status) and os.WTERMSIG(status) == signal.SIGKILL
+
+    evolution_runner.recover_interrupted_evolution_runs()
+    evolution_runner.recover_interrupted_evolution_runs()
+
+    with sessions()() as db:
+        run_row = db.get(EvolutionRun, created["id"])
+        rnd = (
+            db.query(EvolutionRound)
+            .filter(EvolutionRound.run_id == created["id"])
+            .one()
+        )
+        props = db.query(CorrectionProposal).all()
+        ckpt = db.get(EvolutionCheckpoint, "default")
+        assert run_row is not None
+        if crash_at == "after_proposal":
+            assert len(props) == 1
+            prop = props[0]
+            assert prop.status == "auto_applied"
+            assert run_row.status == "accepted"
+            assert run_row.proposal_id == prop.id
+            assert rnd.decision == "accept"
+            assert rnd.proposal_id == prop.id
+            assert ckpt is not None
+            assert ckpt.checkpoint_trajectory_id == run_row.frozen_max_trajectory_id
+            assert (
+                db.query(Build).filter(Build.correction_proposal_id == prop.id).count()
+                == 1
+            )
+            # Subsequent mining sees zero new trajectories (no duplicate proposal!)
+            follow = evolution_runner.run_evolution(
+                "default", runner=_CandWinRunner(), judge_fn=judge_cand, seed=1
+            )
+            assert follow["stop_reason"] == "no_signals"
+            assert db.query(CorrectionProposal).count() == 1
+        else:
+            assert len(props) == 0
+            assert run_row.status == "incomplete"
+            assert rnd.decision == "incomplete"
+            assert ckpt is None

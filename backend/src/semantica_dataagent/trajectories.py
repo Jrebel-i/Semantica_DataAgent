@@ -6,13 +6,14 @@ import json
 import os
 import re
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from threading import Lock
 from typing import Any
 
 from sqlalchemy.orm import Session
 
 from . import semantic_overrides, telemetry
+from .api_time import as_utc_or_now as _as_utc
 from .db import InteractionTrajectory, sessions
 
 LOCAL_MCP_IDLE_WINDOW = timedelta(minutes=30)
@@ -90,14 +91,6 @@ def _reset_after_fork() -> None:
 
 if hasattr(os, "register_at_fork"):
     os.register_at_fork(after_in_child=_reset_after_fork)
-
-
-def _as_utc(value: datetime | None) -> datetime:
-    if value is None:
-        return datetime.now(UTC)
-    if value.tzinfo is None:
-        return value.replace(tzinfo=UTC)
-    return value.astimezone(UTC)
 
 
 def scrub_text(value: str, secrets: tuple[str, ...] = ()) -> str:

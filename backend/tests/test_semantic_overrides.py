@@ -3032,3 +3032,503 @@ def test_review_regression_checks(client, monkeypatch):
         )
         assert rev_build is not None
         assert rev_build.status == "queued"
+
+
+def test_rest_corrections_blocks_evolution_source_spoofing_and_top_level_docs(
+    client, monkeypatch
+):
+    from semantica_dataagent import (
+        corrections,
+        mcp_context,
+    )
+    from semantica_dataagent.auth import Requester
+    from semantica_dataagent.db import ProjectSetting, sessions
+
+    c, admin = client
+    headers = _headers(admin)
+    proj_id, src = _setup_override_project(c, headers, monkeypatch, "Spoof Guard Proj")
+
+    member_tok = c.post(
+        "/api/v1/tokens",
+        headers=headers,
+        json={
+            "name": "spoof-member",
+            "role": "user",
+            "projects": [{"project_id": proj_id, "role": "member"}],
+        },
+    ).json()["token"]
+    mheaders = _headers(member_tok)
+
+    # Even if evolution_require_review=False while correction_require_review=True,
+    # REST callers cannot spoof source="evolution"
+    assert (
+        c.put(
+            f"/api/v1/projects/{proj_id}/evolution-policy",
+            headers=headers,
+            json={"correction_require_review": True, "evolution_require_review": False},
+        ).status_code
+        == 200
+    )
+    spoof_resp = c.post(
+        "/api/v1/corrections",
+        headers=mheaders,
+        params={"project": proj_id},
+        json={
+            "target": "document:knowledge/evolution/spoofed.md",
+            "target_kind": "document",
+            "source": "evolution",
+            "patch": "# Spoofed\n",
+            "reason": "attempt bypass",
+        },
+    )
+    assert spoof_resp.status_code == 422, spoof_resp.text
+
+    admin_spoof = c.post(
+        "/api/v1/corrections",
+        headers=headers,
+        params={"project": proj_id},
+        json={
+            "target": "table:shop.orders",
+            "source": "evolution",
+            "patch": "spoof",
+            "reason": "attempt bypass",
+        },
+    )
+    assert admin_spoof.status_code == 422, admin_spoof.text
+
+    # Internal propose_in_project rejects source="evolution" outside trusted context
+    with mcp_context.bind_mcp_context(
+        Requester(id="admin", role="admin", token=admin, project_id=proj_id),
+        project_id=proj_id,
+    ):
+        with pytest.raises(ValueError, match="evolution"):
+            corrections.propose_in_project(
+                proj_id,
+                "document:knowledge/evolution/direct.md",
+                "# Direct\n",
+                "untrusted call",
+                source="evolution",
+                target_kind="document",
+            )
+
+        # Trusted context rejects top-level knowledge/*.md and accepts knowledge/<category>/*.md
+        with corrections.trusted_evolution_source():
+            with pytest.raises(ValueError, match="knowledge/<category>"):
+                corrections.propose_in_project(
+                    proj_id,
+                    "document:knowledge/top_level_ignored.md",
+                    "# Top Level\n",
+                    "invalid path",
+                    source="evolution",
+                    target_kind="document",
+                )
+            with sessions().begin() as db:
+                row = db.get(ProjectSetting, (proj_id, "evolution_require_review"))
+                assert row is not None
+                row.value = "true"
+            valid_prop = corrections.propose_in_project(
+                proj_id,
+                "document:knowledge/evolution/valid_gap.md",
+                "# Valid Evolution Doc\n",
+                "valid category subdir",
+                source="evolution",
+                target_kind="document",
+            )
+            assert valid_prop["source"] == "evolution"
+            assert valid_prop["status"] == "pending"
+
+    approved = c.post(
+        f"/api/v1/corrections/{valid_prop['id']}/approve",
+        headers=headers,
+        params={"project": proj_id},
+    )
+    assert approved.status_code == 200, approved.text
+    assert (src / "knowledge/evolution/valid_gap.md").is_file()
+
+
+def test_edit_and_approve_non_table_field_structured_proposals(client, monkeypatch):
+    import yaml
+
+    c, admin = client
+    headers = _headers(admin)
+    proj_id, src = _setup_override_project(c, headers, monkeypatch, "Edit Struct Proj")
+
+    # 1) Relationship structured proposal edited via YAML patch
+    rel_patch = {
+        "version": 1,
+        "relationships": {
+            "orders_to_users": {
+                "name": "orders_to_users",
+                "from_database": "shop",
+                "from_table": "orders",
+                "from_columns": ["user_id"],
+                "to_database": "shop",
+                "to_table": "users",
+                "to_columns": ["id"],
+                "instructions": "初始连接说明",
+            }
+        },
+    }
+    rel_created = c.post(
+        "/api/v1/corrections",
+        headers=headers,
+        params={"project": proj_id},
+        json={
+            "target": "relationship:orders_to_users",
+            "target_kind": "override",
+            "reason": "补充外键",
+            "structured_patch": rel_patch,
+        },
+    )
+    assert rel_created.status_code == 201, rel_created.text
+    rel_prop = rel_created.json()
+
+    edited_rel_yaml = yaml.safe_dump(
+        {
+            "version": 1,
+            "relationships": {
+                "orders_to_users": {
+                    **rel_patch["relationships"]["orders_to_users"],
+                    "instructions": "管理员编辑后的连接约束",
+                }
+            },
+        },
+        allow_unicode=True,
+        sort_keys=False,
+    )
+    rel_app = c.post(
+        f"/api/v1/corrections/{rel_prop['id']}/approve",
+        headers=headers,
+        params={"project": proj_id},
+        json={"patch": edited_rel_yaml},
+    )
+    assert rel_app.status_code == 200, rel_app.text
+    assert (
+        rel_app.json()["structured_patch"]["relationships"]["orders_to_users"][
+            "instructions"
+        ]
+        == "管理员编辑后的连接约束"
+    )
+    written_yaml = yaml.safe_load(
+        (src / "overrides" / "semantic_overrides.yaml").read_text(encoding="utf-8")
+    )
+    assert (
+        written_yaml["relationships"]["orders_to_users"]["instructions"]
+        == "管理员编辑后的连接约束"
+    )
+
+    # 2) Compiled Ossie-doc structured override (target starts with document:) edited via YAML patch
+    ossie_patch = {
+        "version": 1,
+        "tables": {
+            "shop.orders": {
+                "database": "shop",
+                "name": "orders",
+                "instructions": "初始派生文档路由约束",
+            }
+        },
+    }
+    ossie_created = c.post(
+        "/api/v1/corrections",
+        headers=headers,
+        params={"project": proj_id},
+        json={
+            "target": "document:ossie/orders.md",
+            "target_kind": "override",
+            "reason": "派生文档编译覆盖",
+            "structured_patch": ossie_patch,
+        },
+    )
+    assert ossie_created.status_code == 201, ossie_created.text
+    ossie_id = ossie_created.json()["id"]
+
+    # Invalid YAML edit must fail 422 instead of silently discarding edits
+    bad_edit = c.post(
+        f"/api/v1/corrections/{ossie_id}/approve",
+        headers=headers,
+        params={"project": proj_id},
+        json={"patch": "not valid structured override text"},
+    )
+    assert bad_edit.status_code == 422, bad_edit.text
+
+    edited_ossie_yaml = yaml.safe_dump(
+        {
+            "version": 1,
+            "tables": {
+                "shop.orders": {
+                    "database": "shop",
+                    "name": "orders",
+                    "instructions": "管理员编辑后的派生文档路由约束",
+                }
+            },
+        },
+        allow_unicode=True,
+        sort_keys=False,
+    )
+    ossie_app = c.post(
+        f"/api/v1/corrections/{ossie_id}/approve",
+        headers=headers,
+        params={"project": proj_id},
+        json={"patch": edited_ossie_yaml},
+    )
+    assert ossie_app.status_code == 200, ossie_app.text
+    assert (
+        ossie_app.json()["structured_patch"]["tables"]["shop.orders"]["instructions"]
+        == "管理员编辑后的派生文档路由约束"
+    )
+
+    # 3) Metric structured override edited via JSON/YAML patch
+    metric_patch = {
+        "version": 1,
+        "metrics": {
+            "daily_gmv": {
+                "name": "daily_gmv",
+                "description": "初始描述",
+                "expression": "SUM(orders.amount)",
+                "dialect": "doris",
+                "tables": ["shop.orders"],
+            }
+        },
+    }
+    metric_created = c.post(
+        "/api/v1/corrections",
+        headers=headers,
+        params={"project": proj_id},
+        json={
+            "target": "metric:daily_gmv",
+            "target_kind": "override",
+            "reason": "指标口径",
+            "structured_patch": metric_patch,
+        },
+    )
+    assert metric_created.status_code == 201, metric_created.text
+    edited_metric_yaml = yaml.safe_dump(
+        {
+            "version": 1,
+            "metrics": {
+                "daily_gmv": {
+                    **metric_patch["metrics"]["daily_gmv"],
+                    "description": "管理员编辑后指标描述",
+                }
+            },
+        },
+        allow_unicode=True,
+        sort_keys=False,
+    )
+    metric_app = c.post(
+        f"/api/v1/corrections/{metric_created.json()['id']}/approve",
+        headers=headers,
+        params={"project": proj_id},
+        json={"patch": edited_metric_yaml},
+    )
+    assert metric_app.status_code == 200, metric_app.text
+    assert (
+        metric_app.json()["structured_patch"]["metrics"]["daily_gmv"]["description"]
+        == "管理员编辑后指标描述"
+    )
+
+
+@pytest.mark.parametrize("crash_at", ["precheck", "journal", "revert", "finalize"])
+def test_interrupted_revert_recovers_without_duplicate_commit_or_build(
+    tmp_path, monkeypatch, crash_at
+):
+    import os
+    import signal
+    import subprocess
+
+    import yaml
+
+    from semantica_dataagent import (
+        corrections,
+        project_context,
+        source_directory,
+    )
+    from semantica_dataagent.auth import Requester
+    from semantica_dataagent.cli import initialize
+    from semantica_dataagent.db import (
+        Build,
+        CorrectionProposal,
+        Project,
+        ProjectMember,
+        ProjectSetting,
+        Token,
+        digest,
+        sessions,
+    )
+
+    monkeypatch.setenv("DATAAGENT_AGENT_MODE", "local")
+    monkeypatch.setenv("DATAAGENT_DB_PATH", str(tmp_path / "app.db"))
+    monkeypatch.setenv("DATAAGENT_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    monkeypatch.setenv("DATAAGENT_PROJECTS_ROOT", str(tmp_path / "projects"))
+    initialize()
+
+    root = project_context.project_source_directory("proj-rev-rec")
+    with sessions().begin() as db:
+        db.add(
+            Project(
+                id="proj-rev-rec",
+                name="Rev Rec Proj",
+                type="warehouse",
+                status="active",
+            )
+        )
+        db.add(
+            ProjectSetting(
+                project_id="proj-rev-rec", key="source_directory", value=str(root)
+            )
+        )
+        tok = Token(digest=digest("rev-admin"), name="rev-admin", role="admin")
+        db.add(tok)
+        db.flush()
+        reviewer_id = tok.id
+        db.add(
+            ProjectMember(project_id="proj-rev-rec", token_id=reviewer_id, role="admin")
+        )
+
+    base_yaml = yaml.safe_dump(
+        {
+            "version": 1,
+            "tables": {
+                "shop.orders": {
+                    "database": "shop",
+                    "name": "orders",
+                    "comment": "初始表说明",
+                }
+            },
+        },
+        allow_unicode=True,
+        sort_keys=False,
+    )
+    updated_yaml = yaml.safe_dump(
+        {
+            "version": 1,
+            "tables": {
+                "shop.orders": {
+                    "database": "shop",
+                    "name": "orders",
+                    "comment": "待回滚表说明",
+                }
+            },
+        },
+        allow_unicode=True,
+        sort_keys=False,
+    )
+    with source_directory.repository(root) as repo:
+        (repo / "overrides").mkdir(exist_ok=True)
+        (repo / "overrides" / "semantic_overrides.yaml").write_text(
+            base_yaml, encoding="utf-8"
+        )
+        source_directory.git(repo, "add", "overrides/semantic_overrides.yaml")
+        source_directory.git(repo, "commit", "-m", "base override", author="tester")
+        (repo / "overrides" / "semantic_overrides.yaml").write_text(
+            updated_yaml, encoding="utf-8"
+        )
+        source_directory.git(repo, "add", "overrides/semantic_overrides.yaml")
+        source_directory.git(
+            repo, "commit", "-m", "Approve correction rev-crash-1", author="rev-admin"
+        )
+        applied_sha = (
+            source_directory.git(repo, "rev-parse", "HEAD").decode("utf-8").strip()
+        )
+
+    monkeypatch.setattr(project_context, "wake_build_queue", lambda: None)
+    proposal_id = f"rev-crash-{crash_at}"
+    with sessions().begin() as db:
+        db.add(
+            CorrectionProposal(
+                id=proposal_id,
+                project_id="proj-rev-rec",
+                owner_id=reviewer_id,
+                reviewer_id=reviewer_id,
+                reviewer_name="rev-admin",
+                target="table:shop.orders",
+                patch=updated_yaml,
+                original_patch=updated_yaml,
+                original=base_yaml,
+                diff="diff",
+                reason="待回滚测试",
+                status="approved",
+                source="manual",
+                target_kind="override",
+                source_directory=str(root),
+                source_path="overrides/semantic_overrides.yaml",
+                commit_sha=applied_sha,
+            )
+        )
+
+    pid = os.fork()
+    if pid == 0:
+        try:
+            if crash_at == "precheck":
+
+                def die_before_lock(_directory):
+                    os.kill(os.getpid(), signal.SIGKILL)
+
+                corrections.repository = die_before_lock
+            real_write_rev = corrections._write_revert_journal
+            real_git = corrections.git
+            real_finalize_rev = corrections._finalize_revert
+
+            def write_rev_then_die(*args, **kwargs):
+                res = real_write_rev(*args, **kwargs)
+                if crash_at == "journal":
+                    os.kill(os.getpid(), signal.SIGKILL)
+                return res
+
+            def git_then_die(r, *args, **kwargs):
+                res = real_git(r, *args, **kwargs)
+                if args and args[0] == "revert":
+                    os.kill(os.getpid(), signal.SIGKILL)
+                return res
+
+            def finalize_rev_then_die(*args, **kwargs):
+                real_finalize_rev(*args, **kwargs)
+                os.kill(os.getpid(), signal.SIGKILL)
+
+            corrections._write_revert_journal = write_rev_then_die
+            corrections.git = git_then_die
+            if crash_at == "finalize":
+                corrections._finalize_revert = finalize_rev_then_die
+            corrections.revert(
+                proposal_id,
+                type("Scope", (), {"project_id": "proj-rev-rec"})(),
+                Requester(id=reviewer_id, role="admin", token="rev-admin"),
+            )
+        finally:
+            os._exit(2)
+
+    _, status = os.waitpid(pid, 0)
+    assert os.WIFSIGNALED(status) and os.WTERMSIG(status) == signal.SIGKILL
+
+    corrections.recover_reverting()
+    corrections.recover_reverting()
+
+    expected = "reverted" if crash_at in {"revert", "finalize"} else "approved"
+    with sessions()() as db:
+        row = db.get(CorrectionProposal, proposal_id)
+        assert row is not None
+        assert row.status == expected
+        assert db.query(Build).filter_by(
+            project_id="proj-rev-rec",
+            correction_proposal_id=f"revert:{proposal_id}",
+        ).count() == (1 if expected == "reverted" else 0)
+        if expected == "reverted":
+            assert row.revert_commit_sha
+            assert row.reverted_at is not None
+
+    log_out = subprocess.check_output(
+        ["git", "-C", str(root), "log", "--format=%B"], text=True
+    )
+    assert log_out.count(f"This reverts commit {applied_sha}.") == (
+        1 if expected == "reverted" else 0
+    )
+    current_yaml = yaml.safe_load(
+        (root / "overrides" / "semantic_overrides.yaml").read_text(encoding="utf-8")
+    )
+    assert current_yaml["tables"]["shop.orders"]["comment"] == (
+        "初始表说明" if expected == "reverted" else "待回滚表说明"
+    )
+    assert not subprocess.check_output(
+        ["git", "-C", str(root), "status", "--porcelain", "--untracked-files=all"],
+        text=True,
+    ).strip()

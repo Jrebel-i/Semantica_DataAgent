@@ -747,6 +747,31 @@ def _render_metrics_markdown(metrics: dict[str, dict[str, Any]]) -> str:
     return "\n".join(lines).strip() + "\n"
 
 
+def _apply_entity_overlay(
+    rec: Record,
+    entry: dict[str, Any],
+    *,
+    legacy_parts: tuple[str, ...],
+    matched_legacy_keys: set[str],
+) -> None:
+    if "comment" in entry and entry["comment"] is not None:
+        rec.data["comment"] = entry["comment"]
+    if entry.get("synonyms"):
+        rec.data["synonyms"] = list(entry["synonyms"])
+    if entry.get("instructions"):
+        rec.data["instructions"] = entry["instructions"]
+    desc = _compose_search_description(
+        rec.data.get("description"),
+        entry.get("synonyms"),
+        entry.get("instructions"),
+    )
+    if desc:
+        rec.data["description"] = desc
+    _attach_override_source(rec)
+    for lk in _legacy_key_variants(rec.data.get("catalog"), *legacy_parts):
+        matched_legacy_keys.add(lk)
+
+
 def apply_overrides_detailed(
     records: list[Record],
     project_id: str = "default",
@@ -796,22 +821,12 @@ def apply_overrides_detailed(
             )
             continue
         for rec in targets:
-            if "comment" in entry and entry["comment"] is not None:
-                rec.data["comment"] = entry["comment"]
-            if entry.get("synonyms"):
-                rec.data["synonyms"] = list(entry["synonyms"])
-            if entry.get("instructions"):
-                rec.data["instructions"] = entry["instructions"]
-            desc = _compose_search_description(
-                rec.data.get("description"),
-                entry.get("synonyms"),
-                entry.get("instructions"),
+            _apply_entity_overlay(
+                rec,
+                entry,
+                legacy_parts=(db_name, tbl_name),
+                matched_legacy_keys=matched_table_legacy_keys,
             )
-            if desc:
-                rec.data["description"] = desc
-            _attach_override_source(rec)
-            for lk in _legacy_key_variants(rec.data.get("catalog"), db_name, tbl_name):
-                matched_table_legacy_keys.add(lk)
             applied_count += 1
 
     for key, entry in doc["fields"].items():
@@ -829,24 +844,12 @@ def apply_overrides_detailed(
             )
             continue
         for rec in targets:
-            if "comment" in entry and entry["comment"] is not None:
-                rec.data["comment"] = entry["comment"]
-            if entry.get("synonyms"):
-                rec.data["synonyms"] = list(entry["synonyms"])
-            if entry.get("instructions"):
-                rec.data["instructions"] = entry["instructions"]
-            desc = _compose_search_description(
-                rec.data.get("description"),
-                entry.get("synonyms"),
-                entry.get("instructions"),
+            _apply_entity_overlay(
+                rec,
+                entry,
+                legacy_parts=(db_name, tbl_name, fld_name),
+                matched_legacy_keys=matched_field_legacy_keys,
             )
-            if desc:
-                rec.data["description"] = desc
-            _attach_override_source(rec)
-            for lk in _legacy_key_variants(
-                rec.data.get("catalog"), db_name, tbl_name, fld_name
-            ):
-                matched_field_legacy_keys.add(lk)
             applied_count += 1
 
     # Compatible fallback for any legacy SQLite MetadataOverride not shadowed by YAML
