@@ -46,6 +46,7 @@ export function ChatPage({
   newTarget,
   initialConversationId = "",
   onNavigateChat,
+  onNavigateKnowledge,
   refreshKey = 0,
 }: {
   token: string;
@@ -56,6 +57,7 @@ export function ChatPage({
   newTarget?: HTMLElement | null;
   initialConversationId?: string;
   onNavigateChat?: () => void;
+  onNavigateKnowledge?: () => void;
   language?: Language;
   onChangeLanguage?: () => void;
   refreshKey?: number;
@@ -420,6 +422,11 @@ export function ChatPage({
     : null;
   const emptyConversation = !loadingConversation && turns.length === 0 && !live;
   const projectLocked = Boolean(currentConversationId) || Boolean(live);
+  const activeChatProject = projects.find(
+    (project) => project.id === (currentConversation?.project_id || projectId),
+  );
+  const headerProjectName =
+    currentConversation?.project_name || activeChatProject?.name || "";
   const liveAnswer = live
     ? stripCitationRefs(live.text)
     : { text: "", refs: [] };
@@ -538,6 +545,7 @@ export function ChatPage({
                   {currentConversation?.title || t.newConversation}
                 </strong>
                 <span>
+                  {headerProjectName ? `${headerProjectName} · ` : ""}
                   {agentId} · {activeProvider?.name || providerId || "—"} ·{" "}
                   {model || "—"}
                 </span>
@@ -672,6 +680,7 @@ export function ChatPage({
               addAttachments={addAttachments}
               removeAttachment={removeAttachment}
               visionEnabled={visionEnabled}
+              onNavigateKnowledge={onNavigateKnowledge}
             />
           </div>
           {citationRef && (

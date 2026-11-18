@@ -3517,6 +3517,140 @@ code {
   padding-top: 0;
 }
 
+.chat-project-guide {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  margin: -12px 0 18px;
+}
+.chat-project-guide-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--ink-2);
+  font-size: 12.5px;
+}
+.chat-project-guide-link {
+  color: var(--teal);
+  font-size: 12.5px;
+  font-weight: 500;
+  text-decoration: none;
+}
+.chat-project-guide-link:hover {
+  text-decoration: underline;
+}
+
+.correction-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+.correction-filters button {
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--white);
+  color: var(--ink-2);
+  font-size: 12px;
+  cursor: pointer;
+}
+.correction-filters button.active {
+  border-color: var(--teal);
+  background: var(--mint-soft);
+  color: var(--teal-dark);
+  font-weight: 600;
+}
+.correction-list button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.admin-page select:not(.ant-select-selector),
+.admin-page
+  input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not(
+    .ant-input
+  ):not(.ant-select-selection-search-input) {
+  min-height: 38px;
+  padding: 6px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--white);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: 13px;
+}
+.admin-page select:not(.ant-select-selector):focus-visible,
+.admin-page
+  input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not(
+    .ant-input
+  ):not(.ant-select-selection-search-input):focus-visible,
+.admin-page textarea:not(.ant-input):focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+  border-color: var(--teal);
+}
+.admin-page textarea:not(.ant-input) {
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--white);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: 13px;
+}
+.admin-page > .page-header > button,
+.admin-page .save-bar > button,
+.admin-page .source-compare > button,
+.admin-page .plugin-card button:not(.ant-btn),
+.admin-page .form-card button:not(.ant-btn) {
+  min-height: 38px;
+  padding: 0 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--white);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  cursor: pointer;
+}
+.admin-page > .page-header > button:hover,
+.admin-page .save-bar > button:hover,
+.admin-page .source-compare > button:hover,
+.admin-page .plugin-card button:not(.ant-btn):hover,
+.admin-page .form-card button:not(.ant-btn):hover {
+  border-color: var(--teal);
+  color: var(--teal);
+}
+.admin-page .save-bar > button.primary,
+.admin-page .plugin-card button.primary:not(.ant-btn),
+.admin-page .form-card button.primary:not(.ant-btn) {
+  border-color: var(--teal);
+  background: var(--teal);
+  color: var(--white);
+}
+.admin-page .save-bar > button.primary:hover,
+.admin-page .plugin-card button.primary:not(.ant-btn):hover,
+.admin-page .form-card button.primary:not(.ant-btn):hover {
+  border-color: var(--teal-dark);
+  background: var(--teal-dark);
+  color: var(--white);
+}
+.admin-page .save-bar > button.danger,
+.admin-page .plugin-card button.danger:not(.ant-btn),
+.admin-page .form-card button.danger:not(.ant-btn) {
+  border-color: var(--danger-border);
+  color: var(--danger);
+}
+
 /* Narrow screens: overlay navigation drawer and full-width content */
 .mobile-topbar {
   display: none;

@@ -708,6 +708,7 @@ export function App() {
                     newTarget={newTarget}
                     initialConversationId={conversationId}
                     onNavigateChat={() => navigate("/chat")}
+                    onNavigateKnowledge={() => navigate("/knowledge")}
                   />
                 </div>
                 {!isChat &&

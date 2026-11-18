@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Alert } from "antd";
+import { Alert, Tag } from "antd";
 import type { Messages } from "./i18n";
 import { safeDecodePath } from "./paths";
 import { ProjectSelector, storedProject } from "./ProjectSelector";
@@ -13,6 +13,17 @@ type Proposal = {
   status: string;
 };
 type Gap = { id: string; question: string; missing: string };
+type StatusFilter = "all" | "pending" | "resolved";
+
+function statusMeta(
+  status: string,
+  t: Messages,
+): { label: string; color: string } {
+  if (status === "pending") return { label: t.statusPending, color: "gold" };
+  if (status === "approved") return { label: t.statusApproved, color: "green" };
+  if (status === "rejected") return { label: t.statusRejected, color: "red" };
+  return { label: status, color: "default" };
+}
 
 export function CorrectionsPage({
   token,
@@ -27,9 +38,18 @@ export function CorrectionsPage({
   const [rows, setRows] = useState<Proposal[]>([]);
   const [missing, setMissing] = useState<Gap[]>([]);
   const [selected, setSelected] = useState<Proposal | null>(null);
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [patch, setPatch] = useState("");
   const [error, setError] = useState("");
   const projectQuery = `project=${encodeURIComponent(project)}`;
+  const pendingCount = rows.filter((row) => row.status === "pending").length;
+  const resolvedCount = rows.length - pendingCount;
+  const filteredRows = rows.filter((row) => {
+    if (statusFilter === "pending") return row.status === "pending";
+    if (statusFilter === "resolved") return row.status !== "pending";
+    return true;
+  });
+  const selectedMeta = selected ? statusMeta(selected.status, t) : null;
   const refresh = useCallback(async () => {
     try {
       const response = await fetch(
@@ -113,26 +133,53 @@ export function CorrectionsPage({
           <section className="card section-card">
             <div className="card-title-row">
               <h2 className="card-title">{t.correctionTitle}</h2>
-              <span className="muted">{rows.length}</span>
+              <span className="muted">{filteredRows.length}</span>
             </div>
-            {rows.length === 0 ? (
+            {rows.length > 0 && (
+              <div className="correction-filters" role="group">
+                {(
+                  [
+                    ["all", `${t.filterAll} (${rows.length})`],
+                    ["pending", `${t.filterPending} (${pendingCount})`],
+                    ["resolved", `${t.filterResolved} (${resolvedCount})`],
+                  ] as const
+                ).map(([key, label]) => (
+                  <button
+                    key={key}
+                    type="button"
+                    className={statusFilter === key ? "active" : ""}
+                    aria-pressed={statusFilter === key}
+                    onClick={() => setStatusFilter(key)}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            )}
+            {filteredRows.length === 0 ? (
               <div className="empty-state">{t.emptyContext}</div>
             ) : (
               <ul className="correction-list">
-                {rows.map((row) => (
-                  <li key={row.id}>
-                    <button
-                      className={selected?.id === row.id ? "active" : ""}
-                      onClick={() => {
-                        setSelected(row);
-                        setPatch(row.patch);
-                      }}
-                    >
-                      <span className="mono">{safeDecodePath(row.target)}</span>
-                      <span className="subtle"> — {row.status}</span>
-                    </button>
-                  </li>
-                ))}
+                {filteredRows.map((row) => {
+                  const meta = statusMeta(row.status, t);
+                  return (
+                    <li key={row.id}>
+                      <button
+                        type="button"
+                        className={selected?.id === row.id ? "active" : ""}
+                        onClick={() => {
+                          setSelected(row);
+                          setPatch(row.patch);
+                        }}
+                      >
+                        <span className="mono">
+                          {safeDecodePath(row.target)}
+                        </span>
+                        <Tag color={meta.color}>{meta.label}</Tag>
+                      </button>
+                    </li>
+                  );
+                })}
               </ul>
             )}
           </section>
@@ -143,6 +190,9 @@ export function CorrectionsPage({
                   <h2 className="card-title mono">
                     {safeDecodePath(selected.target)}
                   </h2>
+                  {selectedMeta && (
+                    <Tag color={selectedMeta.color}>{selectedMeta.label}</Tag>
+                  )}
                 </div>
                 <p className="muted">{selected.reason}</p>
                 <pre className="diff-block">{selected.diff}</pre>
