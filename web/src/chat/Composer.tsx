@@ -243,12 +243,8 @@ export function Composer({
                   }}
                 />
               </label>
-              {!visionEnabled && (
-                <span className="chat-selector-hint">
-                  {t.attachmentVisionHint}
-                </span>
-              )}
             </span>
+            <span className="composer-divider" aria-hidden="true" />
             {!showProjectSelect && currentProject && (
               <span
                 className="composer-project-label"
@@ -260,6 +256,7 @@ export function Composer({
             {showProjectSelect && (
               <label>
                 <select
+                  className="composer-native-select composer-project-select"
                   aria-label={t.projects}
                   title={projectLocked ? t.projectLockedHint : t.projects}
                   value={projectId}
@@ -274,16 +271,9 @@ export function Composer({
                 </select>
               </label>
             )}
-            {projectArchived && (
-              <span className="chat-selector-hint" role="status">
-                {t.projectArchivedNotice}
-              </span>
-            )}
-            {projectLocked && !projectArchived && activeProjects.length > 1 && (
-              <span className="chat-selector-hint">{t.projectLockedHint}</span>
-            )}
             <label>
               <select
+                className="composer-native-select"
                 aria-label={t.askAgent}
                 title={currentConversationId ? t.agentLockedHint : t.askAgent}
                 value={agentId}
@@ -302,11 +292,9 @@ export function Composer({
                 ))}
               </select>
             </label>
-            {currentConversationId && (
-              <span className="chat-selector-hint">{t.agentLockedHint}</span>
-            )}
             <label>
               <select
+                className="composer-native-select"
                 aria-label={t.askProvider}
                 title={t.askProvider}
                 value={providerId}
@@ -330,7 +318,7 @@ export function Composer({
               </select>
             </label>
             <label>
-              <span>{t.askModel}</span>
+              <span className="sr-only">{t.askModel}</span>
               <Select
                 aria-label={t.askModel}
                 className="composer-select composer-model-select"
@@ -356,8 +344,8 @@ export function Composer({
               />
             </label>
             {effortLevels.length > 0 && (
-              <label>
-                <span>{t.askEffort}</span>
+              <label className="composer-effort-pill">
+                <span className="composer-effort-prefix">{t.askEffort}</span>
                 <Select
                   aria-label={t.askEffort}
                   className="composer-select composer-effort-select"
@@ -392,6 +380,28 @@ export function Composer({
             <ArrowUpOutlined />
           </Button>
         </div>
+        {projectArchived && (
+          <div className="composer-switch-hint" role="status">
+            {t.projectArchivedNotice}
+          </div>
+        )}
+        {(!visionEnabled ||
+          (projectLocked && !projectArchived && activeProjects.length > 1) ||
+          Boolean(currentConversationId)) && (
+          <div className="composer-lock-hints">
+            {projectLocked && !projectArchived && activeProjects.length > 1 && (
+              <span className="chat-selector-hint">{t.projectLockedHint}</span>
+            )}
+            {currentConversationId && (
+              <span className="chat-selector-hint">{t.agentLockedHint}</span>
+            )}
+            {!visionEnabled && (
+              <span className="chat-selector-hint">
+                {t.attachmentVisionHint}
+              </span>
+            )}
+          </div>
+        )}
         {conversationSelectionChanged && (
           <div className="composer-switch-hint" role="status">
             {t.nextMessageModel.replace("{model}", model)}

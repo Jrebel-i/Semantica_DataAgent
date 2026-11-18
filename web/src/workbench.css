@@ -3679,6 +3679,215 @@ code {
   color: var(--danger);
 }
 
+/* Chat sidebar & composer theme cohesive polish */
+.chat-header {
+  min-height: 58px;
+  padding: 12px 24px 8px;
+}
+.chat-header-title strong {
+  line-height: 1.4;
+}
+.chat-header-title .chat-header-project {
+  background: var(--panel);
+  border-color: var(--line-soft);
+}
+.sidebar-sessions select.session-project-filter {
+  min-height: 24px;
+  height: 24px;
+  max-width: 112px;
+  padding: 0 20px 0 8px;
+  border: 1px solid var(--line-soft);
+  border-radius: 999px;
+  background-color: rgba(48, 48, 46, 0.03);
+  background-position: right 7px center;
+  background-size: 9px 6px;
+  color: var(--ink-2);
+  font-size: 11.5px;
+}
+.session-item button.session-menu-toggle:not(.ant-btn) {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  min-width: 24px;
+  height: 24px;
+  min-height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink-2);
+  box-shadow: none;
+}
+.session-item button.session-menu-toggle:not(.ant-btn):hover,
+.session-item button.session-menu-toggle:not(.ant-btn):focus-visible {
+  border-color: transparent;
+  background: rgba(48, 48, 46, 0.08);
+  color: var(--ink);
+}
+.session-menu {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: 0 8px 24px var(--shadow-large);
+}
+.session-menu button:not(.ant-btn) {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-height: 30px;
+  padding: 5px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink);
+  font-size: 12.5px;
+  text-align: left;
+}
+.session-menu button:not(.ant-btn):hover {
+  background: var(--panel);
+  color: var(--ink);
+}
+
+.composer-divider {
+  flex: none;
+  width: 1px;
+  height: 14px;
+  margin: 0 2px;
+  background: var(--line-soft);
+}
+.composer-controls .chat-selectors {
+  gap: 4px;
+  justify-content: flex-start;
+  align-items: center;
+}
+.composer-controls .composer-attach-button {
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+}
+.composer-controls .chat-selectors select {
+  height: 28px;
+  min-height: 28px;
+  max-width: 152px;
+  padding: 0 22px 0 10px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background-color: rgba(48, 48, 46, 0.04);
+  color: var(--ink-2);
+  font-size: 12px;
+  text-overflow: ellipsis;
+}
+.composer-controls .chat-selectors select:not(:disabled):hover {
+  border-color: var(--line);
+  background-color: var(--panel);
+  color: var(--ink);
+}
+.composer-controls .chat-selectors select:disabled {
+  padding-right: 10px;
+  background-image: none;
+  background-color: rgba(48, 48, 46, 0.035);
+  color: var(--ink-2);
+  opacity: 0.72;
+  cursor: default;
+}
+.composer-controls .composer-select.ant-select {
+  height: 28px;
+  min-height: 28px;
+  min-width: 0;
+  padding: 0 10px;
+  border: 1px solid transparent !important;
+  border-radius: 999px !important;
+  background: rgba(48, 48, 46, 0.04) !important;
+  box-shadow: none !important;
+  color: var(--ink-2);
+  font-size: 12px;
+}
+.composer-controls .composer-select.ant-select:hover {
+  border-color: var(--line) !important;
+  background: var(--panel) !important;
+  color: var(--ink);
+}
+.composer-controls .composer-select.ant-select.ant-select-focused {
+  border-color: var(--teal) !important;
+  box-shadow: 0 0 0 2px var(--focus-ring) !important;
+}
+.composer-controls .composer-model-select {
+  min-width: 0;
+  max-width: 200px;
+}
+.composer-controls .composer-effort-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  height: 28px;
+  padding-left: 10px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: rgba(48, 48, 46, 0.04);
+  color: var(--ink-3);
+  font-size: 12px;
+  transition:
+    background-color 0.12s ease,
+    border-color 0.12s ease;
+}
+.composer-controls .composer-effort-pill:hover {
+  border-color: var(--line);
+  background: var(--panel);
+}
+.composer-controls .composer-effort-pill:has(.ant-select-focused) {
+  border-color: var(--teal);
+  box-shadow: 0 0 0 2px var(--focus-ring);
+}
+.composer-controls .composer-effort-prefix {
+  color: var(--ink-3);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+.composer-controls .composer-effort-pill .composer-effort-select.ant-select {
+  min-width: 0;
+  height: 26px;
+  min-height: 26px;
+  padding: 0 8px 0 4px;
+  border: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+.composer-controls .composer-effort-pill .composer-effort-select.ant-select:hover,
+.composer-controls .composer-effort-pill .composer-effort-select.ant-select.ant-select-focused {
+  border: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+.composer-controls .ant-select-selector {
+  height: 26px !important;
+  min-height: 26px !important;
+  border: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+}
+.composer-lock-hints {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  max-height: 0;
+  opacity: 0;
+  overflow: hidden;
+  transition:
+    opacity 0.15s ease,
+    max-height 0.15s ease;
+}
+.composer-lock-hints .chat-selector-hint {
+  max-width: none;
+}
+.composer-box:has(select:disabled:hover, .composer-attach-button--disabled:hover)
+  .composer-lock-hints {
+  max-height: 32px;
+  margin-top: 2px;
+  opacity: 0.9;
+}
+
 /* Narrow screens: overlay navigation drawer and full-width content */
 .mobile-topbar {
   display: none;
