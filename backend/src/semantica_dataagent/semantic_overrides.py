@@ -634,7 +634,7 @@ def _load_legacy_sqlite_comments(
 
 
 def _resolve_project_source_dir(project_id: str) -> Path | None:
-    from . import knowledge
+    from . import knowledge, project_context
 
     try:
         values = (
@@ -642,9 +642,9 @@ def _resolve_project_source_dir(project_id: str) -> Path | None:
             if project_id in (None, "default")
             else knowledge.settings(project_id)
         )
+        raw = project_context.from_values(values, project_id).source_directory_value
     except (KeyError, ValueError, RuntimeError, OSError):
         return None
-    raw = str(values.get("source_directory") or "").strip()
     if not raw:
         return None
     path = Path(raw)
@@ -961,10 +961,10 @@ def apply_overrides_detailed(
                     "path": OVERRIDE_METRICS_DOC_PATH,
                     "title": "已确认业务指标（语义覆盖层）",
                     "content": _render_metrics_markdown(valid_metrics),
-                    "generated": False,
+                    "generated": True,
                 },
                 OVERRIDE_RELATIVE_PATH,
-                source_key=OVERRIDE_RELATIVE_PATH,
+                source_key=f"overrides/__derived__/{OVERRIDE_METRICS_CATEGORY}/metrics.md",
                 source_files=[OVERRIDE_RELATIVE_PATH],
             )
         )

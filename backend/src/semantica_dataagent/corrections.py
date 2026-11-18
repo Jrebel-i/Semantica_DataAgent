@@ -8,6 +8,7 @@ import logging
 import os
 import tempfile
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any, Literal
@@ -289,33 +290,51 @@ def propose_in_project(
 
     stored_structured_patch: dict[str, Any] | None = None
     if parsed_patch is not None:
+        if not project.source_directory_value:
+            raise ValueError(
+                "Structured overrides require a configured source_directory"
+            )
         stored_structured_patch = normalize_structured_patch(parsed_patch)
         if not patch_text.strip():
             patch_text = dump_overrides_yaml(stored_structured_patch)
-        if project.source_directory_value:
-            src_root = Path(project.source_directory_value)
-            yaml_path = override_file_path(src_root)
-            if yaml_path.is_file():
-                original = yaml_path.read_text(encoding="utf-8")
-            base_doc, _ = (
-                load_overrides_file(src_root)
-                if src_root.is_dir()
-                else ({"version": 1}, None)
-            )
-            merged_yaml = dump_overrides_yaml(
-                merge_overrides_doc(base_doc, stored_structured_patch)
-            )
-        else:
-            merged_yaml = dump_overrides_yaml(stored_structured_patch)
+        src_root = Path(project.source_directory_value)
+        yaml_path = override_file_path(src_root)
+        if yaml_path.is_file():
+            original = yaml_path.read_text(encoding="utf-8")
+        base_doc, _ = (
+            load_overrides_file(src_root)
+            if src_root.is_dir()
+            else ({"version": 1}, None)
+        )
+        merged_yaml = dump_overrides_yaml(
+            merge_overrides_doc(base_doc, stored_structured_patch)
+        )
         diff = _unified_diff(OVERRIDE_RELATIVE_PATH, original, merged_yaml)
         if not diff:
             raise ValueError("Correction does not change semantic_overrides.yaml")
     else:
+        if resolved_kind == "ossie" and not project.source_directory_value:
+            raise ValueError(
+                "Structured overrides require a configured source_directory"
+            )
         if resolved_kind in {"override", "ossie"}:
             stored_structured_patch = legacy_target_to_patch(target, patch_text)
         diff = _unified_diff(target, original, patch_text)
         if not diff:
             raise ValueError("Correction does not change the target")
+
+    policy = project_context.evolution_policy(project_id)
+    require_review = (
+        policy["evolution_require_review"]
+        if source == "evolution"
+        else policy["correction_require_review"]
+    )
+    if not require_review:
+        with sessions()() as db:
+            submitter_name = _token_name(db, requester.id)
+        author = _validate_git_author(submitter_name)
+    else:
+        author = None
 
     proposal_id = uuid.uuid4().hex
     with sessions().begin() as db:
@@ -342,16 +361,9 @@ def propose_in_project(
         )
         db.add(row)
         db.flush()
-        submitter_name = _token_name(db, requester.id)
 
-    policy = project_context.evolution_policy(project_id)
-    require_review = (
-        policy["evolution_require_review"]
-        if source == "evolution"
-        else policy["correction_require_review"]
-    )
     if not require_review:
-        author = _validate_git_author(submitter_name)
+        assert author is not None
         view = _apply_proposal(
             proposal_id,
             reviewer_id=None,
@@ -545,13 +557,24 @@ def _rollback_applying_row(proposal_id: str) -> None:
         row.reviewer_name = None
 
 
-def _recover_git_applying_row(row_snapshot: dict[str, Any]) -> None:
-    proposal_id = row_snapshot["id"]
-    directory = row_snapshot["source_directory"]
-    source_path = row_snapshot["source_path"]
-    old = row_snapshot["original"]
-    patch = row_snapshot["patch"]
-    target_kind = row_snapshot["target_kind"]
+@dataclass(frozen=True)
+class _ApplyingSnapshot:
+    id: str
+    repo_dir: str | None
+    source_path: str | None
+    original: str
+    patch: str
+    target_kind: str
+    reviewer_id: str | None
+
+
+def _recover_git_applying_row(row_snapshot: _ApplyingSnapshot) -> None:
+    proposal_id = row_snapshot.id
+    directory = row_snapshot.repo_dir
+    source_path = row_snapshot.source_path
+    old = row_snapshot.original
+    patch = row_snapshot.patch
+    target_kind = row_snapshot.target_kind
 
     with repository(directory) as root:
         journal = _read_journal(root, proposal_id)
@@ -565,7 +588,7 @@ def _recover_git_applying_row(row_snapshot: dict[str, Any]) -> None:
             before_existed = True
             before_content = old
             after_content = patch
-            is_human = row_snapshot["reviewer_id"] is not None
+            is_human = row_snapshot.reviewer_id is not None
             message = (
                 f"Approve correction {proposal_id}"
                 if is_human
@@ -645,22 +668,22 @@ def recover_applying(only_id: str | None = None):
         if only_id is not None:
             query = query.filter_by(id=only_id)
         snapshots = [
-            {
-                "id": r.id,
-                "source_directory": r.source_directory,
-                "source_path": r.source_path,
-                "original": r.original,
-                "patch": r.patch,
-                "target_kind": r.target_kind or "document",
-                "reviewer_id": r.reviewer_id,
-            }
+            _ApplyingSnapshot(
+                id=r.id,
+                repo_dir=r.source_directory,
+                source_path=r.source_path,
+                original=r.original,
+                patch=r.patch,
+                target_kind=r.target_kind or "document",
+                reviewer_id=r.reviewer_id,
+            )
             for r in query.all()
         ]
     for snap in snapshots:
         try:
             _recover_git_applying_row(snap)
         except Exception:
-            logger.exception("Could not recover correction %s", snap["id"])
+            logger.exception("Could not recover correction %s", snap.id)
 
 
 def _load_structured_from_row(
@@ -683,6 +706,32 @@ def _load_structured_from_row(
     return legacy_target_to_patch(row.target, patch_text)
 
 
+def _is_plain_legacy_comment(target: str, structured: dict[str, Any] | None) -> bool:
+    if not target.startswith(("table:", "field:")) or structured is None:
+        return False
+    if structured.get("relationships") or structured.get("metrics"):
+        return False
+    tables = structured.get("tables") or {}
+    fields = structured.get("fields") or {}
+    if target.startswith("table:"):
+        if fields or len(tables) != 1:
+            return False
+        entry = next(iter(tables.values()))
+        return (
+            "comment" in entry
+            and not entry.get("synonyms")
+            and not entry.get("instructions")
+        )
+    if tables or len(fields) != 1:
+        return False
+    entry = next(iter(fields.values()))
+    return (
+        "comment" in entry
+        and not entry.get("synonyms")
+        and not entry.get("instructions")
+    )
+
+
 def _apply_proposal(
     proposal_id: str,
     *,
@@ -698,11 +747,14 @@ def _apply_proposal(
         db.execute(text("BEGIN IMMEDIATE"))
         row = _pending(db, proposal_id, project_id)
         effective_patch = patch_override if patch_override is not None else row.patch
-        effective_structured = _load_structured_from_row(
-            row, effective_patch, structured_override
-        )
-        if patch_override is None and structured_override is not None:
-            effective_patch = dump_overrides_yaml(effective_structured)
+        try:
+            effective_structured = _load_structured_from_row(
+                row, effective_patch, structured_override
+            )
+            if patch_override is None and structured_override is not None:
+                effective_patch = dump_overrides_yaml(effective_structured)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from None
         if (
             not auto_apply
             and row.target_kind == "document"
@@ -736,6 +788,14 @@ def _apply_proposal(
     project = project_context.from_values(values, row_project_id)
 
     if row_kind != "document" and not project.source_directory_value:
+        if (
+            structured_override is not None
+            or row_kind == "ossie"
+            or not _is_plain_legacy_comment(row_target, effective_structured)
+        ):
+            raise HTTPException(
+                422, "Structured overrides require a configured source_directory"
+            )
         # Legacy DB-only metadata override without source_directory configured
         with sessions().begin() as db:
             db.execute(text("BEGIN IMMEDIATE"))
@@ -954,31 +1014,32 @@ def revert(
                 _abort_revert_if_active(root)
                 raise HTTPException(409, f"Git revert failed: {exc}") from exc
             revert_sha = git(root, "rev-parse", "HEAD").decode().strip()
+
+            with sessions().begin() as db:
+                db.execute(text("BEGIN IMMEDIATE"))
+                row = db.get(CorrectionProposal, proposal_id)
+                if row is None or row.project_id != project_id:
+                    raise HTTPException(404, "Proposal not found")
+                if row.status not in {"approved", "auto_applied"}:
+                    raise HTTPException(
+                        409, f"Proposal cannot be reverted from status {row.status}"
+                    )
+                row.status = "reverted"
+                row.revert_commit_sha = revert_sha
+                row.reverted_at = datetime.now(UTC)
+                add_queued_build(
+                    db,
+                    "incremental",
+                    actor_name,
+                    correction_proposal_id=f"revert:{row.id}",
+                    project_id=row.project_id,
+                )
+                db.flush()
+                result = ProposalView.model_validate(row)
     except HTTPException:
         raise
     except (OSError, ValueError) as exc:
         raise HTTPException(409, str(exc)) from exc
 
-    with sessions().begin() as db:
-        db.execute(text("BEGIN IMMEDIATE"))
-        row = db.get(CorrectionProposal, proposal_id)
-        if row is None or row.project_id != project_id:
-            raise HTTPException(404, "Proposal not found")
-        if row.status not in {"approved", "auto_applied"}:
-            raise HTTPException(
-                409, f"Proposal cannot be reverted from status {row.status}"
-            )
-        row.status = "reverted"
-        row.revert_commit_sha = revert_sha
-        row.reverted_at = datetime.now(UTC)
-        add_queued_build(
-            db,
-            "incremental",
-            actor_name,
-            correction_proposal_id=None,
-            project_id=row.project_id,
-        )
-        db.flush()
-        result = ProposalView.model_validate(row)
     project_context.wake_build_queue()
     return result

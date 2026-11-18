@@ -2813,3 +2813,222 @@ def test_revert_approved_and_auto_applied_proposals_with_git_conflict_abort(
     assert rev_root.status_code == 200, rev_root.text
     assert rev_root.json()["status"] == "reverted"
     assert not (root_src / "overrides" / "semantic_overrides.yaml").exists()
+
+
+def test_review_regression_checks(client, monkeypatch):
+    import time
+
+    from semantica_dataagent import build_queue, knowledge, project_context
+    from semantica_dataagent.db import Build, MetadataOverride, sessions
+
+    c, admin = client
+    headers = _headers(admin)
+
+    # 1. Derived metrics document has generated=True and cannot be proposed as editable doc
+    proj_id, _src = _setup_override_project(c, headers, monkeypatch, "Review Reg Proj")
+    c.put(
+        f"/api/v1/projects/{proj_id}/evolution-policy",
+        headers=headers,
+        json={"correction_require_review": False},
+    )
+    metric_resp = c.post(
+        "/api/v1/corrections",
+        headers=headers,
+        params={"project": proj_id},
+        json={
+            "target": "metric:daily_gmv",
+            "reason": "新增指标",
+            "structured_patch": {
+                "version": 1,
+                "metrics": {
+                    "daily_gmv": {
+                        "name": "daily_gmv",
+                        "expression": "SUM(orders.amount)",
+                        "tables": ["shop.orders"],
+                    }
+                },
+            },
+        },
+    )
+    assert metric_resp.status_code == 201, metric_resp.text
+    deadline = time.monotonic() + 3.0
+    while time.monotonic() < deadline:
+        builds = c.get(
+            "/api/v1/builds", headers=headers, params={"project": proj_id}
+        ).json()
+        inc = [b for b in builds if b["build_type"] == "incremental"]
+        if inc and all(b["status"] in {"succeeded", "failed"} for b in inc):
+            assert all(b["status"] == "succeeded" for b in inc), inc
+            break
+        time.sleep(0.02)
+    else:
+        raise AssertionError("Timed out waiting for metric incremental build")
+    described_tbl = c.get(
+        "/api/v1/tables",
+        headers=headers,
+        params={"project": proj_id, "names": "shop.orders"},
+    ).json()[0]
+    metrics_doc_link = next(
+        d for d in described_tbl["documents"] if d["path"].endswith("metrics.md")
+    )
+    assert metrics_doc_link["generated"] is True
+    doc_edit_attempt = c.post(
+        "/api/v1/corrections",
+        headers=headers,
+        params={"project": proj_id},
+        json={
+            "target": metrics_doc_link["ref"],
+            "patch": "# tampered",
+            "reason": "直接改生成文档",
+        },
+    )
+    assert doc_edit_attempt.status_code == 422, doc_edit_attempt.text
+    assert "editable source" in doc_edit_attempt.text
+
+    # 2. /approve with schema-invalid structured_patch returns 422 (never 500)
+    c.put(
+        f"/api/v1/projects/{proj_id}/evolution-policy",
+        headers=headers,
+        json={"correction_require_review": True},
+    )
+    pending_resp = c.post(
+        "/api/v1/corrections",
+        headers=headers,
+        params={"project": proj_id},
+        json={
+            "target": "table:shop.orders",
+            "reason": "待审覆盖",
+            "structured_patch": {
+                "version": 1,
+                "tables": {
+                    "shop.orders": {
+                        "database": "shop",
+                        "name": "orders",
+                        "comment": "合法订单表",
+                    }
+                },
+            },
+        },
+    )
+    assert pending_resp.status_code == 201, pending_resp.text
+    pid = pending_resp.json()["id"]
+    bad_approve = c.post(
+        f"/api/v1/corrections/{pid}/approve",
+        headers=headers,
+        params={"project": proj_id},
+        json={
+            "structured_patch": {
+                "version": 1,
+                "tables": {"shop.orders": {"database": "shop", "name": "orders"}},
+            }
+        },
+    )
+    assert bad_approve.status_code == 422, bad_approve.text
+    assert (
+        c.get(
+            f"/api/v1/corrections/{pid}",
+            headers=headers,
+            params={"project": proj_id},
+        ).json()["status"]
+        == "pending"
+    )
+
+    # 3. Auto-apply with invalid Git author returns 422 and leaves zero orphaned rows
+    bad_tok = c.post(
+        "/api/v1/tokens",
+        headers=headers,
+        json={
+            "name": "bad<author>",
+            "role": "user",
+            "projects": [{"project_id": proj_id, "role": "member"}],
+        },
+    ).json()["token"]
+    c.put(
+        f"/api/v1/projects/{proj_id}/evolution-policy",
+        headers=headers,
+        json={"correction_require_review": False},
+    )
+    before_count = len(
+        c.get(
+            "/api/v1/corrections", headers=headers, params={"project": proj_id}
+        ).json()
+    )
+    bad_author_resp = c.post(
+        "/api/v1/corrections",
+        headers=_headers(bad_tok),
+        params={"project": proj_id},
+        json={
+            "target": "table:shop.orders",
+            "reason": "作者不合法测试",
+            "structured_patch": {
+                "version": 1,
+                "tables": {
+                    "shop.orders": {
+                        "database": "shop",
+                        "name": "orders",
+                        "comment": "不应留存",
+                    }
+                },
+            },
+        },
+    )
+    assert bad_author_resp.status_code == 422, bad_author_resp.text
+    after_rows = c.get(
+        "/api/v1/corrections", headers=headers, params={"project": proj_id}
+    ).json()
+    assert len(after_rows) == before_count
+
+    # 4. Structured override when source_directory is unset rejects cleanly (422), never dumps YAML into MetadataOverride
+    c.put(
+        "/api/v1/settings", headers=headers, json={"values": {"source_directory": None}}
+    )
+    monkeypatch.setattr(
+        knowledge,
+        "describe",
+        lambda summary=False, project_id=None, **kw: [
+            {"database": "shop", "name": "orders", "fields": [{"name": "amount"}]}
+        ],
+    )
+    no_src_resp = c.post(
+        "/api/v1/corrections",
+        headers=headers,
+        json={
+            "target": "table:shop.orders",
+            "reason": "无源码目录Structured测试",
+            "structured_patch": {
+                "version": 1,
+                "tables": {
+                    "shop.orders": {
+                        "database": "shop",
+                        "name": "orders",
+                        "comment": "不应写入SQLite",
+                        "synonyms": ["订单"],
+                    }
+                },
+            },
+        },
+    )
+    assert no_src_resp.status_code == 422, no_src_resp.text
+    with sessions()() as db:
+        assert db.query(MetadataOverride).filter_by(project_id="default").all() == []
+
+    # 5. Revert queued build carries revert proposal tag and survives recover_interrupted_builds
+    monkeypatch.setattr(project_context, "wake_build_queue", lambda: None)
+    rev_metric = c.post(
+        f"/api/v1/corrections/{metric_resp.json()['id']}/revert",
+        headers=headers,
+        params={"project": proj_id},
+    )
+    assert rev_metric.status_code == 200, rev_metric.text
+    build_queue.recover_interrupted_builds()
+    with sessions()() as db:
+        rev_build = (
+            db.query(Build)
+            .filter_by(
+                project_id=proj_id,
+                correction_proposal_id=f"revert:{metric_resp.json()['id']}",
+            )
+            .one_or_none()
+        )
+        assert rev_build is not None
+        assert rev_build.status == "queued"
