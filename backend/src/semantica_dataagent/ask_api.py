@@ -168,6 +168,16 @@ async def _run_turn(context: dict, question: str, timeout: float) -> dict:
         ),
         turn_id=context["turn_id"],
     )
+    from . import trajectories
+
+    trajectories.start_online_trajectory(
+        project_id=context["project_id"],
+        conversation_id=context["conversation_id"],
+        turn_id=context["turn_id"],
+        token_id=current_requester().id,
+        question=question.strip(),
+        secrets=(request.mcp_token, request.provider.api_key or ""),
+    )
     seq = 0
     terminal = False
     try:

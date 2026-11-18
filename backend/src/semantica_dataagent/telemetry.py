@@ -23,6 +23,7 @@ ALLOWED_FIELDS = frozenset(
     {
         "id",
         "traceId",
+        "project_id",
         "parentObservationId",
         "name",
         "input",
@@ -145,7 +146,16 @@ _TABLE_ARGUMENTS = {
     "sample_table_data": ("table",),
 }
 _METADATA_KEYS = frozenset(
-    {"duration_ms", "agent", "provider", "model", "source", "token_name"}
+    {
+        "duration_ms",
+        "agent",
+        "provider",
+        "model",
+        "source",
+        "token_name",
+        "project_id",
+        "traceId",
+    }
 )
 _SUMMARY_METADATA_KEYS = frozenset(
     {
@@ -349,6 +359,12 @@ def _metadata_summary(event, secrets=()):
 
 def trace_id(conversation_id, turn_id):
     return hashlib.sha256(f"{conversation_id}:{turn_id}".encode()).hexdigest()[:32]
+
+
+def local_mcp_trace_id(project_id, token_id, window_key):
+    """Return a deterministic 32-char Langfuse traceId for a local-MCP idle window."""
+    raw = f"local_mcp:{project_id}:{token_id or 'anon'}:{window_key}"
+    return hashlib.sha256(raw.encode()).hexdigest()[:32]
 
 
 def _scrub(value, secrets=()):
