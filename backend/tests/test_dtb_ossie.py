@@ -582,7 +582,7 @@ def test_convert_dtb_hybrid_dimensions_and_atomic_write(tmp_path):
 
     region_fields = {f["name"]: f for f in by_ds["dimensions.dim_region"]["fields"]}
     code_inst = region_fields["region_code"]["ai_context"]["instructions"]
-    assert "枚举取值（共 3 个）" in code_inst
+    assert "全部取值（共 3 个）" in code_inst
     assert "'HK '" in code_inst
     assert "'SH'" in code_inst and "'BJ'" in code_inst
 

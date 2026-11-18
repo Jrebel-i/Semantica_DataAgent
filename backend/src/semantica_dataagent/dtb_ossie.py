@@ -133,7 +133,7 @@ def _apply_hybrid_dimensions(
             if total <= low_cardinality_limit:
                 stats["low_cardinality_fields"] += 1
                 literals = ", ".join(_format_dim_literal(v) for v in distinct)
-                note = f"枚举取值（共 {total} 个）：{literals}"
+                note = f"全部取值（共 {total} 个）：{literals}"
             else:
                 stats["high_cardinality_fields"] += 1
                 high_card_tables.add(parts)
@@ -1194,7 +1194,7 @@ class DtbOssiePuller:
                 "minimum": 1,
                 "maximum": 500,
                 "default": 20,
-                "title": "低基数枚举阈值",
+                "title": "低基数内联阈值",
             },
             "sample_limit": {
                 "type": "integer",

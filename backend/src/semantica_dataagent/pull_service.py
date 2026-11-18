@@ -12,10 +12,11 @@ from . import project_context
 from .crypto import decrypt
 from .db import PullRecord, sessions
 from .plugins import discover
+from .project_api import PULL_TOKEN_KEYS
+from .project_api import PULLER_ADAPTER_IDS as PULLER_IDS
 from .project_context import DEFAULT_PROJECT_ID, add_queued_build
 from .source_directory import git, publish_ossie_pull, publish_pull, repository
 
-PULLER_IDS = ("dtb", "ossie")
 _locks: dict[str, threading.Lock] = {}
 _locks_guard = threading.Lock()
 
@@ -110,7 +111,7 @@ def run_pull(project_id: str = DEFAULT_PROJECT_ID, *, puller_id: str | None = No
                 "puller", selected_puller, project_id
             )
             secret = project_context.plugin_secret(
-                project_id, f"puller.{selected_puller}.token"
+                project_id, PULL_TOKEN_KEYS[selected_puller]
             )
             directory = project_context.source_directory_value(project_id)
             if not config or not config[0] or not secret or not directory:

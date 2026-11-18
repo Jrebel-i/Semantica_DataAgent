@@ -465,25 +465,14 @@ def diff(root, path, before, after):
 
 
 def _last_commit_author(root, rel_path):
-    result = subprocess.run(
-        [
-            "git",
-            "-c",
-            "core.hooksPath=/dev/null",
-            "-C",
-            str(root),
-            "log",
-            "-1",
-            "--format=%an",
-            "--",
-            rel_path,
-        ],
-        capture_output=True,
-        check=False,
-    )
-    if result.returncode != 0:
+    try:
+        author = (
+            git(root, "log", "-1", "--format=%an", "--", rel_path)
+            .decode("utf-8", errors="replace")
+            .strip()
+        )
+    except ValueError:
         return None
-    author = result.stdout.decode("utf-8", errors="replace").strip()
     return author or None
 
 
@@ -509,22 +498,21 @@ def _atomic_write_bytes(target, data, *, temp_prefix):
             temp_path.unlink(missing_ok=True)
 
 
-def _recover_ossie_pull(root, record, journal):
+def _prepare_pull_recovery(
+    root, record, journal, allow_staged, reset_targets, *, on_committed=None
+):
+    """Validate interrupted pull state and unstage partial files; returns False if committed."""
     version = record["version"]
-    backup_dir = root / ".git" / "dataagent-pull-backup"
-    paths = record.get("paths") or []
-    existed = record.get("existed") or {}
-    backups = record.get("backups") or {}
     try:
         head = git(root, "rev-parse", "--verify", "HEAD").decode().strip()
         subject = git(root, "log", "-1", "--format=%s").decode().strip()
     except ValueError:
         head, subject = None, None
     if subject == f"定时拉取 {version}":
-        if backup_dir.exists():
-            shutil.rmtree(backup_dir)
+        if on_committed is not None:
+            on_committed()
         journal.unlink()
-        return
+        return False
     if head != record["head"]:
         raise ValueError("Source HEAD changed during pull recovery")
     staged = [
@@ -534,14 +522,41 @@ def _recover_ossie_pull(root, record, journal):
         .split("\0")
         if item
     ]
-    allowed = set(paths)
-    if any(item not in allowed for item in staged):
+    if any(not allow_staged(item) for item in staged):
         raise ValueError("Source repository has staged changes during pull recovery")
-    if paths:
+    if reset_targets:
         if head:
-            git(root, "reset", "--quiet", "HEAD", "--", *paths)
+            git(root, "reset", "--quiet", "HEAD", "--", *reset_targets)
         else:
-            git(root, "rm", "-r", "-f", "--cached", "--ignore-unmatch", "--", *paths)
+            git(
+                root,
+                "rm",
+                "-r",
+                "-f",
+                "--cached",
+                "--ignore-unmatch",
+                "--",
+                *reset_targets,
+            )
+    return True
+
+
+def _recover_ossie_pull(root, record, journal):
+    version = record["version"]
+    backup_dir = root / ".git" / "dataagent-pull-backup"
+    paths = record.get("paths") or []
+    existed = record.get("existed") or {}
+    backups = record.get("backups") or {}
+    allowed = set(paths)
+    if not _prepare_pull_recovery(
+        root,
+        record,
+        journal,
+        lambda item: item in allowed,
+        paths,
+        on_committed=lambda: backup_dir.exists() and shutil.rmtree(backup_dir),
+    ):
+        return
 
     # Remove any partial temp files created before crash
     for p_rel in paths:
@@ -589,23 +604,14 @@ def recover_pulls(root):
         _recover_ossie_pull(root, record, journal)
         return
     path = f"dtb/{version}"
-    try:
-        head = git(root, "rev-parse", "--verify", "HEAD").decode().strip()
-        subject = git(root, "log", "-1", "--format=%s").decode().strip()
-    except ValueError:
-        head, subject = None, None
-    if subject == f"定时拉取 {version}":
-        journal.unlink()
+    if not _prepare_pull_recovery(
+        root,
+        record,
+        journal,
+        lambda item: item.startswith(path + "/"),
+        [path],
+    ):
         return
-    if head != record["head"]:
-        raise ValueError("Source HEAD changed during pull recovery")
-    staged = git(root, "diff", "--cached", "--name-only", "-z").decode().split("\0")
-    if any(item and not item.startswith(path + "/") for item in staged):
-        raise ValueError("Source repository has staged changes during pull recovery")
-    if head:
-        git(root, "reset", "--quiet", "HEAD", "--", path)
-    else:
-        git(root, "rm", "-r", "-f", "--cached", "--ignore-unmatch", "--", path)
     for item in (root / "dtb" / version, root / "dtb" / (".pull-" + version)):
         if item.exists():
             shutil.rmtree(item)
