@@ -225,6 +225,7 @@ def propose_in_project(
     structured_patch: dict[str, Any] | str | None = None,
     conversation_id: str | None = None,
     eval_candidate: dict[str, Any] | None = None,
+    extra_gate_report: dict[str, Any] | None = None,
 ) -> dict:
     """Propose replacement content or a structured semantic override inside one project."""
     requester = current_requester()
@@ -255,35 +256,78 @@ def propose_in_project(
         if not patch_text.strip():
             raise ValueError("Correction patch must not be blank")
     elif parsed_patch is None:
-        if not target.startswith(("table:", "field:")):
+        if (
+            resolved_kind == "ossie"
+            and target.startswith("ossie:")
+            and source == "evolution"
+        ):
+            if not patch_text.strip():
+                raise ValueError("Correction patch must not be blank")
+        elif not target.startswith(("table:", "field:")):
             raise ValueError("Unsupported correction target")
-        if not patch_text.strip():
+        elif not patch_text.strip():
             raise ValueError("Correction patch must not be blank")
 
     original = ""
     if parsed_patch is None:
-        known = (
-            knowledge.existing_refs([target])
-            if project_id == project_context.DEFAULT_PROJECT_ID
-            else knowledge.existing_refs([target], project_id)
-        )
-        if target not in known:
-            raise ValueError("Target is not in the current knowledge generation")
-        rows = knowledge.execute(
-            knowledge.read_graph(values),
-            "MATCH (n:SDAEntity {generation:$generation, ref:$ref}) RETURN properties(n) AS node",
-            {"generation": project.generation, "ref": target},
-        )
-        if len(rows) != 1:
-            raise ValueError("Correction target is ambiguous or missing")
-        node = rows[0]["node"]
-        if target.startswith("document:") and (
-            node.get("generated") or not node.get("source_file")
+        if (
+            resolved_kind == "ossie"
+            and target.startswith("ossie:")
+            and source == "evolution"
         ):
-            raise ValueError("Document has no editable source")
-        original = node.get(
-            "content" if target.startswith("document:") else "comment", ""
-        )
+            rel_ossie = str(relative(target[len("ossie:") :]))
+            if not rel_ossie.startswith("ossie/") or not rel_ossie.endswith(
+                (".yaml", ".yml")
+            ):
+                raise ValueError("Ossie target path must live under ossie/*.yaml")
+            if project.source_directory_value:
+                cand = Path(project.source_directory_value) / rel_ossie
+                if cand.is_file():
+                    original = cand.read_text(encoding="utf-8")
+        else:
+            try:
+                known = (
+                    knowledge.existing_refs([target])
+                    if project_id == project_context.DEFAULT_PROJECT_ID
+                    else knowledge.existing_refs([target], project_id)
+                )
+            except (KeyError, knowledge.StorageUnavailable, ValueError, RuntimeError):
+                if source != "evolution":
+                    raise
+                known = set()
+            if target not in known:
+                if source == "evolution" and resolved_kind == "document":
+                    rel_doc = str(relative(target[len("document:") :]))
+                    if rel_doc.startswith(
+                        ("ossie/", "overrides/")
+                    ) or not rel_doc.endswith(".md"):
+                        raise ValueError(
+                            "Evolution document target must be an editable .md path"
+                        )
+                    if project.source_directory_value:
+                        cand = Path(project.source_directory_value) / rel_doc
+                        if cand.is_file():
+                            original = cand.read_text(encoding="utf-8")
+                else:
+                    raise ValueError(
+                        "Target is not in the current knowledge generation"
+                    )
+            else:
+                rows = knowledge.execute(
+                    knowledge.read_graph(values),
+                    "MATCH (n:SDAEntity {generation:$generation, ref:$ref}) RETURN properties(n) AS node",
+                    {"generation": project.generation, "ref": target},
+                )
+                if len(rows) != 1:
+                    raise ValueError("Correction target is ambiguous or missing")
+                node = rows[0]["node"]
+                if target.startswith("document:") and (
+                    node.get("generated") or not node.get("source_file")
+                ):
+                    raise ValueError("Document has no editable source")
+                original = node.get(
+                    "content" if target.startswith("document:") else "comment", ""
+                )
 
     gate_report = run_l1_gate(
         target=target,
@@ -345,6 +389,14 @@ def propose_in_project(
         author = None
 
     gate_payload = gate_report.to_dict()
+    if extra_gate_report:
+        for key, value in extra_gate_report.items():
+            if key == "checks" and isinstance(value, list):
+                gate_payload["checks"] = [*gate_payload.get("checks", []), *value]
+            elif key == "errors" and isinstance(value, list):
+                gate_payload["errors"] = [*gate_payload.get("errors", []), *value]
+            elif key not in {"passed"}:
+                gate_payload[key] = value
     if eval_candidate:
         cleaned_candidate = {
             key: value for key, value in eval_candidate.items() if value is not None
@@ -803,16 +855,33 @@ def _merged_gate_report_json(
     gate_report,
     approval_eval: dict[str, Any] | None = None,
 ) -> str:
-    """Serialize L1 gate_report while preserving any attached eval_candidate metadata."""
+    """Serialize L1 gate_report while preserving L2 gate, provenance, and eval_candidate metadata."""
     payload = gate_report.to_dict()
     merged_candidate: dict[str, Any] = {}
     if existing_json:
         try:
             existing = json.loads(existing_json)
-            if isinstance(existing, dict) and isinstance(
-                existing.get("eval_candidate"), dict
-            ):
-                merged_candidate.update(existing["eval_candidate"])
+            if isinstance(existing, dict):
+                if isinstance(existing.get("eval_candidate"), dict):
+                    merged_candidate.update(existing["eval_candidate"])
+                for preserved_key in ("l1_gate", "l2_gate", "provenance"):
+                    if preserved_key in existing:
+                        payload[preserved_key] = existing[preserved_key]
+                existing_checks = existing.get("checks")
+                if isinstance(existing_checks, list):
+                    seen_names = {
+                        c.get("name")
+                        for c in payload.get("checks", [])
+                        if isinstance(c, dict)
+                    }
+                    for chk in existing_checks:
+                        if (
+                            isinstance(chk, dict)
+                            and chk.get("name")
+                            and chk["name"] not in seen_names
+                        ):
+                            payload.setdefault("checks", []).append(chk)
+                            seen_names.add(chk["name"])
         except ValueError:
             pass
     if approval_eval:
@@ -857,6 +926,7 @@ def _apply_proposal(
         row_target = row.target
         row_reason = row.reason
         row_project_id = row.project_id
+        row_source = row.source or "manual"
         row_kind = row.target_kind or (
             "override"
             if (
@@ -921,19 +991,33 @@ def _apply_proposal(
         promote_correction_to_eval_question(proposal_id, approval_eval=approval_eval)
         return result
 
-    if row_kind != "document":
+    if row_kind != "document" and effective_structured is not None:
         migrate_legacy_metadata_overrides(row_project_id)
 
     doc_source_file: str | None = None
     if row_kind == "document":
-        nodes = knowledge.execute(
-            knowledge.read_graph(values),
-            "MATCH (n:SDADocument {generation:$generation, ref:$ref}) RETURN properties(n) AS node",
-            {"generation": project.generation, "ref": row_target},
-        )
-        if len(nodes) != 1 or not nodes[0]["node"].get("source_file"):
+        try:
+            nodes = knowledge.execute(
+                knowledge.read_graph(values),
+                "MATCH (n:SDADocument {generation:$generation, ref:$ref}) RETURN properties(n) AS node",
+                {"generation": project.generation, "ref": row_target},
+            )
+        except (KeyError, knowledge.StorageUnavailable, ValueError, RuntimeError):
+            if row_source != "evolution":
+                raise
+            nodes = []
+        if len(nodes) == 1 and nodes[0]["node"].get("source_file"):
+            doc_source_file = nodes[0]["node"]["source_file"]
+        elif row_source == "evolution" and row_target.startswith("document:"):
+            doc_source_file = str(relative(row_target[len("document:") :]))
+        else:
             raise HTTPException(409, "Document no longer exists")
-        doc_source_file = nodes[0]["node"]["source_file"]
+    elif (
+        row_kind == "ossie"
+        and effective_structured is None
+        and row_target.startswith("ossie:")
+    ):
+        doc_source_file = str(relative(row_target[len("ossie:") :]))
 
     commit_message = (
         f"Auto-apply correction {proposal_id}"
@@ -946,7 +1030,7 @@ def _apply_proposal(
         row = _pending(db, proposal_id, project_id)
         row.source_directory = project.source_directory_value
         row.source_path = (
-            doc_source_file if row_kind == "document" else OVERRIDE_RELATIVE_PATH
+            doc_source_file if doc_source_file is not None else OVERRIDE_RELATIVE_PATH
         )
         row.patch = effective_patch
         if effective_structured is not None:
@@ -969,12 +1053,16 @@ def _apply_proposal(
             if git(root, "diff", "--cached", "--name-only"):
                 raise ValueError("Source repository has staged changes")
 
-            if row_kind == "document":
-                if path.read_text(encoding="utf-8") != expected_original:
+            if row_kind == "document" or (
+                row_kind == "ossie" and effective_structured is None
+            ):
+                before_existed = path.is_file()
+                before_content = (
+                    path.read_text(encoding="utf-8") if before_existed else ""
+                )
+                if before_content != expected_original:
                     raise ValueError("Document changed since proposal")
                 new_content = effective_patch
-                before_existed = True
-                before_content = expected_original
             else:
                 if effective_structured is None:
                     raise ValueError("Missing structured_patch for override correction")

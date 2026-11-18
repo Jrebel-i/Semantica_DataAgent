@@ -15,6 +15,7 @@ are; this module only selects the project-scoped slice.
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import shutil
@@ -57,6 +58,24 @@ GENERATION_PREFIX_KEY = "generation_prefix"
 CORRECTION_REQUIRE_REVIEW_KEY = "correction_require_review"
 EVOLUTION_REQUIRE_REVIEW_KEY = "evolution_require_review"
 
+AUTO_EVOLVE_ENABLED_KEY = "evolution_auto_enabled"
+EVOLUTION_MIN_TRAJECTORIES_KEY = "evolution_min_trajectories"
+EVOLUTION_MIN_INTERVAL_HOURS_KEY = "evolution_min_interval_hours"
+EVOLUTION_MAX_IDLE_DAYS_KEY = "evolution_max_idle_days"
+EVOLUTION_MAX_ROUNDS_KEY = "evolution_max_rounds"
+EVOLUTION_MAX_EVAL_CASES_KEY = "evolution_max_eval_cases"
+EVOLUTION_PROVIDER_ID_KEY = "evolution_provider_id"
+EVOLUTION_MODEL_KEY = "evolution_model"
+EVOLUTION_JUDGE_PROVIDER_ID_KEY = "evolution_judge_provider_id"
+EVOLUTION_JUDGE_MODEL_KEY = "evolution_judge_model"
+
+DEFAULT_AUTO_EVOLVE_ENABLED = False
+DEFAULT_EVOLUTION_MIN_TRAJECTORIES = 30
+DEFAULT_EVOLUTION_MIN_INTERVAL_HOURS = 24
+DEFAULT_EVOLUTION_MAX_IDLE_DAYS = 7
+DEFAULT_EVOLUTION_MAX_ROUNDS = 3
+DEFAULT_EVOLUTION_MAX_EVAL_CASES = 20
+
 PROJECTS_ROOT_ENV = "DATAAGENT_PROJECTS_ROOT"
 PROJECT_ID_PATTERN = re.compile(r"[a-z][a-z0-9]{0,23}")
 GENERATION_PREFIX_PATTERN = re.compile(r"[a-z0-9_]{1,25}")
@@ -90,6 +109,110 @@ def evolution_policy(project_id: str, db=None) -> dict[str, bool]:
         "evolution_require_review": parse_bool_setting(
             evol.value if evol is not None else None, default=True
         ),
+    }
+
+
+def _parse_int_setting(
+    raw: str | None, *, default: int, minimum: int, maximum: int
+) -> int:
+    if raw is None or not raw.strip():
+        return default
+    try:
+        parsed = int(raw.strip())
+    except ValueError:
+        return default
+    return max(minimum, min(maximum, parsed))
+
+
+def _parse_float_setting(
+    raw: str | None, *, default: float, minimum: float, maximum: float
+) -> float:
+    if raw is None or not raw.strip():
+        return default
+    try:
+        parsed = float(raw.strip())
+    except ValueError:
+        return default
+    if math.isnan(parsed):  # NaN guard
+        return default
+    return max(minimum, min(maximum, parsed))
+
+
+def _optional_str_setting(raw: str | None) -> str | None:
+    if raw is None:
+        return None
+    stripped = raw.strip()
+    return stripped or None
+
+
+def evolution_config(project_id: str, db=None) -> dict[str, Any]:
+    """Return a project's auto-evolution schedule and model settings with safe defaults."""
+    if db is None:
+        with sessions()() as own:
+            return evolution_config(project_id, own)
+    keys = (
+        AUTO_EVOLVE_ENABLED_KEY,
+        EVOLUTION_MIN_TRAJECTORIES_KEY,
+        EVOLUTION_MIN_INTERVAL_HOURS_KEY,
+        EVOLUTION_MAX_IDLE_DAYS_KEY,
+        EVOLUTION_MAX_ROUNDS_KEY,
+        EVOLUTION_MAX_EVAL_CASES_KEY,
+        EVOLUTION_PROVIDER_ID_KEY,
+        EVOLUTION_MODEL_KEY,
+        EVOLUTION_JUDGE_PROVIDER_ID_KEY,
+        EVOLUTION_JUDGE_MODEL_KEY,
+    )
+    rows = {
+        row.key: row.value
+        for row in db.query(ProjectSetting)
+        .filter(
+            ProjectSetting.project_id == project_id,
+            ProjectSetting.key.in_(keys),
+        )
+        .all()
+    }
+    return {
+        "auto_evolve_enabled": parse_bool_setting(
+            rows.get(AUTO_EVOLVE_ENABLED_KEY), default=DEFAULT_AUTO_EVOLVE_ENABLED
+        ),
+        "min_trajectories": _parse_int_setting(
+            rows.get(EVOLUTION_MIN_TRAJECTORIES_KEY),
+            default=DEFAULT_EVOLUTION_MIN_TRAJECTORIES,
+            minimum=1,
+            maximum=10000,
+        ),
+        "min_interval_hours": _parse_float_setting(
+            rows.get(EVOLUTION_MIN_INTERVAL_HOURS_KEY),
+            default=float(DEFAULT_EVOLUTION_MIN_INTERVAL_HOURS),
+            minimum=0.0,
+            maximum=8760.0,
+        ),
+        "max_idle_days": _parse_float_setting(
+            rows.get(EVOLUTION_MAX_IDLE_DAYS_KEY),
+            default=float(DEFAULT_EVOLUTION_MAX_IDLE_DAYS),
+            minimum=1.0,
+            maximum=365.0,
+        ),
+        "max_rounds": _parse_int_setting(
+            rows.get(EVOLUTION_MAX_ROUNDS_KEY),
+            default=DEFAULT_EVOLUTION_MAX_ROUNDS,
+            minimum=1,
+            maximum=20,
+        ),
+        "max_eval_cases": _parse_int_setting(
+            rows.get(EVOLUTION_MAX_EVAL_CASES_KEY),
+            default=DEFAULT_EVOLUTION_MAX_EVAL_CASES,
+            minimum=1,
+            maximum=200,
+        ),
+        "evolution_provider_id": _optional_str_setting(
+            rows.get(EVOLUTION_PROVIDER_ID_KEY)
+        ),
+        "evolution_model": _optional_str_setting(rows.get(EVOLUTION_MODEL_KEY)),
+        "judge_provider_id": _optional_str_setting(
+            rows.get(EVOLUTION_JUDGE_PROVIDER_ID_KEY)
+        ),
+        "judge_model": _optional_str_setting(rows.get(EVOLUTION_JUDGE_MODEL_KEY)),
     }
 
 

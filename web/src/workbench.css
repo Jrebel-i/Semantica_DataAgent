@@ -4030,6 +4030,75 @@ button.composer-project-chip:not(.ant-btn):disabled {
   padding-left: 18px;
 }
 
+.evolution-config-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 12px;
+  align-items: end;
+}
+.evolution-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.evolution-field label {
+  font-size: 12px;
+  color: var(--ink-2);
+}
+.evolution-checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.evolution-layout {
+  display: grid;
+  grid-template-columns: 340px minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+.evolution-round-card {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 12px;
+  background: var(--white);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.evolution-round-header {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+.evolution-round-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+}
+.evolution-gate-block {
+  border-top: 1px solid var(--line);
+  padding-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.evolution-gate-meta {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 12px;
+}
+
 /* Narrow screens: overlay navigation drawer and full-width content */
 .mobile-topbar {
   display: none;
@@ -4133,6 +4202,7 @@ button.composer-project-chip:not(.ant-btn):disabled {
   .plugin-params,
   .build-grid,
   .correction-layout,
+  .evolution-layout,
   .provider-capability-card,
   .search-form,
   .source-layout {

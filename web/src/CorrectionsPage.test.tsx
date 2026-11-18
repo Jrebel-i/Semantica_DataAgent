@@ -471,3 +471,80 @@ test("manages eval questions tab (confirm, create, delete)", async () => {
     ).toBe(true),
   );
 });
+
+test("auto-selects initialProposalId and displays evolution provenance and L2 gate metrics", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) => {
+      if (url === "/api/v1/projects") {
+        return Response.json([
+          {
+            id: "default",
+            name: "业务数据",
+            type: "warehouse",
+            status: "active",
+            created_at: "2026-01-01T00:00:00Z",
+            my_role: "admin",
+          },
+        ]);
+      }
+      if (url === "/api/v1/corrections?project=default") {
+        return Response.json([
+          {
+            id: "prop-other",
+            target: "semantic_overrides:other",
+            reason: "人工修正",
+            diff: "-a\n+b",
+            patch: "b",
+            status: "pending",
+            source: "manual",
+          },
+          {
+            id: "prop-evo",
+            target: "semantic_overrides:gmv",
+            reason: "演化提升 GMV 口径准确率",
+            diff: "-old\n+new",
+            patch: "new",
+            status: "pending",
+            source: "evolution",
+            gate_report: {
+              passed: true,
+              checks: [{ name: "yaml_lint", passed: true, details: [] }],
+              errors: [],
+              l2_gate: {
+                passed: true,
+                mode: "cold_start_ab",
+                evaluated_cases: 6,
+                W_c: 5,
+                W_p: 1,
+                E_c: 0,
+              },
+              provenance: {
+                evolution_run_id: "run-abc",
+                round_number: 2,
+                signal_kind: "sql_self_repair",
+                hypothesis: "补充 GMV 过滤条件减少 SQL 自修",
+                evidence_trajectory_ids: [10, 11],
+              },
+            },
+          },
+        ]);
+      }
+      return Response.json([]);
+    }),
+  );
+
+  render(
+    <CorrectionsPage
+      token="token"
+      messages={getMessages("zh")}
+      initialProposalId="prop-evo"
+    />,
+  );
+
+  expect(
+    await screen.findByText("补充 GMV 过滤条件减少 SQL 自修"),
+  ).toBeTruthy();
+  expect(screen.getByText(/run-abc/)).toBeTruthy();
+  expect(screen.getByText(/W_c=5/)).toBeTruthy();
+});

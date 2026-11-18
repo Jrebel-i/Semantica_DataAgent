@@ -74,6 +74,9 @@ def test_rest_time_fields_have_utc_offset(client, monkeypatch):
         Build,
         Conversation,
         CorrectionProposal,
+        EvolutionCheckpoint,
+        EvolutionRound,
+        EvolutionRun,
         GenerationPointer,
         KnowledgeGap,
         KnowledgeGeneration,
@@ -180,6 +183,33 @@ def test_rest_time_fields_have_utc_offset(client, monkeypatch):
                     tables=1,
                     tasks=0,
                 ),
+                EvolutionCheckpoint(
+                    project_id="default",
+                    checkpoint_trajectory_id=1,
+                    checkpoint_at=datetime(2026, 1, 1),
+                    last_run_id="evo-time-1",
+                    updated_at=datetime(2026, 1, 1),
+                ),
+                EvolutionRun(
+                    id="evo-time-1",
+                    project_id="default",
+                    trigger_type="manual",
+                    status="accepted",
+                    started_at=datetime(2026, 1, 1),
+                    finished_at=datetime(2026, 1, 1, 0, 2),
+                    created_at=datetime(2026, 1, 1),
+                ),
+                EvolutionRound(
+                    id="evo-round-1",
+                    run_id="evo-time-1",
+                    project_id="default",
+                    round_number=1,
+                    signal_kind="search_detour",
+                    hypothesis="h",
+                    decision="accept",
+                    started_at=datetime(2026, 1, 1),
+                    finished_at=datetime(2026, 1, 1, 0, 1),
+                ),
             ]
         )
         db.flush()
@@ -226,6 +256,13 @@ def test_rest_time_fields_have_utc_offset(client, monkeypatch):
         "projects": c.get("/api/v1/projects", headers=headers).json(),
         "project_audit": c.get(
             "/api/v1/projects/default/audit", headers=headers
+        ).json(),
+        "evolution_config": c.get(
+            "/api/v1/projects/default/evolution-config", headers=headers
+        ).json(),
+        "evolution_runs": c.get("/api/v1/evolution/runs", headers=headers).json(),
+        "evolution_run": c.get(
+            "/api/v1/evolution/runs/evo-time-1", headers=headers
         ).json(),
     }
     failures = {

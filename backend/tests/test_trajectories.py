@@ -48,8 +48,10 @@ def test_alembic_0039_single_head_and_upgrade_downgrade(
     monkeypatch.setenv("DATAAGENT_ENCRYPTION_KEY", Fernet.generate_key().decode())
 
     cfg = _alembic_config(db_path)
-    heads = ScriptDirectory.from_config(cfg).get_heads()
-    assert heads == ["0039"]
+    script = ScriptDirectory.from_config(cfg)
+    heads = script.get_heads()
+    assert len(heads) == 1
+    assert any(rev.revision == "0039" for rev in script.walk_revisions())
 
     command.upgrade(cfg, "0038")
     with sqlite3.connect(db_path) as conn:

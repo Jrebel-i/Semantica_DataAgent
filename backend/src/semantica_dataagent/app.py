@@ -107,6 +107,9 @@ async def lifespan(application):
     await asyncio.to_thread(recover_interrupted_builds)
     await asyncio.to_thread(knowledge.cleanup_interrupted_generations)
     await asyncio.to_thread(knowledge.cleanup_candidate_generations)
+    from .evolution_runner import recover_interrupted_evolution_runs
+
+    await asyncio.to_thread(recover_interrupted_evolution_runs)
     from .corrections import recover_applying
     from .semantic_overrides import migrate_legacy_metadata_overrides
 
@@ -130,6 +133,9 @@ async def lifespan(application):
     for project_id, seconds in pull_intervals().items():
         if project_id != project_context.DEFAULT_PROJECT_ID:
             pull_scheduler.start(seconds, project_id)
+    from .evolution_scheduler import evolution_scheduler
+
+    evolution_scheduler.start()
     server = create_mcp()
     application.state.mcp_app = server.streamable_http_app()
     async with server.session_manager.run():
@@ -138,6 +144,7 @@ async def lifespan(application):
         finally:
             cleanup_task.cancel()
             await asyncio.gather(cleanup_task, return_exceptions=True)
+            evolution_scheduler.stop()
             pull_scheduler.stop()
             scheduler.stop()
             auto_build.pending_build_scheduler.stop()
@@ -872,6 +879,10 @@ app.include_router(projects_router)
 from .eval_questions import router as eval_questions_router
 
 app.include_router(eval_questions_router)
+
+from .evolution_api import router as evolution_router
+
+app.include_router(evolution_router)
 
 
 def _mcp_project_id() -> str:

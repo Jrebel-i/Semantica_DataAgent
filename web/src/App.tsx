@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { Alert, Space, Typography, ConfigProvider, Button } from "antd";
 import { CorrectionsPage } from "./CorrectionsPage";
+import { EvolutionPage } from "./EvolutionPage";
 import { BuildPage } from "./BuildPage";
 import { getMessages, type Language } from "./i18n";
 import { ChatPage } from "./ChatPage";
@@ -116,6 +117,9 @@ export function App() {
   const [managementOpen, setManagementOpen] = useState(false);
   const [personalOpen, setPersonalOpen] = useState(false);
   const [path, setPath] = useState(window.location.pathname);
+  const [correctionProposalId, setCorrectionProposalId] = useState<
+    string | null
+  >(null);
   const [error, setError] = useState("");
   const [health, setHealth] = useState<Health | null>(null);
   const [generation, setGeneration] = useState<{
@@ -241,8 +245,16 @@ export function App() {
   };
 
   const navigate = (next: string) => {
+    const [nextPath, nextQuery] = next.split("?");
+    if (nextPath === "/corrections" && nextQuery) {
+      setCorrectionProposalId(
+        new URLSearchParams(nextQuery).get("proposal_id"),
+      );
+    } else {
+      setCorrectionProposalId(null);
+    }
     history.pushState(null, "", next);
-    setPath(next);
+    setPath(nextPath || "/");
     setDrawerOpen(false);
   };
   const canManageProject = role === "admin" || projectAdmin;
@@ -268,6 +280,7 @@ export function App() {
               "/builds",
               "/source",
               "/corrections",
+              "/evolution",
               "/knowledge-gaps",
             ],
           },
@@ -293,6 +306,7 @@ export function App() {
     { path: "/builds", label: t.builds },
     { path: "/source", label: t.source },
     { path: "/corrections", label: t.correctionTitle },
+    { path: "/evolution", label: t.evolutionTitle },
     { path: "/config", label: t.workbenchConfig },
     { path: "/plugins", label: t.plugins },
     { path: "/tokens", label: t.tokens },
@@ -307,7 +321,13 @@ export function App() {
         { path: "/search", label: t.searchDebug },
       ];
     if (
-      ["/builds", "/source", "/corrections", "/knowledge-gaps"].includes(path)
+      [
+        "/builds",
+        "/source",
+        "/corrections",
+        "/evolution",
+        "/knowledge-gaps",
+      ].includes(path)
     )
       return [
         ...(canManageProject
@@ -315,6 +335,7 @@ export function App() {
               { path: "/builds", label: t.builds },
               { path: "/source", label: t.source },
               { path: "/corrections", label: t.correctionTitle },
+              { path: "/evolution", label: t.evolutionTitle },
             ]
           : []),
         { path: "/knowledge-gaps", label: t.gapTitle },
@@ -354,7 +375,27 @@ export function App() {
       <CorrectionsPage token={token} gaps messages={t} />
     ) : path === "/corrections" ? (
       canManageProject ? (
-        <CorrectionsPage token={token} messages={t} />
+        <CorrectionsPage
+          token={token}
+          messages={t}
+          initialProposalId={correctionProposalId}
+        />
+      ) : (
+        <Alert title={t.forbidden} type="warning" />
+      )
+    ) : path === "/evolution" ? (
+      canManageProject ? (
+        <EvolutionPage
+          token={token}
+          messages={t}
+          onNavigateCorrections={(proposalId) =>
+            navigate(
+              proposalId
+                ? `/corrections?proposal_id=${encodeURIComponent(proposalId)}`
+                : "/corrections",
+            )
+          }
+        />
       ) : (
         <Alert title={t.forbidden} type="warning" />
       )
