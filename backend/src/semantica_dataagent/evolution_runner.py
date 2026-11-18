@@ -566,11 +566,16 @@ def _build_overlay_files(
             )
         }
     if target_kind == "document" and target.startswith("document:"):
-        rel = relative(target[len("document:") :])
-        return {rel: patch_text}
+        doc_file, _ = _load_editable_document(project_id, target)
+        rel_path = (
+            relative(doc_file).as_posix()
+            if doc_file
+            else relative(target[len("document:") :]).as_posix()
+        )
+        return {rel_path: patch_text}
     if target_kind == "ossie" and target.startswith("ossie:"):
-        rel = relative(target[len("ossie:") :])
-        return {rel: patch_text}
+        rel_path = relative(target[len("ossie:") :]).as_posix()
+        return {rel_path: patch_text}
     return {}
 
 

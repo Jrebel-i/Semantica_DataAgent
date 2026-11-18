@@ -548,3 +548,65 @@ test("auto-selects initialProposalId and displays evolution provenance and L2 ga
   expect(screen.getByText(/run-abc/)).toBeTruthy();
   expect(screen.getByText(/W_c=5/)).toBeTruthy();
 });
+
+test("displays confirmed_regression regressions list on evolution proposal", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) => {
+      if (url === "/api/v1/projects") {
+        return Response.json([
+          {
+            id: "default",
+            name: "业务数据",
+            type: "warehouse",
+            status: "active",
+            created_at: "2026-01-01T00:00:00Z",
+            my_role: "admin",
+          },
+        ]);
+      }
+      if (url === "/api/v1/corrections?project=default") {
+        return Response.json([
+          {
+            id: "prop-reg",
+            target: "semantic_overrides:orders",
+            reason: "回归门禁结果展示",
+            diff: "-a\n+b",
+            patch: "b",
+            status: "pending",
+            source: "evolution",
+            gate_report: {
+              passed: false,
+              checks: [],
+              errors: [],
+              l2_gate: {
+                passed: false,
+                mode: "confirmed_regression",
+                evaluated_cases: 4,
+                regressions: ["q-3"],
+              },
+              provenance: {
+                evolution_run_id: "run-reg",
+                round_number: 1,
+                signal_kind: "search_detour",
+                hypothesis: "展示回归题目列表",
+              },
+            },
+          },
+        ]);
+      }
+      return Response.json([]);
+    }),
+  );
+
+  render(
+    <CorrectionsPage
+      token="token"
+      messages={getMessages("zh")}
+      initialProposalId="prop-reg"
+    />,
+  );
+
+  expect(await screen.findByText("展示回归题目列表")).toBeTruthy();
+  expect(screen.getByText(/regressions=1 \(q-3\)/)).toBeTruthy();
+});

@@ -546,3 +546,236 @@ def test_miner_detects_all_five_signals_and_preserves_multi_caliber_variants(
 
     repair_signal = next(s for s in res.signals if s.signal_kind == "sql_self_repair")
     assert repair_signal.details.get("join_pairs")
+
+
+def test_miner_excludes_reserve_holdout_and_deleted_query_execution_failures(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    _setup_env(tmp_path, monkeypatch)
+    from semantica_dataagent import eval_questions, trajectories, trajectory_miner
+    from semantica_dataagent.db import (
+        Conversation,
+        QueryExecution,
+        Setting,
+        Turn,
+        sessions,
+    )
+
+    eval_questions.upsert_eval_question(
+        "default",
+        question="保留题集 holdout 失败问题",
+        caliber="holdout caliber",
+        reference_sql="SELECT amount FROM shop.orders",
+        expected_tables=["shop.orders"],
+        expected_fields=["shop.orders.amount"],
+        split="holdout",
+        answer_confirmed=True,
+    )
+
+    base = datetime(2026, 11, 10, 9, 0, 0, tzinfo=UTC)
+    # Chronological 4 trajectories -> 3 diagnosis + 1 tail reserve (tail-conv-3)
+    for idx in range(4):
+        ts = base + timedelta(minutes=idx * 5)
+        cid = f"split-conv-{idx}"
+        trajectories.start_online_trajectory(
+            project_id="default",
+            conversation_id=cid,
+            turn_id=100 + idx,
+            question=f"普通统计问题_{idx}",
+            now=ts,
+        )
+        trajectories.finish_online_trajectory(
+            conversation_id=cid,
+            turn_id=100 + idx,
+            status="completed",
+            answer="ok",
+            now=ts + timedelta(seconds=10),
+        )
+
+    # Also record a trajectory matching the holdout question
+    trajectories.start_online_trajectory(
+        project_id="default",
+        conversation_id="holdout-conv",
+        turn_id=200,
+        question="保留题集 holdout 失败问题",
+        now=base + timedelta(minutes=2),
+    )
+    trajectories.finish_online_trajectory(
+        conversation_id="holdout-conv",
+        turn_id=200,
+        status="failed",
+        answer="secret",
+        now=base + timedelta(minutes=2, seconds=5),
+    )
+
+    with sessions().begin() as db:
+        db.add(Setting(key="session_retention_days", value="7"))
+        # Deleted / non-resumable conversation
+        db.add(
+            Conversation(
+                id="deleted-conv",
+                owner_id="u1",
+                project_id="default",
+                title="deleted",
+                agent="pi",
+                provider_id="p1",
+                model="m1",
+                resumable=False,
+                updated_at=base + timedelta(minutes=1),
+            )
+        )
+        # Retention-expired conversation
+        db.add(
+            Conversation(
+                id="expired-conv",
+                owner_id="u1",
+                project_id="default",
+                title="expired",
+                agent="pi",
+                provider_id="p1",
+                model="m1",
+                resumable=True,
+                updated_at=base - timedelta(days=30),
+            )
+        )
+        # Holdout turn without trajectory row
+        db.add(
+            Conversation(
+                id="holdout-turn-conv",
+                owner_id="u1",
+                project_id="default",
+                title="holdout",
+                agent="pi",
+                provider_id="p1",
+                model="m1",
+                resumable=True,
+                updated_at=base + timedelta(minutes=1),
+            )
+        )
+        db.add(
+            Turn(
+                id=301,
+                conversation_id="holdout-turn-conv",
+                sequence=1,
+                question="保留题集 holdout 失败问题",
+                status="failed",
+                answer="",
+                sql="",
+                citations="[]",
+            )
+        )
+
+        # 1) Failure in the reserve split conversation (split-conv-3) -> must be excluded
+        db.add(
+            QueryExecution(
+                id="qe-reserve",
+                owner_id="u1",
+                conversation_id="split-conv-3",
+                turn_id=103,
+                plan_data=json.dumps(
+                    {
+                        "project_id": "default",
+                        "execution_failure": {
+                            "stage": "poll",
+                            "category": "reserve_secret_failure",
+                        },
+                    }
+                ),
+                sql="SELECT * FROM secret_reserve.tbl",
+                status="failed",
+                created_at=base + timedelta(minutes=16),
+            )
+        )
+        # 2) Failure in holdout conversation -> must be excluded
+        db.add(
+            QueryExecution(
+                id="qe-holdout-conv",
+                owner_id="u1",
+                conversation_id="holdout-conv",
+                turn_id=200,
+                plan_data=json.dumps(
+                    {
+                        "project_id": "default",
+                        "execution_failure": {
+                            "stage": "poll",
+                            "category": "holdout_conv_failure",
+                        },
+                    }
+                ),
+                sql="SELECT * FROM secret_holdout.tbl",
+                status="failed",
+                created_at=base + timedelta(minutes=3),
+            )
+        )
+        # 3) Failure tied to holdout Turn -> must be excluded
+        db.add(
+            QueryExecution(
+                id="qe-holdout-turn",
+                owner_id="u1",
+                conversation_id="holdout-turn-conv",
+                turn_id=301,
+                plan_data=json.dumps(
+                    {
+                        "project_id": "default",
+                        "execution_failure": {
+                            "stage": "poll",
+                            "category": "holdout_turn_failure",
+                        },
+                    }
+                ),
+                sql="SELECT * FROM secret_holdout_turn.tbl",
+                status="failed",
+                created_at=base + timedelta(minutes=3),
+            )
+        )
+        # 4) Failure in deleted (resumable=False) conversation -> must be excluded
+        db.add(
+            QueryExecution(
+                id="qe-deleted",
+                owner_id="u1",
+                conversation_id="deleted-conv",
+                turn_id=None,
+                plan_data=json.dumps(
+                    {
+                        "project_id": "default",
+                        "execution_failure": {
+                            "stage": "poll",
+                            "category": "deleted_conv_failure",
+                        },
+                    }
+                ),
+                sql="SELECT * FROM secret_deleted.tbl",
+                status="failed",
+                created_at=base + timedelta(minutes=3),
+            )
+        )
+        # 5) Failure in retention-expired conversation -> must be excluded
+        db.add(
+            QueryExecution(
+                id="qe-expired",
+                owner_id="u1",
+                conversation_id="expired-conv",
+                turn_id=None,
+                plan_data=json.dumps(
+                    {
+                        "project_id": "default",
+                        "execution_failure": {
+                            "stage": "poll",
+                            "category": "expired_conv_failure",
+                        },
+                    }
+                ),
+                sql="SELECT * FROM secret_expired.tbl",
+                status="failed",
+                created_at=base + timedelta(minutes=3),
+            )
+        )
+
+    res = trajectory_miner.mine_project_trajectories(
+        "default", now=base + timedelta(hours=1)
+    )
+    assert res.reserve_trajectory_ids  # split-conv-3 is in reserve
+    gap_or_fail_signals = [
+        s for s in res.signals if s.signal_kind == "knowledge_gap_or_failure"
+    ]
+    assert gap_or_fail_signals == []

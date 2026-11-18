@@ -15,7 +15,7 @@ import sqlglot
 from sqlglot import exp
 
 from . import eval_questions, trajectories
-from .db import Conversation, KnowledgeGap, QueryExecution, Setting, sessions
+from .db import Conversation, KnowledgeGap, QueryExecution, Setting, Turn, sessions
 
 _PUNCT_RE = re.compile(
     r"[\s\.,;:!?\-\"'`~@#$%^&*()_+=\[\]{}|\\/<>，。；：！？、“”‘’（）【】《》、·]+"
@@ -683,29 +683,59 @@ def _mine_gaps_and_failures(
     project_id: str,
     diag_rows: list[dict[str, Any]],
     *,
+    reserve_rows: list[dict[str, Any]],
+    holdout_conv_ids: set[str],
     holdouts: set[str],
     after_at: datetime | None,
+    now: datetime,
 ) -> list[MinedSignal]:
     signals: list[MinedSignal] = []
-    diag_conv_ids = {
-        str(r["conversation_id"]) for r in diag_rows if r.get("conversation_id")
-    }
     diag_ids = [int(r["id"]) for r in diag_rows]
+    reserve_conv_ids = {
+        str(r["conversation_id"]) for r in reserve_rows if r.get("conversation_id")
+    }
+    reserve_questions = {
+        canonical_question(r.get("question"))
+        for r in reserve_rows
+        if canonical_question(r.get("question"))
+    }
+    excluded_conv_ids = reserve_conv_ids | holdout_conv_ids
 
-    # 1. Knowledge gaps from DB (strictly excluding holdouts)
     with sessions()() as db:
+        retention_days = _retention_days_if_configured(db)
+        cutoff = (
+            now - timedelta(days=retention_days) if retention_days is not None else None
+        )
         gap_query = db.query(KnowledgeGap).filter(KnowledgeGap.project_id == project_id)
         if after_at is not None:
             gap_query = gap_query.filter(KnowledgeGap.created_at >= after_at)
         gaps = gap_query.order_by(KnowledgeGap.created_at.asc()).all()
 
+        qe_query = db.query(QueryExecution).filter(QueryExecution.status == "failed")
+        if after_at is not None:
+            qe_query = qe_query.filter(QueryExecution.created_at >= after_at)
+        failed_qes = qe_query.order_by(QueryExecution.created_at.asc()).all()
+
+        qe_conv_ids = {
+            str(qe.conversation_id) for qe in failed_qes if qe.conversation_id
+        }
+        conv_map: dict[str, Conversation] = {}
+        if qe_conv_ids:
+            for conv in (
+                db.query(Conversation).filter(Conversation.id.in_(qe_conv_ids)).all()
+            ):
+                conv_map[conv.id] = conv
+
+        qe_turn_ids = {int(qe.turn_id) for qe in failed_qes if qe.turn_id is not None}
+        turn_question_map: dict[int, str] = {}
+        if qe_turn_ids:
+            for turn_id, question in (
+                db.query(Turn.id, Turn.question).filter(Turn.id.in_(qe_turn_ids)).all()
+            ):
+                turn_question_map[int(turn_id)] = str(question or "")
+
         exec_failures: list[tuple[str, str, str]] = []
-        for qe in (
-            db.query(QueryExecution)
-            .filter(QueryExecution.status == "failed")
-            .order_by(QueryExecution.created_at.asc())
-            .all()
-        ):
+        for qe in failed_qes:
             if not qe.plan_data:
                 continue
             try:
@@ -714,13 +744,22 @@ def _mine_gaps_and_failures(
                 continue
             if not isinstance(plan, dict) or plan.get("project_id") != project_id:
                 continue
-            if (
-                diag_conv_ids
-                and qe.conversation_id
-                and qe.conversation_id not in diag_conv_ids
-            ):
-                # Only skip if it explicitly belongs to a reserve conversation
-                pass
+            cid = str(qe.conversation_id) if qe.conversation_id else None
+            if cid and cid in excluded_conv_ids:
+                continue
+            if cid and cid in conv_map:
+                conv = conv_map[cid]
+                if not conv.resumable:
+                    continue
+                if cutoff is not None and _as_utc(conv.updated_at) < cutoff:
+                    continue
+            plan_q = canonical_question(plan.get("question"))
+            if plan_q and (plan_q in holdouts or plan_q in reserve_questions):
+                continue
+            if qe.turn_id is not None and int(qe.turn_id) in turn_question_map:
+                turn_q = canonical_question(turn_question_map[int(qe.turn_id)])
+                if turn_q in holdouts or turn_q in reserve_questions:
+                    continue
             ef = plan.get("execution_failure")
             if isinstance(ef, dict):
                 exec_failures.append(
@@ -731,7 +770,12 @@ def _mine_gaps_and_failures(
                     )
                 )
 
-    filtered_gaps = [g for g in gaps if canonical_question(g.question) not in holdouts]
+    filtered_gaps = [
+        g
+        for g in gaps
+        if canonical_question(g.question) not in holdouts
+        and canonical_question(g.question) not in reserve_questions
+    ]
     if filtered_gaps:
         sample_q = trajectories.scrub_text(filtered_gaps[0].question)
         sample_missing = trajectories.scrub_text(filtered_gaps[0].missing)
@@ -800,6 +844,12 @@ def mine_project_trajectories(
     ts = _as_utc(now)
     holdouts = _load_holdout_canonical_questions(project_id)
     raw_rows = trajectories.list_trajectories(project_id, after_id=after_id)
+    holdout_conv_ids = {
+        str(r["conversation_id"])
+        for r in raw_rows
+        if r.get("conversation_id")
+        and canonical_question(r.get("question")) in holdouts
+    }
     eligible = _filter_eligible_trajectories(
         project_id, raw_rows, holdouts=holdouts, now=ts
     )
@@ -808,6 +858,7 @@ def mine_project_trajectories(
     diag_ids = sorted(tid for grp in diag_groups for tid in grp.trajectory_ids)
     reserve_ids = sorted(tid for grp in reserve_groups for tid in grp.trajectory_ids)
     diag_rows = [row for grp in diag_groups for row in grp.trajectories]
+    reserve_rows = [row for grp in reserve_groups for row in grp.trajectories]
 
     signals: list[MinedSignal] = []
     if diag_rows:
@@ -817,7 +868,13 @@ def mine_project_trajectories(
         signals.extend(_mine_search_detours(diag_rows))
     signals.extend(
         _mine_gaps_and_failures(
-            project_id, diag_rows, holdouts=holdouts, after_at=after_at
+            project_id,
+            diag_rows,
+            reserve_rows=reserve_rows,
+            holdout_conv_ids=holdout_conv_ids,
+            holdouts=holdouts,
+            after_at=after_at,
+            now=ts,
         )
     )
 

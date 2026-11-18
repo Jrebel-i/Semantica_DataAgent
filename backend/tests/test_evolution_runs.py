@@ -1168,3 +1168,81 @@ def test_unset_evolution_models_fallback_to_default_online_provider(
     assert jdg_prov is not None
     assert jdg_prov.id == "prov-default"
     assert jdg_mdl == "gpt-mini"
+
+
+def test_build_overlay_files_prepares_real_candidate_workspace_for_doc_and_ossie(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    _setup_env(tmp_path, monkeypatch)
+    from semantica_dataagent import evolution_runner, knowledge
+    from semantica_dataagent.db import ProjectSetting, sessions
+
+    src_dir = tmp_path / "source"
+    _init_git_repo(src_dir, {"README.md": "base\n"})
+    work_dir = tmp_path / "candidate-work"
+
+    with sessions().begin() as db:
+        db.add(
+            ProjectSetting(
+                project_id="default",
+                key="source_directory",
+                value=str(src_dir),
+            )
+        )
+
+    # 1) Direct document path target
+    doc_overlay = evolution_runner._build_overlay_files(
+        "default",
+        {
+            "target_kind": "document",
+            "target": "document:knowledge/clarifications.md",
+            "patch": "# Clarifications\n- Variant A\n- Variant B\n",
+            "structured_patch": None,
+        },
+    )
+    assert all(isinstance(k, str) for k in doc_overlay)
+    knowledge._prepare_candidate_workspace(src_dir, work_dir, doc_overlay)
+    assert (work_dir / "knowledge/clarifications.md").read_text(encoding="utf-8") == (
+        "# Clarifications\n- Variant A\n- Variant B\n"
+    )
+
+    # 2) Existing SDADocument ref mapped to its Neo4j source_file
+    monkeypatch.setattr(knowledge, "read_graph", lambda values: None)
+    monkeypatch.setattr(
+        knowledge,
+        "execute",
+        lambda driver, cypher, params: [
+            {"node": {"generated": False, "source_file": "knowledge/existing.md"}}
+        ],
+    )
+    existing_overlay = evolution_runner._build_overlay_files(
+        "default",
+        {
+            "target_kind": "document",
+            "target": "document:doc-ref-1",
+            "patch": "# Updated Existing\n",
+            "structured_patch": None,
+        },
+    )
+    assert list(existing_overlay) == ["knowledge/existing.md"]
+    knowledge._prepare_candidate_workspace(src_dir, work_dir, existing_overlay)
+    assert (work_dir / "knowledge/existing.md").read_text(encoding="utf-8") == (
+        "# Updated Existing\n"
+    )
+
+    # 3) Ossie YAML file target
+    ossie_overlay = evolution_runner._build_overlay_files(
+        "default",
+        {
+            "target_kind": "ossie",
+            "target": "ossie:ossie/orders.yaml",
+            "patch": "ossie_version: 0.3.0.dev0\nname: default\n",
+            "structured_patch": None,
+        },
+    )
+    assert all(isinstance(k, str) for k in ossie_overlay)
+    assert list(ossie_overlay) == ["ossie/orders.yaml"]
+    knowledge._prepare_candidate_workspace(src_dir, work_dir, ossie_overlay)
+    assert (work_dir / "ossie/orders.yaml").read_text(encoding="utf-8") == (
+        "ossie_version: 0.3.0.dev0\nname: default\n"
+    )

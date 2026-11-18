@@ -63,6 +63,17 @@ function formatNumber(value: unknown, fallback = 0): number {
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
 
+export function formatRegressions(regressions: unknown): string {
+  if (Array.isArray(regressions)) {
+    const ids = regressions.map(String).filter(Boolean);
+    return ids.length > 0 ? `${ids.length} (${ids.join(", ")})` : "0";
+  }
+  if (typeof regressions === "number" && Number.isFinite(regressions)) {
+    return String(regressions);
+  }
+  return "0";
+}
+
 function formatL2Summary(l2: Record<string, unknown>): string {
   const mode = typeof l2.mode === "string" ? l2.mode : "-";
   const cases = formatNumber(l2.evaluated_cases);
@@ -70,7 +81,7 @@ function formatL2Summary(l2: Record<string, unknown>): string {
     return `${mode} · cases=${cases} · W_c=${formatNumber(l2.W_c)} W_p=${formatNumber(l2.W_p)} E_c=${formatNumber(l2.E_c)} new_validate_errors=${formatNumber(l2.new_validate_errors)}`;
   }
   if (mode === "confirmed_regression") {
-    return `${mode} · cases=${cases} · regressions=${formatNumber(l2.regressions)}`;
+    return `${mode} · cases=${cases} · regressions=${formatRegressions(l2.regressions)}`;
   }
   return `${mode} · cases=${cases}`;
 }
@@ -526,14 +537,17 @@ export function EvolutionPage({
             <input
               id="evo-min-interval"
               type="number"
-              min={1}
+              min={0}
               value={config.min_interval_hours}
-              onChange={(e) =>
+              onChange={(e) => {
+                const next = Number(e.target.value);
                 setConfig((prev) => ({
                   ...prev,
-                  min_interval_hours: Number(e.target.value) || 1,
-                }))
-              }
+                  min_interval_hours: Number.isFinite(next)
+                    ? Math.max(0, next)
+                    : 0,
+                }));
+              }}
             />
           </div>
 

@@ -379,13 +379,37 @@ test("project switch discards stale delayed fetch response from previous project
                   passed: true,
                   mode: "confirmed_regression",
                   evaluated_cases: 3,
-                  regressions: 0,
+                  regressions: [],
                 },
                 decision: "accepted",
                 reject_reason: null,
                 proposal_id: null,
                 started_at: "2026-01-02T00:00:01Z",
                 finished_at: "2026-01-02T00:00:50Z",
+              },
+              {
+                id: "ar-2",
+                run_id: "alpha-run",
+                project_id: "alpha",
+                round_number: 2,
+                signal_kind: "sql_self_repair",
+                target_kind: "override",
+                target: "orders.dt",
+                hypothesis: "回归列表渲染校验",
+                candidate_change: {},
+                evidence_trajectory_ids: [2],
+                l1_gate_report: { passed: true, checks: [], errors: [] },
+                l2_gate_report: {
+                  passed: false,
+                  mode: "confirmed_regression",
+                  evaluated_cases: 3,
+                  regressions: ["q-3", "q-4"],
+                },
+                decision: "rejected",
+                reject_reason: "L2 regressions",
+                proposal_id: null,
+                started_at: "2026-01-02T00:00:51Z",
+                finished_at: "2026-01-02T00:00:59Z",
               },
             ],
           },
@@ -403,6 +427,8 @@ test("project switch discards stale delayed fetch response from previous project
   fireEvent.click(await screen.findByTitle("项目 Alpha"));
 
   expect(await screen.findByText("Alpha 专属口径假设")).toBeTruthy();
+  expect(screen.getByText(/regressions=0/)).toBeTruthy();
+  expect(screen.getByText(/regressions=2 \(q-3, q-4\)/)).toBeTruthy();
   const minInput = screen.getByLabelText(
     "最小新增问答轨迹数",
   ) as HTMLInputElement;

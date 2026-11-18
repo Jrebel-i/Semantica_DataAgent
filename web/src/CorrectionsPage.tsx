@@ -14,13 +14,14 @@ import type { components } from "./api";
 import type { Messages } from "./i18n";
 import { safeDecodePath } from "./paths";
 import { ProjectSelector, storedProject } from "./ProjectSelector";
+import { formatRegressions } from "./EvolutionPage";
 import { TableScroll } from "./TableScroll";
 
 type L2GateReport = {
   passed?: boolean;
   mode?: string;
   evaluated_cases?: number;
-  regressions?: number;
+  regressions?: string[] | number;
   W_c?: number;
   W_p?: number;
   E_c?: number;
@@ -639,7 +640,7 @@ export function CorrectionsPage({
                                     ? ` · W_c=${selected.gate_report.l2_gate.W_c ?? 0} W_p=${selected.gate_report.l2_gate.W_p ?? 0} E_c=${selected.gate_report.l2_gate.E_c ?? 0}`
                                     : selected.gate_report.l2_gate
                                           .regressions !== undefined
-                                      ? ` · regressions=${selected.gate_report.l2_gate.regressions}`
+                                      ? ` · regressions=${formatRegressions(selected.gate_report.l2_gate.regressions)}`
                                       : ""}
                                 </div>
                               </div>

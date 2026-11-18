@@ -412,13 +412,13 @@ MCP 认证层对绑定项目已归档或删除中的 agent 凭据仍在工具分
 
 - **Git 源目录修正覆盖层与评测题集（[ADR 0009](adr/0009-git-backed-semantic-overrides-and-correction-policy.md)、[ADR 0010](adr/0010-local-trajectories-and-candidate-generation-gate.md)）**：
   - 业务术语同义词、表/字段说明与额外指令统一存放在项目源目录 `overrides/semantic_overrides.yaml`（`semantic_overrides.py`），随 Git 提交版本化并通过 `correction_proposals` 审批管线（`manual` / `mcp` / `evolution`）写入后触发增量构建；`evolution_require_review` 与 `correction_require_review` 项目级双开关分别控制演化与纠错提案是否需人工审批。
-  - `eval_questions` 表（`eval_questions.py`）支持 `dev` / `holdout` 切分，按 `unique(project_id, normalized_question_hash)` 防跨切分泄露；仅允许写入确认后答案，自动演化禁止读取 `holdout` 评测题与对应问答轨迹。
+  - `eval_questions.py` 将评测题集持久化在每项目专属 YAML 文件 `<projects_root>/<project_id>/eval/questions.yaml`（`project_context.eval_questions_path`，含 `dev` / `holdout` 切分与归一化去重防跨切分泄露）；仅允许写入确认后答案，自动演化禁止读取 `holdout` 评测题与对应问答轨迹。
 - **问答轨迹挖掘与防泄露切分（`trajectory_miner.py`）**：
   - 采集阶段（`trajectories.py`）排除已过期或删除的会话与问答轨迹，并剔除归一化文本匹配 `holdout` 题集的问答轨迹；挖掘前先合并同一会话内重复问答及跨会话近似问题（保留区分口径与编号的数字后缀 Token），再按时间顺序切分为 **70% 诊断池 + 30% 验证保留池**。
   - 归纳五类问题信号：`search_detour`（多轮检索绕路）、`sql_self_repair`（`validate_sql` 先败后成自修）、`multi_turn_correction`（多轮用户追问纠正）、`divergent_clarification`（多口径重复澄清，保留全部**口径变体**而不坍缩为单一默认）与 `knowledge_gap_or_failure`（知识缺口或执行失败聚合）。
 - **单假设演化运行状态机与门禁闭环（Alembic `0040`、`evolution_runner.py`、`evolution_gate.py`）**：
   - `evolution_checkpoints`、`evolution_runs`（部分唯一索引 `one_running_evolution_run_per_project` 强制每项目至多 1 个 `running` 运行）与 `evolution_rounds` 记录运行状态机与轮次证据。应用启动时恢复器将中断的 `running` 标记为 `incomplete`，保持源目录、活跃知识代与批次检查点不变并清理孤立候选知识代；`project_deletion.py` 同步清理上述演化状态表。
-  - 每轮只测试一个主因假设（默认 `max_rounds=3`、`max_eval_cases=20`），生成针对 `overrides/semantic_overrides.yaml`、可编辑 `knowledge/*.md` 或 `ossie/*.yaml` 的候选变更并写入临时候选对象：先后通过 L1 静态校验（YAML/Schema/反坍缩守卫）与 L2 隔离**候选知识代**评估（`confirmed_regression` 无回归或 `cold_start_ab` 净胜准则 `W_c >= W_p + 1`、`W_c >= E_c` 且无新增静态 SQL 校验错误）。
+  - 每轮只测试一个主因假设（默认 `max_rounds=3`、`max_eval_cases=20`），生成针对 `overrides/semantic_overrides.yaml`、可编辑 `knowledge/*.md` 或 `ossie/*.yaml` 的候选变更并写入临时候选对象：先后通过 L1 静态校验（YAML/Schema/反坍缩守卫）与 L2 隔离**候选知识代**评估（`confirmed_regression` 无回归且关键指标严格提升，或 `cold_start_ab` 满足 `E_c == 0` 且 `W_c > W_p` 且无新增静态 SQL 校验错误）。
   - 通过 L1+L2 后按 `evolution_require_review` 创建 `source="evolution"` 纠错提案（携带 `l1_gate`、`l2_gate` 与 `provenance` 报告），并将 `checkpoint_trajectory_id` / `checkpoint_at` 推进至冻结批次上限；任一轮拒收或预算耗尽则标记 `incomplete` 且不推进检查点、不改写源目录或活跃知识代。
 - **Fork 安全自动调度器、REST 契约与前端看板（`evolution_scheduler.py`、`evolution_api.py`、`EvolutionPage.tsx`）**：
   - `evolution_scheduler.py` 严格效仿 `scheduler.py` 提供 `fork_child()` 并向 `os.register_at_fork(after_in_child=...)` 注册（由 `backend/tests/test_fork_safety.py` 守护）。
