@@ -129,8 +129,11 @@ Read `validate_sql` completely:
   semantics. Business-time bounds and partition availability are separate: a latest
   partition is not a substitute for the requested business upper bound; disclose missing
   partitions or late-arriving data when they affect completeness.
-- Compute durations from the original timestamps in seconds or finer precision; apply
-  thresholds and calculate averages before rounding only the final displayed result.
+- By default, compute durations from the original timestamps in seconds or finer
+  precision; apply thresholds and calculate averages before rounding only the final
+  displayed result. If the user explicitly requests, or a verified business definition
+  specifies, rounding or discretization before filtering or aggregation, apply that
+  specified rule and explain its meaning; do not introduce it otherwise.
   Preserve the requested inclusive or exclusive threshold, including exact boundary
   values. Handle NULL timestamps and negative durations explicitly according to the
   business definition; do not silently treat them as zero or valid durations. Account
