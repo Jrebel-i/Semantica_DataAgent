@@ -133,5 +133,7 @@ describe("narrow screen layout", () => {
     expect(desktop).toContain(".correction-layout > *");
     expect(desktop).toContain(".correction-list button > .mono");
     expect(desktop).toContain("text-overflow: ellipsis;");
+    expect(desktop).toContain(".discovery-candidate-card");
+    expect(desktop).toContain(".discovery-evidence-card");
   });
 });

@@ -395,6 +395,7 @@ export function App() {
                 : "/corrections",
             )
           }
+          onNavigatePersonalSettings={() => navigate("/personal-settings")}
         />
       ) : (
         <Alert title={t.forbidden} type="warning" />

@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Button, Space, Tag } from "antd";
 import type { components } from "./api";
+import { DiscoveryPanel } from "./DiscoveryPanel";
 import { readErrorDetail } from "./httpErrors";
 import type { Messages } from "./i18n";
-import { ProjectSelector, storedProject } from "./ProjectSelector";
+import { ProjectSelector, storedProject, useProjects } from "./ProjectSelector";
 
 type EvolutionConfig = components["schemas"]["EvolutionConfigView"];
 type EvolutionConfigUpdate = components["schemas"]["EvolutionConfigUpdate"];
@@ -225,13 +226,25 @@ function RoundCard({ round, t }: { round: EvolutionRound; t: Messages }) {
 export function EvolutionPage({
   token,
   messages: t,
+  initialTab = "evolution",
   onNavigateCorrections,
+  onNavigatePersonalSettings,
 }: {
   token: string;
   messages: Messages;
+  initialTab?: "evolution" | "discovery";
   onNavigateCorrections?: (proposalId?: string) => void;
+  onNavigatePersonalSettings?: () => void;
 }) {
+  const [activeTab, setActiveTab] = useState<"evolution" | "discovery">(
+    initialTab,
+  );
   const [project, setProject] = useState(storedProject);
+  const { projects } = useProjects(token);
+  const currentProject = useMemo(
+    () => projects.find((item) => item.id === project) ?? null,
+    [projects, project],
+  );
   const projectRef = useRef(project);
   projectRef.current = project;
   const requestGenRef = useRef(0);
@@ -308,6 +321,7 @@ export function EvolutionPage({
   );
 
   useEffect(() => {
+    if (activeTab !== "evolution") return;
     const controller = new AbortController();
     requestGenRef.current += 1;
     setLoading(true);
@@ -325,19 +339,19 @@ export function EvolutionPage({
         }
       });
     return () => controller.abort();
-  }, [loadProjectData, project, t.error]);
+  }, [activeTab, loadProjectData, project, t.error]);
 
   const hasRunning = runs.some((r) => r.status === "running");
 
   useEffect(() => {
-    if (!hasRunning) return;
+    if (activeTab !== "evolution" || !hasRunning) return;
     const timer = window.setInterval(() => {
       void loadProjectData(projectRef.current).catch(() => {
         // Keep last valid state on transient poll error
       });
     }, 3000);
     return () => window.clearInterval(timer);
-  }, [hasRunning, loadProjectData, project]);
+  }, [activeTab, hasRunning, loadProjectData, project]);
 
   function handleProjectChange(nextProject: string) {
     requestGenRef.current += 1;
@@ -447,313 +461,361 @@ export function EvolutionPage({
     <section className="stack admin-page">
       <div className="page-header">
         <div>
-          <h1 className="page-title">{t.evolutionTitle}</h1>
-          <p className="page-subtitle">{t.evolutionHint}</p>
+          <h1 className="page-title">
+            {activeTab === "discovery" ? t.discoveryTitle : t.evolutionTitle}
+          </h1>
+          <p className="page-subtitle">
+            {activeTab === "discovery" ? t.discoveryHint : t.evolutionHint}
+          </p>
         </div>
-        <Button
-          onClick={() => void loadProjectData(projectRef.current)}
-          loading={loading}
-        >
-          {t.refresh}
-        </Button>
-        <Button
-          type="primary"
-          onClick={() => void triggerRun()}
-          loading={triggering}
-          disabled={hasRunning}
-        >
-          {t.triggerEvolution}
-        </Button>
+        {activeTab === "evolution" && (
+          <>
+            <Button
+              onClick={() => void loadProjectData(projectRef.current)}
+              loading={loading}
+            >
+              {t.refresh}
+            </Button>
+            <Button
+              type="primary"
+              onClick={() => void triggerRun()}
+              loading={triggering}
+              disabled={hasRunning}
+            >
+              {t.triggerEvolution}
+            </Button>
+          </>
+        )}
         <ProjectSelector
           token={token}
           value={project}
           onChange={handleProjectChange}
           messages={t}
+          includeArchived={activeTab === "discovery"}
         />
       </div>
 
-      {error && <Alert type="error" title={error} showIcon />}
-      {saveNotice && <Alert type="success" title={saveNotice} showIcon />}
+      <div className="correction-filters" role="tablist">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === "evolution"}
+          className={activeTab === "evolution" ? "active" : ""}
+          onClick={() => setActiveTab("evolution")}
+        >
+          {t.evolutionTitle}
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === "discovery"}
+          className={activeTab === "discovery" ? "active" : ""}
+          onClick={() => setActiveTab("discovery")}
+        >
+          {t.discoveryTitle}
+        </button>
+      </div>
 
-      <section className="card section-card">
-        <div className="card-title-row">
-          <h2 className="card-title">{t.evolutionTitle}</h2>
-          <Space size={8} wrap>
-            <Tag color="blue">
-              {t.evolutionPendingTrajectories}: {config.pending_trajectories}
-            </Tag>
-            <Tag>
-              {t.evolutionCheckpoint}: {config.checkpoint_trajectory_id ?? "-"}
-            </Tag>
-          </Space>
-        </div>
+      {activeTab === "discovery" ? (
+        <DiscoveryPanel
+          token={token}
+          project={project}
+          projectInfo={currentProject}
+          providers={providers}
+          messages={t}
+          onNavigateCorrections={onNavigateCorrections}
+          onNavigatePersonalSettings={onNavigatePersonalSettings}
+        />
+      ) : (
+        <>
+          {error && <Alert type="error" title={error} showIcon />}
+          {saveNotice && <Alert type="success" title={saveNotice} showIcon />}
 
-        <div className="evolution-config-grid">
-          <label className="evolution-checkbox">
-            <input
-              type="checkbox"
-              checked={config.auto_evolve_enabled}
-              onChange={(e) =>
-                setConfig((prev) => ({
-                  ...prev,
-                  auto_evolve_enabled: e.target.checked,
-                }))
-              }
-            />
-            <span>{t.autoEvolveEnabled}</span>
-          </label>
-
-          <div className="evolution-field">
-            <label htmlFor="evo-min-trajectories">
-              {t.evolutionMinTrajectories}
-            </label>
-            <input
-              id="evo-min-trajectories"
-              type="number"
-              min={1}
-              value={config.min_trajectories}
-              onChange={(e) =>
-                setConfig((prev) => ({
-                  ...prev,
-                  min_trajectories: Number(e.target.value) || 1,
-                }))
-              }
-            />
-          </div>
-
-          <div className="evolution-field">
-            <label htmlFor="evo-min-interval">
-              {t.evolutionMinIntervalHours}
-            </label>
-            <input
-              id="evo-min-interval"
-              type="number"
-              min={0}
-              value={config.min_interval_hours}
-              onChange={(e) => {
-                const next = Number(e.target.value);
-                setConfig((prev) => ({
-                  ...prev,
-                  min_interval_hours: Number.isFinite(next)
-                    ? Math.max(0, next)
-                    : 0,
-                }));
-              }}
-            />
-          </div>
-
-          <div className="evolution-field">
-            <label htmlFor="evo-max-idle-days">{t.evolutionMaxIdleDays}</label>
-            <input
-              id="evo-max-idle-days"
-              type="number"
-              min={1}
-              value={config.max_idle_days}
-              onChange={(e) =>
-                setConfig((prev) => ({
-                  ...prev,
-                  max_idle_days: Number(e.target.value) || 1,
-                }))
-              }
-            />
-          </div>
-
-          <div className="evolution-field">
-            <label htmlFor="evo-max-rounds">{t.evolutionMaxRounds}</label>
-            <input
-              id="evo-max-rounds"
-              type="number"
-              min={1}
-              value={config.max_rounds}
-              onChange={(e) =>
-                setConfig((prev) => ({
-                  ...prev,
-                  max_rounds: Number(e.target.value) || 1,
-                }))
-              }
-            />
-          </div>
-
-          <div className="evolution-field">
-            <label htmlFor="evo-max-eval-cases">
-              {t.evolutionMaxEvalCases}
-            </label>
-            <input
-              id="evo-max-eval-cases"
-              type="number"
-              min={1}
-              value={config.max_eval_cases}
-              onChange={(e) =>
-                setConfig((prev) => ({
-                  ...prev,
-                  max_eval_cases: Number(e.target.value) || 1,
-                }))
-              }
-            />
-          </div>
-
-          <ProviderModelPair
-            idPrefix="evo-evolver"
-            providerLabel={t.evolutionProviderLabel}
-            modelLabel={t.evolutionModelLabel}
-            defaultLabel={t.evolutionModelDefault}
-            providerId={config.evolution_provider_id}
-            model={config.evolution_model}
-            providers={providers}
-            onProviderChange={(next) =>
-              setConfig((prev) => ({
-                ...prev,
-                evolution_provider_id: next,
-                evolution_model: null,
-              }))
-            }
-            onModelChange={(next) =>
-              setConfig((prev) => ({
-                ...prev,
-                evolution_model: next,
-              }))
-            }
-          />
-
-          <ProviderModelPair
-            idPrefix="evo-judge"
-            providerLabel={t.judgeProviderLabel}
-            modelLabel={t.judgeModelLabel}
-            defaultLabel={t.evolutionModelDefault}
-            providerId={config.judge_provider_id}
-            model={config.judge_model}
-            providers={providers}
-            onProviderChange={(next) =>
-              setConfig((prev) => ({
-                ...prev,
-                judge_provider_id: next,
-                judge_model: null,
-              }))
-            }
-            onModelChange={(next) =>
-              setConfig((prev) => ({
-                ...prev,
-                judge_model: next,
-              }))
-            }
-          />
-        </div>
-
-        <div style={{ marginTop: 12 }}>
-          <Button
-            type="primary"
-            onClick={() => void saveConfig()}
-            loading={saving}
-          >
-            {t.evolutionSaveConfig}
-          </Button>
-        </div>
-      </section>
-
-      <div className="evolution-layout">
-        <section className="card section-card">
-          <div className="card-title-row">
-            <h2 className="card-title">{t.evolutionRunsTitle}</h2>
-            <span className="muted">{runs.length}</span>
-          </div>
-          {runs.length === 0 ? (
-            <div className="empty-state">{t.evolutionEmptyRuns}</div>
-          ) : (
-            <ul className="correction-list">
-              {runs.map((run) => (
-                <li key={run.id}>
-                  <button
-                    type="button"
-                    className={selectedRun?.id === run.id ? "active" : ""}
-                    onClick={() => setSelectedRunId(run.id)}
-                  >
-                    <span className="mono">
-                      {run.trigger_type === "scheduled" ||
-                      run.trigger_type === "scheduler"
-                        ? t.evolutionTriggerScheduled
-                        : t.evolutionTriggerManual}{" "}
-                      · {formatDateTime(run.created_at)}
-                    </span>
-                    <Space size={4}>
-                      <Tag>
-                        {run.rounds_completed}/{run.max_rounds}
-                      </Tag>
-                      <Tag color={runStatusColor(run.status)}>
-                        {statusLabel(run.status)}
-                      </Tag>
-                    </Space>
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
-
-        <section className="card section-card">
-          {selectedRun ? (
-            <div className="stack">
-              <div className="card-title-row">
-                <div>
-                  <h2 className="card-title mono">{selectedRun.id}</h2>
-                  <div className="muted">
-                    {formatDateTime(selectedRun.started_at)} →{" "}
-                    {formatDateTime(selectedRun.finished_at)}
-                  </div>
-                </div>
-                <Space size={8} wrap>
-                  <Tag color={runStatusColor(selectedRun.status)}>
-                    {statusLabel(selectedRun.status)}
-                  </Tag>
-                  {selectedRun.stop_reason && (
-                    <Tag>{`${t.evolutionStopReason}: ${selectedRun.stop_reason}`}</Tag>
-                  )}
-                  {selectedRun.proposal_id && (
-                    <Button
-                      type="primary"
-                      size="small"
-                      onClick={() =>
-                        onNavigateCorrections?.(
-                          selectedRun.proposal_id ?? undefined,
-                        )
-                      }
-                    >
-                      {t.viewEvolutionProposal}
-                    </Button>
-                  )}
-                </Space>
-              </div>
-
-              {selectedRun.error && (
-                <Alert type="error" title={selectedRun.error} showIcon />
-              )}
-
+          <section className="card section-card">
+            <div className="card-title-row">
+              <h2 className="card-title">{t.evolutionTitle}</h2>
               <Space size={8} wrap>
-                <Tag>
-                  {t.evolutionDiagnosisPool}:{" "}
-                  {selectedRun.diagnosis_trajectory_ids?.length ?? 0}
-                </Tag>
-                <Tag>
-                  {t.evolutionReservePool}:{" "}
-                  {selectedRun.reserve_trajectory_ids?.length ?? 0}
+                <Tag color="blue">
+                  {t.evolutionPendingTrajectories}:{" "}
+                  {config.pending_trajectories}
                 </Tag>
                 <Tag>
                   {t.evolutionCheckpoint}:{" "}
-                  {selectedRun.checkpoint_before_trajectory_id ?? "-"} →{" "}
-                  {selectedRun.checkpoint_after_trajectory_id ?? "-"}
+                  {config.checkpoint_trajectory_id ?? "-"}
                 </Tag>
               </Space>
-
-              <div className="stack">
-                {(selectedRun.rounds ?? []).map((round) => (
-                  <RoundCard key={round.id} round={round} t={t} />
-                ))}
-              </div>
             </div>
-          ) : (
-            <div className="empty-state">{t.evolutionEmptyRuns}</div>
-          )}
-        </section>
-      </div>
+
+            <div className="evolution-config-grid">
+              <label className="evolution-checkbox">
+                <input
+                  type="checkbox"
+                  checked={config.auto_evolve_enabled}
+                  onChange={(e) =>
+                    setConfig((prev) => ({
+                      ...prev,
+                      auto_evolve_enabled: e.target.checked,
+                    }))
+                  }
+                />
+                <span>{t.autoEvolveEnabled}</span>
+              </label>
+
+              <div className="evolution-field">
+                <label htmlFor="evo-min-trajectories">
+                  {t.evolutionMinTrajectories}
+                </label>
+                <input
+                  id="evo-min-trajectories"
+                  type="number"
+                  min={1}
+                  value={config.min_trajectories}
+                  onChange={(e) =>
+                    setConfig((prev) => ({
+                      ...prev,
+                      min_trajectories: Number(e.target.value) || 1,
+                    }))
+                  }
+                />
+              </div>
+
+              <div className="evolution-field">
+                <label htmlFor="evo-min-interval">
+                  {t.evolutionMinIntervalHours}
+                </label>
+                <input
+                  id="evo-min-interval"
+                  type="number"
+                  min={0}
+                  value={config.min_interval_hours}
+                  onChange={(e) => {
+                    const next = Number(e.target.value);
+                    setConfig((prev) => ({
+                      ...prev,
+                      min_interval_hours: Number.isFinite(next)
+                        ? Math.max(0, next)
+                        : 0,
+                    }));
+                  }}
+                />
+              </div>
+
+              <div className="evolution-field">
+                <label htmlFor="evo-max-idle-days">
+                  {t.evolutionMaxIdleDays}
+                </label>
+                <input
+                  id="evo-max-idle-days"
+                  type="number"
+                  min={1}
+                  value={config.max_idle_days}
+                  onChange={(e) =>
+                    setConfig((prev) => ({
+                      ...prev,
+                      max_idle_days: Number(e.target.value) || 1,
+                    }))
+                  }
+                />
+              </div>
+
+              <div className="evolution-field">
+                <label htmlFor="evo-max-rounds">{t.evolutionMaxRounds}</label>
+                <input
+                  id="evo-max-rounds"
+                  type="number"
+                  min={1}
+                  value={config.max_rounds}
+                  onChange={(e) =>
+                    setConfig((prev) => ({
+                      ...prev,
+                      max_rounds: Number(e.target.value) || 1,
+                    }))
+                  }
+                />
+              </div>
+
+              <div className="evolution-field">
+                <label htmlFor="evo-max-eval-cases">
+                  {t.evolutionMaxEvalCases}
+                </label>
+                <input
+                  id="evo-max-eval-cases"
+                  type="number"
+                  min={1}
+                  value={config.max_eval_cases}
+                  onChange={(e) =>
+                    setConfig((prev) => ({
+                      ...prev,
+                      max_eval_cases: Number(e.target.value) || 1,
+                    }))
+                  }
+                />
+              </div>
+
+              <ProviderModelPair
+                idPrefix="evo-evolver"
+                providerLabel={t.evolutionProviderLabel}
+                modelLabel={t.evolutionModelLabel}
+                defaultLabel={t.evolutionModelDefault}
+                providerId={config.evolution_provider_id}
+                model={config.evolution_model}
+                providers={providers}
+                onProviderChange={(next) =>
+                  setConfig((prev) => ({
+                    ...prev,
+                    evolution_provider_id: next,
+                    evolution_model: null,
+                  }))
+                }
+                onModelChange={(next) =>
+                  setConfig((prev) => ({
+                    ...prev,
+                    evolution_model: next,
+                  }))
+                }
+              />
+
+              <ProviderModelPair
+                idPrefix="evo-judge"
+                providerLabel={t.judgeProviderLabel}
+                modelLabel={t.judgeModelLabel}
+                defaultLabel={t.evolutionModelDefault}
+                providerId={config.judge_provider_id}
+                model={config.judge_model}
+                providers={providers}
+                onProviderChange={(next) =>
+                  setConfig((prev) => ({
+                    ...prev,
+                    judge_provider_id: next,
+                    judge_model: null,
+                  }))
+                }
+                onModelChange={(next) =>
+                  setConfig((prev) => ({
+                    ...prev,
+                    judge_model: next,
+                  }))
+                }
+              />
+            </div>
+
+            <div style={{ marginTop: 12 }}>
+              <Button
+                type="primary"
+                onClick={() => void saveConfig()}
+                loading={saving}
+              >
+                {t.evolutionSaveConfig}
+              </Button>
+            </div>
+          </section>
+
+          <div className="evolution-layout">
+            <section className="card section-card">
+              <div className="card-title-row">
+                <h2 className="card-title">{t.evolutionRunsTitle}</h2>
+                <span className="muted">{runs.length}</span>
+              </div>
+              {runs.length === 0 ? (
+                <div className="empty-state">{t.evolutionEmptyRuns}</div>
+              ) : (
+                <ul className="correction-list">
+                  {runs.map((run) => (
+                    <li key={run.id}>
+                      <button
+                        type="button"
+                        className={selectedRun?.id === run.id ? "active" : ""}
+                        onClick={() => setSelectedRunId(run.id)}
+                      >
+                        <span className="mono">
+                          {run.trigger_type === "scheduled" ||
+                          run.trigger_type === "scheduler"
+                            ? t.evolutionTriggerScheduled
+                            : t.evolutionTriggerManual}{" "}
+                          · {formatDateTime(run.created_at)}
+                        </span>
+                        <Space size={4}>
+                          <Tag>
+                            {run.rounds_completed}/{run.max_rounds}
+                          </Tag>
+                          <Tag color={runStatusColor(run.status)}>
+                            {statusLabel(run.status)}
+                          </Tag>
+                        </Space>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
+
+            <section className="card section-card">
+              {selectedRun ? (
+                <div className="stack">
+                  <div className="card-title-row">
+                    <div>
+                      <h2 className="card-title mono">{selectedRun.id}</h2>
+                      <div className="muted">
+                        {formatDateTime(selectedRun.started_at)} →{" "}
+                        {formatDateTime(selectedRun.finished_at)}
+                      </div>
+                    </div>
+                    <Space size={8} wrap>
+                      <Tag color={runStatusColor(selectedRun.status)}>
+                        {statusLabel(selectedRun.status)}
+                      </Tag>
+                      {selectedRun.stop_reason && (
+                        <Tag>{`${t.evolutionStopReason}: ${selectedRun.stop_reason}`}</Tag>
+                      )}
+                      {selectedRun.proposal_id && (
+                        <Button
+                          type="primary"
+                          size="small"
+                          onClick={() =>
+                            onNavigateCorrections?.(
+                              selectedRun.proposal_id ?? undefined,
+                            )
+                          }
+                        >
+                          {t.viewEvolutionProposal}
+                        </Button>
+                      )}
+                    </Space>
+                  </div>
+
+                  {selectedRun.error && (
+                    <Alert type="error" title={selectedRun.error} showIcon />
+                  )}
+
+                  <Space size={8} wrap>
+                    <Tag>
+                      {t.evolutionDiagnosisPool}:{" "}
+                      {selectedRun.diagnosis_trajectory_ids?.length ?? 0}
+                    </Tag>
+                    <Tag>
+                      {t.evolutionReservePool}:{" "}
+                      {selectedRun.reserve_trajectory_ids?.length ?? 0}
+                    </Tag>
+                    <Tag>
+                      {t.evolutionCheckpoint}:{" "}
+                      {selectedRun.checkpoint_before_trajectory_id ?? "-"} →{" "}
+                      {selectedRun.checkpoint_after_trajectory_id ?? "-"}
+                    </Tag>
+                  </Space>
+
+                  <div className="stack">
+                    {(selectedRun.rounds ?? []).map((round) => (
+                      <RoundCard key={round.id} round={round} t={t} />
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <div className="empty-state">{t.evolutionEmptyRuns}</div>
+              )}
+            </section>
+          </div>
+        </>
+      )}
     </section>
   );
 }

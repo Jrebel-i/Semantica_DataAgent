@@ -187,6 +187,9 @@ flowchart TD
 - **基于问答轨迹的自主演化闭环（[ADR 0009](docs/adr/0009-git-backed-semantic-overrides-and-correction-policy.md)、[ADR 0010](docs/adr/0010-local-trajectories-and-candidate-generation-gate.md)）**：
   - 将修正覆盖层（`overrides/semantic_overrides.yaml`）迁入项目 Git 源目录版本化管理，并在前端纠错审批、评测题集（`dev` / `holdout` 分层防泄露）与演化看板（`/evolution`）中统一编排。
   - 从本地采集的问答轨迹中排除 `holdout` 后按 70% 诊断 / 30% 验证保留划分，聚类五类信号（检索绕路、SQL 自修、多轮纠偏、保留多语义**口径变体**的重复澄清与缺口失败），逐轮提出单一因果假设，经 L1 静态校验与 L2 隔离**候选知识代**对比门禁后产出 `source="evolution"` 纠错提案并原子推进批次检查点。
+- **基于查询历史挖掘与受控数据探活的冷启动知识发现（[ADR 0011](docs/adr/0011-query-history-mining-and-data-probed-relationships.md)）**：
+  - 为数仓型项目提供可配置**查询历史**源（内置「Doris 审计日志」与「DTB 埋点表」双预设），由管理员使用个人 DTB 令牌按需手动触发只读 AST 拼装拉取并全量记入 `QueryAudit` 审计，经字面量脱敏与结构指纹聚类挖掘高频指标口径、非分区过滤约束与共现等值连接对。
+  - 通过三段漏斗零扫库召回候选**外键关系**，在分区裁剪失败关闭与行数/并发/超时预算内执行两步**数据探活**（仅保留聚合核验证据，绝不落盘业务事实表数据行），产出强制进入 `pending` 待审批的 `source="discovery"` **纠错提案**与可选待确认**评测题集**草稿，并在 `/evolution`「冷启动发现」与 `/corrections`「历史发现」视图闭环审阅。
 
 ---
 
@@ -220,6 +223,11 @@ Semantica_DataAgent/
 │   │   ├── evolution_runner.py # 单假设演化运行状态机、恢复与提案生成
 │   │   ├── evolution_scheduler.py # Fork 安全自主演化周期调度器
 │   │   ├── evolution_api.py  # 演化配置、触发与运行轮次 REST 接口
+│   │   ├── discovery_api.py  # 项目级查询历史源配置与知识发现运行 REST 接口
+│   │   ├── discovery_executor.py # sqlglot AST 只读构造与个人 DTB 令牌执行审计
+│   │   ├── query_history_miner.py # 查询历史脱敏指纹聚类、指标口径与过滤约束挖掘
+│   │   ├── fk_probing.py     # 三段漏斗候选外键关系召回与分区裁剪受控数据探活
+│   │   ├── discovery_runner.py # 知识发现运行状态机、提案收敛与崩溃恢复
 │   │   ├── pull_service.py   # 定时/手动拉取编排与构建入队
 │   │   ├── source_directory.py # Git 源目录上传、预览、原子发布与 SIGKILL 崩溃恢复
 │   │   ├── pi_runner.py / claude_runner.py / codex_runner.py # 三大在线 Agent Runner
@@ -235,7 +243,7 @@ Semantica_DataAgent/
 ├── deploy/                   # Kubernetes 部署清单、应用 Dockerfile 与 agent-runner 沙箱镜像
 ├── eval/                     # 评测题集与评测配置样例
 ├── scripts/                  # 真实样本抽取 (dtb_sample.py)、血缘对比与样本构建验证脚本
-├── docs/                     # 架构决策记录（ADR 0001–0010）、代码规范、插件、融合检索与评测文档
+├── docs/                     # 架构决策记录（ADR 0001–0011）、代码规范、插件、融合检索与评测文档
 └── GLOSSARY.md               # 项目统一领域术语表
 ```
 
@@ -362,6 +370,7 @@ pnpm --dir web build
   - [ADR 0008 — DTB 元数据与任务 SQL 自动转换为 Apache Ossie 与混合维度落盘](docs/adr/0008-dtb-to-ossie-pipeline.md)
   - [ADR 0009 — 修正覆盖层迁入源目录 Git 管理，纠错与演化共用提案管线与项目级双开关](docs/adr/0009-git-backed-semantic-overrides-and-correction-policy.md)
   - [ADR 0010 — 网关同源采集本地问答轨迹，通过隔离候选知识代与防泄漏门禁完成自主演化](docs/adr/0010-local-trajectories-and-candidate-generation-gate.md)
+  - [ADR 0011 — 基于个人 DTB 令牌的查询历史挖掘与受控数据探活外键发现](docs/adr/0011-query-history-mining-and-data-probed-relationships.md)
 
 ## 许可证
 

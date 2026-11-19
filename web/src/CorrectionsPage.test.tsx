@@ -750,3 +750,111 @@ test("long proposal targets expose decoded title tooltips for ellipsis overflow"
   const monoSpan = itemBtn.querySelector(".mono");
   expect(monoSpan?.getAttribute("title")).toBe(longTarget);
 });
+
+test("filters by discovery source and renders structured discovery_evidence verification card", async () => {
+  const calls: { url: string; method?: string }[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string, options?: RequestInit) => {
+      calls.push({ url, method: options?.method });
+      if (url === "/api/v1/projects") {
+        return Response.json([
+          {
+            id: "default",
+            name: "业务数据",
+            type: "warehouse",
+            status: "active",
+            created_at: "2026-01-01T00:00:00Z",
+            my_role: "admin",
+          },
+        ]);
+      }
+      if (url === "/api/v1/corrections?project=default") {
+        return Response.json([
+          {
+            id: "prop-manual",
+            target: "document:guide.md",
+            reason: "人工修正",
+            diff: "-old\n+new",
+            patch: "new",
+            status: "pending",
+            source: "manual",
+            target_kind: "document",
+          },
+          {
+            id: "prop-disc",
+            target: "relationship:shop.orders:shop.users:fk_orders_users",
+            reason: "冷启动知识发现探活核验通过的外键关系",
+            diff: "--- a\n+++ b\n+fk_orders_users",
+            patch: "version: 1",
+            status: "pending",
+            source: "discovery",
+            target_kind: "override",
+            gate_report: {
+              passed: true,
+              checks: [{ name: "yaml_lint", passed: true, details: [] }],
+              errors: [],
+              discovery_evidence: {
+                run_id: "drun-42",
+                candidate_kind: "relationship",
+                query_history_frequency: 25,
+                distinct_callers: 6,
+                sample_distinct_count: 1000,
+                matched_count: 925,
+                overlap_ratio: 0.925,
+                join_matched: true,
+                probing_status: "passed",
+                probe_partitions: {
+                  "shop.orders": { dt: "2026-05-01" },
+                  "shop.users": { dt: "2026-05-01" },
+                },
+              },
+            },
+          },
+        ]);
+      }
+      return Response.json({ id: "prop-disc", status: "approved" });
+    }),
+  );
+
+  render(<CorrectionsPage token="token" messages={getMessages("zh")} />);
+
+  expect(
+    await screen.findByRole("button", { name: /fk_orders_users/ }),
+  ).toBeTruthy();
+
+  // Filter by 历史发现 (discovery)
+  fireEvent.click(screen.getByRole("button", { name: "历史发现" }));
+  expect(screen.getByRole("button", { name: /fk_orders_users/ })).toBeTruthy();
+  expect(
+    screen.queryByRole("button", { name: /document:guide.md/ }),
+  ).toBeNull();
+
+  // Open detail and verify structured discovery_evidence card
+  fireEvent.click(screen.getByRole("button", { name: /fk_orders_users/ }));
+  expect(screen.getByText("历史发现核验证据")).toBeTruthy();
+  expect(screen.getByText(/drun-42/)).toBeTruthy();
+  expect(screen.getByText(/历史查询频次: 25/)).toBeTruthy();
+  expect(screen.getByText(/去重调用方: 6/)).toBeTruthy();
+  expect(screen.getByText(/采样去重数: 1000/)).toBeTruthy();
+  expect(screen.getByText(/命中父表数: 925/)).toBeTruthy();
+  expect(screen.getByText(/包含度: 92\.5%/)).toBeTruthy();
+  expect(screen.getByText(/探活 JOIN 状态: 命中通过/)).toBeTruthy();
+  expect(
+    screen.getByText(
+      /shop\.orders\(dt=2026-05-01\) · shop\.users\(dt=2026-05-01\)/,
+    ),
+  ).toBeTruthy();
+
+  // Approve button remains functional for discovery proposals
+  fireEvent.click(screen.getByRole("button", { name: "批准" }));
+  await waitFor(() =>
+    expect(
+      calls.some(
+        (c) =>
+          c.url === "/api/v1/corrections/prop-disc/approve?project=default" &&
+          c.method === "POST",
+      ),
+    ).toBe(true),
+  );
+});

@@ -73,17 +73,25 @@ export function ProjectSelector({
   onChange,
   messages: t,
   includeMemberProjects = false,
+  includeArchived = false,
 }: {
   token: string;
   value: string;
   onChange: (project: string) => void;
   messages: Messages;
   includeMemberProjects?: boolean;
+  includeArchived?: boolean;
 }) {
   const { projects, loaded } = useProjects(token);
-  const available = includeMemberProjects
-    ? projects.filter((row) => row.status === "active")
-    : manageableProjects(projects);
+  const available = includeArchived
+    ? includeMemberProjects
+      ? projects.filter((row) => row.status !== "deleting")
+      : projects.filter(
+          (row) => row.my_role === "admin" && row.status !== "deleting",
+        )
+    : includeMemberProjects
+      ? projects.filter((row) => row.status === "active")
+      : manageableProjects(projects);
 
   useEffect(() => {
     if (!loaded || available.length === 0) return;
@@ -106,7 +114,10 @@ export function ProjectSelector({
         options={available.map((project) => ({
           value: project.id,
           title: project.name,
-          label: project.name,
+          label:
+            project.status === "archived"
+              ? `${project.name} (${t.archived})`
+              : project.name,
         }))}
         style={{ minWidth: 180 }}
       />
