@@ -302,6 +302,9 @@ def test_rest_time_fields_have_utc_offset(client, monkeypatch):
         "evolution_config": c.get(
             "/api/v1/projects/default/evolution-config", headers=headers
         ).json(),
+        "discovery_config": c.get(
+            "/api/v1/projects/default/discovery-config", headers=headers
+        ).json(),
         "evolution_runs": c.get("/api/v1/evolution/runs", headers=headers).json(),
         "evolution_run": c.get(
             "/api/v1/evolution/runs/evo-time-1", headers=headers

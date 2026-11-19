@@ -697,6 +697,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{project_id}/discovery-config": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Project Discovery Config */
+        get: operations["get_project_discovery_config_api_v1_projects__project_id__discovery_config_get"];
+        /** Put Project Discovery Config */
+        put: operations["put_project_discovery_config_api_v1_projects__project_id__discovery_config_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{project_id}/evolution-config": {
         parameters: {
             query?: never;
@@ -1606,6 +1624,119 @@ export interface components {
              * Format: date-time
              */
             updated_at: string;
+        };
+        /** DiscoveryConfigUpdate */
+        DiscoveryConfigUpdate: {
+            /** Caller Column */
+            caller_column?: string | null;
+            /** Database Column */
+            database_column?: string | null;
+            /** Dialect Column */
+            dialect_column?: string | null;
+            /** Lookback Days */
+            lookback_days?: number | null;
+            /** Max Fk Candidates */
+            max_fk_candidates?: number | null;
+            /** Max Queries */
+            max_queries?: number | null;
+            /** Min Frequency */
+            min_frequency?: number | null;
+            /** Min Inclusion Ratio */
+            min_inclusion_ratio?: number | null;
+            /** Model */
+            model?: string | null;
+            /** Preset */
+            preset?: ("doris_audit_log" | "dtb_tracking_table") | null;
+            /** Probe Concurrency */
+            probe_concurrency?: number | null;
+            /** Probe Timeout Seconds */
+            probe_timeout_seconds?: number | null;
+            /** Provider Id */
+            provider_id?: string | null;
+            /** Sample Limit */
+            sample_limit?: number | null;
+            /** Source Table */
+            source_table?: string | null;
+            /** Sql Column */
+            sql_column?: string | null;
+            /** Status Column */
+            status_column?: string | null;
+            /** Success Statuses */
+            success_statuses?: string[] | null;
+            /** Time Column */
+            time_column?: string | null;
+        };
+        /** DiscoveryConfigView */
+        DiscoveryConfigView: {
+            /** Caller Column */
+            caller_column?: string | null;
+            /** Database Column */
+            database_column?: string | null;
+            /** Dialect Column */
+            dialect_column?: string | null;
+            /** Lookback Days */
+            lookback_days: number;
+            /** Max Fk Candidates */
+            max_fk_candidates: number;
+            /** Max Queries */
+            max_queries: number;
+            /** Min Frequency */
+            min_frequency: number;
+            /** Min Inclusion Ratio */
+            min_inclusion_ratio: number;
+            /** Model */
+            model?: string | null;
+            /**
+             * Preset
+             * @enum {string}
+             */
+            preset: "doris_audit_log" | "dtb_tracking_table";
+            /** Presets */
+            presets?: {
+                [key: string]: components["schemas"]["DiscoveryPresetTemplate"];
+            };
+            /** Probe Concurrency */
+            probe_concurrency: number;
+            /** Probe Timeout Seconds */
+            probe_timeout_seconds: number;
+            /** Provider Id */
+            provider_id?: string | null;
+            /** Sample Limit */
+            sample_limit: number;
+            /** Source Table */
+            source_table: string;
+            /** Sql Column */
+            sql_column: string;
+            /** Status Column */
+            status_column: string;
+            /** Success Statuses */
+            success_statuses: string[];
+            /** Time Column */
+            time_column: string;
+        };
+        /** DiscoveryPresetTemplate */
+        DiscoveryPresetTemplate: {
+            /** Caller Column */
+            caller_column?: string | null;
+            /** Database Column */
+            database_column?: string | null;
+            /** Dialect Column */
+            dialect_column?: string | null;
+            /**
+             * Preset
+             * @enum {string}
+             */
+            preset: "doris_audit_log" | "dtb_tracking_table";
+            /** Source Table */
+            source_table: string;
+            /** Sql Column */
+            sql_column: string;
+            /** Status Column */
+            status_column: string;
+            /** Success Statuses */
+            success_statuses: string[];
+            /** Time Column */
+            time_column: string;
         };
         /** DocumentLink */
         DocumentLink: {
@@ -4690,6 +4821,72 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_project_discovery_config_api_v1_projects__project_id__discovery_config_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DiscoveryConfigView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    put_project_discovery_config_api_v1_projects__project_id__discovery_config_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DiscoveryConfigUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DiscoveryConfigView"];
+                };
             };
             /** @description Validation Error */
             422: {
