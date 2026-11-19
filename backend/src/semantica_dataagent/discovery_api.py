@@ -73,6 +73,8 @@ _TEMPLATE_FIELD_KEYS: tuple[tuple[str, str], ...] = (
 
 
 class DiscoveryPresetTemplate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     preset: DiscoveryPreset
     source_table: str
     sql_column: str
@@ -85,6 +87,8 @@ class DiscoveryPresetTemplate(BaseModel):
 
 
 class DiscoveryConfigView(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     preset: DiscoveryPreset
     source_table: str
     sql_column: str
@@ -444,6 +448,8 @@ class DiscoveryRunTrigger(BaseModel):
 
 
 class DiscoveryCandidateView(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     id: str
     run_id: str
     project_id: str
@@ -458,6 +464,8 @@ class DiscoveryCandidateView(BaseModel):
 
 
 class DiscoveryRunView(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     id: str
     project_id: str
     status: DiscoveryRunStatus
