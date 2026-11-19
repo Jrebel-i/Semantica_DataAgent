@@ -1,0 +1,15 @@
+version: 1
+tables:
+  hive_prod.dwd.dwd_orders:
+    catalog: hive_prod
+    database: dwd
+    name: dwd_orders
+    instructions: "按天全量分区订单明细表，查询须包含 dt 分区裁剪条件。"
+fields:
+  hive_prod.dwd.dwd_orders.pay_amount_cny:
+    catalog: hive_prod
+    database: dwd
+    table: dwd_orders
+    name: pay_amount_cny
+    synonyms: ["实付金额", "成交实付"]
+    instructions: "净销售额计算需扣除 refund_amount_cny。"

@@ -111,9 +111,10 @@ test("downloads the authenticated skill using the attachment filename", async ()
       }),
   );
   vi.stubGlobal("fetch", fetcher);
+  const createObjectURL = vi.fn(() => "blob:skill");
   Object.defineProperty(URL, "createObjectURL", {
     configurable: true,
-    value: vi.fn(() => "blob:skill"),
+    value: createObjectURL,
   });
   Object.defineProperty(URL, "revokeObjectURL", {
     configurable: true,
@@ -137,6 +138,10 @@ test("downloads the authenticated skill using the attachment filename", async ()
     }),
   );
   await waitFor(() => expect(downloaded).toBe("dataagent-retrieval-SKILL.md"));
-  expect(URL.createObjectURL).toHaveBeenCalledWith(expect.any(Blob));
+  expect(createObjectURL).toHaveBeenCalledTimes(1);
+  const [createdBlob] = createObjectURL.mock.calls[0] as unknown as [Blob];
+  expect(createdBlob).toBeTruthy();
+  expect(createdBlob.size).toBe(7);
+  expect(await createdBlob.text()).toBe("# skill");
   expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:skill");
 });

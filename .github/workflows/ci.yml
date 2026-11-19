@@ -1,0 +1,106 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - master
+      - "phase-*"
+  pull_request:
+
+jobs:
+  backend-lint:
+    name: Backend Lint & Format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+      - name: Sync backend dependencies
+        run: uv sync --directory backend --locked
+      - name: Run ruff check and format check
+        run: |
+          uv run --directory backend ruff check src tests ../scripts/verify_phase_5_to_9.py ../tests/test_deploy_manifests.py
+          uv run --directory backend ruff format --check src tests ../scripts/verify_phase_5_to_9.py ../tests/test_deploy_manifests.py
+
+  backend-test:
+    name: Backend & Guardian Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      DATAAGENT_AGENT_MODE: local
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure git identity for override tests
+        run: |
+          git config --global user.name "ci-runner"
+          git config --global user.email "ci-runner@example.invalid"
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+      - name: Sync backend dependencies
+        run: uv sync --directory backend --locked
+      - name: Run root guardian and manifest tests
+        run: uv run --directory backend pytest ../tests/ -q
+      - name: Run Phase 5-9 verification asset self-test
+        run: |
+          uv run --directory backend python ../scripts/verify_phase_5_to_9.py --self-test
+          uv run --directory backend python ../scripts/verify_phase_5_to_9.py --dry-run --phases all
+      - name: Run backend test suite
+        run: DATAAGENT_AGENT_MODE=local uv run --directory backend pytest -q
+
+  contract-and-migrations:
+    name: OpenAPI Contract & Alembic Migrations
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - name: Sync backend dependencies (minimal)
+        run: uv sync --directory backend --locked --no-dev
+      - name: Verify single Alembic head
+        run: |
+          uv run --directory backend python -c "
+          from alembic.config import Config
+          from alembic.script import ScriptDirectory
+          cfg = Config()
+          cfg.set_main_option('script_location', 'src/semantica_dataagent/migrations')
+          heads = ScriptDirectory.from_config(cfg).get_heads()
+          assert len(heads) == 1, f'Expected single Alembic head, got {heads}'
+          print('Alembic head:', heads)
+          "
+      - name: Install web dependencies & verify OpenAPI zero drift
+        run: |
+          pnpm --dir web install --frozen-lockfile
+          pnpm --dir web check:types
+
+  web-check:
+    name: Web Format, Test & Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - name: Install web dependencies
+        run: pnpm --dir web install --frozen-lockfile
+      - name: Check formatting, unit tests, and production build
+        run: |
+          pnpm --dir web format:check
+          pnpm --dir web test
+          pnpm --dir web build

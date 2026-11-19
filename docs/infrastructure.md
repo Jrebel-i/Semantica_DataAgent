@@ -132,3 +132,15 @@ The script performs Cypher, creates and deletes a uniquely named Milvus collecti
 ## 直接运行与会话运行时
 
 按 `docs/code-standards.md` 的“运行应用”初始化并启动服务。默认 `DATAAGENT_AGENT_MODE=sandbox` 使用 Docker；先构建 `docker build -t semantica-dataagent-agent-runner:1.2.0 deploy/agent-runner`。也可显式设置 `DATAAGENT_AGENT_MODE=docker`。Docker 会话使用 internal 网络和仅转发模型及 MCP 的中继；目标在每轮解析，容器通过 hosts 访问中继。可信开发调试可设置 `DATAAGENT_AGENT_MODE=local` 使用本机进程，该模式没有隔离。Kubernetes 使用 `DATAAGENT_AGENT_MODE=k8s`，部署方式见上文。
+
+## 第 5～9 期升级核对与验收
+
+1. **数据库自动迁移与启动自愈路径（`0037` → `0041`）**：
+   - 第 8、9 期新增迁移 `0038`～`0041`（涵盖 Git 修正覆盖层策略、问答轨迹、演化运行与检查点、个人 DTB 令牌以及知识发现运行/候选表）。`serve` 启动前会自动将旧库备份为 `/data/dataagent.db.bak-<UTC 时间戳>` 并升级至单一 head（`0041`）。
+   - 启动阶段自动依次执行 `migrate_legacy_metadata_overrides`（将历史表内覆盖平滑迁入项目源目录 `overrides/semantic_overrides.yaml`）、`cleanup_candidate_generations`、`recover_interrupted_evolution_runs` 与 `recover_interrupted_discovery_runs`。
+2. **单副本 `Recreate` 硬约束（`deploy/k8s/app/application.yaml`）**：
+   - 应用 PVC（`dataagent-data`）为 `ReadWriteOnce` 挂载 SQLite 与项目 Git 源目录，且进程内常驻 `build_queue`、`evolution_scheduler` 与 `discovery_dispatcher`；部署必须保持 `replicas: 1` 与 `strategy.type: Recreate`，不可直接水平扩容为多副本。
+3. **跨 `0038`～`0041` 回滚注意事项**：
+   - 如需回滚到第 4 期旧镜像，必须严格按照上文回滚步骤停 Pod 并恢复迁移前生成的 `/data/dataagent.db.bak-<UTC>` 备份，同时清理 `-wal`/`-shm`；源目录中的 `overrides/semantic_overrides.yaml` 由 Git 版本化管理，不受数据库回滚破坏。
+4. **升级后验收流程**：
+   - 镜像发布升级完成后，依次按 [第 5～9 期分期 Review 与测试环境验收手册](validation/phase-5-to-9-runbook.md) 与 `scripts/verify_phase_5_to_9.py` 完成连通性、端到端 Harness、在线集群契约与真实 DTB/LLM 闭环验证。

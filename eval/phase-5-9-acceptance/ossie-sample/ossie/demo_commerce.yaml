@@ -1,0 +1,138 @@
+version: "0.3.0.dev0"
+
+name: phase5_demo_commerce
+description: 第 5～9 期验收专用电商核心 Apache Ossie 语义模型样例
+ai_context:
+  instructions: "优先使用 dwd_orders 与 dim_city 关联分析分城市交易与净销售额。"
+
+datasets:
+  - name: dwd_orders
+    source: hive_prod.dwd.dwd_orders
+    primary_key: [order_id]
+    description: 电商核心订单明细宽表（含分区日期、城市编码、实付金额与退款金额）
+    ai_context:
+      synonyms: ["订单明细表", "成交宽表"]
+    fields:
+      - name: dt
+        expression:
+          sql: dt
+        description: 订单支付分区日期（yyyy-MM-dd）
+        datatype: String
+        dimension:
+          is_time: true
+        nonportable_extensions:
+          - vendor_name: SEMANTICA_DATAAGENT
+            data:
+              partition: true
+              raw_type: string
+        ai_context:
+          synonyms: ["账期", "支付日期"]
+      - name: order_id
+        expression:
+          sql: order_id
+        description: 订单主键编号
+        datatype: Integer
+        nonportable_extensions:
+          - vendor_name: SEMANTICA_DATAAGENT
+            data:
+              partition: false
+              raw_type: bigint
+      - name: city_code
+        expression:
+          sql: city_code
+        description: 下单城市三字码，关联 dim_city.city_code
+        datatype: String
+        dimension:
+          is_time: false
+        nonportable_extensions:
+          - vendor_name: SEMANTICA_DATAAGENT
+            data:
+              partition: false
+              raw_type: string
+      - name: pay_amount_cny
+        expression:
+          sql: pay_amount_cny
+        description: 买家实付金额（人民币，未扣除退款）
+        datatype: Decimal
+        nonportable_extensions:
+          - vendor_name: SEMANTICA_DATAAGENT
+            data:
+              partition: false
+              raw_type: decimal(18,2)
+        ai_context:
+          synonyms: ["实付金额", "成交实付"]
+      - name: refund_amount_cny
+        expression:
+          sql: refund_amount_cny
+        description: 累计成功退款金额（人民币）
+        datatype: Decimal
+        nonportable_extensions:
+          - vendor_name: SEMANTICA_DATAAGENT
+            data:
+              partition: false
+              raw_type: decimal(18,2)
+      - name: order_status
+        expression:
+          sql: order_status
+        description: 订单状态（paid / shipped / completed / cancelled）
+        datatype: String
+        dimension:
+          is_time: false
+        nonportable_extensions:
+          - vendor_name: SEMANTICA_DATAAGENT
+            data:
+              partition: false
+              raw_type: string
+
+  - name: dim_city
+    source: hive_prod.dim.dim_city
+    primary_key: [city_code]
+    description: 城市行政区域维度表
+    ai_context:
+      synonyms: ["城市维表"]
+    fields:
+      - name: city_code
+        expression:
+          sql: city_code
+        description: 城市三字码主键
+        datatype: String
+        dimension:
+          is_time: false
+        nonportable_extensions:
+          - vendor_name: SEMANTICA_DATAAGENT
+            data:
+              partition: false
+              raw_type: string
+      - name: city_name
+        expression:
+          sql: city_name
+        description: 城市中文名称
+        datatype: String
+        dimension:
+          is_time: false
+      - name: region_name
+        expression:
+          sql: region_name
+        description: 所属大区战区
+        datatype: String
+        dimension:
+          is_time: false
+
+relationships:
+  - name: fk_orders_city
+    from: dwd_orders
+    to: dim_city
+    from_columns: [city_code]
+    to_columns: [city_code]
+    ai_context:
+      synonyms: ["订单城市关联"]
+
+metrics:
+  - name: net_gmv
+    expression:
+      sql: SUM(dwd_orders.pay_amount_cny - dwd_orders.refund_amount_cny)
+    description: 净销售额（实付金额扣除累计成功退款金额，统计有效订单）
+    datatype: Decimal
+    ai_context:
+      synonyms: ["净销售额", "净 GMV"]
+      instructions: "统计日净销售额时须限定 dt 分区并排除 order_status = 'cancelled'。"

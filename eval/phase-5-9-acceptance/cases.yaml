@@ -1,0 +1,353 @@
+# 第 5～9 期架构能力验收测试案例清单
+# 口径严格对齐 GLOSSARY.md：使用「查询历史」「外键关系」「数据探活」「知识发现运行」「纠错提案」「评测题集」「修正覆盖层」「候选知识代」「问答轨迹」。
+
+- id: p5-01
+  phase: 5
+  title: Apache Ossie 模型导入三路分流与外键 RELATES_TO 入图
+  category: 语义模型导入
+  execution_mode: harness_e2e
+  preconditions:
+    - 已创建数仓型项目并启用 ossie 源适配器
+    - 已准备 eval/phase-5-9-acceptance/ossie-sample/ossie/demo_commerce.yaml
+  steps:
+    - 上传 demo_commerce.yaml 至项目源目录 ossie/ 并触发全量构建
+    - 检查构建结果表数量、RELATES_TO 边及派生文档生成情况
+  expected:
+    - dwd_orders 与 dim_city 写入 SDATable，分流生成受保护派生文档
+    - fk_orders_city 生成强连接 RELATES_TO 边，保留 partition 扩展属性
+  pass_criteria: 构建状态 succeeded，RELATES_TO 外键关系与派生文档均可检索到
+
+- id: p5-02
+  phase: 5
+  title: find_join_path 强连接与 validate_sql 分区校验
+  category: MCP 工具链
+  execution_mode: harness_e2e
+  preconditions:
+    - p5-01 已完成构建且存在当前知识代
+  steps:
+    - 调用 MCP find_join_path(["hive_prod.dwd.dwd_orders", "hive_prod.dim.dim_city"])
+    - 调用 MCP validate_sql 分别检验缺 dt 分区过滤与完整 JOIN 分区 SQL
+  expected:
+    - find_join_path 返回 fk_orders_city 且 strength="strong"
+    - 缺 dt 的 SQL 被指出缺少分区过滤，完整 SQL 通过静态校验
+  pass_criteria: 返回强连接路径且分区列识别来自 Ossie nonportable_extensions
+
+- id: p5-03
+  phase: 5
+  title: Ossie 派生文档只读保护（禁止界面或 MCP 纠错）
+  category: 知识治理边界
+  execution_mode: live_cluster_api
+  preconditions:
+    - 已构建包含 Ossie 派生文档的数仓型项目
+  steps:
+    - 对派生文档路径提交 POST /api/v1/corrections/draft 或 POST /api/v1/corrections
+  expected:
+    - 草稿接口标记 source_generated=true，直接提交纠错被服务端拒绝（422）
+  pass_criteria: 无法通过纠错提案篡改确定性生成的派生文档
+
+- id: p5-04
+  phase: 5
+  title: REST 导出 Apache Ossie 双格式（YAML / JSON）校验
+  category: 语义模型导出
+  execution_mode: harness_e2e
+  preconditions:
+    - 当前数仓型项目已完成构建且包含物理表、字段、分区属性与外键关系
+  steps:
+    - 调用 GET /api/v1/projects/{id}/export/ossie?format=yaml
+    - 调用 GET /api/v1/projects/{id}/export/ossie?format=json
+  expected:
+    - 两份输出均以 version="0.3.0.dev0" 导出，并保留 nonportable_extensions 分区标记
+  pass_criteria: 导出内容均通过官方 schemas/ossie/ossie-schema.json 校验
+
+- id: p5-05
+  phase: 5
+  title: CLI export-ossie 往返一致性验证
+  category: CLI 工具
+  execution_mode: harness_e2e
+  preconditions:
+    - 目标项目已完成构建且数据库可访问
+  steps:
+    - 执行 semantica-dataagent export-ossie --project <id> -o out.yaml
+    - 使用 OssieAdapter 重新解析 out.yaml
+  expected:
+    - 输出文件写盘原子完成，重新解析得到的表、字段、外键关系与原知识代一致
+  pass_criteria: CLI 退出码 0 且往返解析实体无缺失
+
+- id: p6-01
+  phase: 6
+  title: convert-dtb-ossie 混合维度落盘（低基数内联 vs 高基数 dimension_values.json）
+  category: 离线转换管线
+  execution_mode: harness_e2e
+  preconditions:
+    - 本地准备含低基数维表（<=20 行）与高基数维表（>20 行）的 DTB 快照目录
+  steps:
+    - 执行 semantica-dataagent convert-dtb-ossie --source-dir <in> --output-dir <out> --low-cardinality-limit 20 --sample-limit 5
+  expected:
+    - 低基数维度值有序内联写入字段 ai_context.instructions
+    - 高基数维度仅保留前 5 个示例，完整行带 row_id 写入 canonical/dimension_values.json
+  pass_criteria: 生成的 Ossie 模型通过 Schema 校验且 dimension_values.json 保留完整 row_id
+
+- id: p6-02
+  phase: 6
+  title: 任务 SQL 等值 JOIN 与分组/窗口主键确定性提炼
+  category: SQL 结构提炼
+  execution_mode: harness_e2e
+  preconditions:
+    - DTB 任务信息包含 Spark/Hive 多表等值 JOIN 与 GROUP BY / ROW_NUMBER() = 1 去重写法
+  steps:
+    - 运行 convert-dtb-ossie 并检查输出的 relationships 与 dataset.primary_key
+  expected:
+    - 从高可信等值 JOIN 提炼外键关系，从一致去重键推导 primary_key
+  pass_criteria: 输出 Ossie 模型包含预期的外键关系与主键声明
+
+- id: p6-03
+  phase: 6
+  title: DtbOssiePuller 在线定时/手动拉取完整闭环（真实 DTB）
+  category: 在线拉取联动
+  execution_mode: live_cluster_dtb
+  preconditions:
+    - 测试集群已有可用 DTB 服务地址与有效拉取凭据
+  steps:
+    - 在数仓型项目中配置 DtbOssiePuller 并手动触发一次拉取与构建
+  expected:
+    - 拉取记录状态 succeeded，源目录生成 ossie/ 与 canonical/dimension_values.json 并完成构建
+  pass_criteria: 拉取与后续构建均成功且 Neo4j 写入 SDADimensionValue 节点
+
+- id: p6-04
+  phase: 6
+  title: DTB 增量更新保留高基数维度值与修正覆盖层不退化
+  category: 构建一致性
+  execution_mode: live_cluster_dtb
+  preconditions:
+    - 已存在人工审定写入 overrides/semantic_overrides.yaml 的说明与同义词
+  steps:
+    - 再次触发 DtbOssiePuller 拉取并完成构建
+  expected:
+    - 基础模型更新但人工修正覆盖层保持生效，高基数维度值不丢失
+  pass_criteria: 检索表/字段说明仍含人工修正内容且 lookup_dim_values 命中高基数维值
+
+- id: p6-05
+  phase: 6
+  title: DTB Shell 任务展开（Livy / Beeline 变量替换）提炼上游依赖
+  category: 任务解析
+  execution_mode: harness_e2e
+  preconditions:
+    - 快照中包含 shell 类型任务调用 submit_sql_and_wait 或 beeline -e 并含变量赋值
+  steps:
+    - 执行 convert-dtb-ossie 与四阶段构建
+  expected:
+    - Shell 变量被展开并成功解析出真实上游输入输出表
+  pass_criteria: 产出的 DEPENDS_ON 与 ai_context.instructions 含真实上游物理表名
+
+- id: p7-01
+  phase: 7
+  title: 数仓型（18 工具）与文档型（8 工具）项目硬隔离
+  category: 项目类型边界
+  execution_mode: live_cluster_api
+  preconditions:
+    - 分别存在 active 状态的数仓型项目与文档型项目
+  steps:
+    - 在文档型项目下调用 GET /api/v1/projects/{doc_id}/export/ossie 与 GET /api/v1/projects/{doc_id}/discovery-config
+    - 通过 /mcp/ 初始化文档型项目会话并列出可用工具
+  expected:
+    - Ossie 导出与冷启动发现配置接口均返回 422 拒绝文档型项目
+    - 文档型项目仅开放 8 个文档与治理工具，屏蔽 SQL 与取数工具
+  pass_criteria: 服务端接口与 MCP 工具清单均严格遵守双类型边界
+
+- id: p7-02
+  phase: 7
+  title: 项目归档冻结 409 与恢复、永久删除保护
+  category: 生命周期管理
+  execution_mode: harness_e2e
+  preconditions:
+    - 存在可操作的非默认测试项目
+  steps:
+    - 调用 POST /api/v1/projects/{id}/archive 归档项目
+    - 验证提问/构建/配置修改均返回 409，随后调用 restore 恢复为 active
+    - 再次归档后执行五步删除并验证 204 返回及审计表留痕
+  expected:
+    - 归档期间所有写入与 MCP/取数入口统一返回 409
+    - 删除前需先归档且核对项目名，删除后项目与关联运行数据清理干净
+  pass_criteria: 归档冻结、恢复与清理流程无残留错误
+
+- id: p7-03
+  phase: 7
+  title: 前端全局项目切换、精简侧栏导航与项目管理员独立入口
+  category: 工作台 UI/UX
+  execution_mode: manual_ui
+  preconditions:
+    - 登录具备多个项目不同角色（admin / member）的测试账号
+  steps:
+    - 切换全局项目选择器，观察知识浏览、构建与项目设置菜单可见性
+    - 以项目管理员（非全局系统管理员）身份打开项目成员、适配器与纠错页
+  expected:
+    - 成员身份隐藏管理入口，项目管理员可独立管理所属项目而不越权访问系统配置
+  pass_criteria: 菜单显隐、路由权限与项目切换无串项目现象
+
+- id: p7-04
+  phase: 7
+  title: 类 Claude + 菜单无边框问答输入栏、外键跳转与派生文档提示
+  category: 工作台 UI/UX
+  execution_mode: manual_ui
+  preconditions:
+    - 浏览器访问已部署前端工作台
+  steps:
+    - 打开新对话与已有对话，操作输入栏 + 菜单（附件、切换项目）及模型/思考强度选择器
+    - 在知识浏览页打开包含外键的表详情页与 Ossie 派生文档页
+  expected:
+    - 已有对话锁定项目/Agent 且无底层布局跳动，表外键支持一键跳转，派生文档明确提示只读
+  pass_criteria: 交互流畅无报错且无样式布局错位
+
+- id: p7-05
+  phase: 7
+  title: 独立 MCP 接入页、动态 Token 示例渲染与个人设置页联动
+  category: 工作台 UI/UX
+  execution_mode: manual_ui
+  preconditions:
+    - 浏览器打开 /mcp-access 与 /personal-settings
+  steps:
+    - 切换显隐令牌、下载检索技能包 SKILL.md，前往个人设置保存与清空个人 DTB 令牌
+  expected:
+    - 技能包按响应头文件名正确下载，个人 DTB 令牌状态实时更新
+  pass_criteria: 下载、复制与个人 DTB 令牌保存清空流程全部正常
+
+- id: p8-01
+  phase: 8
+  title: 对话内自然语言辅助纠错草稿生成与 L1 静态校验
+  category: 知识治理闭环
+  execution_mode: live_cluster_api
+  preconditions:
+    - 已配置 LLM Provider 或使用离线规则解析目标表/字段/外键
+  steps:
+    - 调用 POST /api/v1/corrections/draft 提交结构化纠错意图描述
+  expected:
+    - 返回结构化 structured_patch、unified diff 与通过的 L1 静态校验 gate_report
+  pass_criteria: 非法物理列或语法错误 SQL 被 L1 门禁拦截，合法草稿可直接提交
+
+- id: p8-02
+  phase: 8
+  title: 纠错审批写回 Git 源目录 overrides/semantic_overrides.yaml 与 git revert 回滚
+  category: Git 语义覆盖层
+  execution_mode: live_cluster_api
+  preconditions:
+    - 存在一条 pending 状态的纠错提案
+  steps:
+    - 管理员审批通过提案，检查源目录 overrides/semantic_overrides.yaml 与 Git 提交记录
+    - 管理员在纠错页点击回滚（POST /api/v1/corrections/{id}/revert）
+  expected:
+    - 审批后原子写回源目录并自动触发增量构建，回滚后执行真实 git revert 撤销修正
+  pass_criteria: 审批与回滚均保持 Git 提交历史清晰且无并发冲突
+
+- id: p8-03
+  phase: 8
+  title: 评测题集管理（👍 准确采集、dev/holdout 切分与普通成员留出集脱敏）
+  category: 评测防泄露
+  execution_mode: live_cluster_api
+  preconditions:
+    - 测试项目包含管理员与普通成员令牌
+  steps:
+    - 对已通过 validate_sql 的轮次执行点赞准确或创建 dev/holdout 评测题
+    - 使用普通成员令牌查询 GET /api/v1/eval-questions?project=<id>
+  expected:
+    - 普通成员点赞进入 answer_confirmed=false 待确认队列，管理员确认入 dev 集
+    - 普通成员查询 holdout 题时 reference_sql 返回 null 且 redacted=true
+  pass_criteria: holdout 留出集对非管理员严格脱敏不泄露参考 SQL
+
+- id: p8-04
+  phase: 8
+  title: 问答轨迹挖掘与候选知识代 L1/L2 隔离门禁演化运行（真实 LLM）
+  category: 自主演化
+  execution_mode: live_cluster_llm
+  preconditions:
+    - 目标项目已积累一定量本地问答轨迹与评测题集，并配置可用演化与裁判模型
+  steps:
+    - 配置 GET/PUT /api/v1/projects/{id}/evolution-config 后触发 POST /api/v1/evolution/runs
+    - 等待异步演化运行完成并检查轮次记录、L1/L2 门禁报告与生成提案
+  expected:
+    - 演化运行严格基于隔离候选知识代评估，不污染当前代，且检查点原子推进
+  pass_criteria: 运行状态收口至 accepted/incomplete，门禁报告与提案溯源清晰，无候选代残留
+
+- id: p8-05
+  phase: 8
+  title: 项目级纠错与演化双审批开关生效边界验证
+  category: 治理策略开关
+  execution_mode: live_cluster_api
+  preconditions:
+    - 已存在测试项目
+  steps:
+    - 读取与更新 GET/PUT /api/v1/projects/{id}/correction-policy，关闭或开启双审批开关
+  expected:
+    - 常规提案与演化提案随项目开关决定自动合入或人工审批，历史已决提案不受追朔篡改
+  pass_criteria: 开关读写审计落盘且策略行为与设置一致
+
+- id: p9-01
+  phase: 9
+  title: 未配置个人 DTB 令牌拦截与个人设置引导
+  category: 鉴权与安全边界
+  execution_mode: harness_e2e
+  preconditions:
+    - 当前管理员尚未配置个人 DTB 令牌
+  steps:
+    - 调用 POST /api/v1/discovery/runs 尝试触发知识发现运行
+    - 在前端 /evolution「冷启动发现」页观察提示状态
+  expected:
+    - 服务端返回 400 并明确提示缺少个人 DTB 令牌；前端展示警告与前往个人设置引导链接
+  pass_criteria: 不使用系统全局凭据越权代跑，严格拦截未配置个人令牌的触发请求
+
+- id: p9-02
+  phase: 9
+  title: 查询历史源配置双预设切换、SQL 标识符校验与 ProjectAudit 审计
+  category: 发现配置管理
+  execution_mode: harness_e2e
+  preconditions:
+    - 数仓型测试项目处于 active 状态
+  steps:
+    - 分别切换保存 doris_audit_log 与 dtb_tracking_table 预设
+    - 故意提交含非法字符或分号的 source_table 至 PUT /api/v1/projects/{id}/discovery-config
+  expected:
+    - 合法预设更新返回 200 并写入 project_audit；非法标识符返回 422 被拒绝
+  pass_criteria: 白名单标识符校验严密，防止 SQL 注入配置进入构建阶段
+
+- id: p9-03
+  phase: 9
+  title: source="discovery" 提案来源防伪造与恒定 pending 审批约束
+  category: 治理防绕过
+  execution_mode: live_cluster_api
+  preconditions:
+    - 测试项目已关闭 correction_require_review 与 evolution_require_review
+  steps:
+    - 外部通过 POST /api/v1/corrections 显式传 source="discovery"
+    - 观察内部知识发现运行产出的纠错提案状态
+  expected:
+    - 外部请求直接被 422 拒绝；内部发现运行产出的所有提案状态恒为 pending
+  pass_criteria: 发现提案绝不绕过人工审批直接写回源目录
+
+- id: p9-04
+  phase: 9
+  title: 真实查询历史只读 AST 拉取、脱敏指纹聚合与 QueryAudit 落盘（真实 DTB）
+  category: 查询历史挖掘
+  execution_mode: live_cluster_dtb
+  preconditions:
+    - 当前触发人已在个人设置配置个人 DTB 令牌，且目标项目配置指向测试集群可读的查询历史源
+  steps:
+    - 触发一次知识发现运行（mine_query_history=true，seed_eval_drafts=false）
+    - 检查 QueryAudit 审计表与发现运行结果及候选指标/过滤规则证据
+  expected:
+    - 全程使用 sqlglot AST 只读拼装带 LIMIT 的 SELECT，每条查询记入 QueryAudit
+    - 字面量与凭据完整脱敏，不泄露真实查询参数至候选证据
+  pass_criteria: QueryAudit 与脱敏指纹计数正确，无敏感信息与业务明细落盘
+
+- id: p9-05
+  phase: 9
+  title: 分区裁剪 Fail-Closed（skipped_no_partition）与零业务事实行落盘验证（真实 DTB）
+  category: 受控数据探活
+  execution_mode: live_cluster_dtb
+  preconditions:
+    - 测试项目中存在未定位到有效分区的分区表及可正常探活的维度表/事实表
+  steps:
+    - 触发带 probe_relationships=true 的知识发现运行
+    - 检查候选明细中的 skipped_no_partition 跳过项、passed 项及 SQLite/源目录内容
+  expected:
+    - 找不到可用最新分区的表严格 Fail-Closed 跳过，绝不退化为全表扫描
+    - discovery_candidates 与纠错提案证据仅保留重合率/命中数/探活分区等聚合指标，零事实表数据行
+  pass_criteria: 探活受预算保护、零全表扫描、零事实行持久化，seed_eval_drafts 默认保持关闭
