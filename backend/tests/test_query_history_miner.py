@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 
 import httpx
+
 from semantica_dataagent.agent_types import ProviderConfig
 from semantica_dataagent.discovery_executor import QueryHistoryRecord
 from semantica_dataagent.query_history_miner import (
@@ -404,6 +405,7 @@ def test_mine_handles_bare_table_with_db_cte_malicious_alias_and_no_provider_fal
     tmp_path, monkeypatch
 ):
     from cryptography.fernet import Fernet
+
     from semantica_dataagent import knowledge
     from semantica_dataagent.cli import initialize
 
