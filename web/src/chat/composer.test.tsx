@@ -384,7 +384,8 @@ test("对话中可切换 provider 与模型并在下一条消息使用", async (
   );
   const agent = screen.getByLabelText(messages.askAgent) as HTMLSelectElement;
   expect(agent.disabled).toBe(true);
-  expect(screen.getByText(messages.agentLockedHint)).toBeTruthy();
+  expect(agent.title).toBe(messages.agentLockedHint);
+  expect(screen.queryByText(messages.agentLockedHint)).toBeNull();
   fireEvent.change(screen.getByLabelText(messages.askProvider), {
     target: { value: second.id },
   });
@@ -641,6 +642,9 @@ test("模型不支持图片时图片入口置灰并说明原因，其它文件�
 
   const imageButton = await screen.findByLabelText("添加图片");
   expect((imageButton as HTMLButtonElement).disabled).toBe(true);
+  fireEvent.click(
+    screen.getByRole("button", { name: getMessages("zh").composerMore }),
+  );
   expect(screen.getByText("当前模型不支持图片")).toBeTruthy();
   expect((screen.getByLabelText("添加文件") as HTMLInputElement).disabled).toBe(
     false,

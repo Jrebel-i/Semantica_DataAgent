@@ -4031,30 +4031,6 @@ button.composer-project-chip:not(.ant-btn):disabled {
   border: 0 !important;
   background: transparent !important;
 }
-.composer-lock-hints {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px 12px;
-  max-height: 0;
-  opacity: 0;
-  overflow: hidden;
-  transition:
-    opacity 0.15s ease,
-    max-height 0.15s ease;
-}
-.composer-lock-hints .chat-selector-hint {
-  max-width: none;
-}
-.composer-box:has(
-    select:disabled:hover,
-    button.composer-project-chip:disabled:hover,
-    .composer-attach-button--disabled:hover
-  )
-  .composer-lock-hints {
-  max-height: 32px;
-  margin-top: 2px;
-  opacity: 0.9;
-}
 
 .turn-actions {
   display: flex;

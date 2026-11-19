@@ -224,7 +224,8 @@ test("已有轮次的对话锁定项目并给出换项目提示", async () => {
   expect((screen.getByLabelText("项目") as HTMLSelectElement).disabled).toBe(
     true,
   );
-  expect(screen.getByText("对话已绑定项目，换项目请新建对话")).toBeTruthy();
+  expect(screen.getByTitle("对话已绑定项目，换项目请新建对话")).toBeTruthy();
+  expect(screen.queryByText("对话已绑定项目，换项目请新建对话")).toBeNull();
 });
 
 test("回复中的新对话沿用当前项目选择", async () => {
