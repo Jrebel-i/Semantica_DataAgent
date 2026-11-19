@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+import time
 from pathlib import Path
 
 from cryptography.fernet import Fernet
@@ -165,9 +166,9 @@ def _mock_graph(
 
 
 def test_correction_draft_routing_preview_and_guardrails(tmp_path: Path, monkeypatch):
-    from semantica_dataagent import project_context
+    from semantica_dataagent import knowledge, project_context
     from semantica_dataagent.app import app
-    from semantica_dataagent.db import CorrectionProposal, sessions
+    from semantica_dataagent.db import Build, CorrectionProposal, sessions
     from semantica_dataagent.project_api import create_project_record
 
     admin_token = _configure(tmp_path, monkeypatch)
@@ -253,6 +254,14 @@ def test_correction_draft_routing_preview_and_guardrails(tmp_path: Path, monkeyp
         has_document_links=has_doc_links,
         relates_to_edges=relates_edges,
     )
+
+    def fake_run_build(build_id: int) -> None:
+        with sessions().begin() as db:
+            row = db.get(Build, build_id)
+            if row is not None:
+                row.status = "succeeded"
+
+    monkeypatch.setattr(knowledge, "run_build", fake_run_build)
 
     with TestClient(app, headers=headers) as client:
         assert (
@@ -439,14 +448,21 @@ def test_correction_draft_routing_preview_and_guardrails(tmp_path: Path, monkeyp
         assert approve_res.status_code == 200, approve_res.text
         assert (src_dir / "overrides" / "semantic_overrides.yaml").exists()
 
-        # Finish queued incremental build so project can be archived -> 409 on draft
-        from semantica_dataagent.db import Build
+        # Wait for the queued incremental build to finish so project can be archived -> 409 on draft
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            with sessions()() as db:
+                builds = db.query(Build).filter(Build.project_id == project.id).all()
+                if builds and all(
+                    b.status in {"succeeded", "failed", "cancelled"} for b in builds
+                ):
+                    break
+            time.sleep(0.02)
+        else:
+            raise AssertionError("Timed out waiting for incremental build to finish")
 
-        with sessions().begin() as db:
-            db.query(Build).filter(Build.project_id == project.id).update(
-                {"status": "succeeded"}
-            )
-        assert client.post(f"/api/v1/projects/{project.id}/archive").status_code == 200
+        archive_res = client.post(f"/api/v1/projects/{project.id}/archive")
+        assert archive_res.status_code == 200, archive_res.text
         assert (
             client.post(
                 "/api/v1/corrections/draft",
