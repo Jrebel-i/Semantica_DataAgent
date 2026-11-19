@@ -15,7 +15,7 @@ flowchart TD
         CAN["Canonical 规范数据模型<br/>(schemas/v2: 表/字段/任务/外键/维度值)"]
         OSSIE["Apache Ossie 语义模型<br/>(0.3.0.dev0 YAML/JSON)"]
         DTB["DTB 导出快照与在线拉取<br/>(表信息 / 任务 SQL / 维度数据)"]
-        OVR["元数据修正覆盖层<br/>(metadata_overrides)"]
+        OVR["修正覆盖层<br/>(overrides/semantic_overrides.yaml)"]
     end
 
     subgraph Build["2. 可插拔摄入与构建层"]
@@ -27,7 +27,7 @@ flowchart TD
     end
 
     subgraph Storage["3. 存储与知识代隔离层"]
-        PTR["SQLite 应用库<br/>(项目 / 成员 / 知识代指针 / 会话 / 审批 / 审计)"]
+        PTR["SQLite 应用库<br/>(项目 / 成员 / 知识代指针 / 会话 / 审批 / 演化与发现运行 / 个人 DTB 令牌 / 审计)"]
         NEO["Neo4j 图与全文存储<br/>(SDATable / SDAField / SDADocument / SDATask / SDADimensionValue)<br/>(HAS_FIELD / HAS_DOCUMENT / RELATES_TO / DEPENDS_ON)"]
         MIL["Milvus 向量存储<br/>(每知识代独立集合 sda_&lt;generation&gt;)"]
     end
@@ -37,11 +37,11 @@ flowchart TD
         FUSION["RRF 多路融合检索引擎<br/>(精确 + 全文 + 向量 + 图展开 + 文档关联表加权)"]
         SQLVAL["静态 SQL 校验与连接路径推导<br/>(validate_sql / find_join_path)"]
         EXEC["受控取数执行器 (executors)<br/>(sample_table_data / propose_query / execute_query)"]
-        GOV["知识治理闭环<br/>(propose_correction / report_knowledge_gap)"]
+        GOV["知识治理闭环<br/>(propose_correction / draft / report_knowledge_gap)"]
     end
 
     subgraph Clients["5. 在线 Agent 沙箱与客户端层"]
-        WEB["React 19 Web 工作台<br/>(问答 / 知识浏览 / 源文件 / 构建与拉取 / 纠错审批 / 自主演化 / 项目管理)"]
+        WEB["React 19 Web 工作台<br/>(问答 / 知识浏览 / 源文件 / 构建与拉取 / 纠错审批 / 自主演化与冷启动发现 / 个人设置与 MCP 接入 / 项目管理)"]
         SANDBOX["隔离会话沙箱 (Docker 内网中继 / Kubernetes Pod)<br/>Runner: pi / claude (Claude Code) / codex"]
         LOCAL["外部本地 MCP 客户端<br/>(Claude Desktop / IDE / CLI + ask_dataagent 委托)"]
     end
@@ -50,6 +50,12 @@ flowchart TD
         TRAJ["本地问答轨迹与评测题集<br/>(dev / holdout 隔离防泄露)"]
         EVO["轨迹挖掘与单假设演化运行<br/>(L1 静态 + L2 候选知识代门禁)"]
         EVOSCHED["Fork 安全演化调度器<br/>(thresholds / idle trigger / 检查点)"]
+    end
+
+    subgraph Discovery["7. 冷启动知识发现层 (数仓型项目)"]
+        QHIST["查询历史源<br/>(Doris 审计日志 / DTB 埋点表预设)"]
+        DISCMINE["只读 AST 拉取与脱敏聚类<br/>(个人 DTB 令牌 + QueryAudit + 指纹挖掘)"]
+        PROBE["三段漏斗外键召回与数据探活<br/>(分区裁剪失败关闭 / 零事实行落盘)"]
     end
 
     DTB -->|convert-dtb-ossie / DtbOssiePuller| OSSIE
@@ -71,7 +77,7 @@ flowchart TD
     SCOPE --> SQLVAL
     SCOPE --> EXEC
     SCOPE --> GOV
-    GOV -->|管理员审批写回 Git 源目录 + 触发增量构建| Sources
+    GOV -->|审批或门禁通过写回 Git / 支持 git revert + 增量构建| Sources
 
     WEB <--> SANDBOX
     SANDBOX <-->|仅放行模型网关与 /mcp/| SCOPE
@@ -80,7 +86,13 @@ flowchart TD
     SCOPE --> TRAJ
     TRAJ --> EVO
     EVOSCHED --> EVO
-    EVO -->|临时候选知识代验证通过 → 产出纠错提案| GOV
+    EVO -->|候选知识代对比通过 → 产出纠错提案| GOV
+
+    QHIST --> DISCMINE
+    PTR -.->|个人 DTB 令牌| DISCMINE
+    DISCMINE --> PROBE
+    PROBE -->|强制 pending 纠错提案| GOV
+    PROBE -.->|可选待确认草稿| TRAJ
 ```
 
 ---
@@ -90,7 +102,7 @@ flowchart TD
 ### 1. 多项目隔离与双项目类型体系
 
 - **项目（Project）与类型边界**：
-  - 每个项目是独立的知识库实例，拥有独立的**源目录**、构建队列、**知识代**、插件配置、成员权限與纠错审批，项目之间互不可见、不做跨项目检索。
+  - 每个项目是独立的知识库实例，拥有独立的**源目录**、构建队列、**知识代**、插件配置、成员权限与纠错审批，项目之间互不可见、不做跨项目检索。
   - **数仓型项目（`warehouse`）**：面向数仓知识问答与取数，支持表、字段、任务、上游依赖、外键关系、维度值与知识文档，开放全部 18 个 MCP 工具，注入 `skills/dataagent-retrieval` 检索技能。默认项目 `default`（“业务数据”）为数仓型。
   - **文档型项目（`document`）**：面向平台架构、规范制度等纯文档知识库，仅运行支持 `document` 的源适配器（如 `markdown`），仅开放 8 个文档与治理类 MCP 工具，注入 `skills/dataagent-document-retrieval` 检索技能，从根源屏蔽 SQL 与取数入口。
 - **存储命名与生命周期管理**：
@@ -164,31 +176,37 @@ flowchart TD
   - 在线 Agent 不设工具调用次数与硬性步骤预算，保持完整的自主探索能力；安全边界由容器/Pod 级隔离保障。
   - **Docker 模式**：每个会话运行在独立的 `semantica-dataagent-agent-runner` 容器中，仅连接内部网络；专用中继仅转发至当前会话配置的模型网关与本机 `/mcp/`，无法访问宿主机文件、源目录或其它网络目标。
   - **Kubernetes 模式（`DATAAGENT_AGENT_MODE=k8s`）**：在独立命名空间拉起会话 Pod，由 init 容器配置 iptables 白名单，支持 `DATAAGENT_SESSION_NODES` 节点池亲和调度，且不挂载任何 K8s ServiceAccount Token。
+- **工作台交互与项目管理员视图**：
+  - 提供全局项目选择器、精简侧栏导航与项目管理员独立入口、支持模型与思考强度切换及 `+` 菜单上传的类 Claude 无边框问答输入栏、表详情页外键跳转与派生文档（`ossie/*.md`）只读保护，以及独立 MCP 接入指南页（`/mcp-access`）。
 - **多 Runner、多模型能力探测与多模态附件**：
   - 支持在同一对话中跨轮次切换允许的 Provider / Model 及五档思考强度（`low` / `medium` / `high` / `extra` / `max`），自动映射为 Pi `--thinking`、Claude Code `--effort` 与 Codex `model_reasoning_effort`。
   - 管理员可在界面一键探测模型真实能力（并发红/蓝双图 Vision 识别探测 + 五档思考强度参数兼容性探测）。
   - 支持上传任意文件与图片附件（单文件 `<= 20MB`、单次最多 10 个、合计 `<= 50MB`），存储在会话专属工作区 `work/attachments`（`0600` 权限 + `O_NOFOLLOW` 防符号链接穿越），并在提示词中将附件内容严格标记为不可信数据以防提示词注入。
-- **两阶段取数与下载链接安全复核**：
+- **个人 DTB 令牌与两阶段安全取数**：
+  - 用户可在 **个人设置**（`/personal-settings`，`/api/v1/me/dtb-token`）加密保存个人 DTB 令牌，用于受控取数执行以及按需手动触发**查询历史**拉取与**数据探活**；所有外部 DTB 查询均全量记入 `QueryAudit` 审计表。
   - Agent 只能先调用 `propose_query` 生成查询计划；必须由提问者确认后才可执行。
   - 执行确认、直接下载与短期签名下载链接（`/download-link/...`，30 分钟有效）在每次访问时均按计划自身的 `plan_data.project_id` 实时复核令牌有效性、项目成员资格与项目未归档状态，所有越权或撤销令牌请求均记录 `rejected_401` / `rejected_404` / `rejected_409` 审计。
-- **隐私安全的 Langfuse 观测**：默认仅上报工具名、耗时、状态、表名（仅从可信工具参数或 SQL AST 提取）与去字面量 SQL 指纹；仅当管理员显式开启 `langfuse_capture_content` 时才采集问答正文，且全路径强制过滤 API Key、Token 与密码。
+- **隐私安全的观测与同源问答轨迹采集**：
+  - Langfuse 默认仅上报工具名、耗时、状态、表名（仅从可信工具参数或 SQL AST 提取）与去字面量 SQL 指纹；仅当管理员显式开启 `langfuse_capture_content` 时才采集问答正文，且全路径强制过滤 API Key、Token 与密码。
+  - 系统同步在 MCP 网关与在线对话（`trajectories.py`）同源采集本地**问答轨迹**（仅记录可观测工具调用、SQL 校验结果与澄清交互，不含思维链与业务查询结果行），用于后续诊断与自主演化。
 
-### 6. 知识治理闭环与 Apache Ossie / DTB 语义层互操作
+### 6. 知识治理闭环、Apache Ossie 互操作、自主演化与冷启动发现
 
-- **提案审批与修正覆盖层（[ADR 0004](docs/adr/0004-corrections-via-approved-proposals.md)）**：
-  - 文档纠错经管理员在前端审批通过后，自动以申请人身份写回项目 Git 源目录并触发增量构建。
-  - 表与字段说明纠错写入项目级 `metadata_overrides` 表，每次构建时叠加在导出数据之上，确保人工修正永远不会被下一次 DTB 定时拉取覆盖。
+- **Git 化修正覆盖层与人机协同纠错闭环（[ADR 0004](docs/adr/0004-corrections-via-approved-proposals.md)、[ADR 0009](docs/adr/0009-git-backed-semantic-overrides-and-correction-policy.md)）**：
+  - 全部**知识文档**与数仓语义**修正覆盖层**（表、字段、**外键关系**与已审定**指标**说明，统一存储于项目 Git 源目录 `overrides/semantic_overrides.yaml`）共用统一**纠错提案**管线；每次**构建**时将覆盖层叠加在基础来源之上，不会被下一次 DTB 定时拉取覆盖，并支持管理员在纠错页面一键执行 `git revert` 回滚。
+  - **对话内辅助纠错与评测采集**：支持在对话中通过自然语言生成带 L1 静态校验的结构化纠错草稿（`POST /api/v1/corrections/draft`），并支持对包含已校验 SQL 的对话轮次点击「👍 准确」一键收录入 `dev` **评测题集**（管理员提交直接确认，普通成员提交待确认）。
+  - **项目级双审批开关**：管理员可分别配置人工纠错与演化提案自动通过开关（`correction_require_review` / `evolution_require_review`）；其中来自**知识发现运行**（`source="discovery"`）的提案恒定强制进入 `pending` 待审批队列，不受自动通过开关放行。
 - **Apache Ossie（`0.3.0.dev0`）双向互操作（[ADR 0007](docs/adr/0007-ossie-semantic-interchange.md)）**：
   - `ossie` 源适配器支持导入 Apache Ossie YAML/JSON 模型（兼容 `0.1`/`0.2` 归一化并通过内置官方 `schemas/ossie/ossie-schema.json` 校验），自动完成“物理表与单列映射 → 图节点、逻辑外键 → `RELATES_TO` 边、计算字段/指标/AI 上下文 → 受保护派生文档”三路分流。
   - 支持通过 CLI `export-ossie` 或 `GET /api/v1/projects/{id}/export/ossie` 将当前知识代确定性导出为标准 Ossie 模型（通过 `nonportable_extensions` 无损保留 `partition` 与 `raw_type`）。
 - **DTB → Apache Ossie 全自动提炼与混合维度落盘（[ADR 0008](docs/adr/0008-dtb-to-ossie-pipeline.md)）**：
   - 既可通过 CLI `convert-dtb-ossie` 离线转换，也可在项目配置中启用 `DTB 拉取为 Ossie`（`DtbOssiePuller`）定时拉取。
   - 保守确定性解析任务 SQL 中的物理表等值 JOIN 生成 `relationships`、一致性 `GROUP BY` / `ROW_NUMBER() = 1` 生成 `primary_key`、分区策略与直接上游写入 `dataset.ai_context.instructions`；低基数维度值原样内联进字段说明，高基数维度表保留同行 `row_id` 自动导出至 `dimension_values.json`。
-- **基于问答轨迹的自主演化闭环（[ADR 0009](docs/adr/0009-git-backed-semantic-overrides-and-correction-policy.md)、[ADR 0010](docs/adr/0010-local-trajectories-and-candidate-generation-gate.md)）**：
-  - 将修正覆盖层（`overrides/semantic_overrides.yaml`）迁入项目 Git 源目录版本化管理，并在前端纠错审批、评测题集（`dev` / `holdout` 分层防泄露）与演化看板（`/evolution`）中统一编排。
-  - 从本地采集的问答轨迹中排除 `holdout` 后按 70% 诊断 / 30% 验证保留划分，聚类五类信号（检索绕路、SQL 自修、多轮纠偏、保留多语义**口径变体**的重复澄清与缺口失败），逐轮提出单一因果假设，经 L1 静态校验与 L2 隔离**候选知识代**对比门禁后产出 `source="evolution"` 纠错提案并原子推进批次检查点。
+- **基于问答轨迹的自主演化闭环（[ADR 0010](docs/adr/0010-local-trajectories-and-candidate-generation-gate.md)）**：
+  - 在**评测题集**（严格隔离 `dev` 开发集与 `holdout` 留出集防泄露）守护与演化看板（`/evolution`）中统一编排；从本地采集的**问答轨迹**中排除 `holdout` 后按 70% 诊断 / 30% 验证保留划分，聚类五类信号（检索绕路、SQL 自修、多轮纠偏、保留多语义**口径变体**的重复澄清与缺口失败）。
+  - 逐轮提出单一因果假设，经 L1 静态校验与 L2 隔离**候选知识代**对比门禁后产出 `source="evolution"` 纠错提案并原子推进批次检查点。
 - **基于查询历史挖掘与受控数据探活的冷启动知识发现（[ADR 0011](docs/adr/0011-query-history-mining-and-data-probed-relationships.md)）**：
-  - 为数仓型项目提供可配置**查询历史**源（内置「Doris 审计日志」与「DTB 埋点表」双预设），由管理员使用个人 DTB 令牌按需手动触发只读 AST 拼装拉取并全量记入 `QueryAudit` 审计，经字面量脱敏与结构指纹聚类挖掘高频指标口径、非分区过滤约束与共现等值连接对。
+  - 为数仓型项目提供可配置**查询历史**源（内置「Doris 审计日志」与「DTB 埋点表」双预设），由管理员使用个人 DTB 令牌按需手动触发只读 AST 拼装拉取并全量记入 `QueryAudit` 审计，经字面量脱敏与结构指纹聚类挖掘高频**指标口径**、非分区过滤约束与共现等值连接对。
   - 通过三段漏斗零扫库召回候选**外键关系**，在分区裁剪失败关闭与行数/并发/超时预算内执行两步**数据探活**（仅保留聚合核验证据，绝不落盘业务事实表数据行），产出强制进入 `pending` 待审批的 `source="discovery"` **纠错提案**与可选待确认**评测题集**草稿，并在 `/evolution`「冷启动发现」与 `/corrections`「历史发现」视图闭环审阅。
 
 ---
@@ -198,15 +216,14 @@ flowchart TD
 ```text
 Semantica_DataAgent/
 ├── backend/                  # Python 3.12 后端（FastAPI + SQLAlchemy + Alembic + Semantica + MCP）
-│   ├── alembic/              # SQLite 数据库迁移脚本（幂等升级 + 自动备份）
 │   ├── src/semantica_dataagent/
-│   │   ├── app.py            # FastAPI 路由、插件配置、构建/拉取/纠错/会话入口
+│   │   ├── migrations/       # Alembic SQLite 数据库迁移脚本（当前至 0041，幂等升级 + 自动备份）
+│   │   ├── app.py            # FastAPI 路由、/mcp/ Streamable HTTP MCP 服务端与 18 个工具注册、插件与会话入口
 │   │   ├── cli.py            # semantica-dataagent CLI（init/migrate/serve/eval*/export-ossie/convert-dtb-ossie）
-│   │   ├── knowledge.py      # 全量/增量知识构建编排、记录校验与知识代切换
-│   │   ├── search.py         # RRF 多路融合检索、置信度计算与文档歧义检测
-│   │   ├── sql_validation.py # 基于 sqlglot 的静态 SQL 校验、Catalog 限定与分区检查
-│   │   ├── join_path.py      # 表间外键与血缘连接路径查找 (find_join_path)
-│   │   ├── mcp_server.py     # Streamable HTTP MCP 服务端與 18 个工具实现
+│   │   ├── knowledge.py      # 全量/增量知识构建编排、RRF 多路融合检索核心、置信度与歧义检测及知识代切换
+│   │   ├── table_api.py      # search_knowledge 检索接口、表/字段详情与外键视图
+│   │   ├── sql_validation.py # 基于 sqlglot 的静态 SQL 校验（validate_sql）、Catalog 限定、分区检查与连接路径查找（find_join_path）
+│   │   ├── mcp_context.py / mcp_contract.py / mcp_project.py # MCP 项目作用域解析、统一分页/分片契约与项目隔离鉴权
 │   │   ├── project_api.py    # 多项目生命周期、成员权限、源适配器配置与项目审计
 │   │   ├── project_types.py  # 项目类型（warehouse / document）工具与适配器权威映射表
 │   │   ├── ossie_source.py   # Apache Ossie 源适配器（三路分流）
@@ -215,7 +232,9 @@ Semantica_DataAgent/
 │   │   ├── dtb_source.py     # DTB 快照源适配器
 │   │   ├── dtb_tasks.py      # DTB 任务 SQL 解析与 Shell (Livy/Beeline) 展开
 │   │   ├── dtb_executor.py   # DTB 查询取样与受控取数执行器
+│   │   ├── personal_settings.py / dtb_auth.py # 个人 DTB 令牌加密存储与受控执行鉴权
 │   │   ├── semantic_overrides.py # Git 源目录修正覆盖层管理与构建叠加
+│   │   ├── corrections.py / correction_draft.py # 统一纠错提案管线、审批回写、git revert 与对话内辅助纠错草稿生成
 │   │   ├── eval_questions.py # 评测题集管理（dev / holdout 隔离）
 │   │   ├── trajectories.py   # 网关与对话问答轨迹本地采集与清理
 │   │   ├── trajectory_miner.py # 问答轨迹去重、70/30 防泄露切分与五类信号挖掘
@@ -228,14 +247,15 @@ Semantica_DataAgent/
 │   │   ├── query_history_miner.py # 查询历史脱敏指纹聚类、指标口径与过滤约束挖掘
 │   │   ├── fk_probing.py     # 三段漏斗候选外键关系召回与分区裁剪受控数据探活
 │   │   ├── discovery_runner.py # 知识发现运行状态机、提案收敛与崩溃恢复
+│   │   ├── relationships.py  # 表外键 RELATES_TO 与文档/任务关联调和
 │   │   ├── pull_service.py   # 定时/手动拉取编排与构建入队
 │   │   ├── source_directory.py # Git 源目录上传、预览、原子发布与 SIGKILL 崩溃恢复
 │   │   ├── pi_runner.py / claude_runner.py / codex_runner.py # 三大在线 Agent Runner
-│   │   └── *_stage.py        # 独立构建写入阶段（table / dimension / document / task / relationships）
+│   │   └── *_stage.py        # 独立构建写入阶段（table / dimension / document / task）
 │   └── tests/                # 后端单元、崩溃恢复、Fork 安全、时间契约与端到端测试套件
 ├── web/                      # React 19 + TypeScript + Ant Design 6 + Vite 8 前端工作台
 │   ├── contract/openapi.json # 后端 OpenAPI 契约快照（由 check:types 守护零漂移）
-│   └── src/                  # 问答工作台、知识浏览、源文件管理、构建与拉取、纠错审批、自主演化看板、项目管理与平台设置
+│   └── src/                  # 问答工作台、知识浏览、源文件管理、构建与拉取、纠错审批、自主演化与冷启动发现（DiscoveryPanel）、个人设置（PersonalSettingsPage）、MCP 接入（McpAccessPage）、项目管理与平台设置
 ├── schemas/                  # JSON Schema 定义
 │   ├── v1/ & v2/             # 规范数据模型 Schema（table/field/task/relationship/dimension_value）
 │   └── ossie/                # 官方 Apache Ossie 0.3.0.dev0 JSON Schema
