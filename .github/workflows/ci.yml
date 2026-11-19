@@ -39,7 +39,7 @@ jobs:
       - name: Sync backend dependencies
         run: uv sync --directory backend --locked
       - name: Run root guardian and manifest tests
-        run: uv run --directory backend pytest ../tests/ -q
+        run: backend/.venv/bin/pytest tests/ -q
       - name: Run Phase 5-9 verification asset self-test
         run: |
           uv run --directory backend python ../scripts/verify_phase_5_to_9.py --self-test
