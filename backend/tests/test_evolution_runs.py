@@ -46,7 +46,7 @@ def test_alembic_0040_single_head_upgrade_downgrade_and_running_constraint(
 
     cfg = _alembic_config(db_path)
     heads = ScriptDirectory.from_config(cfg).get_heads()
-    assert heads == ["0040"]
+    assert len(heads) == 1
 
     command.upgrade(cfg, "0039")
     command.upgrade(cfg, "0040")

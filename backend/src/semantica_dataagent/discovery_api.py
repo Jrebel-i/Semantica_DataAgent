@@ -6,13 +6,26 @@ import json
 import math
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from . import project_context
+from . import discovery_executor, discovery_runner, project_context
+from .api_time import UtcDatetime
 from .auth import Requester, current_requester
-from .db import ProjectSetting, Provider, sessions
-from .project_api import actor_name, admin_project_path_scope
+from .db import (
+    DiscoveryCandidate,
+    DiscoveryRun,
+    ProjectSetting,
+    Provider,
+    sessions,
+)
+from .project_api import (
+    _require_project_admin,
+    actor_name,
+    admin_project_path_scope,
+    admin_project_scope,
+    resolve_project_scope,
+)
 from .project_audit import record_project_audit
 from .project_context import (
     ARCHIVED_DETAIL,
@@ -380,3 +393,192 @@ def put_project_discovery_config(
             detail=saved,
         )
         return _build_config_view(scope.project_id, db)
+
+
+DiscoveryRunStatus = Literal["running", "completed", "partial", "failed", "incomplete"]
+DiscoveryCandidateKind = Literal["relationship", "metric", "filter_rule", "eval_draft"]
+DiscoveryCandidateDecision = Literal[
+    "proposed", "skipped", "failed", "deduplicated", "rejected"
+]
+
+
+class DiscoveryRunTrigger(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mine_query_history: bool = True
+    probe_relationships: bool = True
+    seed_eval_drafts: bool = False
+    lookback_days: int | None = Field(default=None, ge=1, le=90)
+    max_queries: int | None = Field(default=None, ge=50, le=20000)
+    min_frequency: int | None = Field(default=None, ge=1, le=500)
+    max_fk_candidates: int | None = Field(default=None, ge=0, le=50)
+    sample_limit: int | None = Field(default=None, ge=100, le=5000)
+    min_inclusion_ratio: float | None = Field(default=None, ge=0.5, le=1.0)
+    probe_timeout_seconds: int | None = Field(default=None, ge=5, le=120)
+    probe_concurrency: int | None = Field(default=None, ge=1, le=2)
+
+    @field_validator(
+        "lookback_days",
+        "max_queries",
+        "min_frequency",
+        "max_fk_candidates",
+        "sample_limit",
+        "probe_timeout_seconds",
+        "probe_concurrency",
+        mode="before",
+    )
+    @classmethod
+    def _reject_bool_for_int(cls, value: Any) -> Any:
+        if isinstance(value, bool):
+            raise ValueError("整数参数不接受布尔值")  # noqa: TRY004 - Pydantic requires ValueError for 422
+        return value
+
+    @field_validator("min_inclusion_ratio", mode="before")
+    @classmethod
+    def _validate_ratio_finite(cls, value: Any) -> Any:
+        if isinstance(value, bool):
+            raise ValueError("包含度阈值不接受布尔值")  # noqa: TRY004 - Pydantic requires ValueError for 422
+        if isinstance(value, (int, float)) and not math.isfinite(float(value)):
+            raise ValueError("包含度阈值必须为有限数值")
+        return value
+
+
+class DiscoveryCandidateView(BaseModel):
+    id: str
+    run_id: str
+    project_id: str
+    candidate_kind: DiscoveryCandidateKind
+    target: str
+    evidence: dict[str, Any] = Field(default_factory=dict)
+    decision: DiscoveryCandidateDecision
+    reason: str | None = None
+    proposal_id: str | None = None
+    eval_question_id: str | None = None
+    created_at: UtcDatetime
+
+
+class DiscoveryRunView(BaseModel):
+    id: str
+    project_id: str
+    status: DiscoveryRunStatus
+    mine_query_history: bool
+    probe_relationships: bool
+    seed_eval_drafts: bool
+    config_snapshot: dict[str, Any] = Field(default_factory=dict)
+    queries_fetched: int = 0
+    templates_clustered: int = 0
+    candidates_recalled: int = 0
+    candidates_probed: int = 0
+    candidates_passed: int = 0
+    candidates_skipped: int = 0
+    candidates_failed: int = 0
+    proposals_created: int = 0
+    eval_drafts_created: int = 0
+    error: str | None = None
+    created_by: str | None = None
+    started_at: UtcDatetime
+    finished_at: UtcDatetime | None = None
+    created_at: UtcDatetime
+
+
+class DiscoveryRunDetailView(DiscoveryRunView):
+    candidates: list[DiscoveryCandidateView] = Field(default_factory=list)
+
+
+def _admin_read_project_scope(
+    requester: Annotated[Requester, Depends(current_requester)],
+    project: Annotated[str | None, Query()] = None,
+) -> ProjectContext:
+    scope = resolve_project_scope(project, requester, allow_frozen=True)
+    return _require_project_admin(scope, requester)
+
+
+@router.post(
+    "/api/v1/discovery/runs",
+    status_code=202,
+    response_model=DiscoveryRunView,
+)
+def trigger_discovery_run(
+    scope: Annotated[ProjectContext, Depends(admin_project_scope)],
+    requester: Annotated[Requester, Depends(current_requester)],
+    body: DiscoveryRunTrigger | None = None,
+):
+    if scope.project_type != "warehouse":
+        raise HTTPException(status_code=422, detail="文档型项目不支持知识发现运行")
+    req = body or DiscoveryRunTrigger()
+    if (
+        not req.mine_query_history
+        and not req.probe_relationships
+        and not req.seed_eval_drafts
+    ):
+        raise HTTPException(status_code=422, detail="请至少开启一项知识发现步骤")
+
+    overrides = {
+        "lookback_days": req.lookback_days,
+        "max_queries": req.max_queries,
+        "min_frequency": req.min_frequency,
+        "max_fk_candidates": req.max_fk_candidates,
+        "sample_limit": req.sample_limit,
+        "min_inclusion_ratio": req.min_inclusion_ratio,
+        "probe_timeout_seconds": req.probe_timeout_seconds,
+        "probe_concurrency": req.probe_concurrency,
+    }
+    try:
+        created = discovery_runner.create_discovery_run(
+            scope.project_id,
+            owner_id=requester.id,
+            mine_query_history=req.mine_query_history,
+            probe_relationships=req.probe_relationships,
+            seed_eval_drafts=req.seed_eval_drafts,
+            overrides=overrides,
+        )
+    except discovery_executor.DiscoveryTokenMissingError as exc:
+        raise HTTPException(status_code=400, detail=exc.detail) from None
+    except discovery_executor.DiscoveryExecutorUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=exc.detail) from None
+    except discovery_runner.DiscoveryUnsupportedProjectError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+    except discovery_runner.DiscoveryFrozenError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    except discovery_runner.DiscoveryConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+
+    discovery_runner.discovery_dispatcher.dispatch_run(created["id"], requester.id)
+    return DiscoveryRunView.model_validate(created)
+
+
+@router.get("/api/v1/discovery/runs", response_model=list[DiscoveryRunView])
+def list_discovery_runs(
+    scope: Annotated[ProjectContext, Depends(_admin_read_project_scope)],
+):
+    with sessions()() as db:
+        runs = (
+            db.query(DiscoveryRun)
+            .filter(DiscoveryRun.project_id == scope.project_id)
+            .order_by(DiscoveryRun.created_at.desc(), DiscoveryRun.id.desc())
+            .all()
+        )
+        return [
+            DiscoveryRunView.model_validate(discovery_runner.serialize_run(r))
+            for r in runs
+        ]
+
+
+@router.get("/api/v1/discovery/runs/{run_id}", response_model=DiscoveryRunDetailView)
+def get_discovery_run(
+    run_id: str,
+    scope: Annotated[ProjectContext, Depends(_admin_read_project_scope)],
+):
+    with sessions()() as db:
+        run = db.get(DiscoveryRun, run_id)
+        if run is None or run.project_id != scope.project_id:
+            raise HTTPException(status_code=404, detail="Discovery run not found")
+        candidates = (
+            db.query(DiscoveryCandidate)
+            .filter(DiscoveryCandidate.run_id == run_id)
+            .order_by(DiscoveryCandidate.created_at.asc(), DiscoveryCandidate.id.asc())
+            .all()
+        )
+        return DiscoveryRunDetailView.model_validate(
+            discovery_runner.serialize_run(run, candidates)
+        )

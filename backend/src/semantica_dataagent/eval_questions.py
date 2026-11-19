@@ -54,7 +54,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 EvalSplit = Literal["dev", "holdout"]
-EvalSource = Literal["manual", "feedback", "correction"]
+EvalSource = Literal["manual", "feedback", "correction", "discovery"]
 EvalDialect = Literal["hive", "spark", "doris"]
 
 NonEmptyText = Annotated[str, Field(min_length=1, max_length=20000, pattern=r"\S")]
@@ -327,7 +327,9 @@ def _row_to_view(row: dict[str, Any], *, is_admin: bool) -> EvalQuestionView:
     answer_confirmed = bool(row.get("answer_confirmed", False))
     source_val = str(row.get("source") or "manual")
     source: EvalSource = (
-        source_val if source_val in ("manual", "feedback", "correction") else "manual"
+        source_val
+        if source_val in ("manual", "feedback", "correction", "discovery")
+        else "manual"
     )
     should_redact = not is_admin and (split == "holdout" or not answer_confirmed)
     if should_redact:
@@ -499,6 +501,61 @@ def upsert_eval_question(
         payload["questions"] = rows
         _atomic_write_yaml(path, payload)
         return dict(target_row)
+
+
+def _normalize_eval_text(value: str) -> str:
+    return " ".join(str(value or "").strip().lower().split())
+
+
+def _normalize_eval_sql_fingerprint(sql: str, dialect: str = "doris") -> str:
+    from .query_history_miner import scrub_and_fingerprint_sql
+
+    _, fp, _, _ = scrub_and_fingerprint_sql(sql, dialect=dialect)
+    if fp:
+        return fp
+    return _normalize_eval_text(sql)
+
+
+def find_duplicate_eval_question(
+    project_id: str,
+    *,
+    question: str,
+    reference_sql: str,
+    dialect: str = "doris",
+    template_fingerprint: str | None = None,
+) -> dict[str, Any] | None:
+    """Return an existing dev or holdout eval question matching normalized question or SQL."""
+    path = project_context.eval_questions_path(project_id)
+    if not path.exists():
+        return None
+    try:
+        _, rows = _read_raw_rows(project_id)
+    except (ValueError, TypeError):
+        return None
+
+    target_q = _normalize_eval_text(question)
+    target_fp = template_fingerprint or _normalize_eval_sql_fingerprint(
+        reference_sql, dialect=dialect
+    )
+    target_sql_norm = _normalize_eval_text(reference_sql)
+
+    for row in rows:
+        existing_q = _normalize_eval_text(str(row.get("question") or ""))
+        if target_q and existing_q == target_q:
+            return row
+        existing_sql = str(row.get("reference_sql") or "").strip()
+        if existing_sql:
+            if (
+                target_sql_norm
+                and _normalize_eval_text(existing_sql) == target_sql_norm
+            ):
+                return row
+            existing_fp = _normalize_eval_sql_fingerprint(
+                existing_sql, dialect=str(row.get("dialect") or dialect)
+            )
+            if target_fp and existing_fp == target_fp:
+                return row
+    return None
 
 
 def find_feedback_question_by_turn(
