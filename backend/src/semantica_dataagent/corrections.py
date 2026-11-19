@@ -48,10 +48,13 @@ logger = logging.getLogger(__name__)
 
 Text = Annotated[str, Field(min_length=1, max_length=20000, pattern=r"\S")]
 TargetKind = Literal["document", "override", "ossie"]
-ProposalSource = Literal["manual", "mcp", "evolution"]
+ProposalSource = Literal["manual", "mcp", "evolution", "discovery"]
 
 _TRUSTED_EVOLUTION_SOURCE: ContextVar[bool] = ContextVar(
     "trusted_evolution_source", default=False
+)
+_TRUSTED_DISCOVERY_SOURCE: ContextVar[bool] = ContextVar(
+    "trusted_discovery_source", default=False
 )
 
 
@@ -63,6 +66,16 @@ def trusted_evolution_source():
         yield
     finally:
         _TRUSTED_EVOLUTION_SOURCE.reset(token)
+
+
+@contextmanager
+def trusted_discovery_source():
+    """Authorize internal ``discovery_runner`` calls to emit ``source='discovery'`` proposals."""
+    token = _TRUSTED_DISCOVERY_SOURCE.set(True)
+    try:
+        yield
+    finally:
+        _TRUSTED_DISCOVERY_SOURCE.reset(token)
 
 
 def _evolution_doc_relpath(target: str) -> str:
@@ -303,11 +316,15 @@ def propose_in_project(
                 raise ValueError("Conversation not found in project")
     if not str(reason or "").strip():
         raise ValueError("Correction reason must not be blank")
-    if source not in {"manual", "mcp", "evolution"}:
+    if source not in {"manual", "mcp", "evolution", "discovery"}:
         raise ValueError(f"Unsupported correction source: {source}")
     if source == "evolution" and not _TRUSTED_EVOLUTION_SOURCE.get():
         raise ValueError(
             "Evolution proposals can only be submitted by the evolution runner"
+        )
+    if source == "discovery" and not _TRUSTED_DISCOVERY_SOURCE.get():
+        raise ValueError(
+            "Discovery proposals can only be submitted by the discovery runner"
         )
 
     parsed_patch = _parse_structured_patch_arg(structured_patch)
@@ -437,11 +454,13 @@ def propose_in_project(
             raise ValueError("Correction does not change the target")
 
     policy = project_context.evolution_policy(project_id)
-    require_review = (
-        policy["evolution_require_review"]
-        if source == "evolution"
-        else policy["correction_require_review"]
-    )
+    if source == "discovery":
+        # Discovery proposals MUST always enter human review regardless of auto-apply switches.
+        require_review = True
+    elif source == "evolution":
+        require_review = policy["evolution_require_review"]
+    else:
+        require_review = policy["correction_require_review"]
     if not require_review:
         with sessions()() as db:
             submitter_name = _token_name(db, requester.id)
@@ -938,7 +957,12 @@ def _merged_gate_report_json(
             if isinstance(existing, dict):
                 if isinstance(existing.get("eval_candidate"), dict):
                     merged_candidate.update(existing["eval_candidate"])
-                for preserved_key in ("l1_gate", "l2_gate", "provenance"):
+                for preserved_key in (
+                    "l1_gate",
+                    "l2_gate",
+                    "provenance",
+                    "discovery_evidence",
+                ):
                     if preserved_key in existing:
                         payload[preserved_key] = existing[preserved_key]
                 existing_checks = existing.get("checks")

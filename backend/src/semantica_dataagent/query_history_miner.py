@@ -1230,22 +1230,20 @@ def mine_query_history(
             )
             if not alias_map:
                 continue
+            extracted_sel_filters = _extract_single_table_filters(sel, alias_map)
             sel_filters = tuple(
-                sorted(
-                    {
-                        pred
-                        for _, _, pred, _ in _extract_single_table_filters(
-                            sel, alias_map
-                        )
-                    }
-                )
+                sorted({pred for _, _, pred, _ in extracted_sel_filters})
             )
+            filter_tables = {
+                info.canonical_name for info, _, _, _ in extracted_sel_filters
+            }
             for proj in sel.expressions:
                 if proj.find(exp.AggFunc) is None:
                     continue
                 expr_sql, ref_tables = _normalize_metric_expression(proj, alias_map)
                 if not ref_tables:
                     continue
+                combined_tables = sorted(set(ref_tables) | filter_tables)
                 topic = _derive_metric_topic(proj, expr_sql, ref_tables)
                 for cohort_id, cohort_exec_count in cohorts_to_emit:
                     mkey = (topic, expr_sql, sel_filters, cohort_id)
@@ -1263,7 +1261,7 @@ def mine_query_history(
                             "fingerprints": [],
                         },
                     )
-                    mslot["tables"].update(ref_tables)
+                    mslot["tables"].update(combined_tables)
                     mslot["execution_count"] += cohort_exec_count
                     mslot["callers"].update(acc.callers)
                     if acc.fingerprint not in mslot["fingerprints"]:

@@ -507,3 +507,67 @@ class EvolutionRound(Base):
     proposal_id: Mapped[str | None]
     started_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC))
     finished_at: Mapped[datetime | None]
+
+
+class DiscoveryRun(Base):
+    """Offline cold-start knowledge discovery run state and aggregate metrics (#304)."""
+
+    __tablename__ = "discovery_runs"
+    __table_args__ = (
+        Index(
+            "ix_discovery_runs_project_created",
+            "project_id",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(primary_key=True, default=lambda: uuid.uuid4().hex)
+    project_id: Mapped[str] = mapped_column(default="default", server_default="default")
+    status: Mapped[str] = mapped_column(default="running", server_default="running")
+    mine_query_history: Mapped[bool] = mapped_column(default=True, server_default="1")
+    probe_relationships: Mapped[bool] = mapped_column(default=True, server_default="1")
+    seed_eval_drafts: Mapped[bool] = mapped_column(default=False, server_default="0")
+    config_snapshot: Mapped[str] = mapped_column(default="{}", server_default="{}")
+    queries_fetched: Mapped[int] = mapped_column(default=0, server_default="0")
+    templates_clustered: Mapped[int] = mapped_column(default=0, server_default="0")
+    candidates_recalled: Mapped[int] = mapped_column(default=0, server_default="0")
+    candidates_probed: Mapped[int] = mapped_column(default=0, server_default="0")
+    candidates_passed: Mapped[int] = mapped_column(default=0, server_default="0")
+    candidates_skipped: Mapped[int] = mapped_column(default=0, server_default="0")
+    candidates_failed: Mapped[int] = mapped_column(default=0, server_default="0")
+    proposals_created: Mapped[int] = mapped_column(default=0, server_default="0")
+    eval_drafts_created: Mapped[int] = mapped_column(default=0, server_default="0")
+    error: Mapped[str | None]
+    created_by: Mapped[str | None]
+    started_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC))
+    finished_at: Mapped[datetime | None]
+    created_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC))
+
+
+class DiscoveryCandidate(Base):
+    """Aggregated candidate outcome record produced by a discovery run (#304)."""
+
+    __tablename__ = "discovery_candidates"
+    __table_args__ = (
+        Index(
+            "ix_discovery_candidates_run_created",
+            "run_id",
+            "created_at",
+        ),
+        Index(
+            "ix_discovery_candidates_project",
+            "project_id",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(primary_key=True, default=lambda: uuid.uuid4().hex)
+    run_id: Mapped[str]
+    project_id: Mapped[str] = mapped_column(default="default", server_default="default")
+    candidate_kind: Mapped[str]
+    target: Mapped[str] = mapped_column(default="", server_default="")
+    evidence_json: Mapped[str] = mapped_column(default="{}", server_default="{}")
+    decision: Mapped[str]
+    reason: Mapped[str | None]
+    proposal_id: Mapped[str | None]
+    eval_question_id: Mapped[str | None]
+    created_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC))
