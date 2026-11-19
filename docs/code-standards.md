@@ -425,3 +425,22 @@ MCP 认证层对绑定项目已归档或删除中的 agent 凭据仍在工具分
   - 项目配置读写统一通过 `project_context.py`（由 `tests/test_project_context_guard.py` 守护），`GET/PUT /api/v1/projects/{project_id}/evolution-config` 默认值严格设定为 `auto_evolve_enabled=false`、`min_trajectories=30`、`min_interval_hours=24`、`max_idle_days=7`、`max_rounds=3`、`max_eval_cases=20`；归档项目 `PUT` 与并发运行 `POST /api/v1/evolution/runs?project=` 统一返回 `409`，所有 REST 响应时间字段使用 `UtcDatetime`（`backend/tests/test_api_time.py` 守护）。
   - 自动触发判定满足 `(new_trajectories >= min_trajectories and elapsed >= min_interval_hours) or (elapsed >= max_idle_days and new_trajectories >= 1)`（包含数据库未配置或零历史首轮场景）；手动触发 `POST /api/v1/evolution/runs` 在 `auto_evolve_enabled=false` 时仍可按需执行，并发冲突返回 `409`。
   - 前端 `/evolution` 页面向 `admin` 与项目管理员开放，支持配置调整、触发运行、查看每轮假设及 L1/L2 门禁详情并跳转至 `/corrections?proposal_id=<id>` 审阅产出纠错提案。
+
+## 查询历史挖掘与受控数据探活冷启动发现
+
+- **项目级查询历史源配置与双预设（[ADR 0011](adr/0011-query-history-mining-and-data-probed-relationships.md)、`discovery_api.py`、`project_context.py`）**：
+  - 全部发现配置读写统一封装在 `project_context.py`（由 `tests/test_project_context_guard.py` 守护）。`GET/PUT /api/v1/projects/{project_id}/discovery-config` 仅面向系统管理员与项目管理员开放，内置 `doris_audit_log` 与 `dtb_tracking_table` 两套预设模板并支持自定义源表名、关键列映射、成功状态值、挖掘/探活预算及可选 `provider_id` / `model`。
+  - 文档型项目返回 `422`；归档或删除中项目 `GET` 可只读查看，`PUT` 与触发运行统一返回 `409 项目已归档`。
+- **AST 只读 SQL 构造与个人 DTB 令牌执行审计（`discovery_executor.py`、`query_history_miner.py`）**：
+  - 查询历史拉取与数据探活 SQL 一律由 `sqlglot` AST 结合合法标识符与状态白名单拼装受控只读 `SELECT` 并强制 `LIMIT`，严禁用户手写任意自由 SQL 模板。
+  - **知识发现运行**仅允许管理员按需手动触发，强制使用触发人保存在个人设置中的个人 DTB 令牌（`GET /api/v1/me/dtb-token`，未配置返回 `400`，绝不在后台定时任务静默借用他人凭据）；所有经 DTB 执行的查询均全量写入 `QueryAudit` 审计记录。拉回的 SQL 经 `sqlglot` 剥离字面量与敏感凭据并按结构指纹聚类，按频次与去重调用方筛选高频口径、非分区默认过滤约束与等值连接对。
+- **三段漏斗外键召回与分区裁剪失败关闭（`fk_probing.py`）**：
+  - 本地零扫库综合查询历史高频等值连接、列名/类型/语义相似度与已有**维度值**值域交集召回 Top-K 候选**外键关系**；随后在单次候选上限、并发上限（1–2）与单条超时预算内执行两步**数据探活**（采样包含度 + `LIMIT 1` JOIN 命中校验）。
+  - 分区表强制仅探测最新单分区，无可用分区、元数据缺失或超时直接失败关闭为 `skipped` / `failed`，绝不退化为全表扫描；非分区表强制子查询采样上限（默认 `1000`）。探活结果仅持久化重合率、采样/命中数、JOIN 状态与探活分区等聚合核验证据，严禁将业务事实表数据行写入知识库或应用数据库。
+- **状态机、强制待审批提案、中断恢复与级联删除（Alembic `0041`、`discovery_runner.py`）**：
+  - `discovery_runs`（部分唯一索引强制每项目至多 1 个 `running`，并发触发返回 `409`）与 `discovery_candidates` 持久化运行状态、阶段计数、脱敏错误摘要与逐条候选决策；所有响应时间字段使用 `UtcDatetime`（`backend/tests/test_api_time.py` 守护）。
+  - `discovery_dispatcher` 提供 `fork_child()` 并向 `os.register_at_fork` 注册（`backend/tests/test_fork_safety.py` 守护）；应用启动恢复器将残留 `running` 安全标为 `incomplete`，`project_deletion.py` 永久删除项目时同步清理发现运行、候选明细与项目级配置。
+  - 挖掘出的指标、过滤约束与探活通过的**外键关系**经 L1 静态校验后通过受信任上下文生成 `source="discovery"` **纠错提案**，**一律强制进入 `pending` 待审批状态**（不受项目自动生效开关影响），携带 `gate_report.discovery_evidence`；管理员触发时显式勾选 `seed_eval_drafts`（默认关闭）才会将通过 `validate_sql` 的脱敏查询写入 `answer_confirmed=false` 的隔离**评测题集**草稿。
+- **工作台接入与样式规范（`DiscoveryPanel.tsx`、`EvolutionPage.tsx`、`CorrectionsPage.tsx`）**：
+  - `/evolution` 页面提供「自主演化」与「冷启动发现」切换视图，支持个人 DTB 令牌就绪检测与 `/personal-settings` 直达链接、预设切换与配置保存、`seed_eval_drafts` 默认未勾选、运行与候选明细及 `/corrections?proposal_id=<id>` 跳转，并带项目切换竞态保护。
+  - `CorrectionsPage.tsx` 支持 `discovery`（「历史发现」）来源筛选、标签与结构化 `discovery_evidence` 核验证据卡片；新增桌面端 CSS 规则统一置于 `web/src/workbench.css` 的 `@media (max-width: 768px)` 之前，且不对 `workbench.css` 运行 Prettier。
