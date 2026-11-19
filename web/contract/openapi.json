@@ -840,6 +840,7 @@
         "type": "object"
       },
       "DiscoveryCandidateView": {
+        "additionalProperties": false,
         "properties": {
           "candidate_kind": {
             "enum": [
@@ -1174,6 +1175,7 @@
         "type": "object"
       },
       "DiscoveryConfigView": {
+        "additionalProperties": false,
         "properties": {
           "caller_column": {
             "anyOf": [
@@ -1321,6 +1323,7 @@
         "type": "object"
       },
       "DiscoveryPresetTemplate": {
+        "additionalProperties": false,
         "properties": {
           "caller_column": {
             "anyOf": [
@@ -1399,6 +1402,7 @@
         "type": "object"
       },
       "DiscoveryRunDetailView": {
+        "additionalProperties": false,
         "properties": {
           "candidates": {
             "items": {
@@ -1673,6 +1677,7 @@
         "type": "object"
       },
       "DiscoveryRunView": {
+        "additionalProperties": false,
         "properties": {
           "candidates_failed": {
             "default": 0,
