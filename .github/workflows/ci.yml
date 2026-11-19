@@ -36,6 +36,8 @@ jobs:
           git config --global user.email "ci-runner@example.invalid"
       - name: Install uv
         uses: astral-sh/setup-uv@v5
+      - name: Preserve uv Python install dir across HOME overrides
+        run: echo "UV_PYTHON_INSTALL_DIR=$(uv python dir)" >> "$GITHUB_ENV"
       - name: Sync backend dependencies
         run: uv sync --directory backend --locked
       - name: Run root guardian and manifest tests
@@ -45,7 +47,12 @@ jobs:
           uv run --directory backend python ../scripts/verify_phase_5_to_9.py --self-test
           uv run --directory backend python ../scripts/verify_phase_5_to_9.py --dry-run --phases all
       - name: Run backend test suite
-        run: DATAAGENT_AGENT_MODE=local uv run --directory backend pytest -q
+        run: |
+          # Stock ubuntu-latest runners lack the locally built semantica-dataagent-agent-runner:1.2.0
+          # image and Docker Desktop's host.docker.internal; run all non-runner-image backend tests here.
+          DATAAGENT_AGENT_MODE=local uv run --directory backend pytest -q \
+            --ignore=tests/test_agent_sandbox_integration.py \
+            -k "not test_session_upload_extracts_into_existing_root_owned_mounts"
 
   contract-and-migrations:
     name: OpenAPI Contract & Alembic Migrations
