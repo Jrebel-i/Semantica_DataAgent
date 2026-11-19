@@ -839,6 +839,470 @@
         "title": "ConversationView",
         "type": "object"
       },
+      "DiscoveryConfigUpdate": {
+        "additionalProperties": false,
+        "properties": {
+          "caller_column": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Caller Column"
+          },
+          "database_column": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Database Column"
+          },
+          "dialect_column": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dialect Column"
+          },
+          "lookback_days": {
+            "anyOf": [
+              {
+                "maximum": 90.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lookback Days"
+          },
+          "max_fk_candidates": {
+            "anyOf": [
+              {
+                "maximum": 50.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Fk Candidates"
+          },
+          "max_queries": {
+            "anyOf": [
+              {
+                "maximum": 20000.0,
+                "minimum": 50.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Queries"
+          },
+          "min_frequency": {
+            "anyOf": [
+              {
+                "maximum": 500.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min Frequency"
+          },
+          "min_inclusion_ratio": {
+            "anyOf": [
+              {
+                "maximum": 1.0,
+                "minimum": 0.5,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min Inclusion Ratio"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "preset": {
+            "anyOf": [
+              {
+                "enum": [
+                  "doris_audit_log",
+                  "dtb_tracking_table"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Preset"
+          },
+          "probe_concurrency": {
+            "anyOf": [
+              {
+                "maximum": 2.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Probe Concurrency"
+          },
+          "probe_timeout_seconds": {
+            "anyOf": [
+              {
+                "maximum": 120.0,
+                "minimum": 5.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Probe Timeout Seconds"
+          },
+          "provider_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider Id"
+          },
+          "sample_limit": {
+            "anyOf": [
+              {
+                "maximum": 5000.0,
+                "minimum": 100.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sample Limit"
+          },
+          "source_table": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Table"
+          },
+          "sql_column": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sql Column"
+          },
+          "status_column": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status Column"
+          },
+          "success_statuses": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Success Statuses"
+          },
+          "time_column": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Time Column"
+          }
+        },
+        "title": "DiscoveryConfigUpdate",
+        "type": "object"
+      },
+      "DiscoveryConfigView": {
+        "properties": {
+          "caller_column": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Caller Column"
+          },
+          "database_column": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Database Column"
+          },
+          "dialect_column": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dialect Column"
+          },
+          "lookback_days": {
+            "title": "Lookback Days",
+            "type": "integer"
+          },
+          "max_fk_candidates": {
+            "title": "Max Fk Candidates",
+            "type": "integer"
+          },
+          "max_queries": {
+            "title": "Max Queries",
+            "type": "integer"
+          },
+          "min_frequency": {
+            "title": "Min Frequency",
+            "type": "integer"
+          },
+          "min_inclusion_ratio": {
+            "title": "Min Inclusion Ratio",
+            "type": "number"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "preset": {
+            "enum": [
+              "doris_audit_log",
+              "dtb_tracking_table"
+            ],
+            "title": "Preset",
+            "type": "string"
+          },
+          "presets": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/DiscoveryPresetTemplate"
+            },
+            "title": "Presets",
+            "type": "object"
+          },
+          "probe_concurrency": {
+            "title": "Probe Concurrency",
+            "type": "integer"
+          },
+          "probe_timeout_seconds": {
+            "title": "Probe Timeout Seconds",
+            "type": "integer"
+          },
+          "provider_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider Id"
+          },
+          "sample_limit": {
+            "title": "Sample Limit",
+            "type": "integer"
+          },
+          "source_table": {
+            "title": "Source Table",
+            "type": "string"
+          },
+          "sql_column": {
+            "title": "Sql Column",
+            "type": "string"
+          },
+          "status_column": {
+            "title": "Status Column",
+            "type": "string"
+          },
+          "success_statuses": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Success Statuses",
+            "type": "array"
+          },
+          "time_column": {
+            "title": "Time Column",
+            "type": "string"
+          }
+        },
+        "required": [
+          "preset",
+          "source_table",
+          "sql_column",
+          "status_column",
+          "time_column",
+          "success_statuses",
+          "lookback_days",
+          "max_queries",
+          "min_frequency",
+          "max_fk_candidates",
+          "sample_limit",
+          "min_inclusion_ratio",
+          "probe_timeout_seconds",
+          "probe_concurrency"
+        ],
+        "title": "DiscoveryConfigView",
+        "type": "object"
+      },
+      "DiscoveryPresetTemplate": {
+        "properties": {
+          "caller_column": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Caller Column"
+          },
+          "database_column": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Database Column"
+          },
+          "dialect_column": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dialect Column"
+          },
+          "preset": {
+            "enum": [
+              "doris_audit_log",
+              "dtb_tracking_table"
+            ],
+            "title": "Preset",
+            "type": "string"
+          },
+          "source_table": {
+            "title": "Source Table",
+            "type": "string"
+          },
+          "sql_column": {
+            "title": "Sql Column",
+            "type": "string"
+          },
+          "status_column": {
+            "title": "Status Column",
+            "type": "string"
+          },
+          "success_statuses": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Success Statuses",
+            "type": "array"
+          },
+          "time_column": {
+            "title": "Time Column",
+            "type": "string"
+          }
+        },
+        "required": [
+          "preset",
+          "source_table",
+          "sql_column",
+          "status_column",
+          "time_column",
+          "success_statuses"
+        ],
+        "title": "DiscoveryPresetTemplate",
+        "type": "object"
+      },
       "DocumentLink": {
         "properties": {
           "category": {
@@ -7935,6 +8399,102 @@
           }
         ],
         "summary": "Delete Project Route"
+      }
+    },
+    "/api/v1/projects/{project_id}/discovery-config": {
+      "get": {
+        "operationId": "get_project_discovery_config_api_v1_projects__project_id__discovery_config_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiscoveryConfigView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Project Discovery Config"
+      },
+      "put": {
+        "operationId": "put_project_discovery_config_api_v1_projects__project_id__discovery_config_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DiscoveryConfigUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiscoveryConfigView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Put Project Discovery Config"
       }
     },
     "/api/v1/projects/{project_id}/evolution-config": {

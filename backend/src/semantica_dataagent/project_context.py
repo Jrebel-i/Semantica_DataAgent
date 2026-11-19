@@ -76,6 +76,89 @@ DEFAULT_EVOLUTION_MAX_IDLE_DAYS = 7
 DEFAULT_EVOLUTION_MAX_ROUNDS = 3
 DEFAULT_EVOLUTION_MAX_EVAL_CASES = 20
 
+DISCOVERY_PRESET_KEY = "discovery_preset"
+DISCOVERY_SOURCE_TABLE_KEY = "discovery_source_table"
+DISCOVERY_SQL_COLUMN_KEY = "discovery_sql_column"
+DISCOVERY_STATUS_COLUMN_KEY = "discovery_status_column"
+DISCOVERY_TIME_COLUMN_KEY = "discovery_time_column"
+DISCOVERY_DATABASE_COLUMN_KEY = "discovery_database_column"
+DISCOVERY_CALLER_COLUMN_KEY = "discovery_caller_column"
+DISCOVERY_DIALECT_COLUMN_KEY = "discovery_dialect_column"
+DISCOVERY_SUCCESS_STATUSES_KEY = "discovery_success_statuses"
+DISCOVERY_LOOKBACK_DAYS_KEY = "discovery_lookback_days"
+DISCOVERY_MAX_QUERIES_KEY = "discovery_max_queries"
+DISCOVERY_MIN_FREQUENCY_KEY = "discovery_min_frequency"
+DISCOVERY_MAX_FK_CANDIDATES_KEY = "discovery_max_fk_candidates"
+DISCOVERY_SAMPLE_LIMIT_KEY = "discovery_sample_limit"
+DISCOVERY_MIN_INCLUSION_RATIO_KEY = "discovery_min_inclusion_ratio"
+DISCOVERY_PROBE_TIMEOUT_SECONDS_KEY = "discovery_probe_timeout_seconds"
+DISCOVERY_PROBE_CONCURRENCY_KEY = "discovery_probe_concurrency"
+DISCOVERY_PROVIDER_ID_KEY = "discovery_provider_id"
+DISCOVERY_MODEL_KEY = "discovery_model"
+
+DISCOVERY_SETTING_KEYS = (
+    DISCOVERY_PRESET_KEY,
+    DISCOVERY_SOURCE_TABLE_KEY,
+    DISCOVERY_SQL_COLUMN_KEY,
+    DISCOVERY_STATUS_COLUMN_KEY,
+    DISCOVERY_TIME_COLUMN_KEY,
+    DISCOVERY_DATABASE_COLUMN_KEY,
+    DISCOVERY_CALLER_COLUMN_KEY,
+    DISCOVERY_DIALECT_COLUMN_KEY,
+    DISCOVERY_SUCCESS_STATUSES_KEY,
+    DISCOVERY_LOOKBACK_DAYS_KEY,
+    DISCOVERY_MAX_QUERIES_KEY,
+    DISCOVERY_MIN_FREQUENCY_KEY,
+    DISCOVERY_MAX_FK_CANDIDATES_KEY,
+    DISCOVERY_SAMPLE_LIMIT_KEY,
+    DISCOVERY_MIN_INCLUSION_RATIO_KEY,
+    DISCOVERY_PROBE_TIMEOUT_SECONDS_KEY,
+    DISCOVERY_PROBE_CONCURRENCY_KEY,
+    DISCOVERY_PROVIDER_ID_KEY,
+    DISCOVERY_MODEL_KEY,
+)
+
+DEFAULT_DISCOVERY_PRESET = "doris_audit_log"
+DEFAULT_DISCOVERY_LOOKBACK_DAYS = 7
+DEFAULT_DISCOVERY_MAX_QUERIES = 5000
+DEFAULT_DISCOVERY_MIN_FREQUENCY = 3
+DEFAULT_DISCOVERY_MAX_FK_CANDIDATES = 20
+DEFAULT_DISCOVERY_SAMPLE_LIMIT = 1000
+DEFAULT_DISCOVERY_MIN_INCLUSION_RATIO = 0.8
+DEFAULT_DISCOVERY_PROBE_TIMEOUT_SECONDS = 30
+DEFAULT_DISCOVERY_PROBE_CONCURRENCY = 2
+
+DISCOVERY_PRESETS: dict[str, dict[str, Any]] = {
+    "doris_audit_log": {
+        "preset": "doris_audit_log",
+        "source_table": "__internal_schema.audit_log",
+        "sql_column": "stmt",
+        "status_column": "state",
+        "time_column": "time",
+        "database_column": "db",
+        "caller_column": "user",
+        "dialect_column": None,
+        "success_statuses": ["EOF", "OK"],
+    },
+    "dtb_tracking_table": {
+        "preset": "dtb_tracking_table",
+        "source_table": "mysql.data_tool_box_emr.query_history",
+        "sql_column": "query_sql",
+        "status_column": "status",
+        "time_column": "create_time",
+        "database_column": "database_name",
+        "caller_column": "user_name",
+        "dialect_column": "engine_type",
+        "success_statuses": ["SUCCESS", "SUCCEEDED", "FINISHED"],
+    },
+}
+
+SQL_IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
+SQL_TABLE_IDENTIFIER_PATTERN = re.compile(
+    r"^[A-Za-z_][A-Za-z0-9_]{0,127}(?:\.[A-Za-z_][A-Za-z0-9_]{0,127}){0,2}$"
+)
+DISCOVERY_STATUS_LITERAL_PATTERN = re.compile(r"^[\w.-]{1,64}$")
+
 PROJECTS_ROOT_ENV = "DATAAGENT_PROJECTS_ROOT"
 PROJECT_ID_PATTERN = re.compile(r"[a-z][a-z0-9]{0,23}")
 GENERATION_PREFIX_PATTERN = re.compile(r"[a-z0-9_]{1,25}")
@@ -213,6 +296,198 @@ def evolution_config(project_id: str, db=None) -> dict[str, Any]:
             rows.get(EVOLUTION_JUDGE_PROVIDER_ID_KEY)
         ),
         "judge_model": _optional_str_setting(rows.get(EVOLUTION_JUDGE_MODEL_KEY)),
+    }
+
+
+def is_valid_sql_identifier(value: Any) -> bool:
+    """Return True if value is a safe single SQL identifier (column or segment)."""
+    return isinstance(value, str) and bool(SQL_IDENTIFIER_PATTERN.fullmatch(value))
+
+
+def is_valid_table_identifier(value: Any) -> bool:
+    """Return True if value is a safe 1-, 2-, or 3-part SQL table identifier."""
+    return isinstance(value, str) and bool(
+        SQL_TABLE_IDENTIFIER_PATTERN.fullmatch(value)
+    )
+
+
+def is_valid_status_literal(value: Any) -> bool:
+    """Return True if value is a safe non-empty status literal without injection chars."""
+    if not isinstance(value, str) or not value:
+        return False
+    if any(ch.isspace() for ch in value) or "--" in value:
+        return False
+    return bool(DISCOVERY_STATUS_LITERAL_PATTERN.fullmatch(value))
+
+
+def _parse_finite_float_setting(
+    raw: str | None, *, default: float, minimum: float, maximum: float
+) -> float:
+    if raw is None or not raw.strip():
+        return default
+    try:
+        parsed = float(raw.strip())
+    except ValueError:
+        return default
+    if not math.isfinite(parsed):
+        return default
+    return max(minimum, min(maximum, parsed))
+
+
+def _parse_discovery_identifier(
+    raw: str | None, *, default: str, is_table: bool = False
+) -> str:
+    if raw is None:
+        return default
+    cleaned = raw.strip()
+    check = is_valid_table_identifier if is_table else is_valid_sql_identifier
+    return cleaned if check(cleaned) else default
+
+
+def _parse_optional_discovery_column(
+    rows: Mapping[str, str], key: str, default: str | None
+) -> str | None:
+    if key not in rows:
+        return default
+    cleaned = (rows.get(key) or "").strip()
+    if not cleaned:
+        return None
+    return cleaned if is_valid_sql_identifier(cleaned) else default
+
+
+def _parse_discovery_success_statuses(
+    raw: str | None, *, default: list[str]
+) -> list[str]:
+    if raw is None or not raw.strip():
+        return list(default)
+    try:
+        parsed = json.loads(raw)
+    except ValueError:
+        return list(default)
+    if not isinstance(parsed, list) or not parsed:
+        return list(default)
+    result: list[str] = []
+    seen: set[str] = set()
+    for item in parsed:
+        if not isinstance(item, str):
+            return list(default)
+        cleaned = item.strip()
+        if not is_valid_status_literal(cleaned):
+            return list(default)
+        if cleaned not in seen:
+            seen.add(cleaned)
+            result.append(cleaned)
+    return result or list(default)
+
+
+def discovery_presets() -> dict[str, dict[str, Any]]:
+    """Return deep copies of the built-in query-history preset templates."""
+    return {
+        name: {**tpl, "success_statuses": list(tpl["success_statuses"])}
+        for name, tpl in DISCOVERY_PRESETS.items()
+    }
+
+
+def discovery_config(project_id: str, db=None) -> dict[str, Any]:
+    """Return a project's query-history and data-probing config with safe defaults."""
+    if db is None:
+        with sessions()() as own:
+            return discovery_config(project_id, own)
+    rows = {
+        row.key: row.value
+        for row in db.query(ProjectSetting)
+        .filter(
+            ProjectSetting.project_id == project_id,
+            ProjectSetting.key.in_(DISCOVERY_SETTING_KEYS),
+        )
+        .all()
+    }
+    raw_preset = _optional_str_setting(rows.get(DISCOVERY_PRESET_KEY))
+    preset = raw_preset if raw_preset in DISCOVERY_PRESETS else DEFAULT_DISCOVERY_PRESET
+    template = DISCOVERY_PRESETS[preset]
+
+    return {
+        "preset": preset,
+        "source_table": _parse_discovery_identifier(
+            rows.get(DISCOVERY_SOURCE_TABLE_KEY),
+            default=template["source_table"],
+            is_table=True,
+        ),
+        "sql_column": _parse_discovery_identifier(
+            rows.get(DISCOVERY_SQL_COLUMN_KEY),
+            default=template["sql_column"],
+        ),
+        "status_column": _parse_discovery_identifier(
+            rows.get(DISCOVERY_STATUS_COLUMN_KEY),
+            default=template["status_column"],
+        ),
+        "time_column": _parse_discovery_identifier(
+            rows.get(DISCOVERY_TIME_COLUMN_KEY),
+            default=template["time_column"],
+        ),
+        "database_column": _parse_optional_discovery_column(
+            rows, DISCOVERY_DATABASE_COLUMN_KEY, template["database_column"]
+        ),
+        "caller_column": _parse_optional_discovery_column(
+            rows, DISCOVERY_CALLER_COLUMN_KEY, template["caller_column"]
+        ),
+        "dialect_column": _parse_optional_discovery_column(
+            rows, DISCOVERY_DIALECT_COLUMN_KEY, template["dialect_column"]
+        ),
+        "success_statuses": _parse_discovery_success_statuses(
+            rows.get(DISCOVERY_SUCCESS_STATUSES_KEY),
+            default=template["success_statuses"],
+        ),
+        "lookback_days": _parse_int_setting(
+            rows.get(DISCOVERY_LOOKBACK_DAYS_KEY),
+            default=DEFAULT_DISCOVERY_LOOKBACK_DAYS,
+            minimum=1,
+            maximum=90,
+        ),
+        "max_queries": _parse_int_setting(
+            rows.get(DISCOVERY_MAX_QUERIES_KEY),
+            default=DEFAULT_DISCOVERY_MAX_QUERIES,
+            minimum=50,
+            maximum=20000,
+        ),
+        "min_frequency": _parse_int_setting(
+            rows.get(DISCOVERY_MIN_FREQUENCY_KEY),
+            default=DEFAULT_DISCOVERY_MIN_FREQUENCY,
+            minimum=1,
+            maximum=500,
+        ),
+        "max_fk_candidates": _parse_int_setting(
+            rows.get(DISCOVERY_MAX_FK_CANDIDATES_KEY),
+            default=DEFAULT_DISCOVERY_MAX_FK_CANDIDATES,
+            minimum=0,
+            maximum=50,
+        ),
+        "sample_limit": _parse_int_setting(
+            rows.get(DISCOVERY_SAMPLE_LIMIT_KEY),
+            default=DEFAULT_DISCOVERY_SAMPLE_LIMIT,
+            minimum=100,
+            maximum=5000,
+        ),
+        "min_inclusion_ratio": _parse_finite_float_setting(
+            rows.get(DISCOVERY_MIN_INCLUSION_RATIO_KEY),
+            default=DEFAULT_DISCOVERY_MIN_INCLUSION_RATIO,
+            minimum=0.5,
+            maximum=1.0,
+        ),
+        "probe_timeout_seconds": _parse_int_setting(
+            rows.get(DISCOVERY_PROBE_TIMEOUT_SECONDS_KEY),
+            default=DEFAULT_DISCOVERY_PROBE_TIMEOUT_SECONDS,
+            minimum=5,
+            maximum=120,
+        ),
+        "probe_concurrency": _parse_int_setting(
+            rows.get(DISCOVERY_PROBE_CONCURRENCY_KEY),
+            default=DEFAULT_DISCOVERY_PROBE_CONCURRENCY,
+            minimum=1,
+            maximum=2,
+        ),
+        "provider_id": _optional_str_setting(rows.get(DISCOVERY_PROVIDER_ID_KEY)),
+        "model": _optional_str_setting(rows.get(DISCOVERY_MODEL_KEY)),
     }
 
 
