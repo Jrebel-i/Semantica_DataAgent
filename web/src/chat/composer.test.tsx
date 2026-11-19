@@ -384,8 +384,7 @@ test("对话中可切换 provider 与模型并在下一条消息使用", async (
   );
   const agent = screen.getByLabelText(messages.askAgent) as HTMLSelectElement;
   expect(agent.disabled).toBe(true);
-  // tooltip 已移除：锁定时 title 为空，避免 hover 引起布局抖动
-  expect(agent.title).toBe("");
+  expect(agent.title).toBe(messages.agentLockedHint);
   expect(screen.queryByText(messages.agentLockedHint)).toBeNull();
   fireEvent.change(screen.getByLabelText(messages.askProvider), {
     target: { value: second.id },

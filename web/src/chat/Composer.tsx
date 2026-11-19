@@ -387,7 +387,7 @@ export function Composer({
               <select
                 className="composer-ghost-select"
                 aria-label={t.askAgent}
-                title={currentConversationId ? undefined : t.askAgent}
+                title={currentConversationId ? t.agentLockedHint : t.askAgent}
                 value={agentId}
                 disabled={Boolean(currentConversationId)}
                 onChange={(event) => selectAgent(event.target.value)}
@@ -417,7 +417,7 @@ export function Composer({
                 type="button"
                 className="composer-project-chip"
                 disabled={projectLocked}
-                title={projectLocked ? undefined : t.switchProject}
+                title={projectLocked ? t.projectLockedHint : t.switchProject}
                 onClick={() => setPlusOpen((open) => !open)}
               >
                 {currentProject.name}
