@@ -116,29 +116,47 @@ Read `validate_sql` completely:
   available and the choice affects the answer, clarify or explicitly disclose the
   assumption. Interpret calendar boundaries and daylight-saving transitions in that
   timezone, and check the database column and function timezone semantics for the dialect.
-- A complete past calendar month uses a half-open interval from its start to the next
-  month's start. For "as of now" or "to date", use the relevant starting point and
-  current time anchor; do not extend the upper bound to a future month or year end.
-  For "as of today", distinguish the current instant from the whole calendar day;
-  clarify or disclose an authorized assumption when the intent matters. An explicitly
-  requested complete month or future report remains valid, including its future boundary.
-- Identify the source and meaning of the current time anchor; do not assume a session's
-  stored UTC start time was provided to the model or is the business time. Distinguish
-  a turn's anchor from the actual SQL execution time, which may be later. A dynamic
-  database current-time function is evaluated according to its dialect and execution
-  semantics. Business-time bounds and partition availability are separate: a latest
-  partition is not a substitute for the requested business upper bound; disclose missing
-  partitions or late-arriving data when they affect completeness.
+- Identify the current-time anchor and its source. Do not assume a session's stored UTC
+  start time is the business time, and distinguish the turn anchor from the actual SQL
+  execution time, which may be later. A database current-time expression follows the
+  dialect's execution semantics. If the anchor is missing or not trustworthy and the
+  answer depends on "now", clarify or state that the bound is unverified; never
+  substitute the latest partition or a session timestamp for it.
+- Classify the requested period before writing its bounds. An open-ended or current
+  period ("as of now", "to date", "so far", "current month/quarter/year", or "today")
+  is in progress: its exclusive upper bound is the business-time anchor, not the month,
+  quarter, year, or day end. A complete past period uses a half-open interval from its
+  start to the next period's start; a complete past calendar month ends at the next
+  month's start, not at its last day. Only an explicitly requested complete period or
+  explicitly requested future report may extend beyond the anchor; disclose that the
+  part after the anchor is future time. Do not infer a complete period or future report
+  from wording that only names the current period. For "today", default to the anchor
+  rather than next-day midnight.
+- Keep business time and partition time separate. A latest partition or a partition's
+  completeness is not the business upper bound; disclose missing or late-arriving
+  partitions when they affect completeness. Match the result's time precision to its
+  source: a day-level partition or daily aggregate cannot establish an exact hour or
+  instant.
+- For durations, identify the start and end events from the question or a verified
+  business definition, then compute end minus start. Check the operand order in the
+  final expression and the dialect-specific argument order; a negative duration is a
+  direction error unless the business definition explicitly allows it.
 - By default, compute durations from the original timestamps in seconds or finer
-  precision; apply thresholds and calculate averages before rounding only the final
-  displayed result. If the user explicitly requests, or a verified business definition
-  specifies, rounding or discretization before filtering or aggregation, apply that
-  specified rule and explain its meaning; do not introduce it otherwise.
+  precision; apply thresholds and calculate averages on raw values, and round only the
+  final displayed result. If the user explicitly requests, or a verified business
+  definition specifies, rounding or discretization before filtering or aggregation,
+  apply that specified rule and explain its meaning; do not introduce it otherwise.
   Preserve the requested inclusive or exclusive threshold, including exact boundary
-  values. Handle NULL timestamps and negative durations explicitly according to the
-  business definition; do not silently treat them as zero or valid durations. Account
-  for dates and timezone transitions across midnight, and verify the dialect's timestamp
-  subtraction, precision, NULL and rounding behavior before choosing an expression.
+  values, and the requested per-row or aggregate granularity. Handle NULL timestamps
+  according to the business definition; do not silently treat them as zero or valid
+  durations. Verify the dialect's timestamp subtraction, precision, NULL, and rounding
+  behavior before choosing an expression.
+- Before presenting or proposing the final SQL, reread it against every check above:
+  timezone and anchor, open-ended versus complete versus future period, upper bound
+  relative to the anchor, business time versus partition, duration direction and dialect
+  arguments, per-row versus aggregate duration granularity, raw-precision filtering and
+  aggregation before display rounding, and result time precision. A passing
+  `validate_sql` does not prove these semantics.
 
 ## Pagination and errors
 
