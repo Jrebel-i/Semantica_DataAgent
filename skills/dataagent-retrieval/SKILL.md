@@ -139,8 +139,10 @@ Read `validate_sql` completely:
   instant.
 - For durations, identify the start and end events from the question or a verified
   business definition, then compute end minus start. Check the operand order in the
-  final expression and the dialect-specific argument order; a negative duration is a
-  direction error unless the business definition explicitly allows it.
+  final expression and the dialect-specific argument order. A negative duration triggers
+  a recheck of the start/end definitions and argument order; after the expression is
+  confirmed correct, handle rows that remain negative according to the business
+  definition, and never silently treat them as zero or valid.
 - By default, compute durations from the original timestamps in seconds or finer
   precision; apply thresholds and calculate averages on raw values, and round only the
   final displayed result. If the user explicitly requests, or a verified business
