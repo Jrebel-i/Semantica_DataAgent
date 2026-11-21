@@ -1,4 +1,4 @@
-<!-- retro-done: #1, #73, 二期后续, #171, #232, #267, #276, #284, #292, #302 -->
+<!-- retro-done: #1, #73, 二期后续, #171, #232, #267, #276, #284, #292, #302, #315 -->
 # 教训
 
 本项目的代码由 agent 编写、审查和合并。每个 spec 的票全部合并后，协调者复盘三个问题：哪些改完又返工了，哪些不该合进来，哪些验证做得太薄。这里只记录复盘得出、但还没有升级的教训。改代码之前先读这份文件，review 时逐条对照。
@@ -236,6 +236,12 @@
 - 证据：想杀挂起的 pytest，`pkill -f "…/.venv/bin/pytest"` 把当前这条命令的 shell 也杀了（退出码 144）。
 - 做法：用 `kill <pid>`，pid 从 `pgrep -af` 或 `ps` 取。
 - Seen 1× (spec #171 · 2026-11-09)
+
+**重构 Pydantic 模型后必须在真实镜像里做一次启动验证；`NameError` 类回归单测跑不出来。**
+- 证据：七期将 `FieldView` 和 `RelationshipLink` 里的 `Field(exclude_if=...)` 改写为 `_OmitOptionalResponseFields`，同时保留了 `Field(...)` 调用，但漏掉把 `Field` 加入 pydantic 导入列表（issue #315）。单测用 `uv run pytest` 在源码树跑，import 路径与镜像不同，`NameError` 在本地无法复现；部署后容器启动即崩溃（CrashLoopBackOff）。
+- 修复：补 `Field` 导入（commit `d317d64`），重建镜像后服务正常。
+- 怎么提前发现：改 pydantic 模型的 import 块后，用 `python -c "from semantica_dataagent.table_api import *"` 在 venv 里做一次 import 烟雾测试；或在 Dockerfile `RUN python -c "import semantica_dataagent.app"` 作为构建步骤。
+- Seen 1× (deploy · 2026-11-21)
 
 ## 做对的事
 
