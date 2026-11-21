@@ -32,7 +32,7 @@ class _OmitOptionalResponseFields(BaseModel):
     omit_when_none: ClassVar[frozenset[str]] = frozenset()
 
     @model_serializer(mode="wrap")
-    def serialize_optional_fields(self, handler: SerializerFunctionWrapHandler) -> dict:
+    def serialize_optional_fields(self, handler: SerializerFunctionWrapHandler):
         result = handler(self)
         return {
             key: value

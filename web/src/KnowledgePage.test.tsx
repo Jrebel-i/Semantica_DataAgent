@@ -1030,6 +1030,14 @@ test("展示 catalog 前缀、外键关系跳转、Markdown 文档及派生只�
         to_table: "dim.city",
         to_columns: ["code"],
       },
+      {
+        name: "fk_other_orders",
+        ref: "rel:other_orders",
+        from_table: "dwd.orders",
+        from_columns: ["id"],
+        to_table: "lake.dwd.orders",
+        to_columns: ["id"],
+      },
     ],
   };
   const dimCity: TableRow & { catalog?: string; relationships?: [] } = {
@@ -1081,6 +1089,7 @@ test("展示 catalog 前缀、外键关系跳转、Markdown 文档及派生只�
   ).toBeTruthy();
   expect(await screen.findByText("外键关系")).toBeTruthy();
   expect(screen.getByText(/fk_orders_city/)).toBeTruthy();
+  expect(screen.getByRole("button", { name: "dwd.orders" })).toBeTruthy();
 
   fireEvent.click(screen.getByRole("button", { name: "dim.city" }));
   expect(

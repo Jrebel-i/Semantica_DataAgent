@@ -855,7 +855,10 @@ export function KnowledgePage({
                       <ul className="fk-relationship-list">
                         {(detail.relationships ?? []).map((rel) => {
                           const twoPart = `${selected.database}.${selected.name}`;
-                          const isOutgoing = rel.from_table === twoPart;
+                          const fullName = selected.catalog
+                            ? `${selected.catalog}.${twoPart}`
+                            : twoPart;
+                          const isOutgoing = rel.from_table === fullName;
                           const peer = isOutgoing
                             ? rel.to_table
                             : rel.from_table;

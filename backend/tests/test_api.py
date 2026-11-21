@@ -1366,6 +1366,25 @@ def test_table_list_view_summary_and_full(client, monkeypatch):
     assert response.json() == [full]
     assert calls[-1] == {"database": None, "search": None, "summary": False}
 
+    full["catalog"] = None
+    full["relationships"] = None
+    full["documents"][0]["generated"] = None
+    response = c.get("/api/v1/tables/shop/orders", headers=headers)
+    assert response.status_code == 200
+    data = response.json()
+    assert "catalog" not in data
+    assert "relationships" not in data
+    assert "generated" not in data["documents"][0]
+    assert data["fields"][0]["dimension_count"] is None
+
+    full["catalog"] = "lake"
+    full["relationships"] = []
+    full["documents"][0]["generated"] = False
+    data = c.get("/api/v1/tables/shop/orders", headers=headers).json()
+    assert data["catalog"] == "lake"
+    assert data["relationships"] == []
+    assert data["documents"][0]["generated"] is False
+
     assert (
         c.get(
             "/api/v1/tables",
