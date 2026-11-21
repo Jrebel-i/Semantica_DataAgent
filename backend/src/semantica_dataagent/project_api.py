@@ -670,7 +670,11 @@ def get_project_source_status(
                 "application/yaml": {"schema": {"type": "string"}},
                 "application/json": {"schema": {"type": "string"}},
             },
-        }
+        },
+        401: {"description": "Not authenticated"},
+        404: {"description": "Project not found"},
+        409: {"description": "Project state does not allow export"},
+        503: {"description": "Service unavailable"},
     },
 )
 def export_project_ossie(

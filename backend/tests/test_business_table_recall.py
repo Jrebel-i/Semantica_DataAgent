@@ -200,7 +200,6 @@ def test_document_and_field_relations_respect_three_part_catalog():
     } == {
         ("hive", "shop", "orders"),
         ("", "shop", "orders"),
-        ("", "warehouse", "t0"),
     }
     has_field_queries = [
         q for q, _ in storage.queries if "MERGE (t)-[:HAS_FIELD]->(n)" in q

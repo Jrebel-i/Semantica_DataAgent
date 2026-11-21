@@ -15,6 +15,16 @@ WORKTREE_ROOT = Path(__file__).resolve().parents[2]
 SCHEMA_PATH = WORKTREE_ROOT / "schemas" / "ossie" / "ossie-schema.json"
 
 
+def test_ossie_openapi_documents_export_errors():
+    from semantica_dataagent.app import app
+
+    path = "/api/v1/projects/{project_id}/export/ossie"
+    snapshot = json.loads((WORKTREE_ROOT / "web/contract/openapi.json").read_text())
+    for schema in (app.openapi(), snapshot):
+        responses = schema["paths"][path]["get"]["responses"]
+        assert {"200", "401", "404", "409", "422", "503"} <= responses.keys()
+
+
 def _schema_validator() -> Draft202012Validator:
     return Draft202012Validator(json.loads(SCHEMA_PATH.read_text(encoding="utf-8")))
 
