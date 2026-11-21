@@ -30,28 +30,43 @@ Use this skill when a question needs warehouse knowledge or SQL. Retrieve before
    - `get_lineage` with `direction` `up` or `down` and `depth` 1-3 to understand dependencies. Pass `column` with a field name alongside `table` to inspect field-level dependencies and their task provenance.
    - `find_join_path` for two to four tables when a join is not already supported.
    - `read_task_sql` when the producing task SQL is needed as evidence.
-6. **Before best-effort SQL, check for conflicting definitions.** If two or more metric
+6. **Before drafting any SQL, resolve definitions and date attribution.** If two or more metric
    definitions can match the question, stop this turn and call `request_clarification`
    with the competing definitions. Do not choose a definition and do not write or validate
-   SQL in the same turn; wait for the user's choice. Ask in plain text only after the
-   clarification tool returns.
-7. When a relevant table exists, write one SQL statement in the requested dialect even
-   if some fields or definitions are missing. Use only fields confirmed by
+   SQL in the same turn; follow Ambiguity and clarification and wait for the user's choice.
+   For each business-date window, use the event explicitly requested or given by a verified
+   definition; otherwise apply the measured-end default when applicable (see Time semantics
+   and duration). Adjacent event fields alone do not make the attribution ambiguous. Only if
+   the event remains unresolved and multiple candidates change the answer, clarify and wait;
+   if the required event or its field cannot be established, explain the missing evidence and
+   report the knowledge gap without SQL.
+7. Subject to step 6, when a relevant table exists, write one SQL statement in the requested
+   dialect even if some fields or definitions are missing. Use only fields confirmed by
    `describe_tables` or returned table metadata, never a column name inferred from
    convention or the metric name (for example, do not invent an `amount` column). State
    the assumptions and explain how the result differs from the requested metric. Then call
    `report_knowledge_gap` for the missing knowledge and call `propose_correction` when
    evidence shows existing content is wrong. A request for a concrete computation on a
    known table, such as a row count per partition, is answerable without a formal metric
-   definition; do not withhold SQL just because that definition is absent. Skip SQL only
-   when no relevant table exists.
+   definition; do not withhold SQL just because that definition is absent. Best-effort SQL
+   must not bypass step 6. When SQL cannot
+   be drafted or validated under these rules, explain why and do not present final SQL.
 8. **Always** call `validate_sql` with the SQL and dialect. Do not present SQL as final
    before validation. If validation reports any table, field, syntax, join, or partition
    problem, rewrite the statement using confirmed tables and fields, then validate the
    replacement. Never present a statement that failed validation as final.
+   - **Validate the exact final statement.** The SQL text and dialect passed to
+     `validate_sql` must be the complete statement you will show in the final answer or
+     pass to any existing query-plan entry point, with no later edits. After any change,
+     including `ORDER BY`, `LIMIT`, expressions, aliases, or other clauses, run
+     `validate_sql` again on the actual final version. Present or propose only the version
+     that passed. If none passed, disclose the validation failure instead of delivering
+     final SQL.
    - **Never silently drop a condition.** Every filter in the question (entity, time
      range, status, dimension value) must appear in the final SQL. Before submitting,
-     self-check: "is each requested condition present?"
+     self-check: "is each requested condition present?" For every business-date window,
+     check that the actual time predicate uses the event field confirmed by the question or
+     verified evidence, including any applicable measured-end default.
    - If a condition cannot be expressed, do not delete it and submit the rest. Tell the
      user which condition cannot be applied and why, or call `request_clarification`.
      Good: keep `WHERE country = 'HK '` and repair the join. Bad: remove the airline
@@ -109,6 +124,76 @@ Read `validate_sql` completely:
   Good incremental: `SELECT * FROM db.table WHERE dt >= '2025-01-01' AND dt <= '2025-01-31'`.
   Bad: no partition condition, or a snapshot table's partition column used as business time.
 
+## Time semantics and duration
+
+- Determine the business timezone from the request or a verified project definition.
+  Apply an authorized project default and disclose it. If no reliable timezone is
+  available and the choice affects the answer, clarify or explicitly disclose the
+  assumption. Interpret calendar boundaries and daylight-saving transitions in that
+  timezone, and check the database column and function timezone semantics for the dialect.
+- Identify the current-time anchor and its source. Do not assume a session's stored UTC
+  start time is the business time, and distinguish the turn anchor from the actual SQL
+  execution time, which may be later. A database current-time expression follows the
+  dialect's execution semantics. If the anchor is missing or not trustworthy and the
+  answer depends on "now", clarify or state that the bound is unverified; never
+  substitute the latest partition or a session timestamp for it.
+- Classify the requested period before writing its bounds. An open-ended or current
+  period ("as of now", "to date", "so far", "current month/quarter/year", or "today")
+  is in progress: its exclusive upper bound is the business-time anchor, not the month,
+  quarter, year, or day end. A complete past period uses a half-open interval from its
+  start to the next period's start; a complete past calendar month ends at the next
+  month's start, not at its last day. Only an explicitly requested complete period or
+  explicitly requested future report may extend beyond the anchor; disclose that the
+  part after the anchor is future time. Do not infer a complete period or future report
+  from wording that only names the current period. For "today", default to the anchor
+  rather than next-day midnight.
+- Keep business time and partition time separate. A latest partition or a partition's
+  completeness is not the business upper bound; disclose missing or late-arriving
+  partitions when they affect completeness. Match the result's time precision to its
+  source: a day-level partition or daily aggregate cannot establish an exact hour or
+  instant.
+- Bind each business-date window to the event named in the question or in a verified
+  definition, not a neighboring lifecycle timestamp that merely happens to be available.
+  The question and confirmed definition take precedence over defaults. Field existence
+  alone, or SQL examples for another metric, do not justify changing the attribution event.
+  When a question measures the elapsed time of a specified occurred event and does not
+  separately specify an attribution event, apply the date window to the timestamp of the
+  measured end event; an explicitly specified different event or verified definition
+  takes precedence. If the event remains unresolved and multiple candidates change the
+  answer, call `request_clarification`; do not disclose an assumption instead. Never
+  treat order completion, partition time, or load time as equivalent to the measured
+  business event.
+- For durations, identify the start and end events from the question or a verified
+  business definition, then compute end minus start. Check the operand order in the
+  final expression and the dialect-specific argument order. A negative duration triggers
+  a recheck of the start/end definitions and argument order; after the expression is
+  confirmed correct, handle rows that remain negative according to the business
+  definition, and never silently treat them as zero or valid.
+- By default, compute durations from the original timestamps in seconds or finer
+  precision; apply thresholds and calculate averages on raw values, and round only the
+  final displayed result. If the user explicitly requests, or a verified business
+  definition specifies, rounding or discretization before filtering or aggregation,
+  apply that specified rule and explain its meaning; do not introduce it otherwise.
+  For a bounded numeric duration expressed as "A to B" or "between A and B", default to
+  both endpoints inclusive; explicit comparison wording or a verified business
+  definition overrides this default. Express the default as `raw >= lower AND raw <= upper`
+  (or a `BETWEEN` already confirmed to be double-closed) and keep both boundary values.
+  This default applies to duration thresholds only; calendar period boundaries and their
+  separate half-open rules are unchanged. Preserve any other requested inclusive or
+  exclusive threshold, including exact boundary values, and the requested per-row or
+  aggregate granularity. Handle NULL timestamps according to the business definition; do
+  not silently treat them as zero or valid durations. Verify the dialect's timestamp
+  subtraction, precision, NULL, and rounding behavior before choosing an expression.
+- Before presenting or proposing the final SQL, reread it against every check above:
+  timezone and anchor, open-ended versus complete versus future period, upper bound
+  relative to the anchor, the business event selected for each window (not a neighboring
+  lifecycle event), business time versus partition, duration direction and dialect
+  arguments, per-row versus aggregate duration granularity, raw-precision filtering and
+  aggregation before display rounding, both duration-threshold operators against the
+  intended inclusion of each endpoint, result time precision, and that the exact final
+  SQL and dialect were validated after the last edit. A passing `validate_sql` does not
+  prove these semantics.
+
 ## Pagination and errors
 
 - If a tool returns `next_cursor`, call the same tool again with the same arguments plus
@@ -127,6 +212,7 @@ Read `validate_sql` completely:
 
 ## Ambiguity and clarification
 
+For business-date attribution, apply step 6 before deciding whether it is ambiguous.
 When a result has `ambiguous: true`, its confidence is `low`, several candidates have similar
 strength, or two documents define the same metric differently, stop and call
 `request_clarification` before answering:
@@ -169,10 +255,11 @@ Keep the answer focused:
 
 1. State the chosen definition and scope, with document/table references.
 2. Name the exact tables and fields, with references.
-3. Give the SQL in a fenced code block and state its dialect. The final answer must
-   literally contain the block, and the block must be the statement that last passed
-   `validate_sql`; saying that SQL was written or validated is not a substitute for
-   pasting it.
+3. If validation passed, give the SQL in a fenced code block and state its dialect. The
+   final answer must literally contain the block, and the block must be the statement
+   that last passed `validate_sql`; saying that SQL was written or validated is not a
+   substitute for pasting it. If no relevant table exists or no statement passed
+   validation, explain why and do not present final SQL.
 4. Summarize `validate_sql` results. Mention any weak/unsupported join and ambiguity.
 5. Cite each conclusion with the returned reference ids and end with a `引用：` line that
    lists every ref used. If the knowledge base does not support the question, say so and
@@ -180,4 +267,4 @@ Keep the answer focused:
 
 ## Corrections and knowledge gaps
 
-When knowledge is incomplete but a relevant table exists, write the best SQL that can be written using known fields, validate it, include the complete SQL in a fenced code block in the final answer (not only a summary), and explicitly label the assumptions as such (in Chinese answers use “假设”), explain missing fields or definitions, and how the result differs from the requested metric. For example, a payment record count can be a clearly labelled partial result when the payment amount field is missing; do not pretend the count is an amount or invent a field that cannot pass validation. Then call `report_knowledge_gap` for the missing knowledge and, when reliable evidence shows a document or metadata comment is wrong, call `propose_correction` with its existing reference, replacement content or comment, and reason. A proposal awaits admin approval; do not treat it as already applied. Only when no relevant table can be found should you just report the knowledge gap without SQL. Conflicting metric definitions still require clarification before choosing a definition or writing SQL.
+When knowledge is incomplete but a relevant table exists, subject to step 6, attempt the best SQL that can be written using known fields, validate it, and include the complete SQL in a fenced code block in the final answer only when it passes validation (not only a summary); explicitly label the assumptions as such (in Chinese answers use “假设”), explain missing fields or definitions, and how the result differs from the requested metric. For example, a payment record count can be a clearly labelled partial result when the payment amount field is missing; do not pretend the count is an amount or invent a field that cannot pass validation. Then call `report_knowledge_gap` for the missing knowledge and, when reliable evidence shows a document or metadata comment is wrong, call `propose_correction` with its existing reference, replacement content or comment, and reason. A proposal awaits admin approval; do not treat it as already applied. If no relevant table exists or no statement using confirmed fields can pass validation, explain why and report the knowledge gap without presenting final SQL. Conflicting metric definitions still require clarification before choosing a definition or writing SQL.
