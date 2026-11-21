@@ -30,22 +30,27 @@ Use this skill when a question needs warehouse knowledge or SQL. Retrieve before
    - `get_lineage` with `direction` `up` or `down` and `depth` 1-3 to understand dependencies. Pass `column` with a field name alongside `table` to inspect field-level dependencies and their task provenance.
    - `find_join_path` for two to four tables when a join is not already supported.
    - `read_task_sql` when the producing task SQL is needed as evidence.
-6. **Before best-effort SQL, check for conflicting definitions.** If two or more metric
+6. **Before drafting any SQL, resolve definitions and date attribution.** If two or more metric
    definitions can match the question, stop this turn and call `request_clarification`
    with the competing definitions. Do not choose a definition and do not write or validate
    SQL in the same turn; wait for the user's choice. Ask in plain text only after the
-   clarification tool returns.
-7. When a relevant table exists, write one SQL statement in the requested dialect even
-   if some fields or definitions are missing. Use only fields confirmed by
+   clarification tool returns. For each business-date window, identify its attribution event
+   from the question or verified definition before choosing a field. Follow the event binding
+   and clarification rules in Time semantics and duration. If the attribution event is
+   unresolved and multiple candidates change the answer, call `request_clarification` and
+   wait; do not draft or validate SQL that turn. If the required event or its field cannot be
+   established, explain the missing evidence and report the knowledge gap without SQL.
+7. Subject to step 6 and all clarification rules, when a relevant table exists, write one
+   SQL statement in the requested dialect even if some fields or definitions are missing. Use only fields confirmed by
    `describe_tables` or returned table metadata, never a column name inferred from
    convention or the metric name (for example, do not invent an `amount` column). State
    the assumptions and explain how the result differs from the requested metric. Then call
    `report_knowledge_gap` for the missing knowledge and call `propose_correction` when
    evidence shows existing content is wrong. A request for a concrete computation on a
    known table, such as a row count per partition, is answerable without a formal metric
-   definition; do not withhold SQL just because that definition is absent. Skip SQL only
-   when no relevant table exists or no statement using confirmed fields can pass
-   validation; in either case, explain why and do not present final SQL.
+   definition; do not withhold SQL just because that definition is absent. Best-effort SQL
+   must not bypass unresolved date attribution or any required clarification. When SQL cannot
+   be drafted or validated under these rules, explain why and do not present final SQL.
 8. **Always** call `validate_sql` with the SQL and dialect. Do not present SQL as final
    before validation. If validation reports any table, field, syntax, join, or partition
    problem, rewrite the statement using confirmed tables and fields, then validate the
@@ -59,7 +64,9 @@ Use this skill when a question needs warehouse knowledge or SQL. Retrieve before
      final SQL.
    - **Never silently drop a condition.** Every filter in the question (entity, time
      range, status, dimension value) must appear in the final SQL. Before submitting,
-     self-check: "is each requested condition present?"
+     self-check: "is each requested condition present?" For every business-date window,
+     check that the actual time predicate uses the event field confirmed by the question or
+     verified evidence, including any applicable measured-end default.
    - If a condition cannot be expressed, do not delete it and submit the rest. Tell the
      user which condition cannot be applied and why, or call `request_clarification`.
      Good: keep `WHERE country = 'HK '` and repair the join. Bad: remove the airline
@@ -147,6 +154,8 @@ Read `validate_sql` completely:
   instant.
 - Bind each business-date window to the event named in the question or in a verified
   definition, not a neighboring lifecycle timestamp that merely happens to be available.
+  The question and confirmed definition take precedence over defaults. Field existence
+  alone, or SQL examples for another metric, do not justify changing the attribution event.
   When a question measures the elapsed time of a specified occurred event and does not
   separately specify an attribution event, apply the date window to the timestamp of the
   measured end event; an explicitly specified different event or verified definition
@@ -257,4 +266,4 @@ Keep the answer focused:
 
 ## Corrections and knowledge gaps
 
-When knowledge is incomplete but a relevant table exists, attempt the best SQL that can be written using known fields, validate it, and include the complete SQL in a fenced code block in the final answer only when it passes validation (not only a summary); explicitly label the assumptions as such (in Chinese answers use “假设”), explain missing fields or definitions, and how the result differs from the requested metric. For example, a payment record count can be a clearly labelled partial result when the payment amount field is missing; do not pretend the count is an amount or invent a field that cannot pass validation. Then call `report_knowledge_gap` for the missing knowledge and, when reliable evidence shows a document or metadata comment is wrong, call `propose_correction` with its existing reference, replacement content or comment, and reason. A proposal awaits admin approval; do not treat it as already applied. If no relevant table exists or no statement using confirmed fields can pass validation, explain why and report the knowledge gap without presenting final SQL. Conflicting metric definitions still require clarification before choosing a definition or writing SQL.
+When knowledge is incomplete but a relevant table exists, subject to step 6 and the clarification and time semantics rules, attempt the best SQL that can be written using known fields, validate it, and include the complete SQL in a fenced code block in the final answer only when it passes validation (not only a summary); explicitly label the assumptions as such (in Chinese answers use “假设”), explain missing fields or definitions, and how the result differs from the requested metric. For example, a payment record count can be a clearly labelled partial result when the payment amount field is missing; do not pretend the count is an amount or invent a field that cannot pass validation. Then call `report_knowledge_gap` for the missing knowledge and, when reliable evidence shows a document or metadata comment is wrong, call `propose_correction` with its existing reference, replacement content or comment, and reason. A proposal awaits admin approval; do not treat it as already applied. If no relevant table exists or no statement using confirmed fields can pass validation, explain why and report the knowledge gap without presenting final SQL. Conflicting metric definitions still require clarification before choosing a definition or writing SQL.
