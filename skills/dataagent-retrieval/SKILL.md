@@ -148,17 +148,23 @@ Read `validate_sql` completely:
   final displayed result. If the user explicitly requests, or a verified business
   definition specifies, rounding or discretization before filtering or aggregation,
   apply that specified rule and explain its meaning; do not introduce it otherwise.
-  Preserve the requested inclusive or exclusive threshold, including exact boundary
-  values, and the requested per-row or aggregate granularity. Handle NULL timestamps
-  according to the business definition; do not silently treat them as zero or valid
-  durations. Verify the dialect's timestamp subtraction, precision, NULL, and rounding
-  behavior before choosing an expression.
+  For a bounded numeric duration expressed as "A to B" or "between A and B", default to
+  both endpoints inclusive; explicit comparison wording or a verified business
+  definition overrides this default. Express the default as `raw >= lower AND raw <= upper`
+  (or a `BETWEEN` already confirmed to be double-closed) and keep both boundary values.
+  This default applies to duration thresholds only; calendar period boundaries and their
+  separate half-open rules are unchanged. Preserve any other requested inclusive or
+  exclusive threshold, including exact boundary values, and the requested per-row or
+  aggregate granularity. Handle NULL timestamps according to the business definition; do
+  not silently treat them as zero or valid durations. Verify the dialect's timestamp
+  subtraction, precision, NULL, and rounding behavior before choosing an expression.
 - Before presenting or proposing the final SQL, reread it against every check above:
   timezone and anchor, open-ended versus complete versus future period, upper bound
   relative to the anchor, business time versus partition, duration direction and dialect
   arguments, per-row versus aggregate duration granularity, raw-precision filtering and
-  aggregation before display rounding, and result time precision. A passing
-  `validate_sql` does not prove these semantics.
+  aggregation before display rounding, both duration-threshold operators (`>=` on the
+  lower bound and `<=` on the upper bound) with inclusive boundaries retained, and result
+  time precision. A passing `validate_sql` does not prove these semantics.
 
 ## Pagination and errors
 
