@@ -26,7 +26,14 @@ from sqlalchemy import text, update
 from . import auto_build, knowledge, project_context
 from .api_time import UtcDatetime
 from .attachments import MAX_REQUEST_BYTES
-from .auth import admin, authenticate_mcp, bearer, current_requester, current_user
+from .auth import (
+    Requester,
+    admin,
+    authenticate_mcp,
+    bearer,
+    current_requester,
+    current_user,
+)
 from .build_queue import build_queue, recover_interrupted_builds
 from .db import (
     Build,
@@ -1580,39 +1587,59 @@ class PullView(BaseModel):
     model_config = {"from_attributes": True}
 
 
-def _trigger_named_pull(project: str | None, *, puller_id: str) -> PullView:
+def _trigger_named_pull(scope: ProjectContext, *, puller_id: str) -> PullView:
     from .pull_service import run_pull
 
-    project_id = project_context.resolve_project_id(project)
     try:
-        return run_pull(project_id, puller_id=puller_id)
+        return run_pull(scope.project_id, puller_id=puller_id)
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
 
 
 @app.post("/api/v1/pulls/dtb", response_model=PullView)
 def trigger_pull(
-    _: Annotated[str, Depends(admin)], project: Annotated[str | None, Query()] = None
+    scope: Annotated[ProjectContext, Depends(admin_project_scope)],
 ):
-    return _trigger_named_pull(project, puller_id="dtb")
+    return _trigger_named_pull(scope, puller_id="dtb")
 
 
 @app.post("/api/v1/pulls/ossie", response_model=PullView)
 def trigger_ossie_pull(
-    _: Annotated[str, Depends(admin)], project: Annotated[str | None, Query()] = None
+    scope: Annotated[ProjectContext, Depends(admin_project_scope)],
 ):
-    return _trigger_named_pull(project, puller_id="ossie")
+    return _trigger_named_pull(scope, puller_id="ossie")
 
 
 @app.get("/api/v1/pulls", response_model=list[PullView])
-def list_pulls(_: Annotated[str, Depends(current_user)]):
-    from .db import PullRecord
+def list_pulls(
+    requester: Annotated[Requester, Depends(current_requester)],
+    project: Annotated[str | None, Query()] = None,
+):
+    from sqlalchemy import func
 
-    with sessions()() as db:
-        return [
-            PullView.model_validate(row)
-            for row in db.query(PullRecord).order_by(PullRecord.id.desc()).all()
+    from .db import PullRecord
+    from .project_api import accessible_projects, resolve_project_scope
+
+    if project is not None:
+        allowed_ids = [
+            resolve_project_scope(project, requester, allow_frozen=True).project_id
         ]
+    else:
+        allowed_ids = [row.id for row in accessible_projects(requester)]
+    if not allowed_ids:
+        return []
+    with sessions()() as db:
+        rows = (
+            db.query(PullRecord)
+            .filter(
+                func.coalesce(
+                    PullRecord.project_id, project_context.DEFAULT_PROJECT_ID
+                ).in_(allowed_ids)
+            )
+            .order_by(PullRecord.id.desc())
+            .all()
+        )
+        return [PullView.model_validate(row) for row in rows]
 
 
 if static_dir := os.environ.get("DATAAGENT_STATIC_DIR"):

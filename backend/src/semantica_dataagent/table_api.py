@@ -1,9 +1,14 @@
 """Table knowledge REST endpoints and MCP tools."""
 
-from typing import Annotated, Literal
+from typing import Annotated, ClassVar, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    SerializerFunctionWrapHandler,
+    model_serializer,
+)
 
 from . import knowledge
 from .auth import current_user
@@ -23,14 +28,43 @@ class FieldView(BaseModel):
     dimension_samples: list[str] | None = None
 
 
-class DocumentLink(BaseModel):
+class _OmitOptionalResponseFields(BaseModel):
+    omit_when_none: ClassVar[frozenset[str]] = frozenset()
+
+    @model_serializer(mode="wrap")
+    def serialize_optional_fields(self, handler: SerializerFunctionWrapHandler):
+        result = handler(self)
+        return {
+            key: value
+            for key, value in result.items()
+            if key not in self.omit_when_none or value is not None
+        }
+
+
+class DocumentLink(_OmitOptionalResponseFields):
+    model_config = ConfigDict(exclude_none=True)
+    omit_when_none = frozenset({"generated"})
+
     ref: str
     path: str
     category: str
+    generated: bool | None = None
 
 
-class TableSummary(BaseModel):
-    catalog: str | None = Field(default=None, exclude_if=lambda value: value is None)
+class RelationshipLink(BaseModel):
+    name: str
+    ref: str
+    from_table: str
+    from_columns: list[str]
+    to_table: str
+    to_columns: list[str]
+
+
+class TableSummary(_OmitOptionalResponseFields):
+    model_config = ConfigDict(exclude_none=True)
+    omit_when_none = frozenset({"catalog"})
+
+    catalog: str | None = None
     name: str
     database: str
     comment: str
@@ -40,14 +74,18 @@ class TableSummary(BaseModel):
     has_partition: bool
 
 
-class TableView(BaseModel):
-    catalog: str | None = Field(default=None, exclude_if=lambda value: value is None)
+class TableView(_OmitOptionalResponseFields):
+    model_config = ConfigDict(exclude_none=True)
+    omit_when_none = frozenset({"catalog", "relationships"})
+
+    catalog: str | None = None
     name: str
     database: str
     comment: str
     ref: str
     fields: list[FieldView]
     documents: list[DocumentLink]
+    relationships: list[RelationshipLink] | None = None
 
 
 @router.get("/api/v1/tables", response_model=list[TableView | TableSummary])

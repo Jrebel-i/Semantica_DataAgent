@@ -1,11 +1,14 @@
-import { useRef, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Button, Input, Select } from "antd";
 import {
   ArrowUpOutlined,
+  CheckOutlined,
   CloseOutlined,
   FileOutlined,
+  FolderOpenOutlined,
   PaperClipOutlined,
   PictureOutlined,
+  PlusOutlined,
 } from "@ant-design/icons";
 import type { AgentProfiles } from "../agentProfiles";
 import type { Messages } from "../i18n";
@@ -54,6 +57,7 @@ export function Composer({
   addAttachments,
   removeAttachment,
   visionEnabled,
+  onNavigateKnowledge,
 }: {
   messages: Messages;
   question: string;
@@ -89,10 +93,33 @@ export function Composer({
   addAttachments: (files: File[]) => void;
   removeAttachment: (id: string) => void;
   visionEnabled: boolean;
+  onNavigateKnowledge?: () => void;
 }) {
   const fileInput = useRef<HTMLInputElement>(null);
   const imageInput = useRef<HTMLInputElement>(null);
+  const [plusOpen, setPlusOpen] = useState(false);
   const t = messages;
+
+  useEffect(() => {
+    if (!plusOpen) return;
+    const handleMouseDown = (event: MouseEvent) => {
+      if (
+        !(event.target instanceof Element) ||
+        !event.target.closest(".composer-plus-wrap")
+      ) {
+        setPlusOpen(false);
+      }
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setPlusOpen(false);
+    };
+    document.addEventListener("mousedown", handleMouseDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", handleMouseDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [plusOpen]);
   const effortLabels: Record<EffortLevel, string> = {
     low: t.effortLow,
     medium: t.effortMedium,
@@ -118,7 +145,33 @@ export function Composer({
   const showProjectSelect = !projectArchived && activeProjects.length > 1;
   return (
     <div className="chat-composer">
-      {emptyConversation && <h1 className="chat-greeting">{t.chatGreeting}</h1>}
+      {emptyConversation && (
+        <>
+          <h1 className="chat-greeting">{t.chatGreeting}</h1>
+          {currentProject && (
+            <div className="chat-project-guide">
+              <span className="chat-project-guide-badge">
+                {currentProject.name} ·{" "}
+                {currentProject.type === "document"
+                  ? t.projectGuideDocument
+                  : t.projectGuideWarehouse}
+              </span>
+              <a
+                href="/knowledge"
+                className="chat-project-guide-link"
+                onClick={(event) => {
+                  if (onNavigateKnowledge) {
+                    event.preventDefault();
+                    onNavigateKnowledge();
+                  }
+                }}
+              >
+                {t.browseProjectKnowledge}
+              </a>
+            </div>
+          )}
+        </>
+      )}
       <form className="composer-box" onSubmit={(event) => onAsk(event)}>
         {attachments.length > 0 && (
           <div className="composer-attachments" aria-label={t.attachments}>
@@ -178,84 +231,161 @@ export function Composer({
           }
         />
         <div className="composer-controls">
-          <div className="chat-selectors">
-            <span className="composer-attach-actions">
-              <label className="composer-attach-button" title={t.attachFile}>
-                <PaperClipOutlined />
-                <input
-                  ref={fileInput}
-                  className="composer-file-input"
-                  type="file"
-                  multiple
-                  aria-label={t.attachFile}
-                  onChange={(event) => {
-                    const files = Array.from(event.target.files ?? []);
-                    if (files.length) addAttachments(files);
-                    event.target.value = "";
-                  }}
-                />
-              </label>
-              <label
-                className={`composer-attach-button${visionEnabled ? "" : " composer-attach-button--disabled"}`}
-                title={visionEnabled ? t.attachImage : t.attachmentVisionHint}
+          <div className="composer-left">
+            <div className="composer-plus-wrap">
+              <button
+                type="button"
+                className={`composer-plus-btn${plusOpen ? " active" : ""}`}
+                aria-label={t.composerMore}
+                title={t.composerMore}
+                aria-expanded={plusOpen}
+                onClick={() => setPlusOpen((open) => !open)}
               >
-                <PictureOutlined />
-                <input
-                  ref={imageInput}
-                  className="composer-file-input"
-                  type="file"
-                  accept="image/*"
-                  multiple
-                  aria-label={t.attachImage}
-                  disabled={!visionEnabled}
-                  onChange={(event) => {
-                    const files = Array.from(event.target.files ?? []);
-                    if (files.length) addAttachments(files);
-                    event.target.value = "";
-                  }}
-                />
-              </label>
-              {!visionEnabled && (
-                <span className="chat-selector-hint">
-                  {t.attachmentVisionHint}
-                </span>
-              )}
-            </span>
-            {!showProjectSelect && currentProject && (
-              <span
-                className="composer-project-label"
-                title={currentProject.name}
-              >
-                {currentProject.name}
-              </span>
-            )}
-            {showProjectSelect && (
-              <label>
-                <select
-                  aria-label={t.projects}
-                  title={projectLocked ? t.projectLockedHint : t.projects}
-                  value={projectId}
-                  disabled={projectLocked}
-                  onChange={(event) => selectProject(event.target.value)}
+                <PlusOutlined />
+              </button>
+              <input
+                ref={fileInput}
+                className="composer-file-input"
+                type="file"
+                multiple
+                aria-label={t.attachFile}
+                onChange={(event) => {
+                  const files = Array.from(event.target.files ?? []);
+                  if (files.length) addAttachments(files);
+                  event.target.value = "";
+                }}
+              />
+              <input
+                ref={imageInput}
+                className="composer-file-input"
+                type="file"
+                accept="image/*"
+                multiple
+                aria-label={t.attachImage}
+                disabled={!visionEnabled}
+                onChange={(event) => {
+                  const files = Array.from(event.target.files ?? []);
+                  if (files.length) addAttachments(files);
+                  event.target.value = "";
+                }}
+              />
+              {plusOpen && (
+                <div
+                  className={`composer-plus-menu${emptyConversation ? " composer-plus-menu--down" : " composer-plus-menu--up"}`}
+                  role="menu"
                 >
-                  {activeProjects.map((project) => (
-                    <option key={project.id} value={project.id}>
-                      {project.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            )}
-            {projectArchived && (
-              <span className="chat-selector-hint" role="status">
-                {t.projectArchivedNotice}
-              </span>
-            )}
-            {projectLocked && !projectArchived && activeProjects.length > 1 && (
-              <span className="chat-selector-hint">{t.projectLockedHint}</span>
-            )}
-            <label>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="composer-plus-item"
+                    onClick={() => {
+                      setPlusOpen(false);
+                      fileInput.current?.click();
+                    }}
+                  >
+                    <PaperClipOutlined aria-hidden="true" />
+                    <span className="composer-plus-item-label">
+                      {t.attachFile}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="composer-plus-item"
+                    disabled={!visionEnabled}
+                    onClick={() => {
+                      setPlusOpen(false);
+                      imageInput.current?.click();
+                    }}
+                  >
+                    <PictureOutlined aria-hidden="true" />
+                    <span className="composer-plus-item-label">
+                      {t.attachImage}
+                    </span>
+                  </button>
+                  {!visionEnabled && (
+                    <div className="composer-plus-hint">
+                      {t.attachmentVisionHint}
+                    </div>
+                  )}
+                  {showProjectSelect && (
+                    <>
+                      <div className="composer-plus-divider" />
+                      <div className="composer-plus-section">
+                        {t.switchProject}
+                      </div>
+                      {activeProjects.map((project) => (
+                        <button
+                          key={project.id}
+                          type="button"
+                          role="menuitem"
+                          className="composer-plus-item"
+                          disabled={projectLocked}
+                          onClick={() => {
+                            selectProject(project.id);
+                            setPlusOpen(false);
+                          }}
+                        >
+                          <FolderOpenOutlined aria-hidden="true" />
+                          <span className="composer-plus-item-label">
+                            {project.name}
+                          </span>
+                          {project.id === projectId && (
+                            <CheckOutlined
+                              className="composer-plus-check"
+                              aria-hidden="true"
+                            />
+                          )}
+                        </button>
+                      ))}
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
+            {showProjectSelect && (
               <select
+                className="sr-only"
+                tabIndex={-1}
+                aria-label={t.projects}
+                value={projectId}
+                disabled={projectLocked}
+                onChange={(event) => selectProject(event.target.value)}
+              >
+                {activeProjects.map((project) => (
+                  <option key={project.id} value={project.id}>
+                    {project.name}
+                  </option>
+                ))}
+              </select>
+            )}
+            <select
+              className="sr-only"
+              tabIndex={-1}
+              aria-label={t.askProvider}
+              value={providerId}
+              disabled={!providers.length}
+              onChange={(event) => selectProvider(event.target.value)}
+            >
+              {providers.length === 0 && (
+                <option value="">{t.noProviders}</option>
+              )}
+              {providers
+                .filter(
+                  (provider) =>
+                    !profiles[agentId]?.providers.length ||
+                    profiles[agentId].providers.includes(provider.id),
+                )
+                .map((provider) => (
+                  <option key={provider.id} value={provider.id}>
+                    {provider.name}
+                  </option>
+                ))}
+            </select>
+            <label>
+              <span className="sr-only">{t.askAgent}</span>
+              <select
+                className="composer-ghost-select"
                 aria-label={t.askAgent}
                 title={currentConversationId ? t.agentLockedHint : t.askAgent}
                 value={agentId}
@@ -274,35 +404,29 @@ export function Composer({
                 ))}
               </select>
             </label>
-            {currentConversationId && (
-              <span className="chat-selector-hint">{t.agentLockedHint}</span>
-            )}
-            <label>
-              <select
-                aria-label={t.askProvider}
-                title={t.askProvider}
-                value={providerId}
-                disabled={!providers.length}
-                onChange={(event) => selectProvider(event.target.value)}
+            {!showProjectSelect && currentProject && (
+              <span
+                className="composer-project-label"
+                title={currentProject.name}
               >
-                {providers.length === 0 && (
-                  <option value="">{t.noProviders}</option>
-                )}
-                {providers
-                  .filter(
-                    (provider) =>
-                      !profiles[agentId]?.providers.length ||
-                      profiles[agentId].providers.includes(provider.id),
-                  )
-                  .map((provider) => (
-                    <option key={provider.id} value={provider.id}>
-                      {provider.name}
-                    </option>
-                  ))}
-              </select>
-            </label>
+                {currentProject.name}
+              </span>
+            )}
+            {showProjectSelect && currentProject && (
+              <button
+                type="button"
+                className="composer-project-chip"
+                disabled={projectLocked}
+                title={projectLocked ? t.projectLockedHint : t.switchProject}
+                onClick={() => setPlusOpen((open) => !open)}
+              >
+                {currentProject.name}
+              </button>
+            )}
+          </div>
+          <div className="composer-right">
             <label>
-              <span>{t.askModel}</span>
+              <span className="sr-only">{t.askModel}</span>
               <Select
                 aria-label={t.askModel}
                 className="composer-select composer-model-select"
@@ -329,7 +453,7 @@ export function Composer({
             </label>
             {effortLevels.length > 0 && (
               <label>
-                <span>{t.askEffort}</span>
+                <span className="sr-only">{t.askEffort}</span>
                 <Select
                   aria-label={t.askEffort}
                   className="composer-select composer-effort-select"
@@ -352,18 +476,40 @@ export function Composer({
                 />
               </label>
             )}
+            <Button
+              htmlType="submit"
+              type="primary"
+              className="send-button"
+              aria-label={t.askSubmit}
+              title={t.askSubmit}
+              disabled={!canAsk}
+            >
+              <ArrowUpOutlined />
+            </Button>
           </div>
-          <Button
-            htmlType="submit"
-            type="primary"
-            className="send-button"
-            aria-label={t.askSubmit}
-            title={t.askSubmit}
-            disabled={!canAsk}
-          >
-            <ArrowUpOutlined />
-          </Button>
         </div>
+        {projectArchived && (
+          <div className="composer-switch-hint" role="status">
+            {t.projectArchivedNotice}
+          </div>
+        )}
+        {(!visionEnabled ||
+          (projectLocked && !projectArchived && activeProjects.length > 1) ||
+          Boolean(currentConversationId)) && (
+          <div className="composer-lock-hints">
+            {projectLocked && !projectArchived && activeProjects.length > 1 && (
+              <span className="chat-selector-hint">{t.projectLockedHint}</span>
+            )}
+            {currentConversationId && (
+              <span className="chat-selector-hint">{t.agentLockedHint}</span>
+            )}
+            {!visionEnabled && (
+              <span className="chat-selector-hint">
+                {t.attachmentVisionHint}
+              </span>
+            )}
+          </div>
+        )}
         {conversationSelectionChanged && (
           <div className="composer-switch-hint" role="status">
             {t.nextMessageModel.replace("{model}", model)}
@@ -374,19 +520,24 @@ export function Composer({
         <div className="chat-examples">
           <span className="example-title">{t.exampleQuestions}</span>
           <div className="example-chips">
-            {t.examples.slice(0, 3).map((example) => (
-              <Button
-                key={example}
-                disabled={
-                  !resumable ||
-                  projectArchived ||
-                  Boolean(currentConversation?.archived)
-                }
-                onClick={() => setQuestion(example)}
-              >
-                {example}
-              </Button>
-            ))}
+            {(currentProject?.type === "document"
+              ? t.documentExamples
+              : t.examples
+            )
+              .slice(0, 3)
+              .map((example) => (
+                <Button
+                  key={example}
+                  disabled={
+                    !resumable ||
+                    projectArchived ||
+                    Boolean(currentConversation?.archived)
+                  }
+                  onClick={() => setQuestion(example)}
+                >
+                  {example}
+                </Button>
+              ))}
           </div>
         </div>
       )}

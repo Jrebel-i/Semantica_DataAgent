@@ -12,6 +12,7 @@ import {
 } from "antd";
 import type { components } from "./api";
 import type { Messages } from "./i18n";
+import { downloadOssieModel, exportErrorMessage } from "./ossieExport";
 import { TableScroll } from "./TableScroll";
 
 type ProjectRow = components["schemas"]["ProjectView"];
@@ -180,6 +181,9 @@ export function ProjectsPage({
   const [lifecycleBusy, setLifecycleBusy] = useState(false);
   const [adapters, setAdapters] = useState<AdapterRow[]>([]);
   const [adapterError, setAdapterError] = useState("");
+  const [exportingFormat, setExportingFormat] = useState<
+    "yaml" | "json" | null
+  >(null);
 
   const authHeaders = { Authorization: `Bearer ${token}` };
   const refresh = useCallback(async () => {
@@ -486,6 +490,29 @@ export function ProjectsPage({
             <p className="page-subtitle">{t.projectMembersHint}</p>
           </div>
           <div className="page-actions">
+            {selected.type === "warehouse" &&
+              selected.status === "active" &&
+              (["yaml", "json"] as const).map((format) => (
+                <Button
+                  key={format}
+                  autoInsertSpace={false}
+                  loading={exportingFormat === format}
+                  disabled={exportingFormat !== null}
+                  onClick={() => {
+                    setAdapterError("");
+                    setExportingFormat(format);
+                    void downloadOssieModel(token, selected.id, format)
+                      .catch((err: unknown) => {
+                        setAdapterError(
+                          exportErrorMessage(err, t.exportOssieFailed),
+                        );
+                      })
+                      .finally(() => setExportingFormat(null));
+                  }}
+                >
+                  {format === "yaml" ? t.exportOssieYaml : t.exportOssieJson}
+                </Button>
+              ))}
             <Button autoInsertSpace={false} onClick={() => setSelected(null)}>
               {t.backToProjects}
             </Button>

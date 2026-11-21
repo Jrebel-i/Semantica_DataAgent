@@ -999,3 +999,129 @@ test("切换项目后不再用旧项目的关联文档向新项目请求文档",
   });
   expect(screen.queryByText(/订单定义/)).toBeNull();
 });
+
+test("展示 catalog 前缀、外键关系跳转、Markdown 文档及派生只读标识", async () => {
+  const orders: TableRow & {
+    catalog: string;
+    relationships: {
+      name: string;
+      ref: string;
+      from_table: string;
+      from_columns: string[];
+      to_table: string;
+      to_columns: string[];
+    }[];
+  } = {
+    ...table("dwd", "orders"),
+    catalog: "lake",
+    documents: [
+      {
+        ref: "document:ossie/orders.md",
+        path: "ossie/orders.md",
+        category: "ossie",
+      },
+    ],
+    relationships: [
+      {
+        name: "fk_orders_city",
+        ref: "rel:orders_city",
+        from_table: "lake.dwd.orders",
+        from_columns: ["city_code"],
+        to_table: "dim.city",
+        to_columns: ["code"],
+      },
+      {
+        name: "fk_other_orders",
+        ref: "rel:other_orders",
+        from_table: "dwd.orders",
+        from_columns: ["id"],
+        to_table: "lake.dwd.orders",
+        to_columns: ["id"],
+      },
+    ],
+  };
+  const dimCity: TableRow & { catalog?: string; relationships?: [] } = {
+    ...table("dim", "city"),
+    comment: "城市维度表",
+    relationships: [],
+  };
+
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) => {
+      if (url === "/api/v1/projects") return Response.json(projects);
+      if (url.startsWith("/api/v1/categories"))
+        return Response.json([
+          {
+            ref: "category:ossie",
+            name: "ossie",
+            description: "",
+            documents: [
+              { ref: "document:ossie/orders.md", path: "ossie/orders.md" },
+            ],
+          },
+        ]);
+      if (url.startsWith("/api/v1/tables?"))
+        return Response.json(url.includes("search=") ? [] : [orders, dimCity]);
+      if (url.startsWith("/api/v1/tables/dwd/orders?"))
+        return Response.json(orders);
+      if (url.startsWith("/api/v1/tables/dim/city?"))
+        return Response.json(dimCity);
+      if (url.startsWith("/api/v1/document?"))
+        return Response.json({
+          ref: "document:ossie/orders.md",
+          path: "ossie/orders.md",
+          category: "ossie",
+          content: "## 指标定义\n- **GMV**：成交总额",
+          start_line: 1,
+          generated: true,
+        });
+      if (url.startsWith("/api/v1/table-lineage?"))
+        return Response.json({ upstream: [], downstream: [], tasks: [] });
+      return Response.json({});
+    }),
+  );
+
+  render(<KnowledgePage token="token" messages={getMessages("zh")} />);
+
+  expect(
+    await screen.findByRole("heading", { level: 1, name: "lake.dwd.orders" }),
+  ).toBeTruthy();
+  expect(await screen.findByText("外键关系")).toBeTruthy();
+  expect(screen.getByText(/fk_orders_city/)).toBeTruthy();
+  expect(screen.getByRole("button", { name: "dwd.orders" })).toBeTruthy();
+
+  fireEvent.click(screen.getByRole("button", { name: "dim.city" }));
+  expect(
+    await screen.findByRole("heading", { level: 1, name: "dim.city" }),
+  ).toBeTruthy();
+
+  await waitFor(() => {
+    if (!screen.queryByText("ossie")) {
+      fireEvent.click(screen.getByText("知识文档 (1)"));
+    }
+    expect(screen.getByText("ossie")).toBeTruthy();
+  });
+  await waitFor(() => {
+    if (!screen.queryByRole("button", { name: "ossie/orders.md" })) {
+      fireEvent.click(screen.getByText("ossie"));
+    }
+    expect(
+      screen.getByRole("button", { name: "ossie/orders.md" }),
+    ).toBeTruthy();
+  });
+  fireEvent.click(screen.getByRole("button", { name: "ossie/orders.md" }));
+
+  expect(await screen.findByText("语义模型自动生成（只读）")).toBeTruthy();
+  expect(
+    screen.getByRole("heading", { level: 2, name: "指标定义" }),
+  ).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "提出纠错" })).toBeNull();
+
+  fireEvent.change(screen.getByLabelText("搜索表或文档"), {
+    target: { value: "不存在的过滤词" },
+  });
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: "导出 Ossie" })).toBeTruthy(),
+  );
+});

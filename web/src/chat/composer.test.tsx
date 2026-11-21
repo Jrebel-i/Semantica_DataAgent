@@ -731,3 +731,65 @@ test("模型不支持图片时通过添加文件入口选图片也会提示", as
   expect(await screen.findByText(/请更换支持图片的模型/)).toBeTruthy();
   expect(screen.queryByText("chart.png")).toBeNull();
 });
+
+test("点击输入区 + 菜单可添加附件或切换项目，点击外部自动收起", async () => {
+  const messages = getMessages("zh");
+  const projects = [
+    {
+      id: "default",
+      name: "业务数据",
+      type: "warehouse",
+      status: "active",
+      created_at: "2026-11-05T00:00:00Z",
+      my_role: "member",
+    },
+    {
+      id: "docs",
+      name: "规范文档",
+      type: "document",
+      status: "active",
+      created_at: "2026-11-05T00:00:00Z",
+      my_role: "member",
+    },
+  ];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/v1/projects") return json(projects);
+      if (url === "/api/v1/agents")
+        return json([{ id: "pi", name: "pi", available: true }]);
+      if (url === "/api/v1/providers") return json([provider]);
+      if (url === "/api/v1/conversations") return json([]);
+      if (url === "/api/v1/conversations?archived=true") return json([]);
+      if (url === "/api/v1/assistant-defaults")
+        return json({
+          assistant_agent: "pi",
+          assistant_provider_id: provider.id,
+          assistant_model: provider.models[0],
+        });
+      return new Response("", { status: 404 });
+    }),
+  );
+
+  const { container } = render(
+    <ChatPage token="token" role="user" messages={messages} />,
+  );
+
+  const plusBtn = await screen.findByRole("button", {
+    name: messages.composerMore,
+  });
+  fireEvent.click(plusBtn);
+  expect(container.querySelector(".composer-plus-menu")).toBeTruthy();
+
+  fireEvent.click(screen.getByRole("menuitem", { name: "规范文档" }));
+  expect(container.querySelector(".composer-plus-menu")).toBeNull();
+  expect(container.querySelector(".composer-project-chip")?.textContent).toBe(
+    "规范文档",
+  );
+
+  fireEvent.click(plusBtn);
+  expect(container.querySelector(".composer-plus-menu")).toBeTruthy();
+  fireEvent.mouseDown(document.body);
+  expect(container.querySelector(".composer-plus-menu")).toBeNull();
+});

@@ -159,6 +159,7 @@ export function SearchPage({
           value={project}
           onChange={setProject}
           messages={t}
+          includeMemberProjects
         />
       </div>
       {categoryError && <Alert type="error" title={t.categoryError} />}

@@ -163,7 +163,7 @@ export function BuildPage({
           messages={t}
         />
       </div>
-      <PullsPanel token={token} messages={t} />
+      <PullsPanel token={token} project={project} messages={t} />
       {generations?.behind && (
         <Alert
           type="warning"

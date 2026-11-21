@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { Alert, Space, Typography, ConfigProvider, Button } from "antd";
 import { CorrectionsPage } from "./CorrectionsPage";
 import { BuildPage } from "./BuildPage";
@@ -19,11 +19,14 @@ import { AgentSettings } from "./AgentSettings";
 import { PlatformSettings } from "./PlatformSettings";
 import {
   DatabaseOutlined,
-  UserOutlined,
+  FolderOpenOutlined,
+  LogoutOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
-  LogoutOutlined,
   SearchOutlined,
+  SettingOutlined,
+  SyncOutlined,
+  UserOutlined,
 } from "@ant-design/icons";
 
 function formatGenerationTime(value: string | null | undefined) {
@@ -242,13 +245,49 @@ export function App() {
     setPath(next);
     setDrawerOpen(false);
   };
-  const navigation = [
+  const canManageProject = role === "admin" || projectAdmin;
+  const navigation: {
+    path: string;
+    label: string;
+    icon: ReactNode;
+    activePaths?: string[];
+  }[] = [
     { path: "/search", label: t.sidebarSearch, icon: <SearchOutlined /> },
     {
       path: "/knowledge",
       label: t.sidebarKnowledge,
       icon: <DatabaseOutlined />,
     },
+    ...(canManageProject
+      ? [
+          {
+            path: "/builds",
+            label: t.sidebarDataOps,
+            icon: <SyncOutlined />,
+            activePaths: [
+              "/builds",
+              "/source",
+              "/corrections",
+              "/knowledge-gaps",
+            ],
+          },
+          {
+            path: "/projects",
+            label: t.sidebarProjects,
+            icon: <FolderOpenOutlined />,
+          },
+        ]
+      : []),
+    ...(role === "admin"
+      ? [
+          {
+            path: "/config",
+            label: t.sidebarSystemConfig,
+            icon: <SettingOutlined />,
+            activePaths: ["/config", "/plugins", "/tokens"],
+          },
+        ]
+      : []),
   ];
   const management = [
     { path: "/builds", label: t.builds },
@@ -271,7 +310,7 @@ export function App() {
       ["/builds", "/source", "/corrections", "/knowledge-gaps"].includes(path)
     )
       return [
-        ...(role === "admin"
+        ...(canManageProject
           ? [
               { path: "/builds", label: t.builds },
               { path: "/source", label: t.source },
@@ -314,20 +353,24 @@ export function App() {
     path === "/knowledge-gaps" ? (
       <CorrectionsPage token={token} gaps messages={t} />
     ) : path === "/corrections" ? (
-      role === "admin" ? (
+      canManageProject ? (
         <CorrectionsPage token={token} messages={t} />
       ) : (
         <Alert title={t.forbidden} type="warning" />
       )
     ) : path === "/chat" || path === "/" ? null : path === "/builds" ? (
-      role === "admin" ? (
+      canManageProject ? (
         <BuildPage token={token} messages={t} />
       ) : (
         <Alert title={t.forbidden} type="warning" />
       )
     ) : path === "/source" ? (
-      role === "admin" ? (
-        <SourcePage token={token} messages={t} />
+      canManageProject ? (
+        <SourcePage
+          token={token}
+          messages={t}
+          onNavigateBuilds={() => navigate("/builds")}
+        />
       ) : (
         <Alert title={t.forbidden} type="warning" />
       )
@@ -492,6 +535,7 @@ export function App() {
                   className="nav-item"
                   href={item.path}
                   aria-current={
+                    item.activePaths?.includes(path) ||
                     path === item.path ||
                     (path === "/" && item.path === "/chat")
                       ? "page"
@@ -664,6 +708,7 @@ export function App() {
                     newTarget={newTarget}
                     initialConversationId={conversationId}
                     onNavigateChat={() => navigate("/chat")}
+                    onNavigateKnowledge={() => navigate("/knowledge")}
                   />
                 </div>
                 {!isChat &&

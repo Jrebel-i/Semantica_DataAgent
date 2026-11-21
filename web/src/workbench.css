@@ -3517,6 +3517,507 @@ code {
   padding-top: 0;
 }
 
+.chat-header-meta {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.chat-header-title .chat-header-project {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--ink-2);
+  font-family: var(--font-sans);
+  font-size: 11.5px;
+  font-weight: 500;
+}
+
+.chat-project-guide {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  margin: -12px 0 18px;
+}
+.chat-project-guide-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--ink-2);
+  font-size: 12.5px;
+}
+.chat-project-guide-link {
+  color: var(--teal);
+  font-size: 12.5px;
+  font-weight: 500;
+  text-decoration: none;
+}
+.chat-project-guide-link:hover {
+  text-decoration: underline;
+}
+
+.correction-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+.correction-filters button {
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--white);
+  color: var(--ink-2);
+  font-size: 12px;
+  cursor: pointer;
+}
+.correction-filters button.active {
+  border-color: var(--teal);
+  background: var(--mint-soft);
+  color: var(--teal-dark);
+  font-weight: 600;
+}
+.correction-list button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.admin-page select:not(.ant-select-selector),
+.admin-page
+  input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not(
+    .ant-input
+  ):not(.ant-select-selection-search-input) {
+  min-height: 38px;
+  padding: 6px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--white);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: 13px;
+}
+.admin-page select:not(.ant-select-selector):focus-visible,
+.admin-page
+  input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not(
+    .ant-input
+  ):not(.ant-select-selection-search-input):focus-visible,
+.admin-page textarea:not(.ant-input):focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+  border-color: var(--teal);
+}
+.admin-page textarea:not(.ant-input) {
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--white);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: 13px;
+}
+.admin-page > .page-header > button,
+.admin-page .save-bar > button,
+.admin-page .source-compare > button,
+.admin-page .plugin-card button:not(.ant-btn),
+.admin-page .form-card button:not(.ant-btn) {
+  min-height: 38px;
+  padding: 0 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--white);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  cursor: pointer;
+}
+.admin-page > .page-header > button:hover,
+.admin-page .save-bar > button:hover,
+.admin-page .source-compare > button:hover,
+.admin-page .plugin-card button:not(.ant-btn):hover,
+.admin-page .form-card button:not(.ant-btn):hover {
+  border-color: var(--teal);
+  color: var(--teal);
+}
+.admin-page > .page-header > button:focus-visible,
+.admin-page .save-bar > button:focus-visible,
+.admin-page .source-compare > button:focus-visible,
+.admin-page .plugin-card button:not(.ant-btn):focus-visible,
+.admin-page .form-card button:not(.ant-btn):focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+  border-color: var(--teal);
+}
+.admin-page .save-bar > button.primary,
+.admin-page .plugin-card button.primary:not(.ant-btn),
+.admin-page .form-card button.primary:not(.ant-btn) {
+  border-color: var(--teal);
+  background: var(--teal);
+  color: var(--white);
+}
+.admin-page .save-bar > button.primary:hover,
+.admin-page .plugin-card button.primary:not(.ant-btn):hover,
+.admin-page .form-card button.primary:not(.ant-btn):hover {
+  border-color: var(--teal-dark);
+  background: var(--teal-dark);
+  color: var(--white);
+}
+.admin-page .save-bar > button.danger,
+.admin-page .plugin-card button.danger:not(.ant-btn),
+.admin-page .form-card button.danger:not(.ant-btn) {
+  border-color: var(--danger-border);
+  color: var(--danger);
+}
+
+/* Chat sidebar & Claude-style borderless composer polish */
+.chat-header {
+  min-height: 58px;
+  padding: 12px 24px 8px;
+}
+.chat-header-title strong {
+  line-height: 1.4;
+}
+.chat-header-title .chat-header-project {
+  background: var(--panel);
+  border-color: var(--line-soft);
+}
+.chat-project-guide-badge {
+  border: 0;
+  background: rgba(48, 48, 46, 0.045);
+}
+.sidebar-sessions select.session-project-filter {
+  min-height: 24px;
+  height: 24px;
+  max-width: 112px;
+  padding: 0 20px 0 8px;
+  border: 1px solid var(--line-soft);
+  border-radius: 999px;
+  background-color: rgba(48, 48, 46, 0.03);
+  background-position: right 7px center;
+  background-size: 9px 6px;
+  color: var(--ink-2);
+  font-size: 11.5px;
+}
+.session-item button.session-menu-toggle:not(.ant-btn) {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  min-width: 24px;
+  height: 24px;
+  min-height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink-2);
+  box-shadow: none;
+}
+.session-item button.session-menu-toggle:not(.ant-btn):hover,
+.session-item button.session-menu-toggle:not(.ant-btn):focus-visible {
+  border-color: transparent;
+  background: rgba(48, 48, 46, 0.08);
+  color: var(--ink);
+}
+.session-menu {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: 0 8px 24px var(--shadow-large);
+}
+.session-menu button:not(.ant-btn) {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-height: 30px;
+  padding: 5px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink);
+  font-size: 12.5px;
+  text-align: left;
+}
+.session-menu button:not(.ant-btn):hover {
+  background: var(--panel);
+  color: var(--ink);
+}
+
+.composer-box {
+  overflow: visible;
+}
+.composer-left {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+.composer-right {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+  flex: none;
+}
+.composer-plus-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+button.composer-plus-btn:not(.ant-btn) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  min-width: 30px;
+  height: 30px;
+  min-height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink-2);
+  font-size: 15px;
+  box-shadow: none;
+  cursor: pointer;
+}
+button.composer-plus-btn:not(.ant-btn):hover,
+button.composer-plus-btn:not(.ant-btn).active {
+  border-color: transparent;
+  background: rgba(48, 48, 46, 0.06);
+  color: var(--ink);
+}
+button.composer-plus-btn:not(.ant-btn):focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+.composer-plus-menu {
+  position: absolute;
+  left: 0;
+  z-index: 1200;
+  min-width: 224px;
+  max-width: 280px;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: 0 10px 28px rgba(48, 48, 46, 0.14);
+}
+.composer-plus-menu--down {
+  top: calc(100% + 8px);
+}
+.composer-plus-menu--up {
+  bottom: calc(100% + 8px);
+}
+.composer-plus-section {
+  padding: 6px 10px 4px;
+  color: var(--ink-3);
+  font-size: 11px;
+}
+.composer-plus-divider {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--line-soft);
+}
+button.composer-plus-item:not(.ant-btn) {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  min-height: 34px;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+button.composer-plus-item:not(.ant-btn):hover:not(:disabled) {
+  border-color: transparent;
+  background: var(--panel);
+  color: var(--ink);
+}
+button.composer-plus-item:not(.ant-btn):disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.composer-plus-item-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.composer-plus-check {
+  color: var(--teal);
+  font-size: 12px;
+  flex: none;
+}
+.composer-plus-hint {
+  padding: 2px 10px 6px;
+  color: var(--ink-3);
+  font-size: 11px;
+}
+
+.composer-controls select.composer-ghost-select {
+  height: 28px;
+  min-height: 28px;
+  max-width: 140px;
+  padding: 0 20px 0 8px;
+  border: 0;
+  border-radius: 6px;
+  appearance: none;
+  background-color: transparent;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='9' height='6' viewBox='0 0 9 6'%3E%3Cpath d='M1 1l3.5 3.5L8 1' fill='none' stroke='%236F6B64' stroke-width='1.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 6px center;
+  background-size: 9px 6px;
+  color: var(--ink-2);
+  font-size: 12.5px;
+  cursor: pointer;
+  text-overflow: ellipsis;
+}
+.composer-controls select.composer-ghost-select:not(:disabled):hover {
+  background-color: rgba(48, 48, 46, 0.05);
+  color: var(--ink);
+}
+.composer-controls select.composer-ghost-select:disabled {
+  padding-right: 8px;
+  background-image: none;
+  background-color: transparent;
+  color: var(--ink-3);
+  cursor: default;
+}
+button.composer-project-chip:not(.ant-btn) {
+  display: inline-flex;
+  align-items: center;
+  height: 28px;
+  min-height: 28px;
+  max-width: 160px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink-2);
+  font-size: 12.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+button.composer-project-chip:not(.ant-btn):hover:not(:disabled) {
+  border-color: transparent;
+  background: rgba(48, 48, 46, 0.05);
+  color: var(--ink);
+}
+button.composer-project-chip:not(.ant-btn):disabled {
+  color: var(--ink-3);
+  cursor: default;
+  opacity: 0.8;
+}
+.composer-project-label {
+  height: 28px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink-2);
+  font-size: 12.5px;
+}
+
+.composer-controls .composer-select.ant-select {
+  height: 28px;
+  min-height: 28px;
+  min-width: 0;
+  padding: 0 6px;
+  border: 0 !important;
+  border-radius: 6px !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  color: var(--ink);
+  font-size: 13px;
+}
+.composer-controls .composer-select.ant-select:hover {
+  border: 0 !important;
+  background: rgba(48, 48, 46, 0.05) !important;
+}
+.composer-controls .composer-select.ant-select.ant-select-focused {
+  background: rgba(48, 48, 46, 0.05) !important;
+  box-shadow: 0 0 0 2px var(--focus-ring) !important;
+}
+.composer-controls .composer-model-select {
+  min-width: 0;
+  max-width: 210px;
+}
+.composer-controls .composer-model-select .ant-select-content {
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 500;
+}
+.composer-controls .composer-effort-select .ant-select-content {
+  color: var(--ink-2);
+  font-size: 12.5px;
+}
+.composer-controls .ant-select-selector {
+  height: 28px !important;
+  min-height: 28px !important;
+  border: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+  display: inline-flex;
+  align-items: center;
+}
+.composer-controls .ant-select .ant-select-content {
+  display: inline-flex;
+  align-items: center;
+  line-height: 28px;
+}
+.composer-controls .ant-select .ant-select-input {
+  min-height: 0 !important;
+  height: 20px !important;
+  padding: 0 !important;
+  border: 0 !important;
+  background: transparent !important;
+}
+.composer-lock-hints {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  max-height: 0;
+  opacity: 0;
+  overflow: hidden;
+  transition:
+    opacity 0.15s ease,
+    max-height 0.15s ease;
+}
+.composer-lock-hints .chat-selector-hint {
+  max-width: none;
+}
+.composer-box:has(
+    select:disabled:hover,
+    button.composer-project-chip:disabled:hover,
+    .composer-attach-button--disabled:hover
+  )
+  .composer-lock-hints {
+  max-height: 32px;
+  margin-top: 2px;
+  opacity: 0.9;
+}
+
 /* Narrow screens: overlay navigation drawer and full-width content */
 .mobile-topbar {
   display: none;

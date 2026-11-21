@@ -46,6 +46,7 @@ export function ChatPage({
   newTarget,
   initialConversationId = "",
   onNavigateChat,
+  onNavigateKnowledge,
   refreshKey = 0,
 }: {
   token: string;
@@ -56,6 +57,7 @@ export function ChatPage({
   newTarget?: HTMLElement | null;
   initialConversationId?: string;
   onNavigateChat?: () => void;
+  onNavigateKnowledge?: () => void;
   language?: Language;
   onChangeLanguage?: () => void;
   refreshKey?: number;
@@ -420,6 +422,14 @@ export function ChatPage({
     : null;
   const emptyConversation = !loadingConversation && turns.length === 0 && !live;
   const projectLocked = Boolean(currentConversationId) || Boolean(live);
+  const activeChatProject = projects.find(
+    (project) => project.id === (currentConversation?.project_id || projectId),
+  );
+  const headerProjectName =
+    currentConversation?.project_name || activeChatProject?.name || "";
+  const showHeaderProjectBadge =
+    Boolean(headerProjectName) &&
+    (projects.length > 1 || Boolean(currentConversation?.project_id));
   const liveAnswer = live
     ? stripCitationRefs(live.text)
     : { text: "", refs: [] };
@@ -537,10 +547,17 @@ export function ChatPage({
                 <strong>
                   {currentConversation?.title || t.newConversation}
                 </strong>
-                <span>
-                  {agentId} · {activeProvider?.name || providerId || "—"} ·{" "}
-                  {model || "—"}
-                </span>
+                <div className="chat-header-meta">
+                  {showHeaderProjectBadge && (
+                    <span className="chat-header-project">
+                      {headerProjectName}
+                    </span>
+                  )}
+                  <span>
+                    {agentId} · {activeProvider?.name || providerId || "—"} ·{" "}
+                    {model || "—"}
+                  </span>
+                </div>
               </div>
             </header>
             {currentConversation?.archived && (
@@ -672,6 +689,7 @@ export function ChatPage({
               addAttachments={addAttachments}
               removeAttachment={removeAttachment}
               visionEnabled={visionEnabled}
+              onNavigateKnowledge={onNavigateKnowledge}
             />
           </div>
           {citationRef && (

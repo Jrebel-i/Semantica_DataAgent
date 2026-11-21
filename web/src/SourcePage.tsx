@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Alert, Checkbox, Switch, Tag, Upload } from "antd";
+import { Alert, Button, Checkbox, Switch, Tag, Upload } from "antd";
 import type { components } from "./api";
 import type { Messages } from "./i18n";
 import { ProjectSelector, storedProject } from "./ProjectSelector";
@@ -66,19 +66,26 @@ function tree(paths: string[]): Tree {
 function FileTree({
   node,
   prefix,
+  defaultOpen,
   open,
 }: {
   node: Tree;
   prefix: string;
+  defaultOpen: boolean;
   open: (path: string) => void;
 }) {
   return (
     <ul>
       {Object.entries(node.directories).map(([name, child]) => (
         <li key={name}>
-          <details open>
+          <details open={defaultOpen}>
             <summary>{name}</summary>
-            <FileTree node={child} prefix={`${prefix}${name}/`} open={open} />
+            <FileTree
+              node={child}
+              prefix={`${prefix}${name}/`}
+              defaultOpen={defaultOpen}
+              open={open}
+            />
           </details>
         </li>
       ))}
@@ -153,18 +160,26 @@ function encoded(file: File): Promise<string> {
 export function SourcePage({
   token,
   messages: t,
+  onNavigateBuilds,
 }: {
   token: string;
   messages: Messages;
+  onNavigateBuilds?: () => void;
 }) {
   const [project, setProject] = useState(storedProject);
   const [paths, setPaths] = useState<string[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
+  const [uploadMode, setUploadMode] = useState<"category" | "target">(
+    "category",
+  );
+  const [targetDir, setTargetDir] = useState("ossie");
   const [category, setCategory] = useState("");
   const [newCategory, setNewCategory] = useState("");
   const [subfolder, setSubfolder] = useState("");
   const [files, setFiles] = useState<File[]>([]);
   const [replace, setReplace] = useState(false);
+  const [fileFilter, setFileFilter] = useState("");
+  const [treeExpand, setTreeExpand] = useState({ open: true, seq: 0 });
   const [preview, setPreview] = useState<Preview | null>(null);
   const [busy, setBusy] = useState(false);
   const [path, setPath] = useState("");
@@ -176,6 +191,7 @@ export function SourcePage({
   const [diff, setDiff] = useState("");
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
+  const [buildNotice, setBuildNotice] = useState("");
   const [status, setStatus] = useState<SourceStatus | null>(null);
   const [autoBuild, setAutoBuild] = useState<boolean | null>(null);
   const [statusRefresh, setStatusRefresh] = useState(0);
@@ -211,7 +227,16 @@ export function SourcePage({
   }, [loadCategories]);
   useEffect(() => {
     setPreview(null);
-  }, [files, category, newCategory, subfolder, replace, project]);
+  }, [
+    files,
+    uploadMode,
+    targetDir,
+    category,
+    newCategory,
+    subfolder,
+    replace,
+    project,
+  ]);
   useEffect(() => {
     let active = true;
     let timer: number | undefined;
@@ -251,9 +276,13 @@ export function SourcePage({
     };
   }, [project, request, statusRefresh]);
   const selectedCategory = newCategory.trim() || category;
+  const canPreviewUpload = Boolean(
+    files.length &&
+    (uploadMode === "target" ? targetDir.trim() : selectedCategory),
+  );
   function chooseFiles(next: File[]) {
     setFiles(next);
-    if (!next.length) return;
+    if (!next.length || uploadMode !== "category") return;
     const root = next[0].webkitRelativePath?.split("/")[0];
     if (root) {
       setNewCategory(root);
@@ -275,6 +304,13 @@ export function SourcePage({
             })),
           ),
         };
+    if (uploadMode === "target") {
+      return {
+        target: targetDir.trim(),
+        replace,
+        ...values,
+      };
+    }
     return {
       category: selectedCategory,
       ...(subfolder.trim() ? { subfolder: subfolder.trim() } : {}),
@@ -283,7 +319,7 @@ export function SourcePage({
     };
   }
   async function loadPreview() {
-    if (!files.length || !selectedCategory) return;
+    if (!canPreviewUpload) return;
     setBusy(true);
     try {
       setPreview(
@@ -295,6 +331,24 @@ export function SourcePage({
       );
       setError("");
     } catch {
+      setError(t.sourceError);
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function triggerQuickBuild() {
+    setBusy(true);
+    try {
+      await request("/api/v1/builds", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ build_type: "incremental" }),
+      });
+      setError("");
+      setBuildNotice(t.sourceBuildQueued);
+      setStatusRefresh((value) => value + 1);
+    } catch {
+      setBuildNotice("");
       setError(t.sourceError);
     } finally {
       setBusy(false);
@@ -350,6 +404,10 @@ export function SourcePage({
       setError(t.sourceError);
     }
   }
+  const trimmedFilter = fileFilter.trim().toLowerCase();
+  const visiblePaths = trimmedFilter
+    ? paths.filter((p) => p.toLowerCase().includes(trimmedFilter))
+    : paths;
   return (
     <section className="stack admin-page">
       <div className="page-header">
@@ -391,6 +449,18 @@ export function SourcePage({
               />
             </label>
           )}
+          <Button
+            autoInsertSpace={false}
+            disabled={busy}
+            onClick={() => void triggerQuickBuild()}
+          >
+            {t.sourceQuickBuild}
+          </Button>
+          {onNavigateBuilds && (
+            <Button autoInsertSpace={false} onClick={onNavigateBuilds}>
+              {t.sourceViewBuilds}
+            </Button>
+          )}
           <ProjectSelector
             token={token}
             value={project}
@@ -400,12 +470,29 @@ export function SourcePage({
         </div>
       </div>
       {error && <Alert type="error" title={error} />}
+      {buildNotice && <Alert type="success" title={buildNotice} />}
       {success && <Alert type="success" title={`${t.uploaded}: ${success}`} />}
       <div className="source-layout">
         <div className="source-stack">
           <section className="card section-card">
             <div className="card-title-row">
               <h2 className="card-title">{t.sourceUpload}</h2>
+              <div className="filter-pills">
+                <Button
+                  size="small"
+                  type={uploadMode === "category" ? "primary" : "default"}
+                  onClick={() => setUploadMode("category")}
+                >
+                  {t.sourceModeCategory}
+                </Button>
+                <Button
+                  size="small"
+                  type={uploadMode === "target" ? "primary" : "default"}
+                  onClick={() => setUploadMode("target")}
+                >
+                  {t.sourceModeTarget}
+                </Button>
+              </div>
             </div>
             <div className="stack">
               <div className="field">
@@ -431,45 +518,73 @@ export function SourcePage({
                   onChange={chooseFiles}
                 />
               </div>
-              <label className="field">
-                <span className="field-label">{t.sourceCategory}</span>
-                <select
-                  aria-label={t.sourceCategory}
-                  value={category}
-                  onChange={(e) => {
-                    setCategory(e.target.value);
-                    setNewCategory("");
-                  }}
-                >
-                  <option value="">{t.sourceCategoryPlaceholder}</option>
-                  {categories.map((item) => (
-                    <option value={item.name} key={item.name}>
-                      {item.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="field">
-                <span className="field-label">{t.sourceNewCategory}</span>
-                <input
-                  aria-label={t.sourceNewCategory}
-                  placeholder={t.sourceNewCategoryPlaceholder}
-                  value={newCategory}
-                  onChange={(e) => {
-                    setNewCategory(e.target.value);
-                    setCategory("");
-                  }}
-                />
-              </label>
-              <label className="field">
-                <span className="field-label">{t.sourceSubfolder}</span>
-                <input
-                  aria-label={t.sourceSubfolder}
-                  placeholder={t.sourceSubfolderPlaceholder}
-                  value={subfolder}
-                  onChange={(e) => setSubfolder(e.target.value)}
-                />
-              </label>
+              {uploadMode === "category" ? (
+                <>
+                  <label className="field">
+                    <span className="field-label">{t.sourceCategory}</span>
+                    <select
+                      aria-label={t.sourceCategory}
+                      value={category}
+                      onChange={(e) => {
+                        setCategory(e.target.value);
+                        setNewCategory("");
+                      }}
+                    >
+                      <option value="">{t.sourceCategoryPlaceholder}</option>
+                      {categories.map((item) => (
+                        <option value={item.name} key={item.name}>
+                          {item.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="field">
+                    <span className="field-label">{t.sourceNewCategory}</span>
+                    <input
+                      aria-label={t.sourceNewCategory}
+                      placeholder={t.sourceNewCategoryPlaceholder}
+                      value={newCategory}
+                      onChange={(e) => {
+                        setNewCategory(e.target.value);
+                        setCategory("");
+                      }}
+                    />
+                  </label>
+                  <label className="field">
+                    <span className="field-label">{t.sourceSubfolder}</span>
+                    <input
+                      aria-label={t.sourceSubfolder}
+                      placeholder={t.sourceSubfolderPlaceholder}
+                      value={subfolder}
+                      onChange={(e) => setSubfolder(e.target.value)}
+                    />
+                  </label>
+                </>
+              ) : (
+                <div className="stack">
+                  <div className="filter-pills">
+                    {(["ossie", "canonical"] as const).map((preset) => (
+                      <Button
+                        key={preset}
+                        size="small"
+                        type={targetDir === preset ? "primary" : "default"}
+                        onClick={() => setTargetDir(preset)}
+                      >
+                        {preset}/
+                      </Button>
+                    ))}
+                  </div>
+                  <label className="field">
+                    <span className="field-label">{t.sourceTargetDir}</span>
+                    <input
+                      aria-label={t.sourceTargetDir}
+                      placeholder={t.sourceTargetDirPlaceholder}
+                      value={targetDir}
+                      onChange={(e) => setTargetDir(e.target.value)}
+                    />
+                  </label>
+                </div>
+              )}
               <details className="advanced-options">
                 <summary>{t.sourceAdvanced}</summary>
                 <Checkbox
@@ -541,7 +656,7 @@ export function SourcePage({
               <div className="save-bar" style={{ marginTop: 0 }}>
                 <button
                   type="button"
-                  disabled={busy || !files.length || !selectedCategory}
+                  disabled={busy || !canPreviewUpload}
                   onClick={() => void loadPreview()}
                 >
                   {t.sourcePreview}
@@ -565,12 +680,46 @@ export function SourcePage({
           <section className="card section-card">
             <div className="card-title-row">
               <h2 className="card-title">{t.sourceBrowse}</h2>
-              <span className="muted">{paths.length}</span>
+              <span className="muted">
+                {trimmedFilter
+                  ? `${visiblePaths.length}/${paths.length}`
+                  : paths.length}
+              </span>
             </div>
-            <div className="source-tree">
+            <div className="stack" style={{ marginBottom: 12 }}>
+              <input
+                aria-label={t.sourceFilterFiles}
+                placeholder={t.sourceFilterFiles}
+                value={fileFilter}
+                onChange={(e) => setFileFilter(e.target.value)}
+              />
+              <div className="filter-pills">
+                <Button
+                  size="small"
+                  onClick={() =>
+                    setTreeExpand((prev) => ({ open: true, seq: prev.seq + 1 }))
+                  }
+                >
+                  {t.sourceExpandAll}
+                </Button>
+                <Button
+                  size="small"
+                  onClick={() =>
+                    setTreeExpand((prev) => ({
+                      open: false,
+                      seq: prev.seq + 1,
+                    }))
+                  }
+                >
+                  {t.sourceCollapseAll}
+                </Button>
+              </div>
+            </div>
+            <div className="source-tree" key={treeExpand.seq}>
               <FileTree
-                node={tree(paths)}
+                node={tree(visiblePaths)}
                 prefix=""
+                defaultOpen={treeExpand.open}
                 open={(p) => void open(p)}
               />
             </div>

@@ -88,3 +88,51 @@ test("lists manageable projects and reports the selected project", async () => {
   await waitFor(() => expect(changes).toEqual(["docs"]));
   expect(screen.queryByTitle("Old Docs")).toBeNull();
 });
+
+test("当前值不在可用项目列表时自动切换到首个项目，且支持 includeMemberProjects", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () =>
+      Response.json([
+        {
+          id: "alpha",
+          name: "主题域 Alpha",
+          type: "warehouse",
+          status: "active",
+          created_at: "2026-01-01T00:00:00Z",
+          my_role: "admin",
+        },
+        {
+          id: "beta",
+          name: "成员项目 Beta",
+          type: "warehouse",
+          status: "active",
+          created_at: "2026-01-01T00:00:00Z",
+          my_role: "member",
+        },
+      ]),
+    ),
+  );
+  const changes: string[] = [];
+  const { rerender } = render(
+    <ProjectSelector
+      token="token"
+      value="default"
+      onChange={(value) => changes.push(value)}
+      messages={getMessages("zh")}
+    />,
+  );
+  await waitFor(() => expect(changes).toEqual(["alpha"]));
+
+  rerender(
+    <ProjectSelector
+      token="token"
+      value="alpha"
+      includeMemberProjects
+      onChange={(value) => changes.push(value)}
+      messages={getMessages("zh")}
+    />,
+  );
+  fireEvent.mouseDown(screen.getByRole("combobox"));
+  expect(await screen.findByTitle("成员项目 Beta")).toBeTruthy();
+});

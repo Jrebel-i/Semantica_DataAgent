@@ -1430,6 +1430,8 @@ export interface components {
         DocumentLink: {
             /** Category */
             category: string;
+            /** Generated */
+            generated?: boolean | null;
             /** Path */
             path: string;
             /** Ref */
@@ -1990,6 +1992,21 @@ export interface components {
             /** Tasks */
             tasks: number;
         };
+        /** RelationshipLink */
+        RelationshipLink: {
+            /** From Columns */
+            from_columns: string[];
+            /** From Table */
+            from_table: string;
+            /** Name */
+            name: string;
+            /** Ref */
+            ref: string;
+            /** To Columns */
+            to_columns: string[];
+            /** To Table */
+            to_table: string;
+        };
         /** SearchHit */
         SearchHit: {
             /** Ambiguity Refs */
@@ -2168,6 +2185,8 @@ export interface components {
             name: string;
             /** Ref */
             ref: string;
+            /** Relationships */
+            relationships?: components["schemas"]["RelationshipLink"][] | null;
         };
         /** TaskView */
         TaskView: {
@@ -4053,7 +4072,9 @@ export interface operations {
     };
     list_pulls_api_v1_pulls_get: {
         parameters: {
-            query?: never;
+            query?: {
+                project?: string | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -4067,6 +4088,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PullView"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

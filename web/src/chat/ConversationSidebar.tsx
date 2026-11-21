@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { Button, Modal } from "antd";
 import {
   DeleteOutlined,
@@ -88,6 +89,26 @@ export function ConversationSidebar({
   onToggleArchived: () => void;
 }) {
   const t = messages;
+  useEffect(() => {
+    if (!menuId) return;
+    const handleMouseDown = (event: MouseEvent) => {
+      if (
+        !(event.target instanceof Element) ||
+        !event.target.closest(".session-menu-wrap")
+      ) {
+        setMenuId("");
+      }
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setMenuId("");
+    };
+    document.addEventListener("mousedown", handleMouseDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", handleMouseDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [menuId, setMenuId]);
   const filter = (rows: Conversation[]) =>
     projectFilter
       ? rows.filter((conversation) => conversation.project_id === projectFilter)
