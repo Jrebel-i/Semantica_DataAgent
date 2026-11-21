@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import (
     BaseModel,
     ConfigDict,
+    Field,
     SerializerFunctionWrapHandler,
     model_serializer,
 )
