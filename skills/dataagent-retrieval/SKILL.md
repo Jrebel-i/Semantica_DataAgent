@@ -49,6 +49,13 @@ Use this skill when a question needs warehouse knowledge or SQL. Retrieve before
    before validation. If validation reports any table, field, syntax, join, or partition
    problem, rewrite the statement using confirmed tables and fields, then validate the
    replacement. Never present a statement that failed validation as final.
+   - **Validate the exact final statement.** The SQL text and dialect passed to
+     `validate_sql` must be the complete statement you will show in the final answer or
+     pass to `propose_query`/`execute_query`, with no later edits. After any change,
+     including `ORDER BY`, `LIMIT`, expressions, aliases, or other clauses, run
+     `validate_sql` again on the actual final version. Present or propose only the version
+     that passed; if the final version has not passed, label it explicitly as unvalidated
+     or do not deliver it as final.
    - **Never silently drop a condition.** Every filter in the question (entity, time
      range, status, dimension value) must appear in the final SQL. Before submitting,
      self-check: "is each requested condition present?"
@@ -137,6 +144,14 @@ Read `validate_sql` completely:
   partitions when they affect completeness. Match the result's time precision to its
   source: a day-level partition or daily aggregate cannot establish an exact hour or
   instant.
+- Bind each business-date window to the event named in the question or in a verified
+  definition, not a neighboring lifecycle timestamp that merely happens to be available.
+  When a question measures the elapsed time of a specified occurred event and does not
+  separately specify an attribution event, attribute rows by that measured event as the
+  end point; an explicitly specified different event or verified definition takes
+  precedence. If the event is unclear and changes the answer, clarify or disclose the
+  assumption. Never treat order completion, partition time, or load time as equivalent
+  to the measured business event.
 - For durations, identify the start and end events from the question or a verified
   business definition, then compute end minus start. Check the operand order in the
   final expression and the dialect-specific argument order. A negative duration triggers
@@ -160,11 +175,13 @@ Read `validate_sql` completely:
   subtraction, precision, NULL, and rounding behavior before choosing an expression.
 - Before presenting or proposing the final SQL, reread it against every check above:
   timezone and anchor, open-ended versus complete versus future period, upper bound
-  relative to the anchor, business time versus partition, duration direction and dialect
+  relative to the anchor, the business event selected for each window (not a neighboring
+  lifecycle event), business time versus partition, duration direction and dialect
   arguments, per-row versus aggregate duration granularity, raw-precision filtering and
   aggregation before display rounding, both duration-threshold operators against the
-  intended inclusion of each endpoint, and result time precision. A passing
-  `validate_sql` does not prove these semantics.
+  intended inclusion of each endpoint, result time precision, and that the exact final
+  SQL and dialect were validated after the last edit. A passing `validate_sql` does not
+  prove these semantics.
 
 ## Pagination and errors
 
