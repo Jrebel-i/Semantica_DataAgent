@@ -1,4 +1,4 @@
-<!-- retro-done: #1, #73, 二期后续, #171, #232 -->
+<!-- retro-done: #1, #73, 二期后续, #171, #232, #267, #276, #284, #292, #302 -->
 # 教训
 
 本项目的代码由 agent 编写、审查和合并。每个 spec 的票全部合并后，协调者复盘三个问题：哪些改完又返工了，哪些不该合进来，哪些验证做得太薄。这里只记录复盘得出、但还没有升级的教训。改代码之前先读这份文件，review 时逐条对照。
@@ -195,6 +195,26 @@
 - 证据：#143 第二轮排队等待时我给任务书追加了“普通用户隐藏状态栏”，但任务启动时已经读过文件，送达的 prompt 里没有它，看截图才发现，多一轮返工。
 - 怎么提前发现：派发后检查 `*.prompt.md` 是否含关键要求；要补就单独开一轮。
 - Seen 1× (二期后续 · 2026-11-08)
+
+## 多期集中 review（五至九期 · 2026-11-21）
+
+**review agent 的"硬违规"声明要先对照真实代码核实再派修复，否则会按误判改坏正确逻辑。**
+- 证据：第六期 review agent 报两项硬违规——"dtb_ossie.py 1264 行无测试"和"OpenAPI 漂移（pulls/ossie 缺失）"，两者经代码核实均为误判：test_dtb_ossie.py、test_dtb_ossie_pull.py 及 fixtures 都在，openapi.json 里 /api/v1/pulls/ossie 也存在；第七期 review 报 S1（ProjectSelector useEffect 依赖缺失）和 S3（ossieExport 未 revokeObjectURL），核实后 useEffect 两个依赖数组都完整、ossieExport.ts 第 29 行已调用 revokeObjectURL，都是误判；第八期 GateValidationError 报"未注册 422 handler"，核实 evolution_runner.py:1192 已内联处理；第九期报"discovery_config 权限不足"和"BEGIN IMMEDIATE 缺注释"，核实 discovery_api 已用 admin_project_path_scope、无 BEGIN IMMEDIATE 代码。
+- 修复：把"需修复"缩到核实后仍成立的少数——第五期 S3（relationships.py 三段式 catalog 静默退化）和 P1（export/ossie 缺错误码）、第七期 S2（table_api.py exclude_if 无效）和 S5（KnowledgePage isOutgoing 混用格式），其余驳回。
+- 怎么提前发现：review agent 返回硬违规时，先用 git show/grep 在目标分支核实该文件/该行是否存在所述代码，再决定是否派修复；"无测试"类声明要 ls tests/ 目录并查 fixtures；"OpenAPI 漂移"要实际解析 paths 键。
+- Done right：第六、八、九期核实后零修复直接合并，省去一轮 Codex+agy 往返。
+- Seen 1× (spec #267/#276/#284/#292/#302 · 2026-11-21)
+
+**前端"比较两格式 OR"的 bug 要先读测试数据确认 backend 实际存储的格式分布，再决定合并还是择一。**
+- 证据：第七期 S5 KnowledgePage.tsx 的 `isOutgoing = rel.from_table === fullName || rel.from_table === twoPart` 被 review 标为"混用格式导致方向误判"；Codex 第一版按任务书改成只用 twoPart，测试失败——测试数据里 from_table 同时有三段式 `lake.dwd.orders` 和两段式 `dwd.orders`，两种格式都真实存在；Codex 第二版保留 OR 仍失败，因为 `dwd.orders` 命中 twoPart 时把"另一张无 catalog 同名表的入向关系"误判为当前表出向。正确修复是有 catalog 时只用 fullName，无 catalog 时只用 twoPart（不要 OR）。
+- 修复：`const fullName = selected.catalog ? ... : twoPart; const isOutgoing = rel.from_table === fullName;`，22 个测试全过。
+- 怎么提前发现：前端比较类的 bug，先读测试 fixture 里该字段的样本值，确认实际有几种格式、哪种是当前表的；"两个格式都出现"时用 catalog 有无做分支而不是 OR。
+- Seen 1× (spec #284 · 2026-11-21)
+
+**Codex 任务书禁止"先做调查"会耗光上下文；精简任务书只点名要改的文件，能一轮完成提交。**
+- 证据：第五、七期第一版任务书允许 Codex 自行读文件调查，两个会话都在前期"Checking app import"/"Copying node_modules dependencies"阶段耗尽上下文、未产生提交；第二版任务书显式写"只改指定文件、禁止跑测试/装依赖/复制 node_modules、直接 commit"，两轮都在约 2 分钟内完成提交。
+- 怎么提前发现：改动范围明确（2-3 个文件、验收标准明确）的修复任务，任务书写明禁止项和"只改这几个文件"；复杂调查类才放开读取范围，并提高 effort。
+- Seen 1× (spec #267/#284 · 2026-11-21)
 
 **部署要脚本化、批量化；真实环境验证的选择器要固定成小工具。**
 - 证据：一晚部署 5 次，每次手工构建、推送、提 PR、合并、apply 约 10–12 分钟；真实环境验证脚本的选择器写错（回车没有提交、点到“复制 SQL”而不是“确认执行”、把整页状态栏当成内容），重跑 3–4 次，每次约 4 分钟。
