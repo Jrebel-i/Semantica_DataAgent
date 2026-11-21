@@ -23,6 +23,12 @@ class FieldView(BaseModel):
     type: str
     comment: str
     partition: bool
+    synonyms: list[str] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    instructions: str | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     dimension_count: int | None = None
     dimension_too_many: bool | None = None
     dimension_samples: list[str] | None = None
@@ -58,6 +64,12 @@ class RelationshipLink(BaseModel):
     from_columns: list[str]
     to_table: str
     to_columns: list[str]
+    description: str | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    instructions: str | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
 
 class TableSummary(_OmitOptionalResponseFields):
@@ -83,6 +95,12 @@ class TableView(_OmitOptionalResponseFields):
     database: str
     comment: str
     ref: str
+    synonyms: list[str] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    instructions: str | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     fields: list[FieldView]
     documents: list[DocumentLink]
     relationships: list[RelationshipLink] | None = None

@@ -27,6 +27,9 @@ from .db import (
     Clarification,
     Conversation,
     CorrectionProposal,
+    EvolutionCheckpoint,
+    EvolutionRound,
+    EvolutionRun,
     GenerationPointer,
     KnowledgeGap,
     KnowledgeGeneration,
@@ -93,6 +96,7 @@ def is_project_collection(name: str, project_id: str) -> bool:
 
 
 def _delete_source(project_id: str, settings: dict) -> None:
+    project_context.delete_project_eval_directory(project_id)
     root = project_context.projects_root().resolve()
     target = (root / project_id).resolve()
     if target.parent != root or target == root:
@@ -123,6 +127,9 @@ def _delete_neo4j(project_id: str, settings: dict) -> None:
 def _delete_milvus(project_id: str, settings: dict) -> None:
     from pymilvus import MilvusClient
 
+    from . import knowledge
+
+    knowledge.evict_project_vector_readers(project_id)
     client = MilvusClient(uri=settings["milvus_uri"])
     try:
         for name in client.list_collections():
@@ -213,6 +220,18 @@ def _delete_database(project_id: str, settings: dict) -> None:
             db.query(QueryExecution).filter(
                 QueryExecution.conversation_id.in_(conversation_ids)
             ).delete(synchronize_session=False)
+        from . import trajectories
+
+        trajectories.delete_project_trajectories(db, project_id)
+        db.query(EvolutionRound).filter(EvolutionRound.project_id == project_id).delete(
+            synchronize_session=False
+        )
+        db.query(EvolutionRun).filter(EvolutionRun.project_id == project_id).delete(
+            synchronize_session=False
+        )
+        db.query(EvolutionCheckpoint).filter(
+            EvolutionCheckpoint.project_id == project_id
+        ).delete(synchronize_session=False)
         db.query(Conversation).filter(Conversation.project_id == project_id).delete(
             synchronize_session=False
         )

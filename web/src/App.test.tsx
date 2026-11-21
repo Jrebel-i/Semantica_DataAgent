@@ -787,3 +787,116 @@ test("ordinary members do not get the project management menu entry", async () =
   expect(screen.queryByRole("link", { name: "项目管理" })).toBeNull();
   history.replaceState(null, "", "/");
 });
+
+test("user cannot access evolution dashboard", async () => {
+  localStorage.setItem("token", "reader");
+  history.replaceState(null, "", "/evolution");
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) =>
+      url === "/api/v1/me"
+        ? Response.json({ role: "user" })
+        : Response.json([]),
+    ),
+  );
+  render(<App />);
+  expect(await screen.findByText("无权限访问")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: /立即演化/ })).toBeNull();
+  history.replaceState(null, "", "/");
+});
+
+test("projectAdmin can open evolution dashboard and navigate to generated proposal", async () => {
+  localStorage.setItem("token", "padmin");
+  history.replaceState(null, "", "/evolution");
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) => {
+      if (url === "/api/v1/me") return Response.json({ role: "user" });
+      if (url === "/api/v1/projects") {
+        return Response.json([
+          {
+            id: "default",
+            name: "业务数据",
+            type: "warehouse",
+            status: "active",
+            created_at: "2026-01-01T00:00:00Z",
+            my_role: "admin",
+          },
+        ]);
+      }
+      if (url === "/api/v1/projects/default/evolution-config") {
+        return Response.json({
+          auto_evolve_enabled: false,
+          min_trajectories: 30,
+          min_interval_hours: 24,
+          max_idle_days: 7,
+          max_rounds: 3,
+          max_eval_cases: 20,
+          evolution_provider_id: null,
+          evolution_model: null,
+          judge_provider_id: null,
+          judge_model: null,
+          checkpoint_trajectory_id: null,
+          checkpoint_at: null,
+          pending_trajectories: 0,
+        });
+      }
+      if (url === "/api/v1/evolution/runs?project=default") {
+        return Response.json([
+          {
+            id: "run-route-1",
+            project_id: "default",
+            status: "accepted",
+            trigger_type: "manual",
+            created_by: "padmin",
+            diagnosis_trajectory_ids: [1],
+            reserve_trajectory_ids: [2],
+            max_rounds: 3,
+            max_eval_cases: 20,
+            rounds_completed: 1,
+            proposal_id: "prop-88",
+            stop_reason: "accepted",
+            error: null,
+            signal_summary: {},
+            created_at: "2026-01-01T00:00:00Z",
+            started_at: "2026-01-01T00:00:00Z",
+            finished_at: "2026-01-01T00:01:00Z",
+            rounds: [],
+          },
+        ]);
+      }
+      if (url === "/api/v1/corrections?project=default") {
+        return Response.json([
+          {
+            id: "prop-88",
+            target: "semantic_overrides:gmv",
+            reason: "跨页跳转验证",
+            diff: "-a\n+b",
+            patch: "b",
+            status: "pending",
+            source: "evolution",
+            gate_report: {
+              passed: true,
+              checks: [],
+              errors: [],
+              provenance: {
+                evolution_run_id: "run-route-1",
+                round_number: 1,
+                signal_kind: "search_detour",
+                hypothesis: "路由跳转验证假设",
+              },
+            },
+          },
+        ]);
+      }
+      return Response.json([]);
+    }),
+  );
+
+  render(<App />);
+  fireEvent.click(
+    await screen.findByRole("button", { name: "查看产出纠错提案" }),
+  );
+  expect(await screen.findByText("路由跳转验证假设")).toBeTruthy();
+  history.replaceState(null, "", "/");
+});

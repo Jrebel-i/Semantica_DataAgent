@@ -575,8 +575,10 @@ def _collect_model_files(base: Path, rel_root: Path) -> list[Path]:
     files: list[Path] = []
     for path in sorted(root.rglob("*")):
         rel_parts = path.relative_to(base).parts
-        if ".git" in rel_parts or any(
-            part.startswith(".") for part in path.relative_to(root).parts
+        if (
+            ".git" in rel_parts
+            or (rel_parts and rel_parts[0] == "overrides")
+            or any(part.startswith(".") for part in path.relative_to(root).parts)
         ):
             continue
         if path.is_dir():

@@ -1817,6 +1817,22 @@ def test_ossie_end_to_end_build_search_join_sql_override_and_corrections(
         )
 
     def run_build(build_type: str) -> tuple[int, str, str | None, dict]:
+        import time
+
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            with sessions()() as db:
+                busy = (
+                    db.query(Build)
+                    .filter(
+                        Build.project_id == "default",
+                        Build.status.in_(("queued", "running")),
+                    )
+                    .first()
+                )
+            if busy is None:
+                break
+            time.sleep(0.02)
         with sessions().begin() as db:
             row = Build(
                 project_id="default",

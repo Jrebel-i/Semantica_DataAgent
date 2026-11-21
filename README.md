@@ -41,9 +41,15 @@ flowchart TD
     end
 
     subgraph Clients["5. 在线 Agent 沙箱与客户端层"]
-        WEB["React 19 Web 工作台<br/>(问答 / 知识浏览 / 源文件 / 构建与拉取 / 纠错审批 / 项目管理)"]
+        WEB["React 19 Web 工作台<br/>(问答 / 知识浏览 / 源文件 / 构建与拉取 / 纠错审批 / 自主演化 / 项目管理)"]
         SANDBOX["隔离会话沙箱 (Docker 内网中继 / Kubernetes Pod)<br/>Runner: pi / claude (Claude Code) / codex"]
         LOCAL["外部本地 MCP 客户端<br/>(Claude Desktop / IDE / CLI + ask_dataagent 委托)"]
+    end
+
+    subgraph Evolution["6. 问答轨迹与自主演化层"]
+        TRAJ["本地问答轨迹与评测题集<br/>(dev / holdout 隔离防泄露)"]
+        EVO["轨迹挖掘与单假设演化运行<br/>(L1 静态 + L2 候选知识代门禁)"]
+        EVOSCHED["Fork 安全演化调度器<br/>(thresholds / idle trigger / 检查点)"]
     end
 
     DTB -->|convert-dtb-ossie / DtbOssiePuller| OSSIE
@@ -70,6 +76,11 @@ flowchart TD
     WEB <--> SANDBOX
     SANDBOX <-->|仅放行模型网关与 /mcp/| SCOPE
     LOCAL <-->|Bearer Token + 项目选择| SCOPE
+
+    SCOPE --> TRAJ
+    TRAJ --> EVO
+    EVOSCHED --> EVO
+    EVO -->|临时候选知识代验证通过 → 产出纠错提案| GOV
 ```
 
 ---
@@ -173,6 +184,9 @@ flowchart TD
 - **DTB → Apache Ossie 全自动提炼与混合维度落盘（[ADR 0008](docs/adr/0008-dtb-to-ossie-pipeline.md)）**：
   - 既可通过 CLI `convert-dtb-ossie` 离线转换，也可在项目配置中启用 `DTB 拉取为 Ossie`（`DtbOssiePuller`）定时拉取。
   - 保守确定性解析任务 SQL 中的物理表等值 JOIN 生成 `relationships`、一致性 `GROUP BY` / `ROW_NUMBER() = 1` 生成 `primary_key`、分区策略与直接上游写入 `dataset.ai_context.instructions`；低基数维度值原样内联进字段说明，高基数维度表保留同行 `row_id` 自动导出至 `dimension_values.json`。
+- **基于问答轨迹的自主演化闭环（[ADR 0009](docs/adr/0009-git-backed-semantic-overrides-and-correction-policy.md)、[ADR 0010](docs/adr/0010-local-trajectories-and-candidate-generation-gate.md)）**：
+  - 将修正覆盖层（`overrides/semantic_overrides.yaml`）迁入项目 Git 源目录版本化管理，并在前端纠错审批、评测题集（`dev` / `holdout` 分层防泄露）与演化看板（`/evolution`）中统一编排。
+  - 从本地采集的问答轨迹中排除 `holdout` 后按 70% 诊断 / 30% 验证保留划分，聚类五类信号（检索绕路、SQL 自修、多轮纠偏、保留多语义**口径变体**的重复澄清与缺口失败），逐轮提出单一因果假设，经 L1 静态校验与 L2 隔离**候选知识代**对比门禁后产出 `source="evolution"` 纠错提案并原子推进批次检查点。
 
 ---
 
@@ -198,6 +212,14 @@ Semantica_DataAgent/
 │   │   ├── dtb_source.py     # DTB 快照源适配器
 │   │   ├── dtb_tasks.py      # DTB 任务 SQL 解析与 Shell (Livy/Beeline) 展开
 │   │   ├── dtb_executor.py   # DTB 查询取样与受控取数执行器
+│   │   ├── semantic_overrides.py # Git 源目录修正覆盖层管理与构建叠加
+│   │   ├── eval_questions.py # 评测题集管理（dev / holdout 隔离）
+│   │   ├── trajectories.py   # 网关与对话问答轨迹本地采集与清理
+│   │   ├── trajectory_miner.py # 问答轨迹去重、70/30 防泄露切分与五类信号挖掘
+│   │   ├── evolution_gate.py # 隔离候选知识代创建、L2 A/B 与回归门禁评估
+│   │   ├── evolution_runner.py # 单假设演化运行状态机、恢复与提案生成
+│   │   ├── evolution_scheduler.py # Fork 安全自主演化周期调度器
+│   │   ├── evolution_api.py  # 演化配置、触发与运行轮次 REST 接口
 │   │   ├── pull_service.py   # 定时/手动拉取编排与构建入队
 │   │   ├── source_directory.py # Git 源目录上传、预览、原子发布与 SIGKILL 崩溃恢复
 │   │   ├── pi_runner.py / claude_runner.py / codex_runner.py # 三大在线 Agent Runner
@@ -205,7 +227,7 @@ Semantica_DataAgent/
 │   └── tests/                # 后端单元、崩溃恢复、Fork 安全、时间契约与端到端测试套件
 ├── web/                      # React 19 + TypeScript + Ant Design 6 + Vite 8 前端工作台
 │   ├── contract/openapi.json # 后端 OpenAPI 契约快照（由 check:types 守护零漂移）
-│   └── src/                  # 问答工作台、知识浏览、源文件管理、构建与拉取、纠错审批、项目管理与平台设置
+│   └── src/                  # 问答工作台、知识浏览、源文件管理、构建与拉取、纠错审批、自主演化看板、项目管理与平台设置
 ├── schemas/                  # JSON Schema 定义
 │   ├── v1/ & v2/             # 规范数据模型 Schema（table/field/task/relationship/dimension_value）
 │   └── ossie/                # 官方 Apache Ossie 0.3.0.dev0 JSON Schema
@@ -213,7 +235,7 @@ Semantica_DataAgent/
 ├── deploy/                   # Kubernetes 部署清单、应用 Dockerfile 与 agent-runner 沙箱镜像
 ├── eval/                     # 评测题集与评测配置样例
 ├── scripts/                  # 真实样本抽取 (dtb_sample.py)、血缘对比与样本构建验证脚本
-├── docs/                     # 架构决策记录（ADR 0001–0008）、代码规范、插件、融合检索与评测文档
+├── docs/                     # 架构决策记录（ADR 0001–0010）、代码规范、插件、融合检索与评测文档
 └── GLOSSARY.md               # 项目统一领域术语表
 ```
 
@@ -338,6 +360,8 @@ pnpm --dir web build
   - [ADR 0006 — 可插拔数据摄入架构](docs/adr/0006-pluggable-ingestion-for-open-source.md)
   - [ADR 0007 — Apache Ossie 作为语义模型双向交换标准](docs/adr/0007-ossie-semantic-interchange.md)
   - [ADR 0008 — DTB 元数据与任务 SQL 自动转换为 Apache Ossie 与混合维度落盘](docs/adr/0008-dtb-to-ossie-pipeline.md)
+  - [ADR 0009 — 修正覆盖层迁入源目录 Git 管理，纠错与演化共用提案管线与项目级双开关](docs/adr/0009-git-backed-semantic-overrides-and-correction-policy.md)
+  - [ADR 0010 — 网关同源采集本地问答轨迹，通过隔离候选知识代与防泄漏门禁完成自主演化](docs/adr/0010-local-trajectories-and-candidate-generation-gate.md)
 
 ## 许可证
 

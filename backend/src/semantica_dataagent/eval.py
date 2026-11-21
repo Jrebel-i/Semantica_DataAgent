@@ -423,6 +423,8 @@ def sql_satisfies_caliber(question: Question, sql: str) -> bool:
             name = name.lower()
             if table not in tables:
                 return False
+            if name == "*":
+                continue
             if not any(
                 field_name == name and (owner is None or owner == table)
                 for owner, field_name in columns

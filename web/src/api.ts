@@ -211,6 +211,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/conversations/{conversation_id}/turns/{turn_id}/feedback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Record Turn Feedback */
+        post: operations["record_turn_feedback_api_v1_conversations__conversation_id__turns__turn_id__feedback_post"];
+        /** Revoke Turn Feedback */
+        delete: operations["revoke_turn_feedback_api_v1_conversations__conversation_id__turns__turn_id__feedback_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/conversations/{conversation_id}/turns/{turn_id}/queries/{query_id}/execute": {
         parameters: {
             query?: never;
@@ -240,6 +258,23 @@ export interface paths {
         put?: never;
         /** Create Proposal */
         post: operations["create_proposal_api_v1_corrections_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/corrections/draft": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Draft Proposal */
+        post: operations["draft_proposal_api_v1_corrections_draft_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -297,6 +332,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/corrections/{proposal_id}/revert": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Revert */
+        post: operations["revert_api_v1_corrections__proposal_id__revert_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/document": {
         parameters: {
             query?: never;
@@ -306,6 +358,77 @@ export interface paths {
         };
         /** Document Route */
         get: operations["document_route_api_v1_document_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/eval-questions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Eval Questions */
+        get: operations["list_eval_questions_api_v1_eval_questions_get"];
+        put?: never;
+        /** Create Eval Question */
+        post: operations["create_eval_question_api_v1_eval_questions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/eval-questions/{question_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete Eval Question */
+        delete: operations["delete_eval_question_api_v1_eval_questions__question_id__delete"];
+        options?: never;
+        head?: never;
+        /** Update Eval Question */
+        patch: operations["update_eval_question_api_v1_eval_questions__question_id__patch"];
+        trace?: never;
+    };
+    "/api/v1/evolution/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Evolution Runs */
+        get: operations["list_evolution_runs_api_v1_evolution_runs_get"];
+        put?: never;
+        /** Trigger Evolution Run */
+        post: operations["trigger_evolution_run_api_v1_evolution_runs_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/evolution/runs/{run_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Evolution Run */
+        get: operations["get_evolution_run_api_v1_evolution_runs__run_id__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -568,6 +691,42 @@ export interface paths {
         put?: never;
         /** Delete Project Route */
         post: operations["delete_project_route_api_v1_projects__project_id__delete_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/evolution-config": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Project Evolution Config */
+        get: operations["get_project_evolution_config_api_v1_projects__project_id__evolution_config_get"];
+        /** Put Project Evolution Config */
+        put: operations["put_project_evolution_config_api_v1_projects__project_id__evolution_config_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/evolution-policy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Project Evolution Policy */
+        get: operations["get_project_evolution_policy_api_v1_projects__project_id__evolution_policy_get"];
+        /** Set Project Evolution Policy */
+        put: operations["set_project_evolution_policy_api_v1_projects__project_id__evolution_policy_put"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1219,8 +1378,28 @@ export interface components {
         };
         /** Approval */
         Approval: {
+            /** Caliber */
+            caliber?: string | null;
+            /** Category */
+            category?: string | null;
+            /** Dialect */
+            dialect?: ("hive" | "spark" | "doris") | null;
+            /** Expected Fields */
+            expected_fields?: string[] | null;
+            /** Expected Tables */
+            expected_tables?: string[] | null;
             /** Patch */
             patch?: string | null;
+            /** Question */
+            question?: string | null;
+            /** Reference Sql */
+            reference_sql?: string | null;
+            /** Structured Patch */
+            structured_patch?: {
+                [key: string]: unknown;
+            } | null;
+            /** Turn Id */
+            turn_id?: number | null;
         };
         /** AskRequest */
         AskRequest: {
@@ -1321,6 +1500,8 @@ export interface components {
             project_id: string;
             /** Source Commit */
             source_commit: string | null;
+            /** Stale Overrides */
+            stale_overrides?: components["schemas"]["StaleOverrideWarning"][];
             /**
              * Started At
              * Format: date-time
@@ -1461,6 +1642,65 @@ export interface components {
             /** Start Line */
             start_line: number;
         };
+        /** DraftCorrectionRequest */
+        DraftCorrectionRequest: {
+            /** Category */
+            category?: string | null;
+            /** Conversation Id */
+            conversation_id?: string | null;
+            /** Description */
+            description: string;
+            /** Model */
+            model?: string | null;
+            /** Project */
+            project?: string | null;
+            /** Provider Id */
+            provider_id?: string | null;
+            /** Target */
+            target?: string | null;
+            /** Turn Id */
+            turn_id?: number | null;
+        };
+        /** DraftCorrectionResponse */
+        DraftCorrectionResponse: {
+            /** Caliber */
+            caliber?: string | null;
+            /** Diff */
+            diff: string;
+            /** Gate Report */
+            gate_report: {
+                [key: string]: unknown;
+            };
+            /** Patch */
+            patch: string;
+            /** Reason */
+            reason: string;
+            /** Reference Sql */
+            reference_sql?: string | null;
+            /** Resolved Path */
+            resolved_path: string;
+            /**
+             * Source Generated
+             * @default false
+             */
+            source_generated: boolean;
+            /** Structured Patch */
+            structured_patch?: {
+                [key: string]: unknown;
+            } | null;
+            /** Target */
+            target: string;
+            /**
+             * Target Kind
+             * @enum {string}
+             */
+            target_kind: "document" | "override" | "ossie";
+            /**
+             * Used Llm
+             * @default false
+             */
+            used_llm: boolean;
+        };
         /** DtbTokenInput */
         DtbTokenInput: {
             /** Token */
@@ -1486,6 +1726,149 @@ export interface components {
             /** Upstream */
             upstream: string;
         };
+        /** EvalQuestionCreate */
+        EvalQuestionCreate: {
+            /**
+             * Answer Confirmed
+             * @default true
+             */
+            answer_confirmed: boolean;
+            /** Caliber */
+            caliber: string;
+            /**
+             * Category
+             * @default 未分类
+             */
+            category: string;
+            /**
+             * Clarify
+             * @default false
+             */
+            clarify: boolean;
+            /**
+             * Dialect
+             * @default hive
+             * @enum {string}
+             */
+            dialect: "hive" | "spark" | "doris";
+            /** Expected Fields */
+            expected_fields?: string[] | null;
+            /** Expected Tables */
+            expected_tables?: string[] | null;
+            /** Id */
+            id?: string | null;
+            /**
+             * Notes
+             * @default
+             */
+            notes: string;
+            /** Question */
+            question: string;
+            /** Reference Sql */
+            reference_sql: string;
+            /** Split */
+            split?: ("dev" | "holdout") | null;
+        };
+        /** EvalQuestionPatch */
+        EvalQuestionPatch: {
+            /** Answer Confirmed */
+            answer_confirmed?: boolean | null;
+            /** Caliber */
+            caliber?: string | null;
+            /** Category */
+            category?: string | null;
+            /** Clarify */
+            clarify?: boolean | null;
+            /** Dialect */
+            dialect?: ("hive" | "spark" | "doris") | null;
+            /** Expected Fields */
+            expected_fields?: string[] | null;
+            /** Expected Tables */
+            expected_tables?: string[] | null;
+            /** Notes */
+            notes?: string | null;
+            /** Question */
+            question?: string | null;
+            /** Reference Sql */
+            reference_sql?: string | null;
+            /** Split */
+            split?: ("dev" | "holdout") | null;
+        };
+        /** EvalQuestionView */
+        EvalQuestionView: {
+            /**
+             * Answer Confirmed
+             * @default false
+             */
+            answer_confirmed: boolean;
+            /** Caliber */
+            caliber?: string | null;
+            /**
+             * Category
+             * @default 未分类
+             */
+            category: string;
+            /**
+             * Clarify
+             * @default false
+             */
+            clarify: boolean;
+            /** Conversation Id */
+            conversation_id?: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Created By */
+            created_by?: string | null;
+            /**
+             * Dialect
+             * @default hive
+             */
+            dialect: string;
+            /** Expected Fields */
+            expected_fields?: string[];
+            /** Expected Tables */
+            expected_tables?: string[];
+            /** Id */
+            id: string;
+            /**
+             * Notes
+             * @default
+             */
+            notes: string;
+            /** Proposal Id */
+            proposal_id?: string | null;
+            /** Question */
+            question: string;
+            /**
+             * Redacted
+             * @default false
+             */
+            redacted: boolean;
+            /** Reference Sql */
+            reference_sql?: string | null;
+            /**
+             * Source
+             * @default manual
+             * @enum {string}
+             */
+            source: "manual" | "feedback" | "correction";
+            /**
+             * Split
+             * @default dev
+             * @enum {string}
+             */
+            split: "dev" | "holdout";
+            /** Turn Id */
+            turn_id?: number | null;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
         /** EventView */
         EventView: {
             /** Data */
@@ -1496,6 +1879,193 @@ export interface components {
             seq: number;
             /** Type */
             type: string;
+        };
+        /** EvolutionConfigUpdate */
+        EvolutionConfigUpdate: {
+            /** Auto Evolve Enabled */
+            auto_evolve_enabled?: boolean | null;
+            /** Evolution Model */
+            evolution_model?: string | null;
+            /** Evolution Provider Id */
+            evolution_provider_id?: string | null;
+            /** Judge Model */
+            judge_model?: string | null;
+            /** Judge Provider Id */
+            judge_provider_id?: string | null;
+            /** Max Eval Cases */
+            max_eval_cases?: number | null;
+            /** Max Idle Days */
+            max_idle_days?: number | null;
+            /** Max Rounds */
+            max_rounds?: number | null;
+            /** Min Interval Hours */
+            min_interval_hours?: number | null;
+            /** Min Trajectories */
+            min_trajectories?: number | null;
+        };
+        /** EvolutionConfigView */
+        EvolutionConfigView: {
+            /** Auto Evolve Enabled */
+            auto_evolve_enabled: boolean;
+            /** Checkpoint At */
+            checkpoint_at?: string | null;
+            /** Checkpoint Trajectory Id */
+            checkpoint_trajectory_id?: number | null;
+            /** Evolution Model */
+            evolution_model?: string | null;
+            /** Evolution Provider Id */
+            evolution_provider_id?: string | null;
+            /** Judge Model */
+            judge_model?: string | null;
+            /** Judge Provider Id */
+            judge_provider_id?: string | null;
+            /** Max Eval Cases */
+            max_eval_cases: number;
+            /** Max Idle Days */
+            max_idle_days: number;
+            /** Max Rounds */
+            max_rounds: number;
+            /** Min Interval Hours */
+            min_interval_hours: number;
+            /** Min Trajectories */
+            min_trajectories: number;
+            /**
+             * Pending Trajectories
+             * @default 0
+             */
+            pending_trajectories: number;
+        };
+        /** EvolutionPolicyUpdate */
+        EvolutionPolicyUpdate: {
+            /** Correction Require Review */
+            correction_require_review?: boolean | null;
+            /** Evolution Require Review */
+            evolution_require_review?: boolean | null;
+        };
+        /** EvolutionPolicyView */
+        EvolutionPolicyView: {
+            /** Correction Require Review */
+            correction_require_review: boolean;
+            /** Evolution Require Review */
+            evolution_require_review: boolean;
+        };
+        /** EvolutionRoundView */
+        EvolutionRoundView: {
+            /** Candidate Change */
+            candidate_change?: {
+                [key: string]: unknown;
+            };
+            /**
+             * Decision
+             * @enum {string}
+             */
+            decision: "running" | "accept" | "reject" | "incomplete";
+            /** Evidence Trajectory Ids */
+            evidence_trajectory_ids?: number[];
+            /** Finished At */
+            finished_at?: string | null;
+            /** Hypothesis */
+            hypothesis: string;
+            /** Id */
+            id: string;
+            /** L1 Gate Report */
+            l1_gate_report?: {
+                [key: string]: unknown;
+            } | null;
+            /** L2 Gate Report */
+            l2_gate_report?: {
+                [key: string]: unknown;
+            } | null;
+            /** Project Id */
+            project_id: string;
+            /** Proposal Id */
+            proposal_id?: string | null;
+            /** Reject Reason */
+            reject_reason?: string | null;
+            /** Round Number */
+            round_number: number;
+            /** Run Id */
+            run_id: string;
+            /** Signal Kind */
+            signal_kind: string;
+            /**
+             * Started At
+             * Format: date-time
+             */
+            started_at: string;
+            /**
+             * Target
+             * @default
+             */
+            target: string;
+            /**
+             * Target Kind
+             * @default override
+             */
+            target_kind: string;
+        };
+        /** EvolutionRunTrigger */
+        EvolutionRunTrigger: {
+            /** Max Eval Cases */
+            max_eval_cases?: number | null;
+            /** Max Rounds */
+            max_rounds?: number | null;
+        };
+        /** EvolutionRunView */
+        EvolutionRunView: {
+            /** Checkpoint After Trajectory Id */
+            checkpoint_after_trajectory_id?: number | null;
+            /** Checkpoint Before Trajectory Id */
+            checkpoint_before_trajectory_id?: number | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Created By */
+            created_by?: string | null;
+            /** Diagnosis Trajectory Ids */
+            diagnosis_trajectory_ids?: number[];
+            /** Error */
+            error?: string | null;
+            /** Finished At */
+            finished_at?: string | null;
+            /** Frozen Max Trajectory Id */
+            frozen_max_trajectory_id?: number | null;
+            /** Id */
+            id: string;
+            /** Max Eval Cases */
+            max_eval_cases: number;
+            /** Max Rounds */
+            max_rounds: number;
+            /** Project Id */
+            project_id: string;
+            /** Proposal Id */
+            proposal_id?: string | null;
+            /** Reserve Trajectory Ids */
+            reserve_trajectory_ids?: number[];
+            /** Rounds */
+            rounds?: components["schemas"]["EvolutionRoundView"][];
+            /** Rounds Completed */
+            rounds_completed: number;
+            /** Signal Summary */
+            signal_summary?: {
+                [key: string]: unknown;
+            };
+            /**
+             * Started At
+             * Format: date-time
+             */
+            started_at: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "running" | "accepted" | "incomplete";
+            /** Stop Reason */
+            stop_reason?: string | null;
+            /** Trigger Type */
+            trigger_type: string;
         };
         /** ExecuteInput */
         ExecuteInput: {
@@ -1512,10 +2082,14 @@ export interface components {
             dimension_samples?: string[] | null;
             /** Dimension Too Many */
             dimension_too_many?: boolean | null;
+            /** Instructions */
+            instructions?: string | null;
             /** Name */
             name: string;
             /** Partition */
             partition: boolean;
+            /** Synonyms */
+            synonyms?: string[] | null;
             /** Type */
             type: string;
         };
@@ -1841,12 +2415,41 @@ export interface components {
         };
         /** ProposalCreate */
         ProposalCreate: {
-            /** Patch */
+            /** Caliber */
+            caliber?: string | null;
+            /** Category */
+            category?: string | null;
+            /** Conversation Id */
+            conversation_id?: string | null;
+            /** Dialect */
+            dialect?: ("hive" | "spark" | "doris") | null;
+            /** Expected Fields */
+            expected_fields?: string[] | null;
+            /** Expected Tables */
+            expected_tables?: string[] | null;
+            /**
+             * Patch
+             * @default
+             */
             patch: string;
+            /** Question */
+            question?: string | null;
             /** Reason */
             reason: string;
+            /** Reference Sql */
+            reference_sql?: string | null;
+            /** Source */
+            source?: "manual" | null;
+            /** Structured Patch */
+            structured_patch?: {
+                [key: string]: unknown;
+            } | null;
             /** Target */
             target: string;
+            /** Target Kind */
+            target_kind?: ("document" | "override" | "ossie") | null;
+            /** Turn Id */
+            turn_id?: number | null;
         };
         /** ProposalView */
         ProposalView: {
@@ -1861,6 +2464,10 @@ export interface components {
             created_at: string;
             /** Diff */
             diff: string;
+            /** Gate Report */
+            gate_report?: {
+                [key: string]: unknown;
+            } | null;
             /** Id */
             id: string;
             /** Original */
@@ -1875,14 +2482,32 @@ export interface components {
             project_id: string;
             /** Reason */
             reason: string;
+            /** Revert Commit Sha */
+            revert_commit_sha?: string | null;
+            /** Reverted At */
+            reverted_at?: string | null;
             /** Reviewed At */
             reviewed_at: string | null;
             /** Reviewer Id */
             reviewer_id: string | null;
+            /**
+             * Source
+             * @default manual
+             */
+            source: string;
             /** Status */
             status: string;
+            /** Structured Patch */
+            structured_patch?: {
+                [key: string]: unknown;
+            } | null;
             /** Target */
             target: string;
+            /**
+             * Target Kind
+             * @default document
+             */
+            target_kind: string;
         };
         /** ProviderCreate */
         ProviderCreate: {
@@ -1994,10 +2619,14 @@ export interface components {
         };
         /** RelationshipLink */
         RelationshipLink: {
+            /** Description */
+            description?: string | null;
             /** From Columns */
             from_columns: string[];
             /** From Table */
             from_table: string;
+            /** Instructions */
+            instructions?: string | null;
             /** Name */
             name: string;
             /** Ref */
@@ -2131,6 +2760,15 @@ export interface components {
             /** Target */
             target?: string | null;
         };
+        /** StaleOverrideWarning */
+        StaleOverrideWarning: {
+            /** Key */
+            key: string;
+            /** Kind */
+            kind: string;
+            /** Reason */
+            reason: string;
+        };
         /** Status */
         Status: {
             /** Elapsed Ms */
@@ -2181,12 +2819,16 @@ export interface components {
             documents: components["schemas"]["DocumentLink"][];
             /** Fields */
             fields: components["schemas"]["FieldView"][];
+            /** Instructions */
+            instructions?: string | null;
             /** Name */
             name: string;
             /** Ref */
             ref: string;
             /** Relationships */
             relationships?: components["schemas"]["RelationshipLink"][] | null;
+            /** Synonyms */
+            synonyms?: string[] | null;
         };
         /** TaskView */
         TaskView: {
@@ -2275,6 +2917,51 @@ export interface components {
              */
             role: "admin" | "member";
         };
+        /** TurnFeedbackRequest */
+        TurnFeedbackRequest: {
+            /** Caliber */
+            caliber?: string | null;
+            /** Category */
+            category?: string | null;
+            /** Dialect */
+            dialect?: ("hive" | "spark" | "doris") | null;
+            /** Expected Fields */
+            expected_fields?: string[] | null;
+            /** Expected Tables */
+            expected_tables?: string[] | null;
+            /**
+             * Notes
+             * @default
+             */
+            notes: string;
+            /**
+             * Rating
+             * @default accurate
+             * @constant
+             */
+            rating: "accurate";
+            /** Reference Sql */
+            reference_sql?: string | null;
+        };
+        /** TurnFeedbackView */
+        TurnFeedbackView: {
+            /** Answer Confirmed */
+            answer_confirmed: boolean;
+            eval_question: components["schemas"]["EvalQuestionView"];
+            /** Question Id */
+            question_id: string;
+            /**
+             * Rating
+             * @default accurate
+             * @constant
+             */
+            rating: "accurate";
+            /**
+             * Split
+             * @enum {string}
+             */
+            split: "dev" | "holdout";
+        };
         /** TurnView */
         TurnView: {
             /** Answer */
@@ -2287,13 +2974,27 @@ export interface components {
             effort: string | null;
             /** Error */
             error: string | null;
+            /** Eval Answer Confirmed */
+            eval_answer_confirmed?: boolean | null;
+            /** Eval Question Id */
+            eval_question_id?: string | null;
             /**
              * Events
              * @default []
              */
             events: components["schemas"]["EventView"][];
+            /**
+             * Feedback Accurate
+             * @default false
+             */
+            feedback_accurate: boolean;
             /** Finished At */
             finished_at: string | null;
+            /**
+             * Has Validated Sql
+             * @default false
+             */
+            has_validated_sql: boolean;
             /** Id */
             id: number;
             /** Model */
@@ -2798,6 +3499,72 @@ export interface operations {
             };
         };
     };
+    record_turn_feedback_api_v1_conversations__conversation_id__turns__turn_id__feedback_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                conversation_id: string;
+                turn_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["TurnFeedbackRequest"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TurnFeedbackView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    revoke_turn_feedback_api_v1_conversations__conversation_id__turns__turn_id__feedback_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                conversation_id: string;
+                turn_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     confirm_query_api_v1_conversations__conversation_id__turns__turn_id__queries__query_id__execute_post: {
         parameters: {
             query?: never;
@@ -2884,6 +3651,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    draft_proposal_api_v1_corrections_draft_post: {
+        parameters: {
+            query?: {
+                project?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DraftCorrectionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DraftCorrectionResponse"];
                 };
             };
             /** @description Validation Error */
@@ -3000,6 +3802,39 @@ export interface operations {
             };
         };
     };
+    revert_api_v1_corrections__proposal_id__revert_post: {
+        parameters: {
+            query?: {
+                project?: string | null;
+            };
+            header?: never;
+            path: {
+                proposal_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProposalView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     document_route_api_v1_document_get: {
         parameters: {
             query: {
@@ -3020,6 +3855,243 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DocumentView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_eval_questions_api_v1_eval_questions_get: {
+        parameters: {
+            query?: {
+                split?: ("dev" | "holdout") | null;
+                answer_confirmed?: boolean | null;
+                category?: string | null;
+                source?: ("manual" | "feedback" | "correction") | null;
+                project?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EvalQuestionView"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_eval_question_api_v1_eval_questions_post: {
+        parameters: {
+            query?: {
+                project?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EvalQuestionCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EvalQuestionView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_eval_question_api_v1_eval_questions__question_id__delete: {
+        parameters: {
+            query?: {
+                project?: string | null;
+            };
+            header?: never;
+            path: {
+                question_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_eval_question_api_v1_eval_questions__question_id__patch: {
+        parameters: {
+            query?: {
+                project?: string | null;
+            };
+            header?: never;
+            path: {
+                question_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EvalQuestionPatch"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EvalQuestionView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_evolution_runs_api_v1_evolution_runs_get: {
+        parameters: {
+            query?: {
+                project?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EvolutionRunView"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    trigger_evolution_run_api_v1_evolution_runs_post: {
+        parameters: {
+            query?: {
+                project?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["EvolutionRunTrigger"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EvolutionRunView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_evolution_run_api_v1_evolution_runs__run_id__get: {
+        parameters: {
+            query?: {
+                project?: string | null;
+            };
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EvolutionRunView"];
                 };
             };
             /** @description Validation Error */
@@ -3618,6 +4690,138 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_project_evolution_config_api_v1_projects__project_id__evolution_config_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EvolutionConfigView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    put_project_evolution_config_api_v1_projects__project_id__evolution_config_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EvolutionConfigUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EvolutionConfigView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_project_evolution_policy_api_v1_projects__project_id__evolution_policy_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EvolutionPolicyView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_project_evolution_policy_api_v1_projects__project_id__evolution_policy_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EvolutionPolicyUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EvolutionPolicyView"];
+                };
             };
             /** @description Validation Error */
             422: {

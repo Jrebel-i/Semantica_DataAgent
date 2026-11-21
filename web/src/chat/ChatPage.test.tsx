@@ -7,6 +7,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { ChatPage } from "../ChatPage";
 import { getMessages } from "../i18n";
@@ -456,4 +457,299 @@ test("新对话空白态显示项目类型引导、知识库入口，并随项�
   expect(
     screen.queryByRole("button", { name: messages.examples[0] }),
   ).toBeNull();
+});
+
+test("轮次底部 👍 准确 仅对通过 SQL 校验的回答开放并写入评测题集", async () => {
+  const feedbackCalls: { url: string; body: unknown }[] = [];
+  const conv = {
+    id: "conv-fb",
+    project_id: "default",
+    project_name: "业务数据",
+    title: "订单统计核对",
+    agent: "pi",
+    provider_id: provider.id,
+    model: provider.models[0],
+    created_at: "2026-11-05T00:00:00Z",
+    updated_at: "2026-11-05T00:00:00Z",
+    turn_count: 2,
+  };
+  const detail = {
+    ...conv,
+    turns: [
+      {
+        id: 101,
+        sequence: 1,
+        question: "介绍订单系统",
+        status: "done",
+        answer: "订单系统记录客户交易。",
+        sql: [],
+        citations: [],
+        error: null,
+        started_at: "2026-11-05T00:00:00Z",
+        finished_at: "2026-11-05T00:00:01Z",
+        events: [],
+        has_validated_sql: false,
+        feedback_accurate: false,
+      },
+      {
+        id: 102,
+        sequence: 2,
+        question: "昨日已支付订单数是多少",
+        status: "done",
+        answer: "共 42 单。",
+        sql: [
+          {
+            sql: "SELECT COUNT(*) FROM shop.orders WHERE status = 'paid'",
+            dialect: "hive",
+          },
+        ],
+        citations: [{ ref: "table:shop.orders", type: "table" }],
+        error: null,
+        started_at: "2026-11-05T00:01:00Z",
+        finished_at: "2026-11-05T00:01:01Z",
+        events: [],
+        has_validated_sql: true,
+        feedback_accurate: false,
+      },
+    ],
+  };
+
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/v1/agents")
+        return json([{ id: "pi", name: "pi", available: true }]);
+      if (url === "/api/v1/providers") return json([provider]);
+      if (url === "/api/v1/projects")
+        return json([
+          {
+            id: "default",
+            name: "业务数据",
+            type: "warehouse",
+            status: "active",
+            created_at: "2026-11-05T00:00:00Z",
+            my_role: "member",
+          },
+        ]);
+      if (url === "/api/v1/conversations") return json([conv]);
+      if (url === "/api/v1/conversations/conv-fb") return json(detail);
+      if (
+        url === "/api/v1/conversations/conv-fb/turns/102/feedback" &&
+        init?.method === "POST"
+      ) {
+        const body = JSON.parse(String(init.body));
+        feedbackCalls.push({ url, body });
+        return Response.json(
+          {
+            rating: "accurate",
+            question_id: "eq-102",
+            answer_confirmed: false,
+            split: "dev",
+            eval_question: { id: "eq-102", answer_confirmed: false },
+          },
+          { status: 201 },
+        );
+      }
+      if (
+        url === "/api/v1/conversations/conv-fb/turns/102/feedback" &&
+        init?.method === "DELETE"
+      ) {
+        feedbackCalls.push({ url, body: { method: "DELETE" } });
+        return new Response(null, { status: 204 });
+      }
+      return new Response("", { status: 404 });
+    }),
+  );
+
+  render(<ChatPage token="token" role="user" messages={getMessages("zh")} />);
+  fireEvent.click(await screen.findByRole("button", { name: "订单统计核对" }));
+  expect(await screen.findByText("共 42 单。")).toBeTruthy();
+
+  const accurateBtns = screen.getAllByRole("button", { name: /准确/ });
+  expect(accurateBtns).toHaveLength(2);
+  expect((accurateBtns[0] as HTMLButtonElement).disabled).toBe(true);
+  expect((accurateBtns[1] as HTMLButtonElement).disabled).toBe(false);
+
+  fireEvent.click(accurateBtns[1]);
+  await waitFor(() =>
+    expect(feedbackCalls).toEqual([
+      {
+        url: "/api/v1/conversations/conv-fb/turns/102/feedback",
+        body: { rating: "accurate" },
+      },
+    ]),
+  );
+  const doneBtn = (await screen.findByRole("button", {
+    name: /已标为准确/,
+  })) as HTMLButtonElement;
+  expect(doneBtn.disabled).toBe(false);
+  expect(doneBtn.title).toBe("点击取消准确标记");
+
+  fireEvent.click(doneBtn);
+  await waitFor(() =>
+    expect(feedbackCalls).toEqual([
+      {
+        url: "/api/v1/conversations/conv-fb/turns/102/feedback",
+        body: { rating: "accurate" },
+      },
+      {
+        url: "/api/v1/conversations/conv-fb/turns/102/feedback",
+        body: { method: "DELETE" },
+      },
+    ]),
+  );
+  expect(
+    await screen.findByText("已取消准确标记，已从评测题集移除"),
+  ).toBeTruthy();
+  const revertedBtns = screen.getAllByRole("button", { name: /准确/ });
+  expect((revertedBtns[1] as HTMLButtonElement).textContent).toContain("准确");
+  expect((revertedBtns[1] as HTMLButtonElement).textContent).not.toContain(
+    "已标为准确",
+  );
+});
+
+test("轮次底部 🛠️ 纠错抽屉支持生成草稿预览、门禁拦截与提交提案", async () => {
+  const requests: { url: string; method?: string; body?: unknown }[] = [];
+  let gatePassed = false;
+  const conv = {
+    id: "conv-draft",
+    project_id: "default",
+    project_name: "业务数据",
+    title: "GMV 纠错会话",
+    agent: "pi",
+    provider_id: provider.id,
+    model: provider.models[0],
+    created_at: "2026-11-05T00:00:00Z",
+    updated_at: "2026-11-05T00:00:00Z",
+    turn_count: 1,
+  };
+  const detail = {
+    ...conv,
+    turns: [
+      {
+        id: 201,
+        sequence: 1,
+        question: "GMV 是否包含退款？",
+        status: "done",
+        answer: "统计 orders 表 amount 字段。",
+        sql: [{ sql: "SELECT SUM(amount) FROM shop.orders", dialect: "hive" }],
+        citations: [{ ref: "table:shop.orders", type: "table" }],
+        error: null,
+        started_at: "2026-11-05T00:00:00Z",
+        finished_at: "2026-11-05T00:00:01Z",
+        events: [],
+        has_validated_sql: true,
+        feedback_accurate: false,
+      },
+    ],
+  };
+
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+      requests.push({ url, method: init?.method, body });
+      if (url === "/api/v1/agents")
+        return json([{ id: "pi", name: "pi", available: true }]);
+      if (url === "/api/v1/providers") return json([provider]);
+      if (url === "/api/v1/projects")
+        return json([
+          {
+            id: "default",
+            name: "业务数据",
+            type: "warehouse",
+            status: "active",
+            created_at: "2026-11-05T00:00:00Z",
+            my_role: "admin",
+          },
+        ]);
+      if (url === "/api/v1/conversations") return json([conv]);
+      if (url === "/api/v1/conversations/conv-draft") return json(detail);
+      if (url === "/api/v1/corrections/draft" && init?.method === "POST") {
+        return json({
+          target: "table:shop.orders",
+          target_kind: "override",
+          patch:
+            "version: 1\ntables:\n  shop.orders:\n    instructions: 排除退款",
+          structured_patch: {
+            version: 1,
+            tables: {
+              "shop.orders": {
+                database: "shop",
+                name: "orders",
+                instructions: "排除退款",
+              },
+            },
+          },
+          diff: "--- overrides/semantic_overrides.yaml\n+++ overrides/semantic_overrides.yaml\n+instructions: 排除退款",
+          gate_report: gatePassed
+            ? { passed: true, checks: [], errors: [] }
+            : {
+                passed: false,
+                checks: [],
+                errors: ["检测到非法 SQL 语句"],
+              },
+          resolved_path: "overrides/semantic_overrides.yaml",
+          reason: "补充订单退款过滤规则",
+          source_generated: true,
+          used_llm: false,
+        });
+      }
+      if (
+        url === "/api/v1/corrections?project=default" &&
+        init?.method === "POST"
+      ) {
+        return Response.json(
+          { id: "prop-201", status: "pending" },
+          { status: 201 },
+        );
+      }
+      return new Response("", { status: 404 });
+    }),
+  );
+
+  render(<ChatPage token="token" role="admin" messages={getMessages("zh")} />);
+  fireEvent.click(await screen.findByRole("button", { name: "GMV 纠错会话" }));
+  expect(await screen.findByText("统计 orders 表 amount 字段。")).toBeTruthy();
+
+  fireEvent.click(screen.getByRole("button", { name: "🛠️ 纠错" }));
+  const drawer = await screen.findByRole("dialog");
+  fireEvent.change(within(drawer).getByLabelText("纠错问题描述"), {
+    target: { value: "统计 GMV 时需要排除退款订单" },
+  });
+  fireEvent.click(within(drawer).getByRole("button", { name: "生成草稿预览" }));
+
+  expect(await within(drawer).findByText("L1 预检未通过")).toBeTruthy();
+  expect(within(drawer).getByText("检测到非法 SQL 语句")).toBeTruthy();
+  const submitDisabled = within(drawer).getByRole("button", {
+    name: "提出纠错",
+  }) as HTMLButtonElement;
+  expect(submitDisabled.disabled).toBe(true);
+
+  gatePassed = true;
+  fireEvent.click(
+    await within(drawer).findByRole("button", { name: "生成草稿预览" }),
+  );
+  expect(await within(drawer).findByText("L1 预检通过")).toBeTruthy();
+  expect(
+    within(drawer).getByText(/目标文件:\s*overrides\/semantic_overrides\.yaml/),
+  ).toBeTruthy();
+
+  const submitBtn = within(drawer).getByRole("button", {
+    name: "提出纠错",
+  }) as HTMLButtonElement;
+  expect(submitBtn.disabled).toBe(false);
+  fireEvent.click(submitBtn);
+
+  await waitFor(() =>
+    expect(
+      requests.some(
+        (req) =>
+          req.url === "/api/v1/corrections?project=default" &&
+          req.method === "POST",
+      ),
+    ).toBe(true),
+  );
 });

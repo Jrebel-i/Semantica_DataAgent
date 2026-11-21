@@ -493,23 +493,6 @@ export function Composer({
             {t.projectArchivedNotice}
           </div>
         )}
-        {(!visionEnabled ||
-          (projectLocked && !projectArchived && activeProjects.length > 1) ||
-          Boolean(currentConversationId)) && (
-          <div className="composer-lock-hints">
-            {projectLocked && !projectArchived && activeProjects.length > 1 && (
-              <span className="chat-selector-hint">{t.projectLockedHint}</span>
-            )}
-            {currentConversationId && (
-              <span className="chat-selector-hint">{t.agentLockedHint}</span>
-            )}
-            {!visionEnabled && (
-              <span className="chat-selector-hint">
-                {t.attachmentVisionHint}
-              </span>
-            )}
-          </div>
-        )}
         {conversationSelectionChanged && (
           <div className="composer-switch-hint" role="status">
             {t.nextMessageModel.replace("{model}", model)}

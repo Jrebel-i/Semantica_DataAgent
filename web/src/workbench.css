@@ -503,11 +503,11 @@ button {
 
 /* Native controls, themed */
 select,
-input[type="text"],
+input[type="text"]:not(.ant-select-input):not(.ant-select-selection-search-input):not(.ant-input-number-input),
 input[type="password"],
 input[type="number"],
-input[type="search"],
-input:not([type]),
+input[type="search"]:not(.ant-select-input):not(.ant-select-selection-search-input),
+input:not([type]):not(.ant-select-input):not(.ant-select-selection-search-input),
 textarea {
   min-height: 36px;
   padding: 0 10px;
@@ -546,7 +546,7 @@ select[multiple] option:checked {
   background: var(--teal) linear-gradient(0deg, var(--teal), var(--teal));
   color: var(--white);
 }
-input:focus,
+input:not(.ant-select-input):not(.ant-select-selection-search-input):not(.ant-input-number-input):focus,
 textarea:focus,
 select:focus,
 .ant-input:focus,
@@ -712,6 +712,15 @@ legend {
 .ant-select-selector {
   border-radius: var(--radius) !important;
   border-color: var(--line) !important;
+}
+.ant-select .ant-select-input,
+.ant-select .ant-select-selection-search-input {
+  min-height: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
 }
 .ant-input-affix-wrapper {
   padding-inline: 10px;
@@ -2441,6 +2450,10 @@ button.clarification-option-toggle:hover {
   gap: 16px;
   align-items: start;
 }
+.correction-layout > *,
+.evolution-layout > * {
+  min-width: 0;
+}
 .correction-list {
   list-style: none;
   margin: 0;
@@ -2448,6 +2461,9 @@ button.clarification-option-toggle:hover {
   display: flex;
   flex-direction: column;
   gap: 3px;
+}
+.correction-list li {
+  min-width: 0;
 }
 .correction-list button {
   width: 100%;
@@ -3591,13 +3607,33 @@ code {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+}
+.correction-list button > .mono {
+  flex: 1 1 0%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.correction-list button .ant-space {
+  flex-shrink: 0;
+}
+.correction-layout .card-title.mono,
+.evolution-layout .card-title.mono {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .admin-page select:not(.ant-select-selector),
 .admin-page
   input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not(
     .ant-input
-  ):not(.ant-select-selection-search-input) {
+  ):not(.ant-input-number-input):not(.ant-select-input):not(
+    .ant-select-selection-search-input
+  ) {
   min-height: 38px;
   padding: 6px 12px;
   border: 1px solid var(--line);
@@ -3611,7 +3647,9 @@ code {
 .admin-page
   input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not(
     .ant-input
-  ):not(.ant-select-selection-search-input):focus-visible,
+  ):not(.ant-input-number-input):not(.ant-select-input):not(
+    .ant-select-selection-search-input
+  ):focus-visible,
 .admin-page textarea:not(.ant-input):focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: 1px;
@@ -3993,29 +4031,86 @@ button.composer-project-chip:not(.ant-btn):disabled {
   border: 0 !important;
   background: transparent !important;
 }
-.composer-lock-hints {
+
+.turn-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px 12px;
-  max-height: 0;
-  opacity: 0;
-  overflow: hidden;
-  transition:
-    opacity 0.15s ease,
-    max-height 0.15s ease;
+  gap: 8px;
+  margin-top: 10px;
 }
-.composer-lock-hints .chat-selector-hint {
-  max-width: none;
+
+.stale-overrides-list {
+  margin: 4px 0 0;
+  padding-left: 18px;
 }
-.composer-box:has(
-    select:disabled:hover,
-    button.composer-project-chip:disabled:hover,
-    .composer-attach-button--disabled:hover
-  )
-  .composer-lock-hints {
-  max-height: 32px;
-  margin-top: 2px;
-  opacity: 0.9;
+
+.evolution-config-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 12px;
+  align-items: end;
+}
+.evolution-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.evolution-field label {
+  font-size: 12px;
+  color: var(--ink-2);
+}
+.evolution-checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.evolution-layout {
+  display: grid;
+  grid-template-columns: 340px minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+.evolution-round-card {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 12px;
+  background: var(--white);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.evolution-round-header {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+.evolution-round-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+}
+.evolution-gate-block {
+  border-top: 1px solid var(--line);
+  padding-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.evolution-gate-meta {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 12px;
 }
 
 /* Narrow screens: overlay navigation drawer and full-width content */
@@ -4121,6 +4216,7 @@ button.composer-project-chip:not(.ant-btn):disabled {
   .plugin-params,
   .build-grid,
   .correction-layout,
+  .evolution-layout,
   .provider-capability-card,
   .search-form,
   .source-layout {

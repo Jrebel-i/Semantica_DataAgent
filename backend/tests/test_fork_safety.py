@@ -140,6 +140,26 @@ def _sandbox_lock():
         pass
 
 
+def _trajectories_lock():
+    from semantica_dataagent import trajectories
+
+    with trajectories._write_lock:
+        pass
+
+
+def _mcp_eval_lock():
+    from semantica_dataagent import mcp_context
+
+    with mcp_context._eval_lock:
+        pass
+
+
+def _evolution_scheduler_lock():
+    from semantica_dataagent import evolution_scheduler
+
+    evolution_scheduler.evolution_scheduler.wake()
+
+
 @pytest.mark.parametrize(
     "name",
     [
@@ -147,12 +167,15 @@ def _sandbox_lock():
         "pending_builds",
         "scheduler",
         "pull_scheduler",
+        "evolution_scheduler",
         "embedding_limiter",
         "project_deletion",
         "pull_service",
         "telemetry",
         "provider_probe",
         "agent_sandbox",
+        "trajectories",
+        "mcp_eval",
     ],
 )
 def test_forked_child_resets_other_process_global_locks(name):
@@ -177,6 +200,11 @@ def test_forked_child_resets_other_process_global_locks(name):
 
         lock = scheduler.pull_scheduler._condition
         action = scheduler.pull_scheduler.due_projects
+    elif name == "evolution_scheduler":
+        from semantica_dataagent import evolution_scheduler
+
+        lock = evolution_scheduler.evolution_scheduler._condition
+        action = _evolution_scheduler_lock
     elif name == "embedding_limiter":
         from semantica_dataagent.embedding_client import _LIMITER
 
@@ -197,6 +225,14 @@ def test_forked_child_resets_other_process_global_locks(name):
         from semantica_dataagent import provider_probe
 
         lock, action = provider_probe._active_lock, _provider_probe_lock
+    elif name == "trajectories":
+        from semantica_dataagent import trajectories
+
+        lock, action = trajectories._write_lock, _trajectories_lock
+    elif name == "mcp_eval":
+        from semantica_dataagent import mcp_context
+
+        lock, action = mcp_context._eval_lock, _mcp_eval_lock
     else:
         from semantica_dataagent import agent_sandbox
 

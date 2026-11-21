@@ -125,4 +125,13 @@ describe("narrow screen layout", () => {
       "grid-template-columns: minmax(0, 1fr);",
     );
   });
+
+  test("desktop AntD select inputs and correction list targets prevent visual bleed and overflow", () => {
+    const desktop = narrowStart === -1 ? css : css.slice(0, narrowStart);
+    expect(desktop).toContain(".ant-select .ant-select-input");
+    expect(desktop).toContain("background: transparent !important;");
+    expect(desktop).toContain(".correction-layout > *");
+    expect(desktop).toContain(".correction-list button > .mono");
+    expect(desktop).toContain("text-overflow: ellipsis;");
+  });
 });

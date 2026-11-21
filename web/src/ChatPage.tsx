@@ -21,6 +21,7 @@ import { TurnBlock } from "./chat/TurnBlock";
 import { ConversationSidebar } from "./chat/ConversationSidebar";
 import { Composer } from "./chat/Composer";
 import { ContextDrawer } from "./chat/ContextDrawer";
+import { CorrectionDraftDrawer } from "./chat/CorrectionDraftDrawer";
 import { ProviderSettings } from "./chat/ProviderSettings";
 import { useProviders } from "./chat/useProviders";
 import { useConversations } from "./chat/useConversations";
@@ -28,6 +29,7 @@ import { rememberProject, storedProject } from "./ProjectSelector";
 import { useCitations } from "./chat/useCitations";
 import { useAsk } from "./chat/useAsk";
 import { turnFailed } from "./chat/turnEvents";
+import { readErrorDetail } from "./httpErrors";
 
 export {
   citationDisplayName,
@@ -77,6 +79,9 @@ export function ChatPage({
   const [sending, setSending] = useState(false);
   const [loadingConversation, setLoadingConversation] = useState(false);
   const [error, setError] = useState("");
+  const [feedbackNotice, setFeedbackNotice] = useState("");
+  const [markingTurnId, setMarkingTurnId] = useState<number | null>(null);
+  const [correctionTurn, setCorrectionTurn] = useState<Turn | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -199,6 +204,75 @@ export function ChatPage({
 
   const selectedProject = projects.find((project) => project.id === projectId);
   const projectArchived = selectedProject?.status === "archived";
+
+  async function markTurnAccurate(turn: Turn) {
+    if (!currentConversationId || projectArchived) return;
+    setMarkingTurnId(turn.id);
+    setError("");
+    setFeedbackNotice("");
+    const url = `/api/v1/conversations/${encodeURIComponent(currentConversationId)}/turns/${turn.id}/feedback`;
+    try {
+      if (turn.feedback_accurate) {
+        const response = await fetch(url, {
+          method: "DELETE",
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!response.ok) {
+          throw new Error(await readErrorDetail(response, t.operationFailed));
+        }
+        setTurns((prev) =>
+          prev.map((row) =>
+            row.id === turn.id
+              ? {
+                  ...row,
+                  feedback_accurate: false,
+                  eval_question_id: null,
+                  eval_answer_confirmed: null,
+                }
+              : row,
+          ),
+        );
+        setFeedbackNotice(t.turnAccurateCancelled);
+        return;
+      }
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ rating: "accurate" }),
+      });
+      if (!response.ok) {
+        throw new Error(await readErrorDetail(response, t.operationFailed));
+      }
+      const saved = (await response.json()) as {
+        question_id: string;
+        answer_confirmed: boolean;
+      };
+      setTurns((prev) =>
+        prev.map((row) =>
+          row.id === turn.id
+            ? {
+                ...row,
+                feedback_accurate: true,
+                eval_question_id: saved.question_id,
+                eval_answer_confirmed: saved.answer_confirmed,
+              }
+            : row,
+        ),
+      );
+      setFeedbackNotice(
+        saved.answer_confirmed
+          ? t.turnAccurateSavedConfirmed
+          : t.turnAccurateSavedDraft,
+      );
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : t.operationFailed);
+    } finally {
+      setMarkingTurnId(null);
+    }
+  }
 
   const {
     question,
@@ -577,6 +651,14 @@ export function ChatPage({
             )}
             <div className="chat-scroll">
               {error && <Alert type="error" title={error} />}
+              {feedbackNotice && (
+                <Alert
+                  type="success"
+                  title={feedbackNotice}
+                  closable
+                  onClose={() => setFeedbackNotice("")}
+                />
+              )}
               {!resumable && <Alert type="info" title={t.sessionExpired} />}
               {loadingConversation && (
                 <p className="muted">{t.loadingConversation}</p>
@@ -598,6 +680,10 @@ export function ChatPage({
                   onCopyLink={(id) => void copyDownloadLink(id)}
                   executing={sending}
                   expiredPlans={expiredPlans}
+                  onMarkAccurate={(item) => void markTurnAccurate(item)}
+                  onOpenCorrection={(item) => setCorrectionTurn(item)}
+                  markingAccurate={markingTurnId === turn.id}
+                  actionsDisabled={projectArchived || !currentConversationId}
                 />
               ))}
               {live && (
@@ -705,6 +791,21 @@ export function ChatPage({
               onClose={closeCitation}
             />
           )}
+          <CorrectionDraftDrawer
+            open={correctionTurn !== null}
+            token={token}
+            project={projectId}
+            messages={t}
+            conversationId={currentConversationId || undefined}
+            turnId={correctionTurn?.id}
+            targetLabel={
+              correctionTurn
+                ? `${t.turnCount} #${correctionTurn.sequence}`
+                : undefined
+            }
+            onClose={() => setCorrectionTurn(null)}
+            onSubmitted={() => setFeedbackNotice(t.correctionSubmitted)}
+          />
         </div>
       )}
       {settingsOnly && (

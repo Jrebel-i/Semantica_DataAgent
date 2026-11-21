@@ -106,9 +106,15 @@ async def lifespan(application):
 
     await asyncio.to_thread(recover_interrupted_builds)
     await asyncio.to_thread(knowledge.cleanup_interrupted_generations)
-    from .corrections import recover_applying
+    await asyncio.to_thread(knowledge.cleanup_candidate_generations)
+    from .corrections import recover_applying, recover_reverting
+    from .evolution_runner import recover_interrupted_evolution_runs
+    from .semantic_overrides import migrate_legacy_metadata_overrides
 
     await asyncio.to_thread(recover_applying)
+    await asyncio.to_thread(recover_reverting)
+    await asyncio.to_thread(recover_interrupted_evolution_runs)
+    await asyncio.to_thread(migrate_legacy_metadata_overrides)
     from .pull_service import recover_pulls
 
     try:
@@ -127,6 +133,9 @@ async def lifespan(application):
     for project_id, seconds in pull_intervals().items():
         if project_id != project_context.DEFAULT_PROJECT_ID:
             pull_scheduler.start(seconds, project_id)
+    from .evolution_scheduler import evolution_scheduler
+
+    evolution_scheduler.start()
     server = create_mcp()
     application.state.mcp_app = server.streamable_http_app()
     async with server.session_manager.run():
@@ -135,6 +144,7 @@ async def lifespan(application):
         finally:
             cleanup_task.cancel()
             await asyncio.gather(cleanup_task, return_exceptions=True)
+            evolution_scheduler.stop()
             pull_scheduler.stop()
             scheduler.stop()
             auto_build.pending_build_scheduler.stop()
@@ -596,6 +606,12 @@ class BuildLog(BaseModel):
     message: str
 
 
+class StaleOverrideWarning(BaseModel):
+    kind: str
+    key: str
+    reason: str
+
+
 class BuildView(BaseModel):
     id: int
     project_id: str
@@ -605,6 +621,7 @@ class BuildView(BaseModel):
     counts: dict[str, int]
     error: str | None
     parse_failures: list[dict[str, str]]
+    stale_overrides: list[StaleOverrideWarning] = Field(default_factory=list)
     build_type: Literal["full", "incremental"]
     triggered_by: str | None
     source_commit: str | None
@@ -627,6 +644,20 @@ def build_logs(value: str | None) -> list[BuildLog]:
     ]
 
 
+def build_stale_overrides(value: str | None) -> list[StaleOverrideWarning]:
+    try:
+        entries = json.loads(value or "[]")
+    except (TypeError, json.JSONDecodeError):
+        return []
+    if not isinstance(entries, list):
+        return []
+    return [
+        StaleOverrideWarning.model_validate(entry)
+        for entry in entries
+        if isinstance(entry, dict)
+    ]
+
+
 def build_view(row: Build) -> BuildView:
     return BuildView(
         id=row.id,
@@ -637,6 +668,7 @@ def build_view(row: Build) -> BuildView:
         counts=json.loads(row.counts),
         error=row.error,
         parse_failures=json.loads(row.parse_failures or "[]"),
+        stale_overrides=build_stale_overrides(getattr(row, "stale_overrides", None)),
         build_type=row.build_type or "full",
         triggered_by=row.triggered_by,
         source_commit=row.source_commit,
@@ -681,7 +713,10 @@ def list_generations(
         pointer = generation_pointer(db, project.project_id)
         rows = (
             db.query(KnowledgeGeneration)
-            .filter(KnowledgeGeneration.project_id == project.project_id)
+            .filter(
+                KnowledgeGeneration.project_id == project.project_id,
+                KnowledgeGeneration.is_candidate.is_(False),
+            )
             .order_by(KnowledgeGeneration.created_at.desc())
             .all()
         )
@@ -717,7 +752,7 @@ def switch_generation(
 ):
     with sessions().begin() as db:
         row = db.get(KnowledgeGeneration, name)
-        if row is None or row.project_id != scope.project_id:
+        if row is None or row.project_id != scope.project_id or row.is_candidate:
             raise HTTPException(status_code=404, detail="Generation not found")
         if row.deleting:
             raise HTTPException(status_code=409, detail="Generation is being deleted")
@@ -841,6 +876,14 @@ from .project_api import router as projects_router
 
 app.include_router(projects_router)
 
+from .eval_questions import router as eval_questions_router
+
+app.include_router(eval_questions_router)
+
+from .evolution_api import router as evolution_router
+
+app.include_router(evolution_router)
+
 
 def _mcp_project_id() -> str:
     """Project bound to this MCP request by the transport middleware."""
@@ -938,10 +981,21 @@ def report_knowledge_gap(question: GapText, missing: GapText) -> dict:
 
 
 def propose_correction(
-    target: CorrectionText, patch: CorrectionText, reason: CorrectionText
+    target: CorrectionText,
+    patch: str,
+    reason: CorrectionText,
+    structured_patch: dict | str | None = None,
+    target_kind: Literal["document", "override", "ossie"] | None = None,
 ) -> dict:
-    """Propose a correction in the caller's project."""
-    return _propose_correction(target, patch, reason, project_id=_mcp_project_id())
+    """Propose a correction or structured semantic override in the caller's project."""
+    return _propose_correction(
+        target,
+        patch,
+        reason,
+        project_id=_mcp_project_id(),
+        target_kind=target_kind,
+        structured_patch=structured_patch,
+    )
 
 
 async def ask_dataagent(question: str, conversation_id: str | None = None) -> dict:
@@ -1139,9 +1193,31 @@ class MCPAuthentication:
                 PROJECT_QUERY,
                 TURN_HEADER,
                 bind_mcp_context,
+                resolve_eval_binding,
             )
             from .mcp_contract import ToolInvalidInput
             from .mcp_project import resolve_mcp_project
+
+            eval_binding = resolve_eval_binding(
+                credentials.credentials if credentials else None
+            )
+            if eval_binding is not None:
+                bound_project, bound_generation = eval_binding
+                with bind_mcp_context(
+                    requester,
+                    request.headers.get(CONVERSATION_HEADER),
+                    request.headers.get(TURN_HEADER),
+                    project_id=bound_project,
+                    suppress_trajectory=True,
+                ):
+                    if bound_generation:
+                        with project_context.bind_generation(
+                            bound_project, bound_generation
+                        ):
+                            await self.inner.state.mcp_app(scope, receive, send)
+                    else:
+                        await self.inner.state.mcp_app(scope, receive, send)
+                return
 
             query_project = request.query_params.get(PROJECT_QUERY)
             header_project = request.headers.get(PROJECT_HEADER)

@@ -5,11 +5,16 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import time
+import uuid
 from collections import Counter
+from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager, suppress
+from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 from threading import Lock
 from urllib.parse import quote, urlsplit
 
@@ -305,6 +310,27 @@ def close_readers():
         _read_vectors.clear()
     for reader in readers:
         reader.close()
+
+
+def evict_vector_reader(values) -> None:
+    """Evict and close a cached Milvus read handle for a generation."""
+    key = (values.get("milvus_uri"), collection_name(values))
+    with _read_lock:
+        reader = _read_vectors.pop(key, None)
+    if reader is not None:
+        _close_quietly(reader)
+
+
+def evict_project_vector_readers(project_id: str) -> None:
+    """Evict all cached Milvus read handles belonging to a project."""
+    prefix = project_context.STORAGE_PREFIX + project_id + "_"
+    evicted = []
+    with _read_lock:
+        for key in list(_read_vectors):
+            if str(key[1]).startswith(prefix):
+                evicted.append(_read_vectors.pop(key))
+    for reader in evicted:
+        _close_quietly(reader)
 
 
 _round_trip_lock = Lock()
@@ -632,6 +658,13 @@ def read_sources(values, plugins):
                         f"Source adapter {plugin.id} did not report record provenance"
                     )
             records.extend(result.records)
+        from .semantic_overrides import OVERRIDE_RELATIVE_PATH, override_file_path
+
+        override_file = override_file_path(directory)
+        if override_file.is_file():
+            hashes[OVERRIDE_RELATIVE_PATH] = hashlib.sha256(
+                override_file.read_bytes()
+            ).hexdigest()
         commit = None
         if (directory / ".git").is_dir():
             from .source_directory import git
@@ -695,6 +728,7 @@ def _stage_name(stage):
 def run_build(build_id):
     status, counts, error = "failed", {}, None
     failures = []
+    stale_overrides = []
     new_values = None
     published = False
     stats = EmbeddingStats()
@@ -771,9 +805,28 @@ def run_build(build_id):
             build.config_hash = config_hash
         records, hashes, commit, adapter_stats = read_sources(values, plugins)
         records, filtered = filter_records(records, filters)
-        from .table_stage import apply_overrides
+        from . import table_stage
+        from .semantic_overrides import apply_overrides_detailed
 
-        records = apply_overrides(records, project.project_id)
+        if table_stage.apply_overrides.__module__ == table_stage.__name__:
+            override_result = apply_overrides_detailed(
+                records,
+                project.project_id,
+                source_dir=project.source_directory,
+            )
+            records = override_result.records
+            stale_overrides = list(override_result.stale_overrides)
+        else:
+            records = table_stage.apply_overrides(records, project.project_id)
+        if stale_overrides:
+            _record_log(
+                build_id,
+                logs,
+                "overrides",
+                f"Skipped {len(stale_overrides)} stale override(s): "
+                + ", ".join(item["key"] for item in stale_overrides),
+                level="info",
+            )
         validate_records(records)
         _record_log(
             build_id,
@@ -1057,9 +1110,13 @@ def run_build(build_id):
                     pointer.generation = generation
                 build = db.get(Build, build_id)
                 build.status = "succeeded"
-                build.counts = json.dumps({**counts, **stats.counts()})
+                final_counts = {**counts, **stats.counts()}
+                if stale_overrides:
+                    final_counts["stale_overrides"] = len(stale_overrides)
+                build.counts = json.dumps(final_counts)
                 build.error = None
                 build.parse_failures = json.dumps(failures, ensure_ascii=False)
+                build.stale_overrides = json.dumps(stale_overrides, ensure_ascii=False)
                 build.finished_at = datetime.now(UTC).isoformat()
             published = True
             new_values = None
@@ -1088,9 +1145,12 @@ def run_build(build_id):
             build = db.get(Build, build_id)
             if build is not None and not published:
                 build.status = status
+                if stale_overrides:
+                    counts["stale_overrides"] = len(stale_overrides)
                 build.counts = json.dumps(counts)
                 build.error = error
                 build.parse_failures = json.dumps(failures, ensure_ascii=False)
+                build.stale_overrides = json.dumps(stale_overrides, ensure_ascii=False)
                 build.finished_at = datetime.now(UTC).isoformat()
                 if status == "succeeded" and build.build_type == "incremental":
                     generation_row = db.get(KnowledgeGeneration, build.generation)
@@ -1105,7 +1165,10 @@ def prune_generations(values):
         pointer = generation_pointer(db, project.project_id)
         rows = (
             db.query(KnowledgeGeneration)
-            .filter(KnowledgeGeneration.project_id == project.project_id)
+            .filter(
+                KnowledgeGeneration.project_id == project.project_id,
+                KnowledgeGeneration.is_candidate.is_(False),
+            )
             .order_by(KnowledgeGeneration.created_at.desc())
             .all()
         )
@@ -1177,6 +1240,7 @@ def cleanup_interrupted_generations():
 
 
 def delete_generation_data(values):
+    evict_vector_reader(values)
     project = project_context.from_values(values)
     store = graph(values)
     try:
@@ -1196,6 +1260,261 @@ def delete_generation_data(values):
             client.drop_collection(name)
     finally:
         client.close()
+
+
+@dataclass(frozen=True)
+class CandidateGeneration:
+    """Handle to an isolated temporary candidate generation and its working copy."""
+
+    project_id: str
+    generation: str
+    source_directory: Path
+    stats: EmbeddingStats
+    embedding_counts: Mapping[str, int] | None = None
+
+
+def _new_candidate_name(project: project_context.ProjectContext) -> str:
+    prefix = project.generation_prefix
+    if not prefix or not prefix[0].isalpha():
+        prefix = "cand_"
+    else:
+        prefix = f"{prefix}cand_"
+    max_prefix = min(len(prefix), 40)
+    return prefix[:max_prefix] + uuid.uuid4().hex[: 64 - max_prefix][:16]
+
+
+def _prepare_candidate_workspace(
+    base_source_dir: Path,
+    work_source_dir: Path,
+    overlay_files: Mapping[str, str | None] | None,
+) -> Path:
+    from .source_directory import relative
+
+    if work_source_dir.exists():
+        shutil.rmtree(work_source_dir)
+    work_source_dir.parent.mkdir(parents=True, exist_ok=True)
+    if base_source_dir.exists():
+        shutil.copytree(base_source_dir, work_source_dir, dirs_exist_ok=True)
+    else:
+        work_source_dir.mkdir(parents=True, exist_ok=True)
+
+    root_resolved = work_source_dir.resolve()
+    for rel_path, content in (overlay_files or {}).items():
+        clean_rel = relative(rel_path)
+        target = (root_resolved / clean_rel).resolve()
+        if target != root_resolved and not target.is_relative_to(root_resolved):
+            raise ValueError(f"Overlay path escapes candidate directory: {rel_path}")
+        if content is None:
+            if target.is_file() or target.is_symlink():
+                target.unlink()
+        else:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content, encoding="utf-8")
+    return work_source_dir
+
+
+def _cleanup_values_for_project(project_id: str) -> dict:
+    try:
+        return settings(project_id)
+    except project_context.ProjectNotFound:
+        return settings()
+
+
+def build_candidate_generation(
+    project_id: str = project_context.DEFAULT_PROJECT_ID,
+    *,
+    overlay_files: Mapping[str, str | None] | None = None,
+    candidate_source_dir: str | Path | None = None,
+    generation_name: str | None = None,
+) -> CandidateGeneration:
+    """Build an isolated temporary candidate generation without touching GenerationPointer."""
+    from .relationships import reconcile
+    from .semantic_overrides import apply_overrides_detailed
+    from .stages import STAGES
+
+    values = settings(project_id)
+    project = project_context.from_values(values, project_id)
+    if project.status in project_context.FROZEN_STATUSES:
+        raise ValueError(project_context.ARCHIVED_DETAIL)
+
+    cand_gen = generation_name or _new_candidate_name(project)
+    work_dir = project_context.candidate_generations_dir(project.project_id) / cand_gen
+    work_source = work_dir / "source"
+    stats = EmbeddingStats()
+
+    with sessions().begin() as db:
+        db.add(
+            KnowledgeGeneration(
+                name=cand_gen,
+                project_id=project.project_id,
+                build_id=None,
+                created_at=datetime.now(UTC).isoformat(),
+                deleting=False,
+                is_candidate=True,
+            )
+        )
+
+    try:
+        base_dir = (
+            Path(candidate_source_dir).resolve()
+            if candidate_source_dir is not None
+            else project.source_directory
+        )
+        _prepare_candidate_workspace(base_dir, work_source, overlay_files)
+        cand_values = project_context.with_source_directory(
+            project_context.with_generation(values, cand_gen),
+            work_source,
+        )
+        cand_values["_project_id"] = project.project_id
+        cand_values["_project_type"] = project.project_type
+
+        plugins = configured(project.project_id, project_type=project.project_type)
+        filters = get_filters()
+        records, _, _, _ = read_sources(cand_values, plugins)
+        records, _ = filter_records(records, filters)
+        override_result = apply_overrides_detailed(
+            records,
+            project.project_id,
+            source_dir=work_source,
+        )
+        records = override_result.records
+        validate_records(records)
+
+        with build_storage(cand_values, stats) as storage:
+            for stage in STAGES:
+                result = stage(records, cand_gen, storage)
+                if result.errors:
+                    raise ValueError("; ".join(result.errors))
+            reconcile(storage, records, cand_gen)
+            emb_counts = storage.embedding_counts()
+
+        with sessions().begin() as db:
+            row = db.get(KnowledgeGeneration, cand_gen)
+            if row is not None:
+                row.build_id = 0
+        return CandidateGeneration(
+            project.project_id, cand_gen, work_source, stats, emb_counts
+        )
+    except Exception:
+        destroy_candidate_generation(cand_gen, project.project_id)
+        raise
+
+
+def destroy_candidate_generation(
+    generation: str, project_id: str | None = None
+) -> None:
+    """Deterministically tear down a candidate generation's storage, workdir, and DB row."""
+    resolved_pid = project_id or project_context.DEFAULT_PROJECT_ID
+    with sessions().begin() as db:
+        row = db.get(KnowledgeGeneration, generation)
+        if row is not None:
+            if not row.is_candidate:
+                raise ValueError(
+                    f"Refusing to destroy non-candidate generation {generation}"
+                )
+            resolved_pid = row.project_id
+            pointer = generation_pointer(db, resolved_pid)
+            if pointer is not None and pointer.generation == generation:
+                raise ValueError(f"Refusing to destroy active generation {generation}")
+            row.deleting = True
+        else:
+            pointer = generation_pointer(db, resolved_pid)
+            if pointer is not None and pointer.generation == generation:
+                raise ValueError(f"Refusing to destroy active generation {generation}")
+
+    values = _cleanup_values_for_project(resolved_pid)
+    cand_values = project_context.with_generation(values, generation)
+    delete_generation_data(cand_values)
+
+    work_dir = project_context.candidate_generations_dir(resolved_pid) / generation
+    shutil.rmtree(work_dir, ignore_errors=True)
+    with suppress(OSError):
+        work_dir.parent.rmdir()
+
+    with sessions().begin() as db:
+        row = db.get(KnowledgeGeneration, generation)
+        if row is not None and row.is_candidate:
+            db.delete(row)
+
+
+@contextmanager
+def candidate_generation(
+    project_id: str = project_context.DEFAULT_PROJECT_ID,
+    *,
+    overlay_files: Mapping[str, str | None] | None = None,
+    candidate_source_dir: str | Path | None = None,
+    generation_name: str | None = None,
+):
+    """Build a temporary isolated 候选知识代 and guarantee deterministic teardown."""
+    cand = build_candidate_generation(
+        project_id,
+        overlay_files=overlay_files,
+        candidate_source_dir=candidate_source_dir,
+        generation_name=generation_name,
+    )
+    try:
+        yield cand
+    finally:
+        destroy_candidate_generation(cand.generation, cand.project_id)
+
+
+def cleanup_candidate_generations(project_id: str | None = None) -> int:
+    """Sweep orphan candidate generations left by crashes or project deletion."""
+    import logging
+
+    logger = logging.getLogger(__name__)
+    cleaned = 0
+    handled: set[tuple[str, str]] = set()
+    with sessions()() as db:
+        query = db.query(KnowledgeGeneration).filter(
+            KnowledgeGeneration.is_candidate.is_(True)
+        )
+        if project_id is not None:
+            query = query.filter(KnowledgeGeneration.project_id == project_id)
+        rows = [(row.name, row.project_id) for row in query.all()]
+
+    for cand_gen, pid in rows:
+        handled.add((pid, cand_gen))
+        try:
+            destroy_candidate_generation(cand_gen, pid)
+            cleaned += 1
+        except Exception:  # noqa: BLE001 - retry on next startup if storage is unreachable
+            logger.warning(
+                "Could not clean orphan candidate generation %s (%s)", cand_gen, pid
+            )
+
+    root = project_context.projects_root()
+    if root.exists():
+        project_dirs = (
+            [root / project_id]
+            if project_id is not None
+            else [p for p in root.iterdir() if p.is_dir() and not p.is_symlink()]
+        )
+        for pdir in project_dirs:
+            cand_root = pdir / ".candidates"
+            if not cand_root.is_dir():
+                continue
+            pid = pdir.name
+            for entry in list(cand_root.iterdir()):
+                if not entry.is_dir():
+                    continue
+                if (pid, entry.name) in handled:
+                    continue
+                try:
+                    values = _cleanup_values_for_project(pid)
+                    if values.get("neo4j_uri") and values.get("milvus_uri"):
+                        delete_generation_data(
+                            project_context.with_generation(values, entry.name)
+                        )
+                except Exception:  # noqa: BLE001 - best-effort sweep for filesystem-only orphans
+                    logger.warning(
+                        "Best-effort storage sweep skipped for orphan %s", entry.name
+                    )
+                shutil.rmtree(entry, ignore_errors=True)
+                cleaned += 1
+            with suppress(OSError):
+                cand_root.rmdir()
+    return cleaned
 
 
 def existing_refs(refs, project_id=None):
@@ -1300,17 +1619,19 @@ def describe(names=None, database=None, search=None, summary=False, project_id=N
         for rel in [*(row.get("out_rels") or []), *(row.get("in_rels") or [])]:
             if not rel or not rel.get("ref"):
                 continue
-            rels_by_ref.setdefault(
-                rel["ref"],
-                {
-                    "name": rel.get("name", ""),
-                    "ref": rel["ref"],
-                    "from_table": rel.get("from_table", ""),
-                    "from_columns": list(rel.get("from_columns") or []),
-                    "to_table": rel.get("to_table", ""),
-                    "to_columns": list(rel.get("to_columns") or []),
-                },
-            )
+            entry = {
+                "name": rel.get("name", ""),
+                "ref": rel["ref"],
+                "from_table": rel.get("from_table", ""),
+                "from_columns": list(rel.get("from_columns") or []),
+                "to_table": rel.get("to_table", ""),
+                "to_columns": list(rel.get("to_columns") or []),
+            }
+            if rel.get("description"):
+                entry["description"] = rel["description"]
+            if rel.get("instructions"):
+                entry["instructions"] = rel["instructions"]
+            rels_by_ref.setdefault(rel["ref"], entry)
         return {
             **row["table"],
             "fields": row["fields"],

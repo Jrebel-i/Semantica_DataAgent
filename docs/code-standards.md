@@ -407,3 +407,21 @@ MCP 认证层对绑定项目已归档或删除中的 agent 凭据仍在工具分
   - 核心转换 `convert_dtb_to_ossie` 从 DTB 元数据、数仓任务 SQL（`extract_task_sql_statements` 兼容 `shell` / `merge_onself` / `spark sql`）与维度表行确定性生成 `0.3.0.dev0` Ossie 模型，通过 `ossie-schema.json` `Draft202012Validator` 自校验并原子写入 `<model_name>.yaml`。仅提取物理表真实列上的显式等值连接（去除 `partition=true` 对）为 `relationships`；仅在目标表全部产数 SQL 对主键键组一致时写入 `primary_key`；分区策略与直接上游表摘要写入数据集 `ai_context.instructions`。
   - 混合维度阈值由 `low_cardinality_limit`（默认 `20`）和 `sample_limit`（默认 `5`）控制：低基数列排序取值原样内联写入字段 `ai_context.instructions`；包含任一高基数列的表写入前 `sample_limit` 个示例至字段说明，并由 `write_dtb_ossie_output` 将该表全部有效物理行（带同行 `row_id`）写出到 `dimension_values.json`（通过 `schemas/v2/dimension_value.schema.json` 校验）。
   - 离线入口为 CLI `semantica-dataagent convert-dtb-ossie`；在线入口为 `DtbOssiePuller`（`puller/ossie`，前端配置称 `DTB 拉取为 Ossie`）与 `POST /api/v1/pulls/ossie`。`publish_ossie_pull` 与 `"mode": "ossie"` 启动恢复支持 `SIGKILL` 断点回放、保留人工提交的文件、仅清理历史 `"定时拉取"` 残留文件并兼容无变更空提交；项目尚未存在成功 `full` 知识代时首次 `ossie` 拉取自动入队 `full` 构建，之后入队 `incremental`。`GET /api/v1/pulls?project=<id>` 通过 `resolve_project_scope(..., allow_frozen=True)` 按项目过滤拉取记录（归档项目保持只读可见，未传 `project` 时按 `accessible_projects` 范围过滤），`POST /api/v1/pulls/dtb` 与 `POST /api/v1/pulls/ossie` 支持可选 `?project=<id>` 并走 `admin_project_scope` 校验。
+
+## 问答轨迹、演化运行状态机与看板
+
+- **Git 源目录修正覆盖层与评测题集（[ADR 0009](adr/0009-git-backed-semantic-overrides-and-correction-policy.md)、[ADR 0010](adr/0010-local-trajectories-and-candidate-generation-gate.md)）**：
+  - 业务术语同义词、表/字段说明与额外指令统一存放在项目源目录 `overrides/semantic_overrides.yaml`（`semantic_overrides.py`），随 Git 提交版本化并通过 `correction_proposals` 审批管线（`manual` / `mcp` / `evolution`）写入后触发增量构建；`evolution_require_review` 与 `correction_require_review` 项目级双开关分别控制演化与纠错提案是否需人工审批。
+  - `eval_questions.py` 将评测题集持久化在每项目专属 YAML 文件 `<projects_root>/<project_id>/eval/questions.yaml`（`project_context.eval_questions_path`，含 `dev` / `holdout` 切分与归一化去重防跨切分泄露）；仅允许写入确认后答案，自动演化禁止读取 `holdout` 评测题与对应问答轨迹。
+- **问答轨迹挖掘与防泄露切分（`trajectory_miner.py`）**：
+  - 采集阶段（`trajectories.py`）排除已过期或删除的会话与问答轨迹，并剔除归一化文本匹配 `holdout` 题集的问答轨迹；挖掘前先合并同一会话内重复问答及跨会话近似问题（保留区分口径与编号的数字后缀 Token），再按时间顺序切分为 **70% 诊断池 + 30% 验证保留池**。
+  - 归纳五类问题信号：`search_detour`（多轮检索绕路）、`sql_self_repair`（`validate_sql` 先败后成自修）、`multi_turn_correction`（多轮用户纠偏）、`divergent_clarification`（多口径重复澄清，保留全部**口径变体**而不坍缩为单一默认）与 `knowledge_gap_or_failure`（知识缺口或执行失败聚合）。
+- **单假设演化运行状态机与门禁闭环（Alembic `0040`、`evolution_runner.py`、`evolution_gate.py`）**：
+  - `evolution_checkpoints`、`evolution_runs`（部分唯一索引 `one_running_evolution_run_per_project` 强制每项目至多 1 个 `running` 运行）与 `evolution_rounds` 记录运行状态机与轮次证据。应用启动时恢复器将中断的 `running` 标记为 `incomplete`，保持源目录、活跃知识代与批次检查点不变并清理孤立候选知识代；`project_deletion.py` 同步清理上述演化状态表。
+  - 每轮只测试一个主因假设（默认 `max_rounds=3`、`max_eval_cases=20`），生成针对 `overrides/semantic_overrides.yaml`、可编辑 `knowledge/*.md` 或 `ossie/*.yaml` 的候选变更并写入临时候选对象：先后通过 L1 静态校验（YAML/Schema/反坍缩守卫）与 L2 隔离**候选知识代**评估（`confirmed_regression` 无回归且关键指标严格提升，或 `cold_start_ab` 满足 `E_c == 0` 且 `W_c > W_p` 且无新增静态 SQL 校验错误）。
+  - 通过 L1+L2 后按 `evolution_require_review` 创建 `source="evolution"` 纠错提案（携带 `l1_gate`、`l2_gate` 与 `provenance` 报告），并将 `checkpoint_trajectory_id` / `checkpoint_at` 推进至冻结批次上限；任一轮拒收或预算耗尽则标记 `incomplete` 且不推进检查点、不改写源目录或活跃知识代。
+- **Fork 安全自动调度器、REST 契约与前端看板（`evolution_scheduler.py`、`evolution_api.py`、`EvolutionPage.tsx`）**：
+  - `evolution_scheduler.py` 严格效仿 `scheduler.py` 提供 `fork_child()` 并向 `os.register_at_fork(after_in_child=...)` 注册（由 `backend/tests/test_fork_safety.py` 守护）。
+  - 项目配置读写统一通过 `project_context.py`（由 `tests/test_project_context_guard.py` 守护），`GET/PUT /api/v1/projects/{project_id}/evolution-config` 默认值严格设定为 `auto_evolve_enabled=false`、`min_trajectories=30`、`min_interval_hours=24`、`max_idle_days=7`、`max_rounds=3`、`max_eval_cases=20`；归档项目 `PUT` 与并发运行 `POST /api/v1/evolution/runs?project=` 统一返回 `409`，所有 REST 响应时间字段使用 `UtcDatetime`（`backend/tests/test_api_time.py` 守护）。
+  - 自动触发判定满足 `(new_trajectories >= min_trajectories and elapsed >= min_interval_hours) or (elapsed >= max_idle_days and new_trajectories >= 1)`（包含数据库未配置或零历史首轮场景）；手动触发 `POST /api/v1/evolution/runs` 在 `auto_evolve_enabled=false` 时仍可按需执行，并发冲突返回 `409`。
+  - 前端 `/evolution` 页面向 `admin` 与项目管理员开放，支持配置调整、触发运行、查看每轮假设及 L1/L2 门禁详情并跳转至 `/corrections?proposal_id=<id>` 审阅产出纠错提案。

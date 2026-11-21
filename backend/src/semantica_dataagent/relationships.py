@@ -146,6 +146,8 @@ def _reconcile_foreign_keys(storage, records, generation):
                     "to_table": to_full,
                     "from_columns": list(from_cols),
                     "to_columns": list(to_cols),
+                    "description": d.get("description") or "",
+                    "instructions": d.get("instructions") or "",
                     "source_file": record.source_file,
                     "source_key": record.source_key or record.source_file,
                     "source_files": list(record.source_files),
@@ -173,6 +175,8 @@ def _reconcile_foreign_keys(storage, records, generation):
            OR r.to_table <> row.props.to_table
            OR r.from_columns <> row.props.from_columns
            OR r.to_columns <> row.props.to_columns
+           OR coalesce(r.description, '') <> coalesce(row.props.description, '')
+           OR coalesce(r.instructions, '') <> coalesce(row.props.instructions, '')
            OR coalesce(r.source_file, '') <> coalesce(row.props.source_file, '')
            OR coalesce(r.source_key, '') <> coalesce(row.props.source_key, '')
            OR coalesce(r.source_files, []) <> row.props.source_files

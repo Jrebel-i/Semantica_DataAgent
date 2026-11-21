@@ -4,7 +4,7 @@ import uuid
 from datetime import UTC, datetime
 from threading import Lock
 
-from sqlalchemy import create_engine
+from sqlalchemy import Index, create_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
 
@@ -156,6 +156,7 @@ class Build(Base):
     affected_files: Mapped[str | None]
     dimension_tables: Mapped[str | None]
     generated_files: Mapped[str | None]
+    stale_overrides: Mapped[str] = mapped_column(default="[]", server_default="[]")
 
 
 class PluginConfig(Base):
@@ -232,6 +233,7 @@ class KnowledgeGeneration(Base):
     build_id: Mapped[int | None]
     created_at: Mapped[str | None]
     deleting: Mapped[bool] = mapped_column(default=False, server_default="0")
+    is_candidate: Mapped[bool] = mapped_column(default=False, server_default="0")
 
 
 class GenerationPointer(Base):
@@ -275,6 +277,10 @@ class CorrectionProposal(Base):
     project_id: Mapped[str] = mapped_column(default="default", server_default="default")
     owner_id: Mapped[str]
     conversation_id: Mapped[str | None]
+    source: Mapped[str] = mapped_column(default="manual", server_default="manual")
+    target_kind: Mapped[str] = mapped_column(
+        default="document", server_default="document"
+    )
     target: Mapped[str]
     patch: Mapped[str]
     original: Mapped[str]
@@ -282,12 +288,16 @@ class CorrectionProposal(Base):
     reason: Mapped[str]
     status: Mapped[str] = mapped_column(default="pending")
     original_patch: Mapped[str | None]
+    structured_patch: Mapped[str | None]
+    gate_report: Mapped[str | None]
     source_directory: Mapped[str | None]
     source_path: Mapped[str | None]
     reviewer_name: Mapped[str | None]
     commit_sha: Mapped[str | None]
+    revert_commit_sha: Mapped[str | None]
     reviewer_id: Mapped[str | None]
     reviewed_at: Mapped[datetime | None]
+    reverted_at: Mapped[datetime | None]
     created_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC))
 
 
@@ -348,3 +358,152 @@ class PullRecord(Base):
     build_id: Mapped[int | None]
     source_directory: Mapped[str | None]
     operation_id: Mapped[str | None]
+
+
+class InteractionTrajectory(Base):
+    """Sanitized, untruncated interaction trajectory persisted per project."""
+
+    __tablename__ = "interaction_trajectories"
+    __table_args__ = (
+        Index(
+            "ix_interaction_trajectories_project_recorded_id",
+            "project_id",
+            "recorded_at",
+            "id",
+        ),
+        Index(
+            "ix_interaction_trajectories_project_id_cursor",
+            "project_id",
+            "id",
+        ),
+        Index(
+            "ix_interaction_trajectories_conv_turn",
+            "conversation_id",
+            "turn_id",
+        ),
+        Index(
+            "ix_interaction_trajectories_local_window",
+            "project_id",
+            "token_id",
+            "source_type",
+            "last_activity_at",
+        ),
+        Index(
+            "ix_interaction_trajectories_session_key",
+            "session_key",
+            unique=True,
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    project_id: Mapped[str] = mapped_column(default="default", server_default="default")
+    source_type: Mapped[str]
+    session_key: Mapped[str]
+    conversation_id: Mapped[str | None]
+    turn_id: Mapped[int | None]
+    token_id: Mapped[str | None]
+    langfuse_trace_id: Mapped[str | None]
+    status: Mapped[str] = mapped_column(default="running", server_default="running")
+    question: Mapped[str] = mapped_column(default="", server_default="")
+    answer: Mapped[str] = mapped_column(default="", server_default="")
+    tool_calls: Mapped[str] = mapped_column(default="[]", server_default="[]")
+    matched_refs: Mapped[str] = mapped_column(default="[]", server_default="[]")
+    clarifications: Mapped[str] = mapped_column(default="[]", server_default="[]")
+    sql_validations: Mapped[str] = mapped_column(default="[]", server_default="[]")
+    final_sql: Mapped[str] = mapped_column(default="[]", server_default="[]")
+    citations: Mapped[str] = mapped_column(default="[]", server_default="[]")
+    window_started_at: Mapped[datetime | None]
+    last_activity_at: Mapped[datetime] = mapped_column(
+        default=lambda: datetime.now(UTC)
+    )
+    recorded_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC))
+    updated_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC))
+
+
+class EvolutionCheckpoint(Base):
+    """Per-project trajectory checkpoint advanced only on accepted evolution runs."""
+
+    __tablename__ = "evolution_checkpoints"
+
+    project_id: Mapped[str] = mapped_column(primary_key=True)
+    checkpoint_trajectory_id: Mapped[int | None]
+    checkpoint_at: Mapped[datetime | None]
+    last_run_id: Mapped[str | None]
+    updated_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC))
+
+
+class EvolutionRun(Base):
+    """Persisted state machine record for one autonomous or manual evolution run."""
+
+    __tablename__ = "evolution_runs"
+    __table_args__ = (
+        Index(
+            "ix_evolution_runs_project_created",
+            "project_id",
+            "created_at",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(primary_key=True, default=lambda: uuid.uuid4().hex)
+    project_id: Mapped[str] = mapped_column(default="default", server_default="default")
+    trigger_type: Mapped[str] = mapped_column(default="manual", server_default="manual")
+    status: Mapped[str] = mapped_column(default="running", server_default="running")
+    checkpoint_before_trajectory_id: Mapped[int | None]
+    checkpoint_after_trajectory_id: Mapped[int | None]
+    frozen_max_trajectory_id: Mapped[int | None]
+    diagnosis_trajectory_ids: Mapped[str] = mapped_column(
+        default="[]", server_default="[]"
+    )
+    reserve_trajectory_ids: Mapped[str] = mapped_column(
+        default="[]", server_default="[]"
+    )
+    signal_summary: Mapped[str] = mapped_column(default="{}", server_default="{}")
+    max_rounds: Mapped[int] = mapped_column(default=3, server_default="3")
+    max_eval_cases: Mapped[int] = mapped_column(default=20, server_default="20")
+    rounds_completed: Mapped[int] = mapped_column(default=0, server_default="0")
+    stop_reason: Mapped[str | None]
+    error: Mapped[str | None]
+    proposal_id: Mapped[str | None]
+    created_by: Mapped[str | None]
+    started_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC))
+    finished_at: Mapped[datetime | None]
+    created_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC))
+
+
+class EvolutionRound(Base):
+    """Single-hypothesis round record within an evolution run."""
+
+    __tablename__ = "evolution_rounds"
+    __table_args__ = (
+        Index(
+            "ix_evolution_rounds_run_round",
+            "run_id",
+            "round_number",
+        ),
+        Index(
+            "ix_evolution_rounds_project",
+            "project_id",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(primary_key=True, default=lambda: uuid.uuid4().hex)
+    run_id: Mapped[str]
+    project_id: Mapped[str] = mapped_column(default="default", server_default="default")
+    round_number: Mapped[int]
+    signal_kind: Mapped[str]
+    hypothesis: Mapped[str]
+    evidence_trajectory_ids: Mapped[str] = mapped_column(
+        default="[]", server_default="[]"
+    )
+    target: Mapped[str] = mapped_column(default="", server_default="")
+    target_kind: Mapped[str] = mapped_column(
+        default="override", server_default="override"
+    )
+    candidate_change: Mapped[str] = mapped_column(default="{}", server_default="{}")
+    l1_gate_report: Mapped[str | None]
+    l2_gate_report: Mapped[str | None]
+    decision: Mapped[str] = mapped_column(default="running", server_default="running")
+    reject_reason: Mapped[str | None]
+    proposal_id: Mapped[str | None]
+    started_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC))
+    finished_at: Mapped[datetime | None]

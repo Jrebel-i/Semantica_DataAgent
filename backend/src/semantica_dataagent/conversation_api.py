@@ -23,6 +23,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, text
 
+from . import trajectories
 from .agent_plugin import build_attachment_prompt
 from .agent_runner import DONE, ERROR, AgentEvent, AgentTurnRequest, get_runner
 from .api_time import UtcDatetime
@@ -85,6 +86,10 @@ class TurnView(BaseModel):
     started_at: UtcDatetime
     finished_at: UtcDatetime | None
     events: list[EventView] = []
+    has_validated_sql: bool = False
+    feedback_accurate: bool = False
+    eval_question_id: str | None = None
+    eval_answer_confirmed: bool | None = None
 
 
 class ConversationView(BaseModel):
@@ -174,7 +179,9 @@ def cleanup_expired_sessions() -> None:
             db.query(AgentCredential).filter_by(conversation_id=row.id).delete(
                 synchronize_session=False
             )
+            trajectories.delete_conversation_trajectories(db, row.id)
             row.resumable = False
+        trajectories.delete_expired_local_trajectories(db, cutoff)
 
 
 def public_base_url() -> str:
@@ -219,7 +226,12 @@ def _turn(
     events: list[TurnEvent],
     provider_id: str | None = None,
     model: str | None = None,
+    feedback_entry: dict | None = None,
 ) -> TurnView:
+    from .eval_questions import turn_validated_sql
+
+    sql_blocks = json.loads(row.sql)
+    validated = turn_validated_sql(sql_blocks, events)
     return TurnView(
         id=row.id,
         sequence=row.sequence,
@@ -229,12 +241,24 @@ def _turn(
         question=row.question,
         status=row.status,
         answer=row.answer,
-        sql=json.loads(row.sql),
+        sql=sql_blocks,
         citations=json.loads(row.citations),
         error=row.error,
         started_at=row.started_at,
         finished_at=row.finished_at,
         events=[_event(item) for item in events],
+        has_validated_sql=validated is not None,
+        feedback_accurate=feedback_entry is not None,
+        eval_question_id=(
+            str(feedback_entry["id"])
+            if feedback_entry and feedback_entry.get("id")
+            else None
+        ),
+        eval_answer_confirmed=(
+            bool(feedback_entry.get("answer_confirmed", False))
+            if feedback_entry is not None
+            else None
+        ),
     )
 
 
@@ -276,6 +300,7 @@ def _sse(event: str, data: dict) -> str:
 
 
 def _record_event(turn_id: int, seq: int, event: AgentEvent) -> None:
+    conversation_id: str | None = None
     with sessions().begin() as db:
         db.add(
             TurnEvent(
@@ -295,13 +320,27 @@ def _record_event(turn_id: int, seq: int, event: AgentEvent) -> None:
                 ),
             )
         )
+        if event.type == "clarification":
+            turn = db.get(Turn, turn_id)
+            if turn is not None:
+                conversation_id = turn.conversation_id
+    if conversation_id is not None and event.type == "clarification":
+        trajectories.append_online_event(
+            conversation_id=conversation_id,
+            turn_id=turn_id,
+            event_type=event.type,
+            data=event.data,
+        )
 
 
 def _finish_turn(turn_id: int, status: str, event: AgentEvent | None, error=None):
+    conversation_id: str | None = None
+    secrets: tuple[str, ...] = ()
     with sessions().begin() as db:
         row = db.get(Turn, turn_id)
         if row is None:
             return
+        conversation_id = row.conversation_id
         db.query(AgentCredential).filter_by(turn_id=turn_id).delete()
         row.status = status
         row.finished_at = datetime.now(UTC)
@@ -316,6 +355,36 @@ def _finish_turn(turn_id: int, status: str, event: AgentEvent | None, error=None
         conversation = db.get(Conversation, row.conversation_id)
         if conversation is not None:
             conversation.updated_at = datetime.now(UTC)
+        provider = db.get(Provider, row.provider_id) if row.provider_id else None
+        if provider is not None and provider.api_key:
+            from .crypto import decrypt
+
+            secrets = (decrypt(provider.api_key),)
+    if conversation_id is not None:
+        final_sql = (
+            event.data.get("sql", [])
+            if event is not None and event.type == DONE
+            else None
+        )
+        citations = (
+            event.data.get("citations", [])
+            if event is not None and event.type == DONE
+            else None
+        )
+        answer = (
+            event.data.get("text", "")
+            if event is not None and event.type == DONE
+            else ""
+        )
+        trajectories.finish_online_trajectory(
+            conversation_id=conversation_id,
+            turn_id=turn_id,
+            status=status,
+            answer=answer,
+            final_sql=final_sql,
+            citations=citations,
+            secrets=secrets,
+        )
 
 
 @router.get("/api/v1/conversations", response_model=list[ConversationView])
@@ -394,13 +463,22 @@ def conversation_detail(
             if turns
             else []
         )
+        from .eval_questions import list_feedback_turn_ids
+
         by_turn: dict[int, list[TurnEvent]] = {turn.id: [] for turn in turns}
         for event in events:
             by_turn[event.turn_id].append(event)
+        feedback_by_turn = list_feedback_turn_ids(row.project_id, conversation_id)
         return ConversationDetail(
             **_view(row, len(turns), _project_name(db, row.project_id)).model_dump(),
             turns=[
-                _turn(turn, by_turn[turn.id], row.provider_id, row.model)
+                _turn(
+                    turn,
+                    by_turn[turn.id],
+                    row.provider_id,
+                    row.model,
+                    feedback_entry=feedback_by_turn.get(turn.id),
+                )
                 for turn in turns
             ],
         )
@@ -487,6 +565,7 @@ def delete_conversation(
         db.query(QueryExecution).filter_by(conversation_id=conversation_id).delete(
             synchronize_session=False
         )
+        trajectories.delete_conversation_trajectories(db, conversation_id)
         db.delete(conversation)
     remove_conversation_workspace(agent_root(), conversation_id)
     cleanup_conversation_attachments(conversation_id)
@@ -711,8 +790,23 @@ async def _start_turn(
         effort=body.effort,
         attachments=tuple(attachments),
     )
+    trajectories.start_online_trajectory(
+        project_id=project_id,
+        conversation_id=conversation_id,
+        turn_id=turn_id,
+        token_id=requester.id,
+        question=body.question.strip(),
+        secrets=(run_request.mcp_token, run_request.provider.api_key or ""),
+    )
     return StreamingResponse(
-        _stream(run_request, runner, turn_id, conversation_id, request),
+        _stream(
+            run_request,
+            runner,
+            turn_id,
+            conversation_id,
+            request,
+            project_id=project_id,
+        ),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -826,6 +920,13 @@ async def confirm_query(
         )
         event = AgentEvent("query_result", result)
         _record_event(turn_id, seq, event)
+        trajectories.append_online_event(
+            conversation_id=conversation_id,
+            turn_id=turn_id,
+            event_type="query_confirmation",
+            data=result,
+            secrets=(provider_settings.api_key or "",),
+        )
     except Exception:
         with sessions().begin() as db:
             turn = db.get(Turn, turn_id)
@@ -860,7 +961,14 @@ async def confirm_query(
             {"conversation_id": conversation_id, "turn_id": turn_id, **result},
         )
         async for chunk in _stream(
-            run_request, runner, turn_id, conversation_id, request, seq + 1, False
+            run_request,
+            runner,
+            turn_id,
+            conversation_id,
+            request,
+            seq + 1,
+            False,
+            project_id=conversation_project_id,
         ):
             yield chunk
 
@@ -875,14 +983,20 @@ async def _stream(
     request: Request,
     start_seq: int = 0,
     include_conversation: bool = True,
+    project_id: str | None = None,
 ) -> AsyncIterator[str]:
     if include_conversation:
         yield _sse(
             "conversation",
             {"conversation_id": conversation_id, "turn_id": turn_id},
         )
+    from .project_context import DEFAULT_PROJECT_ID
     from .telemetry import submit, trace_id
 
+    if project_id is None:
+        with sessions()() as db:
+            conv = db.get(Conversation, conversation_id)
+            project_id = conv.project_id if conv is not None else DEFAULT_PROJECT_ID
     observation_id = trace_id(conversation_id, turn_id)
     secrets = (run_request.mcp_token, run_request.provider.api_key or "")
     trace = {
@@ -894,6 +1008,8 @@ async def _stream(
             "provider": run_request.provider.name,
             "model": run_request.model,
             "source": "online",
+            "project_id": project_id,
+            "traceId": observation_id,
         },
     }
     submit("trace-create", trace, secrets)

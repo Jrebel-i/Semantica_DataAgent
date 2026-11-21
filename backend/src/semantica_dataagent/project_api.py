@@ -232,15 +232,20 @@ def resolve_project_scope(
     return _resolve_project_context(project_id, requester, allow_frozen=allow_frozen)
 
 
+def is_project_admin(scope: ProjectContext, requester: Requester) -> bool:
+    """Return True when the caller is a system admin or an admin of this project."""
+    if requester.role == "admin":
+        return True
+    with sessions()() as db:
+        member = db.get(ProjectMember, (scope.project_id, requester.id))
+        return member is not None and member.role == "admin"
+
+
 def _require_project_admin(
     scope: ProjectContext, requester: Requester
 ) -> ProjectContext:
-    if requester.role == "admin":
+    if is_project_admin(scope, requester):
         return scope
-    with sessions()() as db:
-        member = db.get(ProjectMember, (scope.project_id, requester.id))
-        if member is not None and member.role == "admin":
-            return scope
     raise HTTPException(status_code=403, detail="Project admin required")
 
 
@@ -450,6 +455,86 @@ def set_project_auto_build(
         if not body.enabled:
             auto_build.discard_pending_builds(scope.project_id, db)
     return AutoBuildView(enabled=body.enabled)
+
+
+class EvolutionPolicyView(BaseModel):
+    correction_require_review: bool
+    evolution_require_review: bool
+
+
+class EvolutionPolicyUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    correction_require_review: bool | None = None
+    evolution_require_review: bool | None = None
+
+
+@router.get(
+    "/api/v1/projects/{project_id}/evolution-policy",
+    response_model=EvolutionPolicyView,
+)
+def get_project_evolution_policy(
+    project_id: str,
+    scope: Annotated[ProjectContext, Depends(admin_project_path_scope)],
+):
+    return EvolutionPolicyView(**project_context.evolution_policy(scope.project_id))
+
+
+@router.put(
+    "/api/v1/projects/{project_id}/evolution-policy",
+    response_model=EvolutionPolicyView,
+)
+def set_project_evolution_policy(
+    project_id: str,
+    body: EvolutionPolicyUpdate,
+    scope: Annotated[ProjectContext, Depends(admin_project_path_scope)],
+    requester: Annotated[Requester, Depends(current_requester)],
+):
+    if scope.status in FROZEN_STATUSES:
+        raise HTTPException(status_code=409, detail=ARCHIVED_DETAIL)
+    updates = (
+        (
+            "correction_require_review",
+            project_context.CORRECTION_REQUIRE_REVIEW_KEY,
+            body.correction_require_review,
+        ),
+        (
+            "evolution_require_review",
+            project_context.EVOLUTION_REQUIRE_REVIEW_KEY,
+            body.evolution_require_review,
+        ),
+    )
+    with sessions().begin() as db:
+        for field_name, setting_key, value in updates:
+            if field_name not in body.model_fields_set:
+                continue
+            row = db.get(ProjectSetting, (scope.project_id, setting_key))
+            if value is None:
+                if row is not None:
+                    db.delete(row)
+            else:
+                stored = "true" if value else "false"
+                if row is None:
+                    db.add(
+                        ProjectSetting(
+                            project_id=scope.project_id,
+                            key=setting_key,
+                            value=stored,
+                        )
+                    )
+                else:
+                    row.value = stored
+        db.flush()
+        policy = project_context.evolution_policy(scope.project_id, db)
+        record_project_audit(
+            db,
+            project_id=scope.project_id,
+            actor_id=requester.id,
+            actor_name=actor_name(db, requester),
+            action="project.evolution_policy",
+            detail=policy,
+        )
+        return EvolutionPolicyView(**policy)
 
 
 ADAPTER_DEFAULT_ENABLED = frozenset({"canonical", "markdown"})

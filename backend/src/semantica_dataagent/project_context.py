@@ -15,12 +15,14 @@ are; this module only selects the project-scoped slice.
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import shutil
 import uuid
 from collections.abc import Mapping
 from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -53,10 +55,166 @@ GENERATION_RETENTION_KEY = "generation_retention"
 SCHEDULE_INTERVAL_KEY = "schedule_interval_seconds"
 DIMENSION_VALUE_LIMIT_KEY = "dimension_value_limit"
 GENERATION_PREFIX_KEY = "generation_prefix"
+CORRECTION_REQUIRE_REVIEW_KEY = "correction_require_review"
+EVOLUTION_REQUIRE_REVIEW_KEY = "evolution_require_review"
+
+AUTO_EVOLVE_ENABLED_KEY = "evolution_auto_enabled"
+EVOLUTION_MIN_TRAJECTORIES_KEY = "evolution_min_trajectories"
+EVOLUTION_MIN_INTERVAL_HOURS_KEY = "evolution_min_interval_hours"
+EVOLUTION_MAX_IDLE_DAYS_KEY = "evolution_max_idle_days"
+EVOLUTION_MAX_ROUNDS_KEY = "evolution_max_rounds"
+EVOLUTION_MAX_EVAL_CASES_KEY = "evolution_max_eval_cases"
+EVOLUTION_PROVIDER_ID_KEY = "evolution_provider_id"
+EVOLUTION_MODEL_KEY = "evolution_model"
+EVOLUTION_JUDGE_PROVIDER_ID_KEY = "evolution_judge_provider_id"
+EVOLUTION_JUDGE_MODEL_KEY = "evolution_judge_model"
+
+DEFAULT_AUTO_EVOLVE_ENABLED = False
+DEFAULT_EVOLUTION_MIN_TRAJECTORIES = 30
+DEFAULT_EVOLUTION_MIN_INTERVAL_HOURS = 24
+DEFAULT_EVOLUTION_MAX_IDLE_DAYS = 7
+DEFAULT_EVOLUTION_MAX_ROUNDS = 3
+DEFAULT_EVOLUTION_MAX_EVAL_CASES = 20
 
 PROJECTS_ROOT_ENV = "DATAAGENT_PROJECTS_ROOT"
 PROJECT_ID_PATTERN = re.compile(r"[a-z][a-z0-9]{0,23}")
 GENERATION_PREFIX_PATTERN = re.compile(r"[a-z0-9_]{1,25}")
+
+
+def parse_bool_setting(raw: str | None, *, default: bool = True) -> bool:
+    """Parse a persisted boolean setting, falling back on unset or blank values."""
+    if raw is None:
+        return default
+    normalized = raw.strip().lower()
+    if not normalized:
+        return default
+    if normalized in {"true", "1", "yes", "on"}:
+        return True
+    if normalized in {"false", "0", "no", "off"}:
+        return False
+    return default
+
+
+def evolution_policy(project_id: str, db=None) -> dict[str, bool]:
+    """Return a project's correction and evolution review switches."""
+    if db is None:
+        with sessions()() as own:
+            return evolution_policy(project_id, own)
+    corr = db.get(ProjectSetting, (project_id, CORRECTION_REQUIRE_REVIEW_KEY))
+    evol = db.get(ProjectSetting, (project_id, EVOLUTION_REQUIRE_REVIEW_KEY))
+    return {
+        "correction_require_review": parse_bool_setting(
+            corr.value if corr is not None else None, default=True
+        ),
+        "evolution_require_review": parse_bool_setting(
+            evol.value if evol is not None else None, default=True
+        ),
+    }
+
+
+def _parse_int_setting(
+    raw: str | None, *, default: int, minimum: int, maximum: int
+) -> int:
+    if raw is None or not raw.strip():
+        return default
+    try:
+        parsed = int(raw.strip())
+    except ValueError:
+        return default
+    return max(minimum, min(maximum, parsed))
+
+
+def _parse_float_setting(
+    raw: str | None, *, default: float, minimum: float, maximum: float
+) -> float:
+    if raw is None or not raw.strip():
+        return default
+    try:
+        parsed = float(raw.strip())
+    except ValueError:
+        return default
+    if math.isnan(parsed):  # NaN guard
+        return default
+    return max(minimum, min(maximum, parsed))
+
+
+def _optional_str_setting(raw: str | None) -> str | None:
+    if raw is None:
+        return None
+    stripped = raw.strip()
+    return stripped or None
+
+
+def evolution_config(project_id: str, db=None) -> dict[str, Any]:
+    """Return a project's auto-evolution schedule and model settings with safe defaults."""
+    if db is None:
+        with sessions()() as own:
+            return evolution_config(project_id, own)
+    keys = (
+        AUTO_EVOLVE_ENABLED_KEY,
+        EVOLUTION_MIN_TRAJECTORIES_KEY,
+        EVOLUTION_MIN_INTERVAL_HOURS_KEY,
+        EVOLUTION_MAX_IDLE_DAYS_KEY,
+        EVOLUTION_MAX_ROUNDS_KEY,
+        EVOLUTION_MAX_EVAL_CASES_KEY,
+        EVOLUTION_PROVIDER_ID_KEY,
+        EVOLUTION_MODEL_KEY,
+        EVOLUTION_JUDGE_PROVIDER_ID_KEY,
+        EVOLUTION_JUDGE_MODEL_KEY,
+    )
+    rows = {
+        row.key: row.value
+        for row in db.query(ProjectSetting)
+        .filter(
+            ProjectSetting.project_id == project_id,
+            ProjectSetting.key.in_(keys),
+        )
+        .all()
+    }
+    return {
+        "auto_evolve_enabled": parse_bool_setting(
+            rows.get(AUTO_EVOLVE_ENABLED_KEY), default=DEFAULT_AUTO_EVOLVE_ENABLED
+        ),
+        "min_trajectories": _parse_int_setting(
+            rows.get(EVOLUTION_MIN_TRAJECTORIES_KEY),
+            default=DEFAULT_EVOLUTION_MIN_TRAJECTORIES,
+            minimum=1,
+            maximum=10000,
+        ),
+        "min_interval_hours": _parse_float_setting(
+            rows.get(EVOLUTION_MIN_INTERVAL_HOURS_KEY),
+            default=float(DEFAULT_EVOLUTION_MIN_INTERVAL_HOURS),
+            minimum=0.0,
+            maximum=8760.0,
+        ),
+        "max_idle_days": _parse_float_setting(
+            rows.get(EVOLUTION_MAX_IDLE_DAYS_KEY),
+            default=float(DEFAULT_EVOLUTION_MAX_IDLE_DAYS),
+            minimum=1.0,
+            maximum=365.0,
+        ),
+        "max_rounds": _parse_int_setting(
+            rows.get(EVOLUTION_MAX_ROUNDS_KEY),
+            default=DEFAULT_EVOLUTION_MAX_ROUNDS,
+            minimum=1,
+            maximum=20,
+        ),
+        "max_eval_cases": _parse_int_setting(
+            rows.get(EVOLUTION_MAX_EVAL_CASES_KEY),
+            default=DEFAULT_EVOLUTION_MAX_EVAL_CASES,
+            minimum=1,
+            maximum=200,
+        ),
+        "evolution_provider_id": _optional_str_setting(
+            rows.get(EVOLUTION_PROVIDER_ID_KEY)
+        ),
+        "evolution_model": _optional_str_setting(rows.get(EVOLUTION_MODEL_KEY)),
+        "judge_provider_id": _optional_str_setting(
+            rows.get(EVOLUTION_JUDGE_PROVIDER_ID_KEY)
+        ),
+        "judge_model": _optional_str_setting(rows.get(EVOLUTION_JUDGE_MODEL_KEY)),
+    }
+
 
 PROJECT_SETTING_KEYS = frozenset(
     {
@@ -70,6 +228,22 @@ PROJECT_SETTING_KEYS = frozenset(
 
 STORAGE_PREFIX = "sda_"
 _GENERATION_PATTERN = re.compile(r"[A-Za-z][A-Za-z0-9_]{0,63}")
+
+_bound_generations: ContextVar[dict[str, str] | None] = ContextVar(
+    "project_bound_generations", default=None
+)
+
+
+@contextmanager
+def bind_generation(project_id: str, generation: str):
+    """Temporarily aim all reads for ``project_id`` at an isolated generation."""
+    current = dict(_bound_generations.get() or {})
+    current[project_id] = generation
+    token = _bound_generations.set(current)
+    try:
+        yield
+    finally:
+        _bound_generations.reset(token)
 
 
 class ProjectNotFound(LookupError):
@@ -303,7 +477,11 @@ def current_project(
         project = db.get(Project, resolved)
         if project is None:
             raise ProjectNotFound(resolved)
-        values = normalize_values(_read_settings(db, resolved))
+        values = _read_settings(db, resolved)
+    overrides = _bound_generations.get()
+    if overrides and resolved in overrides:
+        values[GENERATION_KEY] = overrides[resolved]
+    values = normalize_values(values)
     return ProjectContext(resolved, values, project.name, project.type, project.status)
 
 
@@ -361,6 +539,15 @@ def with_generation(values: Mapping[str, Any], generation: str) -> dict[str, Any
     return result
 
 
+def with_source_directory(
+    values: Mapping[str, Any], directory: str | Path
+) -> dict[str, Any]:
+    """Return a copy of settings values aimed at an isolated source working copy."""
+    result = dict(values)
+    result[SOURCE_DIRECTORY_KEY] = str(Path(directory).resolve())
+    return result
+
+
 def index_name(name: str) -> str:
     return ProjectContext.index_name(name)
 
@@ -391,6 +578,47 @@ def project_source_directory(project_id: str) -> Path:
     return projects_root() / project_id / "source"
 
 
+def candidate_generations_dir(project_id: str) -> Path:
+    """Directory holding isolated temporary working copies for candidate generations."""
+    return projects_root() / project_id / ".candidates"
+
+
+def project_eval_directory(project_id: str) -> Path:
+    """Return the source-isolated eval directory for a project."""
+    root = projects_root().resolve()
+    project_dir = (root / project_id).resolve()
+    if project_dir.parent != root or project_dir == root:
+        raise ValueError(f"Invalid project directory for eval questions: {project_id}")
+    return project_dir / "eval"
+
+
+def eval_questions_path(project_id: str) -> Path:
+    """Return the per-project questions.yaml path, verified outside source_directory."""
+    target = (project_eval_directory(project_id) / "questions.yaml").resolve()
+    candidates = [project_source_directory(project_id)]
+    configured_source = source_directory_value(project_id)
+    if configured_source:
+        candidates.append(Path(configured_source))
+    if project_id == DEFAULT_PROJECT_ID and os.environ.get("DATAAGENT_SOURCE_DIR"):
+        candidates.append(Path(os.environ["DATAAGENT_SOURCE_DIR"]))
+    for source_path in candidates:
+        source_root = source_path.expanduser().resolve()
+        if target == source_root or target.is_relative_to(source_root):
+            raise RuntimeError(
+                f"Eval questions path {target} must stay isolated outside source directory {source_root}"
+            )
+    return target
+
+
+def delete_project_eval_directory(project_id: str) -> None:
+    """Remove a project's source-isolated eval directory if present."""
+    eval_dir = project_eval_directory(project_id)
+    if eval_dir.is_symlink():
+        eval_dir.unlink()
+    elif eval_dir.exists():
+        shutil.rmtree(eval_dir)
+
+
 def generation_is_built(project_id: str, generation: str) -> bool:
     """True when the generation has been produced by a successful build."""
     with sessions()() as db:
@@ -399,6 +627,7 @@ def generation_is_built(project_id: str, generation: str) -> bool:
             row is not None
             and row.project_id == project_id
             and row.build_id is not None
+            and not row.deleting
         )
 
 
@@ -425,9 +654,10 @@ def recover_projects() -> None:
         if status == DELETING_STATUS:
             shutil.rmtree(entry, ignore_errors=True)
             continue
-        source = entry / "source"
-        if not source.exists():
-            source.mkdir(parents=True, exist_ok=True)
+        if entry.name != DEFAULT_PROJECT_ID:
+            source = entry / "source"
+            if not source.exists():
+                source.mkdir(parents=True, exist_ok=True)
     for project_id, status in known.items():
         if project_id == DEFAULT_PROJECT_ID or status == DELETING_STATUS:
             continue
