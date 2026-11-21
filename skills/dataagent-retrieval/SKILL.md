@@ -162,9 +162,9 @@ Read `validate_sql` completely:
   timezone and anchor, open-ended versus complete versus future period, upper bound
   relative to the anchor, business time versus partition, duration direction and dialect
   arguments, per-row versus aggregate duration granularity, raw-precision filtering and
-  aggregation before display rounding, both duration-threshold operators (`>=` on the
-  lower bound and `<=` on the upper bound) with inclusive boundaries retained, and result
-  time precision. A passing `validate_sql` does not prove these semantics.
+  aggregation before display rounding, both duration-threshold operators against the
+  intended inclusion of each endpoint, and result time precision. A passing
+  `validate_sql` does not prove these semantics.
 
 ## Pagination and errors
 
