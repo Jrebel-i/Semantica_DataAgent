@@ -265,6 +265,31 @@ def _parser() -> argparse.ArgumentParser:
         help="external browser origin used to add or refresh conversation links; "
         "path prefixes are rejected because the UI serves /chat/<id> at the site root",
     )
+    export_ossie_cmd = commands.add_parser(
+        "export-ossie",
+        help="export the current knowledge generation as an Apache Ossie model",
+    )
+    export_ossie_cmd.add_argument(
+        "--project",
+        default="default",
+        help="project id to export (default: default)",
+    )
+    export_ossie_cmd.add_argument(
+        "--database",
+        help="optional database name filter",
+    )
+    export_ossie_cmd.add_argument(
+        "--format",
+        choices=("yaml", "json"),
+        default="yaml",
+        help="output serialization format (default: yaml)",
+    )
+    export_ossie_cmd.add_argument(
+        "-o",
+        "--output",
+        type=Path,
+        help="write output atomically to a file instead of stdout",
+    )
     return parser
 
 
@@ -414,4 +439,34 @@ def main(argv: list[str] | None = None) -> int:
         from .eval_exec import run_report
 
         return run_report(args)
+    if args.command == "export-ossie":
+        from sqlalchemy.exc import SQLAlchemyError
+
+        from .ossie_export import OssieExportError, export_ossie, write_ossie_file
+        from .project_context import ProjectNotFound
+        from .storage_errors import StorageUnavailable
+
+        try:
+            content = export_ossie(
+                project_id=args.project,
+                format=args.format,
+                database=args.database,
+            )
+            if args.output is not None:
+                write_ossie_file(args.output, content)
+            else:
+                sys.stdout.write(content)
+                sys.stdout.flush()
+        except (
+            OssieExportError,
+            ProjectNotFound,
+            StorageUnavailable,
+            ValueError,
+            OSError,
+            KeyError,
+            SQLAlchemyError,
+        ) as exc:
+            print(f"export-ossie failed: {exc}", file=sys.stderr)
+            return 1
+        return 0
     return _run_eval(args)

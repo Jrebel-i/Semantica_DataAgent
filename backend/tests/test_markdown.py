@@ -51,6 +51,7 @@ def test_chunks_split_single_lines_larger_than_the_limit():
 
 def test_dictionary_filename_matches_qualified_table():
     assert table_name("nested/shop.orders.md") == ("shop", "orders")
+    assert table_name("nested/hive.shop.orders.md") == ("hive", "shop", "orders")
     assert table_name("nested/orders.md") is None
 
 

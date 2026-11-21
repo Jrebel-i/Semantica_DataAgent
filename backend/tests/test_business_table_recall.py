@@ -152,3 +152,65 @@ def test_many_associated_tables_do_not_displace_direct_matches(monkeypatch):
 
     hits = knowledge.search("库存", "tables", 50)
     assert {hit["ref"] for hit in hits} == {item["ref"] for item in direct}
+
+
+def test_document_and_field_relations_respect_three_part_catalog():
+    from semantica_dataagent.canonical import Record
+    from semantica_dataagent.relationships import reconcile
+
+    class Storage:
+        build_id = 1
+
+        def __init__(self):
+            self.queries = []
+            self.links = []
+
+        def execute(self, query, params):
+            self.queries.append((query, params))
+            if "RETURN count(*) AS deleted" in query:
+                return [{"deleted": 0}]
+            if "RETURN elementId(n) AS id" in query:
+                return [{"id": "f1"}] if ":SDAField" in query else []
+            if "UNWIND $rows AS row MATCH (d:SDADocument" in query:
+                self.links.extend(params["rows"])
+            return []
+
+    storage = Storage()
+    records = [
+        Record("table", {"catalog": "hive", "database": "shop", "name": "orders"}),
+        Record("table", {"catalog": "internal", "database": "shop", "name": "orders"}),
+        Record("table", {"database": "shop", "name": "orders"}),
+        Record("table", {"database": "warehouse", "name": "t0"}),
+        Record(
+            "document",
+            {
+                "category": "metrics",
+                "path": "nested/hive.shop.orders.md",
+                "content": (
+                    "来自 `hive`.`shop`.`orders` 与 shop.orders，"
+                    "以及字段 warehouse.t0.special_id。"
+                ),
+            },
+        ),
+    ]
+    reconcile(storage, records, "test")
+
+    assert {
+        (row.get("catalog", ""), row["database"], row["name"]) for row in storage.links
+    } == {
+        ("hive", "shop", "orders"),
+        ("", "shop", "orders"),
+    }
+    has_field_queries = [
+        q for q, _ in storage.queries if "MERGE (t)-[:HAS_FIELD]->(n)" in q
+    ]
+    assert has_field_queries and all(
+        "coalesce(t.catalog, '')" in q and "coalesce(n.catalog, '')" in q
+        for q in has_field_queries
+    )
+    has_doc_queries = [
+        q for q, _ in storage.queries if "MERGE (t)-[:HAS_DOCUMENT]->(d)" in q
+    ]
+    assert has_doc_queries and all(
+        "coalesce(t.catalog, '')" in q for q in has_doc_queries
+    )

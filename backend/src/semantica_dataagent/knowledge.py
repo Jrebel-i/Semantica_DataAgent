@@ -55,6 +55,18 @@ def hash_difference(previous, current):
     }
 
 
+def _entity_ref(record):
+    if record.kind in {"table", "field"}:
+        return reference(record.kind, record.data)
+    if record.kind == "document":
+        from .markdown import doc_ref
+
+        return doc_ref(record.data["category"], record.data["path"])
+    if record.kind == "task":
+        return bounded_ref("task:" + quote(record.data["name"], safe=""))
+    return None
+
+
 def incremental_plan(records, changes):
     selected = changes["added"] | changes["changed"] | changes.get("deleted", set())
     return [
@@ -82,11 +94,40 @@ def validate_records(records):
     }
     seen = set()
     for record in records:
-        if record.kind in fields:
-            key = (record.kind, *(record.data[field] for field in fields[record.kind]))
-            if key in seen:
-                raise ValueError("Duplicate " + record.kind + " reference")
-            seen.add(key)
+        data = record.data
+        if record.kind == "relationship":
+            from_cols = data.get("from_columns") or []
+            to_cols = data.get("to_columns") or []
+            if not from_cols or len(from_cols) != len(to_cols):
+                raise ValueError(
+                    f"Relationship {data['name']} has mismatched column counts"
+                )
+            key = (
+                "relationship",
+                data.get("from_catalog") or "",
+                data["from_database"],
+                data["from_table"],
+                data.get("to_catalog") or "",
+                data["to_database"],
+                data["to_table"],
+                data["name"],
+            )
+        elif record.kind in fields:
+            prefix = (
+                (data.get("catalog") or "",)
+                if record.kind in {"table", "field"}
+                else ()
+            )
+            key = (
+                record.kind,
+                *prefix,
+                *(data[field] for field in fields[record.kind]),
+            )
+        else:
+            continue
+        if key in seen:
+            raise ValueError("Duplicate " + record.kind + " reference")
+        seen.add(key)
 
 
 def settings(project_id=None):
@@ -336,12 +377,29 @@ def release_milvus(store):
 
 
 def reference(kind, data, counts=None):
-    key = ".".join(
-        quote(str(data[k]), safe="").replace(".", "%2E")
-        for k in (
-            ("database", "name") if kind == "table" else ("database", "table", "name")
+    if kind == "relationship":
+        from_parts = (
+            ("from_catalog", "from_database", "from_table")
+            if data.get("from_catalog")
+            else ("from_database", "from_table")
         )
-    )
+        to_parts = (
+            ("to_catalog", "to_database", "to_table")
+            if data.get("to_catalog")
+            else ("to_database", "to_table")
+        )
+        from_key = ".".join(
+            quote(str(data[k]), safe="").replace(".", "%2E") for k in from_parts
+        )
+        to_key = ".".join(
+            quote(str(data[k]), safe="").replace(".", "%2E") for k in to_parts
+        )
+        name_key = quote(str(data["name"]), safe="").replace(".", "%2E")
+        return bounded_ref(f"relationship:{from_key}:{to_key}:{name_key}", counts)
+    parts = ("database", "name") if kind == "table" else ("database", "table", "name")
+    if data.get("catalog"):
+        parts = ("catalog", *parts)
+    key = ".".join(quote(str(data[k]), safe="").replace(".", "%2E") for k in parts)
     return bounded_ref(f"{kind}:{key}", counts)
 
 
@@ -509,21 +567,45 @@ def read_sources(values, plugins):
     try:
         fcntl.flock(lock, fcntl.LOCK_SH)
         records, hashes, adapter_stats = [], {}, {}
+        from .canonical import exclude_directories
         from .project_types import supports_project_type
+        from .source_directory import relative, safe
 
         project_type = values.get("_project_type") or project_context.project_type(
             values.get("_project_id")
         )
+        base_resolved = directory.resolve()
+        owned_dirs: list = []
+        for cat, plugin, enabled, parameters in plugins:
+            if cat != "source" or not enabled:
+                continue
+            if not supports_project_type(plugin, project_type):
+                continue
+            owned = getattr(plugin, "owned_paths", None)
+            if callable(owned):
+                for raw_path in owned(parameters):
+                    try:
+                        candidate = (directory / relative(raw_path)).resolve()
+                    except ValueError:
+                        continue
+                    if candidate != base_resolved and candidate.is_relative_to(
+                        base_resolved
+                    ):
+                        owned_dirs.append(candidate)
+
         for category, plugin, enabled, parameters in plugins:
             if category != "source" or not enabled:
                 continue
             if not supports_project_type(plugin, project_type):
                 continue
-            result = plugin.read(directory, parameters)
+            if getattr(plugin, "id", None) == "canonical" and owned_dirs:
+                with exclude_directories(tuple(owned_dirs)):
+                    result = plugin.read(directory, parameters)
+            else:
+                result = plugin.read(directory, parameters)
             adapter_stats.update(
                 {f"{plugin.id}_{key}": value for key, value in result.stats.items()}
             )
-            from .source_directory import relative, safe
 
             for path, digest in result.hashes.items():
                 if safe(directory, relative(path)).is_file() is False and not any(
@@ -833,19 +915,39 @@ def run_build(build_id):
             storage.all_records = records
             storage.is_incremental = build_type == "incremental"
             if build_type == "incremental":
+                selected_refs = sorted(
+                    {
+                        ref
+                        for record in selected
+                        if (ref := _entity_ref(record)) is not None
+                    }
+                )
                 params = {
                     "generation": generation,
                     "files": sorted(touched),
+                    "selected_refs": selected_refs,
                     "tables": [
                         {"database": db, "table": table}
                         for db, table in sorted(dirty_tables)
                     ],
                 }
                 found = storage.execute(
-                    "MATCH (n:SDAEntity {generation:$generation}) WHERE n.source_file IN $files OR n.source_key IN $files OR any(s IN coalesce(n.source_files, []) WHERE s IN $files) OR (n:SDADimensionValue AND any(t IN $tables WHERE t.database = n.database AND t.table = n.table)) RETURN n.ref AS ref",
+                    "MATCH (n:SDAEntity {generation:$generation}) WHERE n.source_file IN $files OR n.source_key IN $files OR any(s IN coalesce(n.source_files, []) WHERE s IN $files) OR n.ref IN $selected_refs OR n.doc_id IN $selected_refs OR (n:SDADimensionValue AND any(t IN $tables WHERE t.database = n.database AND t.table = n.table)) RETURN n.ref AS ref",
                     params,
                 )
                 old_ids.update(row["ref"] for row in found if row["ref"])
+                selected_ids = {id(record) for record in selected}
+                rebuilt = [
+                    record
+                    for record in records
+                    if id(record) not in selected_ids
+                    and (ref := _entity_ref(record)) is not None
+                    and ref in old_ids
+                ]
+                if rebuilt:
+                    selected = [*selected, *rebuilt]
+                    for record in rebuilt:
+                        counts[record.kind] = counts.get(record.kind, 0) + 1
                 with sessions().begin() as db:
                     db.get(Build, build_id).affected_files = json.dumps(
                         {
@@ -862,7 +964,13 @@ def run_build(build_id):
                 )
                 delete_batches(
                     storage.execute,
-                    "MATCH (n:SDAEntity {generation:$generation}) WHERE n.source_file IN $files OR n.source_key IN $files OR any(s IN coalesce(n.source_files, []) WHERE s IN $files) OR (n:SDADimensionValue AND any(t IN $tables WHERE t.database = n.database AND t.table = n.table))",
+                    "MATCH (:SDATable {generation:$generation})-[r:RELATES_TO]->(:SDATable {generation:$generation}) WHERE r.source_file IN $files OR r.source_key IN $files OR any(s IN coalesce(r.source_files, []) WHERE s IN $files)",
+                    "r",
+                    {"generation": generation, "files": sorted(touched)},
+                )
+                delete_batches(
+                    storage.execute,
+                    "MATCH (n:SDAEntity {generation:$generation}) WHERE n.source_file IN $files OR n.source_key IN $files OR any(s IN coalesce(n.source_files, []) WHERE s IN $files) OR n.ref IN $selected_refs OR n.doc_id IN $selected_refs OR (n:SDADimensionValue AND any(t IN $tables WHERE t.database = n.database AND t.table = n.table))",
                     "n",
                     params,
                     detach=True,
@@ -1149,7 +1257,7 @@ def describe(names=None, database=None, search=None, summary=False, project_id=N
             RETURN properties(t) AS table, field_count,
                    count(d) AS document_count,
                    partition_count > 0 AS has_partition
-            ORDER BY table.database,table.name""",
+            ORDER BY coalesce(table.catalog, ''),table.database,table.name""",
             parameters,
         )
         summary_rows = []
@@ -1174,7 +1282,7 @@ def describe(names=None, database=None, search=None, summary=False, project_id=N
             OPTIONAL MATCH (t)-[:HAS_FIELD]->(f:SDAField {generation:$generation})
             WITH t, collect(properties(f)) AS fields
             OPTIONAL MATCH (t)-[:HAS_DOCUMENT]->(d:SDADocument {generation:$generation})
-            RETURN properties(t) AS table, fields, collect({ref:d.ref, path:d.path, category:d.category}) AS documents ORDER BY table.database,table.name""",
+            RETURN properties(t) AS table, fields, collect({ref:d.ref, path:d.path, category:d.category}) AS documents ORDER BY coalesce(table.catalog, ''),table.database,table.name""",
         parameters,
     )
     return [
@@ -1283,7 +1391,7 @@ def search(query, scope, top_k, category=None, project_id=None):
         lexical_query = """CALL {
           MATCH (n:SDAEntity {generation:$generation})
           WHERE ((n:SDATable AND 'tables' IN $scopes) OR (n:SDAField AND 'fields' IN $scopes) OR (n:SDATask AND 'tasks' IN $scopes))
-            AND (toLower(n.name) = toLower($query) OR toLower(coalesce(n.database,'') + '.' + n.name) = toLower($query))
+            AND (toLower(n.name) = toLower($query) OR toLower(coalesce(n.database,'') + '.' + n.name) = toLower($query) OR (n:SDATable AND n.catalog IS NOT NULL AND toLower(n.catalog + '.' + n.database + '.' + n.name) = toLower($query)))
             AND $category IS NULL
           RETURN 'exact' AS source, properties(n) AS item LIMIT $limit
           UNION ALL

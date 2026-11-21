@@ -47,6 +47,8 @@ def write(records, generation, storage):
             r.data,
             ref=reference(r.kind, r.data, truncations),
             source_file=r.source_file,
+            source_key=r.source_key or r.source_file,
+            source_files=list(r.source_files),
             build_id=storage.build_id,
         )
         for r in records
@@ -57,6 +59,8 @@ def write(records, generation, storage):
             r.data,
             ref=reference(r.kind, r.data, truncations),
             source_file=r.source_file,
+            source_key=r.source_key or r.source_file,
+            source_files=list(r.source_files),
             build_id=storage.build_id,
         )
         for r in records
@@ -64,13 +68,17 @@ def write(records, generation, storage):
     ]
     all_records = storage.all_records if storage.all_records is not None else records
     table_keys = {
-        (r.data["database"], r.data["name"]) for r in all_records if r.kind == "table"
+        (r.data.get("catalog") or "", r.data["database"], r.data["name"])
+        for r in all_records
+        if r.kind == "table"
     }
     refs = [item["ref"] for item in tables + fields]
     if len(set(refs)) != len(refs):
         raise ValueError("Duplicate table or field reference")
     if not storage.is_incremental and any(
-        (field["database"], field["table"]) not in table_keys for field in fields
+        (field.get("catalog") or "", field["database"], field["table"])
+        not in table_keys
+        for field in fields
     ):
         raise ValueError("A field refers to a missing table")
     if (

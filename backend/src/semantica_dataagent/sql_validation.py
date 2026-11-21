@@ -3,7 +3,7 @@
 import os
 import re
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from difflib import get_close_matches
 from heapq import heappop, heappush
 from typing import Literal
@@ -29,6 +29,7 @@ class Snapshot:
     edges: list[dict]
     documents: list[dict]
     document_loader: object = None
+    relationships: list[dict] = field(default_factory=list)
 
     def __post_init__(self):
         self.by_name = {full(t).lower(): t for t in self.tables}
@@ -51,12 +52,20 @@ class Snapshot:
         }
         self.neighbors = defaultdict(set)
         self.edge_pairs = defaultdict(list)
+        self.relationship_pairs = defaultdict(list)
         for edge in self.edges:
             a, b = edge["upstream"].lower(), edge["downstream"].lower()
             if a in self.by_name and b in self.by_name and a != b:
                 self.neighbors[a].add(b)
                 self.neighbors[b].add(a)
                 self.edge_pairs[frozenset((a, b))].append(edge)
+        for rel in self.relationships:
+            a = _relationship_table_name(rel, "from").lower()
+            b = _relationship_table_name(rel, "to").lower()
+            if a in self.by_name and b in self.by_name and a != b:
+                self.neighbors[a].add(b)
+                self.neighbors[b].add(a)
+                self.relationship_pairs[frozenset((a, b))].append(rel)
 
     def resolution(self, name):
         """Return ``(matches, reason)``; ``reason`` is None only for a full match."""
@@ -141,6 +150,11 @@ def load_snapshot(project_id: str | None = None):
         """MATCH (:SDALineageTable {generation:$generation})-[r:DEPENDS_ON]->(:SDALineageTable {generation:$generation}) RETURN properties(r) AS edge""",
         params,
     )
+    relationships = knowledge.execute(
+        store,
+        """MATCH (:SDATable {generation:$generation})-[r:RELATES_TO]->(:SDATable {generation:$generation}) RETURN properties(r) AS relationship""",
+        params,
+    )
 
     def documents(pairs):
         return knowledge.execute(
@@ -154,10 +168,85 @@ def load_snapshot(project_id: str | None = None):
         [r["edge"] for r in edges],
         [],
         documents,
+        [r["relationship"] for r in relationships],
     )
     if not version[1] or version[1][1] != "running":
         _snapshot_cache = (key, result)
     return result
+
+
+def _relationship_table_name(rel, side):
+    if f"{side}_database" in rel:
+        return ".".join(
+            part
+            for part in (
+                rel.get(f"{side}_catalog"),
+                rel[f"{side}_database"],
+                rel[f"{side}_table"],
+            )
+            if part
+        )
+    return rel[f"{side}_table"]
+
+
+def _relationship_ref(rel):
+    return rel.get("ref") or (
+        f"relationship:{_relationship_table_name(rel, 'from')}:"
+        f"{_relationship_table_name(rel, 'to')}:{rel['name']}"
+    )
+
+
+def _relationship_evidence(rel):
+    return {
+        "type": "relationship",
+        "strength": "strong",
+        "name": rel["name"],
+        "ref": _relationship_ref(rel),
+        "from_columns": list(rel.get("from_columns") or ()),
+        "to_columns": list(rel.get("to_columns") or ()),
+    }
+
+
+def _relationship_required_pairs(rel):
+    from_name = _relationship_table_name(rel, "from").lower()
+    to_name = _relationship_table_name(rel, "to").lower()
+    from_cols = rel.get("from_columns") or ()
+    to_cols = rel.get("to_columns") or ()
+    if not from_cols or len(from_cols) != len(to_cols):
+        return None
+    return {
+        frozenset(((from_name, fc.lower()), (to_name, tc.lower())))
+        for fc, tc in zip(from_cols, to_cols, strict=True)
+    }
+
+
+def _relationship_step_keys(rel, left_name):
+    from_name = _relationship_table_name(rel, "from").lower()
+    from_cols = rel.get("from_columns") or ()
+    to_cols = rel.get("to_columns") or ()
+    if from_name == left_name:
+        left_cols, right_cols = from_cols, to_cols
+    else:
+        left_cols, right_cols = to_cols, from_cols
+    return [
+        lcol if lcol.lower() == rcol.lower() else f"{lcol}={rcol}"
+        for lcol, rcol in zip(left_cols, right_cols, strict=True)
+    ]
+
+
+def _join_column_source(col, sources):
+    source = sources.get(col.table.lower())
+    if source is None or "database" not in source:
+        return None
+    if col.db and col.db.lower() != source["database"].lower():
+        return None
+    if (
+        col.catalog
+        and source.get("catalog")
+        and col.catalog.lower() != source["catalog"].lower()
+    ):
+        return None
+    return source
 
 
 def full(t):
@@ -173,7 +262,8 @@ def field_names(t):
 def evidence(a, b, left_key=None, right_key=None, snapshot=None, documents=()):
     aname, bname = full(a).lower(), full(b).lower()
     found = []
-    for edge in snapshot.edge_pairs.get(frozenset((aname, bname)), []):
+    pair_key = frozenset((aname, bname))
+    for edge in snapshot.edge_pairs.get(pair_key, []):
         found.append(
             {
                 "type": "lineage",
@@ -184,6 +274,9 @@ def evidence(a, b, left_key=None, right_key=None, snapshot=None, documents=()):
                 "evidence": edge.get("evidence"),
             }
         )
+    if left_key is None and right_key is None:
+        for rel in snapshot.relationship_pairs.get(pair_key, ()):
+            found.append(_relationship_evidence(rel))
     common = (
         set(snapshot.fields[aname]) & set(snapshot.fields[bname]) & snapshot.keys.keys()
     )
@@ -375,8 +468,11 @@ def check_sql(sql, dialect, snapshot, partition_tables=None):
         for join in scope.expression.args.get("joins") or []:
             condition = join.args.get("on")
             supports = []
+            observed_pairs = defaultdict(set)
             if condition and not condition.find(exp.Or):
                 for eq in condition.find_all(exp.EQ):
+                    if eq.find_ancestor(exp.Not) is not None:
+                        continue
                     l, r = eq.left, eq.right
                     if (
                         isinstance(l, exp.Column)
@@ -384,21 +480,25 @@ def check_sql(sql, dialect, snapshot, partition_tables=None):
                         and join.this.alias_or_name.lower()
                         in {l.table.lower(), r.table.lower()}
                     ):
-                        a, b = (
-                            sources.get(l.table.lower()),
-                            sources.get(r.table.lower()),
-                        )
-                        if (
-                            a
-                            and b
-                            and a is not b
-                            and "database" in a
-                            and "database" in b
-                        ):
+                        a = _join_column_source(l, sources)
+                        b = _join_column_source(r, sources)
+                        if a and b and a is not b:
+                            aname, bname = full(a).lower(), full(b).lower()
+                            pair_key = frozenset((aname, bname))
+                            observed_pairs[pair_key].add(
+                                frozenset(
+                                    ((aname, l.name.lower()), (bname, r.name.lower()))
+                                )
+                            )
                             supports.extend(evidence(a, b, l.name, r.name, snapshot))
                             pending_documents.append(
                                 (len(result["joins"]), a, b, l.name, r.name)
                             )
+                for pair_key, observed in observed_pairs.items():
+                    for rel in snapshot.relationship_pairs.get(pair_key, ()):
+                        required = _relationship_required_pairs(rel)
+                        if required is not None and required <= observed:
+                            supports.append(_relationship_evidence(rel))
             join_item = {
                 "condition": condition.sql(dialect=dialect)
                 if condition
@@ -489,7 +589,11 @@ def join_path(tables, snapshot=None):
                 neighbors.update(snapshot.keys.get(key, ()))
             neighbors.discard(current)
             for neighbor in sorted(neighbors):
-                strong = bool(snapshot.edge_pairs.get(frozenset((current, neighbor))))
+                pair = frozenset((current, neighbor))
+                strong = bool(
+                    snapshot.edge_pairs.get(pair)
+                    or snapshot.relationship_pairs.get(pair)
+                )
                 cost = (weak_count + (not strong), distance + 1)
                 if neighbor not in best or cost < best[neighbor]:
                     heappush(queue, (*cost, neighbor, route + [(current, neighbor)]))
@@ -499,7 +603,12 @@ def join_path(tables, snapshot=None):
         connected.update(b for _, b in path)
     # Documents can strengthen a selected path but do not introduce graph edges.
     weak_steps = {
-        (a, b) for a, b in steps if not snapshot.edge_pairs.get(frozenset((a, b)))
+        (a, b)
+        for a, b in steps
+        if not (
+            snapshot.edge_pairs.get(frozenset((a, b)))
+            or snapshot.relationship_pairs.get(frozenset((a, b)))
+        )
     }
     documents = snapshot.documents_for(weak_steps)
     result = []
@@ -519,11 +628,24 @@ def join_path(tables, snapshot=None):
         strength = (
             "strong" if any(p["strength"] == "strong" for p in proofs) else "weak"
         )
+        rel_keys = [
+            key
+            for rel in snapshot.relationship_pairs.get(frozenset((a, b)), ())
+            for key in _relationship_step_keys(rel, a)
+        ]
+        common_keys = [p["key"] for p in proofs if p["type"] == "common_key"]
+        keys = []
+        seen_keys = set()
+        for key in [*rel_keys, *common_keys]:
+            lowered = key.lower()
+            if lowered not in seen_keys:
+                seen_keys.add(lowered)
+                keys.append(key)
         result.append(
             {
                 "from": full(left),
                 "to": full(right),
-                "keys": [p["key"] for p in proofs if p["type"] == "common_key"],
+                "keys": keys,
                 "strength": strength,
                 "evidence": proofs,
             }
