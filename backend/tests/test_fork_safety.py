@@ -160,6 +160,12 @@ def _evolution_scheduler_lock():
     evolution_scheduler.evolution_scheduler.wake()
 
 
+def _discovery_dispatcher_lock():
+    from semantica_dataagent import discovery_runner
+
+    assert discovery_runner.discovery_dispatcher.wait_idle(timeout=1.0)
+
+
 @pytest.mark.parametrize(
     "name",
     [
@@ -168,6 +174,7 @@ def _evolution_scheduler_lock():
         "scheduler",
         "pull_scheduler",
         "evolution_scheduler",
+        "discovery_dispatcher",
         "embedding_limiter",
         "project_deletion",
         "pull_service",
@@ -205,6 +212,11 @@ def test_forked_child_resets_other_process_global_locks(name):
 
         lock = evolution_scheduler.evolution_scheduler._condition
         action = _evolution_scheduler_lock
+    elif name == "discovery_dispatcher":
+        from semantica_dataagent import discovery_runner
+
+        lock = discovery_runner.discovery_dispatcher._condition
+        action = _discovery_dispatcher_lock
     elif name == "embedding_limiter":
         from semantica_dataagent.embedding_client import _LIMITER
 

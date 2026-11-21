@@ -16,6 +16,7 @@ import type { Messages } from "./i18n";
 import { safeDecodePath } from "./paths";
 import { ProjectSelector, storedProject } from "./ProjectSelector";
 import { formatRegressions } from "./EvolutionPage";
+import { formatOverlapRatio, formatProbePartitions } from "./DiscoveryPanel";
 import { TableScroll } from "./TableScroll";
 
 type L2GateReport = {
@@ -38,6 +39,30 @@ type ProvenanceReport = {
   evidence_trajectory_ids?: number[];
 };
 
+type DiscoveryEvidenceReport = {
+  run_id?: string;
+  candidate_kind?: string;
+  from_table?: string;
+  from_columns?: string[];
+  to_table?: string;
+  to_columns?: string[];
+  recall_sources?: string[];
+  recall_score?: number;
+  query_history_frequency?: number;
+  distinct_callers?: number;
+  sample_distinct_count?: number | null;
+  matched_count?: number | null;
+  overlap_ratio?: number | null;
+  join_matched?: boolean | null;
+  probe_partitions?: Record<string, Record<string, string>>;
+  probing_status?: string;
+  topic?: string;
+  expression?: string;
+  predicate?: string;
+  template_count?: number;
+  co_occurrence_ratio?: number;
+};
+
 type GateReport = {
   passed?: boolean;
   checks?: { name?: string; passed?: boolean; details?: string[] }[];
@@ -49,6 +74,7 @@ type GateReport = {
   };
   l2_gate?: L2GateReport;
   provenance?: ProvenanceReport;
+  discovery_evidence?: DiscoveryEvidenceReport;
 };
 
 type Proposal = {
@@ -74,7 +100,7 @@ function initialPatchForProposal(row: Proposal): string {
 type EvalQuestion = components["schemas"]["EvalQuestionView"];
 type Gap = { id: string; question: string; missing: string };
 type StatusFilter = "all" | "pending" | "resolved";
-type SourceFilter = "all" | "manual" | "mcp" | "evolution";
+type SourceFilter = "all" | "manual" | "mcp" | "evolution" | "discovery";
 
 function statusMeta(
   status: string,
@@ -93,8 +119,105 @@ function statusMeta(
 function sourceLabel(source: string | undefined, t: Messages): string {
   if (source === "mcp") return t.sourceMcp;
   if (source === "evolution") return t.sourceEvolution;
+  if (source === "discovery") return t.sourceDiscovery;
   if (source === "manual") return t.sourceManual;
   return source || "";
+}
+
+function discoveryKindText(kind: string | undefined, t: Messages): string {
+  if (kind === "relationship") return t.discoveryKindRelationship;
+  if (kind === "metric") return t.discoveryKindMetric;
+  if (kind === "filter_rule") return t.discoveryKindFilterRule;
+  if (kind === "eval_draft") return t.discoveryKindEvalDraft;
+  return kind || "-";
+}
+
+function DiscoveryEvidenceCard({
+  evidence,
+  t,
+}: {
+  evidence: DiscoveryEvidenceReport | undefined;
+  t: Messages;
+}) {
+  if (!evidence) {
+    return (
+      <div className="discovery-evidence-card">
+        <strong>{t.discoveryEvidenceTitle}</strong>
+        <div className="muted">{t.discoveryEvidenceNoDetail}</div>
+      </div>
+    );
+  }
+  const overlapText = formatOverlapRatio(evidence.overlap_ratio);
+  const partitionsText = formatProbePartitions(evidence.probe_partitions);
+  return (
+    <div className="discovery-evidence-card">
+      <div className="discovery-evidence-header">
+        <strong>{t.discoveryEvidenceTitle}</strong>
+        <Space size={6} wrap>
+          {evidence.candidate_kind && (
+            <Tag>{discoveryKindText(evidence.candidate_kind, t)}</Tag>
+          )}
+          {evidence.run_id && (
+            <Tag className="mono">
+              {t.discoveryEvidenceRunId}: {evidence.run_id}
+            </Tag>
+          )}
+        </Space>
+      </div>
+      <div className="discovery-evidence-pills">
+        {typeof evidence.query_history_frequency === "number" && (
+          <Tag>
+            {t.discoveryEvidenceFrequency}: {evidence.query_history_frequency}
+          </Tag>
+        )}
+        {typeof evidence.distinct_callers === "number" && (
+          <Tag>
+            {t.discoveryEvidenceDistinctCallers}: {evidence.distinct_callers}
+          </Tag>
+        )}
+        {typeof evidence.sample_distinct_count === "number" && (
+          <Tag>
+            {t.discoveryEvidenceSampleCount}: {evidence.sample_distinct_count}
+          </Tag>
+        )}
+        {typeof evidence.matched_count === "number" && (
+          <Tag>
+            {t.discoveryEvidenceMatchedCount}: {evidence.matched_count}
+          </Tag>
+        )}
+        {overlapText && (
+          <Tag color="blue">
+            {t.discoveryEvidenceOverlapRatio}: {overlapText}
+          </Tag>
+        )}
+        {typeof evidence.join_matched === "boolean" && (
+          <Tag color={evidence.join_matched ? "green" : "red"}>
+            {t.discoveryEvidenceJoinProbe}:{" "}
+            {evidence.join_matched
+              ? t.discoveryEvidenceJoinPassed
+              : t.discoveryEvidenceJoinFailed}
+          </Tag>
+        )}
+        {evidence.probing_status &&
+          evidence.probing_status !== "not_applicable" && (
+            <Tag className="mono">
+              {t.discoveryEvidenceProbingStatus}: {evidence.probing_status}
+            </Tag>
+          )}
+      </div>
+      {partitionsText && (
+        <div className="muted mono">
+          {t.discoveryEvidencePartitions}: {partitionsText}
+        </div>
+      )}
+      {evidence.expression && (
+        <div className="muted mono">{evidence.expression}</div>
+      )}
+      {evidence.predicate && (
+        <div className="muted mono">{evidence.predicate}</div>
+      )}
+    </div>
+  );
 }
 
 export function CorrectionsPage({
@@ -530,6 +653,7 @@ export function CorrectionsPage({
                           ["manual", t.sourceManual],
                           ["mcp", t.sourceMcp],
                           ["evolution", t.sourceEvolution],
+                          ["discovery", t.sourceDiscovery],
                         ] as const
                       ).map(([key, label]) => (
                         <button
@@ -669,6 +793,13 @@ export function CorrectionsPage({
                           </div>
                         )}
                       </>
+                    )}
+                    {(selected.gate_report?.discovery_evidence ||
+                      selected.source === "discovery") && (
+                      <DiscoveryEvidenceCard
+                        evidence={selected.gate_report?.discovery_evidence}
+                        t={t}
+                      />
                     )}
                     <pre className="diff-block">{selected.diff}</pre>
                     {canRevert && (

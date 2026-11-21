@@ -108,12 +108,17 @@ async def lifespan(application):
     await asyncio.to_thread(knowledge.cleanup_interrupted_generations)
     await asyncio.to_thread(knowledge.cleanup_candidate_generations)
     from .corrections import recover_applying, recover_reverting
+    from .discovery_runner import (
+        discovery_dispatcher,
+        recover_interrupted_discovery_runs,
+    )
     from .evolution_runner import recover_interrupted_evolution_runs
     from .semantic_overrides import migrate_legacy_metadata_overrides
 
     await asyncio.to_thread(recover_applying)
     await asyncio.to_thread(recover_reverting)
     await asyncio.to_thread(recover_interrupted_evolution_runs)
+    await asyncio.to_thread(recover_interrupted_discovery_runs)
     await asyncio.to_thread(migrate_legacy_metadata_overrides)
     from .pull_service import recover_pulls
 
@@ -136,6 +141,7 @@ async def lifespan(application):
     from .evolution_scheduler import evolution_scheduler
 
     evolution_scheduler.start()
+    discovery_dispatcher.start()
     server = create_mcp()
     application.state.mcp_app = server.streamable_http_app()
     async with server.session_manager.run():
@@ -144,6 +150,7 @@ async def lifespan(application):
         finally:
             cleanup_task.cancel()
             await asyncio.gather(cleanup_task, return_exceptions=True)
+            discovery_dispatcher.stop()
             evolution_scheduler.stop()
             pull_scheduler.stop()
             scheduler.stop()
@@ -883,6 +890,10 @@ app.include_router(eval_questions_router)
 from .evolution_api import router as evolution_router
 
 app.include_router(evolution_router)
+
+from .discovery_api import router as discovery_router
+
+app.include_router(discovery_router)
 
 
 def _mcp_project_id() -> str:

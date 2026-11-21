@@ -27,6 +27,8 @@ from .db import (
     Clarification,
     Conversation,
     CorrectionProposal,
+    DiscoveryCandidate,
+    DiscoveryRun,
     EvolutionCheckpoint,
     EvolutionRound,
     EvolutionRun,
@@ -232,6 +234,12 @@ def _delete_database(project_id: str, settings: dict) -> None:
         db.query(EvolutionCheckpoint).filter(
             EvolutionCheckpoint.project_id == project_id
         ).delete(synchronize_session=False)
+        db.query(DiscoveryCandidate).filter(
+            DiscoveryCandidate.project_id == project_id
+        ).delete(synchronize_session=False)
+        db.query(DiscoveryRun).filter(DiscoveryRun.project_id == project_id).delete(
+            synchronize_session=False
+        )
         db.query(Conversation).filter(Conversation.project_id == project_id).delete(
             synchronize_session=False
         )

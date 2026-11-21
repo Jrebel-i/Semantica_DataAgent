@@ -74,12 +74,15 @@ def test_rest_time_fields_have_utc_offset(client, monkeypatch):
         Build,
         Conversation,
         CorrectionProposal,
+        DiscoveryCandidate,
+        DiscoveryRun,
         EvolutionCheckpoint,
         EvolutionRound,
         EvolutionRun,
         GenerationPointer,
         KnowledgeGap,
         KnowledgeGeneration,
+        PersonalDtbToken,
         ProjectAudit,
         Provider,
         PullRecord,
@@ -218,6 +221,29 @@ def test_rest_time_fields_have_utc_offset(client, monkeypatch):
                     started_at=datetime(2026, 1, 1),
                     finished_at=datetime(2026, 1, 1, 0, 1),
                 ),
+                DiscoveryRun(
+                    id="disc-time-1",
+                    project_id="default",
+                    status="completed",
+                    mine_query_history=True,
+                    probe_relationships=True,
+                    seed_eval_drafts=False,
+                    config_snapshot="{}",
+                    created_by=owner.id,
+                    started_at=datetime(2026, 1, 1),
+                    finished_at=datetime(2026, 1, 1, 0, 2),
+                    created_at=datetime(2026, 1, 1),
+                ),
+                DiscoveryCandidate(
+                    id="disc-cand-1",
+                    run_id="disc-time-1",
+                    project_id="default",
+                    candidate_kind="relationship",
+                    target="relationship:shop.orders:shop.users:fk_orders_users",
+                    evidence_json='{"overlap_ratio": 0.95, "join_matched": true}',
+                    decision="proposed",
+                    created_at=datetime(2026, 1, 1),
+                ),
             ]
         )
         db.flush()
@@ -228,8 +254,35 @@ def test_rest_time_fields_have_utc_offset(client, monkeypatch):
             .scalar()
         )
 
-    from semantica_dataagent import evolution_runner, pull_service
+    from semantica_dataagent import (
+        crypto,
+        discovery_runner,
+        evolution_runner,
+        project_context,
+        pull_service,
+    )
 
+    with sessions().begin() as db:
+        owner = db.get(Token, digest(admin_token))
+        db.add(
+            PersonalDtbToken(
+                owner_id=owner.id,
+                encrypted_token=crypto.encrypt("time-dtb-token"),
+            )
+        )
+        project_context.upsert_plugin_config(
+            db,
+            "executor",
+            "dtb",
+            True,
+            {"base_url": "http://dtb.local", "timeout_seconds": 30},
+        )
+
+    monkeypatch.setattr(
+        discovery_runner,
+        "execute_discovery_run",
+        lambda run_id, **kwargs: None,
+    )
     monkeypatch.setattr(
         evolution_runner, "execute_evolution_run", lambda run_id, **kwargs: None
     )
@@ -277,6 +330,8 @@ def test_rest_time_fields_have_utc_offset(client, monkeypatch):
     assert eval_patched.status_code == 200, eval_patched.text
     evo_triggered = c.post("/api/v1/evolution/runs", headers=headers)
     assert evo_triggered.status_code == 202, evo_triggered.text
+    disc_triggered = c.post("/api/v1/discovery/runs", headers=headers)
+    assert disc_triggered.status_code == 202, disc_triggered.text
     payloads = {
         "token_issued": issued.json(),
         "tokens": c.get("/api/v1/tokens", headers=headers).json(),
@@ -302,6 +357,14 @@ def test_rest_time_fields_have_utc_offset(client, monkeypatch):
         "evolution_config": c.get(
             "/api/v1/projects/default/evolution-config", headers=headers
         ).json(),
+        "discovery_config": c.get(
+            "/api/v1/projects/default/discovery-config", headers=headers
+        ).json(),
+        "discovery_runs": c.get("/api/v1/discovery/runs", headers=headers).json(),
+        "discovery_run": c.get(
+            "/api/v1/discovery/runs/disc-time-1", headers=headers
+        ).json(),
+        "discovery_run_triggered": disc_triggered.json(),
         "evolution_runs": c.get("/api/v1/evolution/runs", headers=headers).json(),
         "evolution_run": c.get(
             "/api/v1/evolution/runs/evo-time-1", headers=headers
