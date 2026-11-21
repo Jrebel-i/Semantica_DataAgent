@@ -51,11 +51,11 @@ Use this skill when a question needs warehouse knowledge or SQL. Retrieve before
    replacement. Never present a statement that failed validation as final.
    - **Validate the exact final statement.** The SQL text and dialect passed to
      `validate_sql` must be the complete statement you will show in the final answer or
-     pass to `propose_query`/`execute_query`, with no later edits. After any change,
+     pass to `propose_query`, with no later edits. After any change,
      including `ORDER BY`, `LIMIT`, expressions, aliases, or other clauses, run
      `validate_sql` again on the actual final version. Present or propose only the version
-     that passed; if the final version has not passed, label it explicitly as unvalidated
-     or do not deliver it as final.
+     that passed. If none passed, disclose the validation failure instead of delivering
+     final SQL.
    - **Never silently drop a condition.** Every filter in the question (entity, time
      range, status, dimension value) must appear in the final SQL. Before submitting,
      self-check: "is each requested condition present?"
@@ -147,11 +147,11 @@ Read `validate_sql` completely:
 - Bind each business-date window to the event named in the question or in a verified
   definition, not a neighboring lifecycle timestamp that merely happens to be available.
   When a question measures the elapsed time of a specified occurred event and does not
-  separately specify an attribution event, attribute rows by that measured event as the
-  end point; an explicitly specified different event or verified definition takes
-  precedence. If the event is unclear and changes the answer, clarify or disclose the
-  assumption. Never treat order completion, partition time, or load time as equivalent
-  to the measured business event.
+  separately specify an attribution event, apply the date window to the timestamp of the
+  measured end event; an explicitly specified different event or verified definition
+  takes precedence. If the event is unclear and changes the answer, clarify or disclose
+  the assumption. Never treat order completion, partition time, or load time as
+  equivalent to the measured business event.
 - For durations, identify the start and end events from the question or a verified
   business definition, then compute end minus start. Check the operand order in the
   final expression and the dialect-specific argument order. A negative duration triggers
