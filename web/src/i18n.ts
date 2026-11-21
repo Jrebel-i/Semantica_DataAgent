@@ -340,6 +340,7 @@ const messages = {
     sourceAdaptersHint:
       "为本项目启用来源适配器并填写参数；保存后从下一次构建生效，正在运行的构建不受影响。",
     adapterPull: "DTB 拉取配置",
+    adapterPullOssie: "DTB 拉取为 Ossie",
     adapterTokenSaved: "凭据已保存；留空表示不修改",
     adapterSave: "保存适配器配置",
     adapterSaveFailed: "适配器配置保存失败",
@@ -874,6 +875,7 @@ const messages = {
     sourceAdaptersHint:
       "Enable source adapters and edit their parameters for this project. Changes apply to the next build; a running build is unaffected.",
     adapterPull: "DTB pull configuration",
+    adapterPullOssie: "Pull DTB as Ossie",
     adapterTokenSaved: "Credential saved; leave blank to keep it",
     adapterSave: "Save adapter configuration",
     adapterSaveFailed: "Could not save adapter configuration",

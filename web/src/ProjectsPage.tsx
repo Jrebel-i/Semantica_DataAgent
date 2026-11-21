@@ -534,18 +534,37 @@ export function ProjectsPage({
                     />
                     {adapter.pull && (
                       <div className="stack">
-                        <h3 className="card-title">{t.adapterPull}</h3>
+                        <h3 className="card-title">
+                          {adapter.id === "ossie"
+                            ? t.adapterPullOssie
+                            : t.adapterPull}
+                        </h3>
                         <Checkbox
                           checked={adapter.pull.enabled}
                           disabled={!canEditAdapters}
-                          onChange={(event) =>
-                            updateAdapter(adapter.id, {
-                              pull: {
-                                ...adapter.pull!,
-                                enabled: event.target.checked,
-                              },
-                            })
-                          }
+                          onChange={(event) => {
+                            const nextEnabled = event.target.checked;
+                            setAdapters((old) =>
+                              old.map((row) => {
+                                if (row.id === adapter.id && row.pull) {
+                                  return {
+                                    ...row,
+                                    pull: {
+                                      ...row.pull,
+                                      enabled: nextEnabled,
+                                    },
+                                  };
+                                }
+                                if (nextEnabled && row.pull?.enabled) {
+                                  return {
+                                    ...row,
+                                    pull: { ...row.pull, enabled: false },
+                                  };
+                                }
+                                return row;
+                              }),
+                            );
+                          }}
                         >
                           {t.enabled}
                         </Checkbox>

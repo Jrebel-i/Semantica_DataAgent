@@ -290,6 +290,74 @@ def _parser() -> argparse.ArgumentParser:
         type=Path,
         help="write output atomically to a file instead of stdout",
     )
+    convert_cmd = commands.add_parser(
+        "convert-dtb-ossie",
+        help="convert a DTB snapshot directory into an Apache Ossie model and hybrid dimensions",
+    )
+    convert_cmd.add_argument(
+        "--source-dir",
+        required=True,
+        type=Path,
+        help="input directory holding dtb snapshot and optional dimensions",
+    )
+    convert_cmd.add_argument(
+        "--output-dir",
+        required=True,
+        type=Path,
+        help="target project source directory to write ossie/ and optional dimension_values.json",
+    )
+    convert_cmd.add_argument(
+        "--snapshot-path",
+        default="dtb",
+        help="snapshot directory relative to --source-dir (default: dtb)",
+    )
+    convert_cmd.add_argument(
+        "--snapshot",
+        help="exact snapshot subdirectory name (default: latest)",
+    )
+    convert_cmd.add_argument(
+        "--dimensions-path",
+        default="dimensions",
+        help="dimensions directory relative to --source-dir (default: dimensions)",
+    )
+    convert_cmd.add_argument(
+        "--dimension-row-limit",
+        type=int,
+        default=50000,
+        help="maximum rows read per dimension table (default: 50000)",
+    )
+    convert_cmd.add_argument(
+        "--ossie-path",
+        default="ossie",
+        help="target ossie subdirectory under --output-dir (default: ossie)",
+    )
+    convert_cmd.add_argument(
+        "--model-name",
+        default="dtb_semantic_model",
+        help="semantic model name and filename stem (default: dtb_semantic_model)",
+    )
+    convert_cmd.add_argument(
+        "--format",
+        choices=("yaml", "json"),
+        default="yaml",
+        help="output serialization format (default: yaml)",
+    )
+    convert_cmd.add_argument(
+        "--low-cardinality-limit",
+        type=int,
+        default=20,
+        help="threshold below/equal which dimension values inline into Ossie ai_context (default: 20)",
+    )
+    convert_cmd.add_argument(
+        "--sample-limit",
+        type=int,
+        default=5,
+        help="maximum sample values appended to high-cardinality field ai_context (default: 5)",
+    )
+    convert_cmd.add_argument(
+        "--database",
+        help="optional database name filter",
+    )
     return parser
 
 
@@ -468,5 +536,40 @@ def main(argv: list[str] | None = None) -> int:
         ) as exc:
             print(f"export-ossie failed: {exc}", file=sys.stderr)
             return 1
+        return 0
+    if args.command == "convert-dtb-ossie":
+        from .dtb_ossie import convert_dtb_to_ossie, write_dtb_ossie_output
+
+        try:
+            result = convert_dtb_to_ossie(
+                args.source_dir,
+                snapshot_path=args.snapshot_path,
+                snapshot=args.snapshot,
+                dimensions_path=args.dimensions_path,
+                dimension_row_limit=args.dimension_row_limit,
+                model_name=args.model_name,
+                format=args.format,
+                low_cardinality_limit=args.low_cardinality_limit,
+                sample_limit=args.sample_limit,
+                database=args.database,
+            )
+            written = write_dtb_ossie_output(
+                result,
+                args.output_dir,
+                ossie_path=args.ossie_path,
+                model_name=args.model_name,
+                format=args.format,
+            )
+        except (ValueError, OSError) as exc:
+            print(f"convert-dtb-ossie failed: {exc}", file=sys.stderr)
+            return 1
+        stats = result.stats
+        print(
+            f"convert-dtb-ossie datasets={stats.get('datasets', 0)} "
+            f"relationships={stats.get('relationships', 0)} "
+            f"primary_keys={stats.get('primary_keys', 0)} "
+            f"dimension_values={stats.get('dimension_values', 0)} "
+            f"ossie={written['ossie']}"
+        )
         return 0
     return _run_eval(args)

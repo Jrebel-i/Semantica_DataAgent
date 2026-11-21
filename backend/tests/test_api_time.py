@@ -69,7 +69,7 @@ def test_openapi_declares_every_time_field_as_datetime():
     assert not failures, f"time fields without date-time schema: {failures}"
 
 
-def test_rest_time_fields_have_utc_offset(client):
+def test_rest_time_fields_have_utc_offset(client, monkeypatch):
     from semantica_dataagent.db import (
         Build,
         Conversation,
@@ -79,6 +79,7 @@ def test_rest_time_fields_have_utc_offset(client):
         KnowledgeGeneration,
         ProjectAudit,
         Provider,
+        PullRecord,
         Token,
         Turn,
         digest,
@@ -169,11 +170,34 @@ def test_rest_time_fields_have_utc_offset(client):
                     started_at=datetime(2026, 1, 1),
                     finished_at=datetime(2026, 1, 1, 0, 1),
                 ),
+                PullRecord(
+                    project_id="default",
+                    status="succeeded",
+                    started_at=datetime(2026, 1, 1),
+                    finished_at=datetime(2026, 1, 1, 0, 1),
+                    tables=1,
+                    tasks=0,
+                ),
             ]
         )
         db.flush()
         build_id = build.id
 
+    from semantica_dataagent import pull_service
+
+    monkeypatch.setattr(
+        pull_service,
+        "run_pull",
+        lambda project_id, *, puller_id="dtb": PullRecord(
+            id=999,
+            project_id=project_id,
+            status="succeeded",
+            started_at=datetime(2026, 1, 1),
+            finished_at=datetime(2026, 1, 1, 0, 1),
+            tables=1,
+            tasks=0,
+        ),
+    )
     issued = c.post(
         "/api/v1/tokens", headers=headers, json={"name": "time", "role": "user"}
     )
@@ -189,6 +213,7 @@ def test_rest_time_fields_have_utc_offset(client):
         "knowledge_gaps": c.get("/api/v1/knowledge-gaps", headers=headers).json(),
         "build": c.get(f"/api/v1/builds/{build_id}", headers=headers).json(),
         "builds": c.get("/api/v1/builds", headers=headers).json(),
+        "pull_ossie": c.post("/api/v1/pulls/ossie", headers=headers).json(),
         "pulls": c.get("/api/v1/pulls", headers=headers).json(),
         "generations": c.get("/api/v1/generations", headers=headers).json(),
         "providers": c.get("/api/v1/providers", headers=headers).json(),

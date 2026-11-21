@@ -587,3 +587,128 @@ test("renders adapters read-only for project members", async () => {
   expect((markdown as HTMLInputElement).disabled).toBe(true);
   expect(screen.queryByRole("button", { name: "保存适配器配置" })).toBeNull();
 });
+
+test("renders DTB 拉取为 Ossie configuration and keeps puller enablement mutually exclusive", async () => {
+  const rows = [
+    ...adapterRows().map((row) =>
+      row.id === "dtb"
+        ? {
+            ...row,
+            enabled: true,
+            pull: {
+              ...row.pull!,
+              enabled: true,
+              parameters: { url: "https://dtb-legacy.example" },
+            },
+          }
+        : row,
+    ),
+    {
+      id: "ossie",
+      name: "Apache Ossie",
+      project_types: ["warehouse"],
+      enabled: false,
+      parameters: {},
+      parameters_schema: {
+        type: "object",
+        properties: {
+          path: { type: "string", default: "ossie" },
+          category: { type: "string", default: "ossie" },
+        },
+      },
+      compatible: true,
+      reason: null,
+      pull: {
+        enabled: false,
+        parameters: {},
+        parameters_schema: {
+          type: "object",
+          properties: {
+            url: { type: "string" },
+            token: { type: "string", format: "password" },
+            interval_seconds: { type: "integer" },
+          },
+        },
+        token_configured: true,
+      },
+    },
+  ];
+  const calls: Array<{ url: string; method?: string; body?: string }> = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string, options?: RequestInit) => {
+      calls.push({
+        url,
+        method: options?.method,
+        body: options?.body as string | undefined,
+      });
+      if (url === "/api/v1/projects") return Response.json([projectRow()]);
+      if (url === "/api/v1/projects/default/adapters") {
+        return Response.json(rows);
+      }
+      if (url === "/api/v1/projects/default/members") return Response.json([]);
+      if (url === "/api/v1/users") return Response.json([]);
+      return Response.json({});
+    }),
+  );
+  render(<ProjectsPage token="admin" messages={getMessages("zh")} />);
+  fireEvent.click(await screen.findByRole("button", { name: "项目成员" }));
+
+  const ossieCard = await screen.findByTestId("adapter-ossie");
+  const dtbCard = screen.getByTestId("adapter-dtb");
+  fireEvent.click(
+    within(ossieCard).getByRole("checkbox", { name: "Apache Ossie" }),
+  );
+
+  expect(await within(ossieCard).findByText("DTB 拉取为 Ossie")).toBeTruthy();
+  expect(
+    within(ossieCard).getByText("凭据已保存；留空表示不修改"),
+  ).toBeTruthy();
+
+  const dtbPullCheckbox = within(dtbCard).getByRole("checkbox", {
+    name: "启用",
+  }) as HTMLInputElement;
+  const ossiePullCheckbox = within(ossieCard).getByRole("checkbox", {
+    name: "启用",
+  }) as HTMLInputElement;
+  expect(dtbPullCheckbox.checked).toBe(true);
+  expect(ossiePullCheckbox.checked).toBe(false);
+
+  // Enabling ossie pull automatically unchecks dtb pull
+  fireEvent.click(ossiePullCheckbox);
+  expect(ossiePullCheckbox.checked).toBe(true);
+  expect(dtbPullCheckbox.checked).toBe(false);
+
+  // Re-enabling dtb pull automatically unchecks ossie pull, then switch back to ossie
+  fireEvent.click(dtbPullCheckbox);
+  expect(dtbPullCheckbox.checked).toBe(true);
+  expect(ossiePullCheckbox.checked).toBe(false);
+  fireEvent.click(ossiePullCheckbox);
+  expect(ossiePullCheckbox.checked).toBe(true);
+  expect(dtbPullCheckbox.checked).toBe(false);
+
+  fireEvent.change(within(ossieCard).getByLabelText("url"), {
+    target: { value: "https://dtb.ossie.example" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "保存适配器配置" }));
+
+  await waitFor(() => {
+    const put = calls.find(
+      (call) =>
+        call.url === "/api/v1/projects/default/adapters" &&
+        call.method === "PUT",
+    );
+    expect(put).toBeTruthy();
+    const body = JSON.parse(put?.body ?? "{}") as {
+      adapters: Array<Record<string, unknown>>;
+    };
+    const dtb = body.adapters.find((row) => row.id === "dtb");
+    const ossie = body.adapters.find((row) => row.id === "ossie");
+    expect((dtb?.pull as { enabled: boolean })?.enabled).toBe(false);
+    expect(ossie?.enabled).toBe(true);
+    expect(ossie?.pull).toEqual({
+      enabled: true,
+      parameters: { url: "https://dtb.ossie.example", token: "***" },
+    });
+  });
+});

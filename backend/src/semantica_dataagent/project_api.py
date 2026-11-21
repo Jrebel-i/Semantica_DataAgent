@@ -453,8 +453,35 @@ def set_project_auto_build(
 
 
 ADAPTER_DEFAULT_ENABLED = frozenset({"canonical", "markdown"})
-DTB_PULL_TOKEN_KEY = "puller.dtb.token"
+PULLER_ADAPTER_IDS = ("dtb", "ossie")
+PULL_TOKEN_KEYS = {pid: f"puller.{pid}.token" for pid in PULLER_ADAPTER_IDS}
+DTB_PULL_TOKEN_KEY = PULL_TOKEN_KEYS["dtb"]
+PULLER_MUTUAL_EXCLUSION_DETAIL = "同一项目不能同时启用 DTB 拉取与 DTB 拉取为 Ossie"
 PROJECT_TYPE_LABELS = {"warehouse": "数仓型", "document": "文档型"}
+
+
+def ensure_puller_not_conflicting(project_id: str, puller_id: str) -> None:
+    """Reject enabling a puller when a sibling puller is already enabled on the project."""
+    for sibling in PULLER_ADAPTER_IDS:
+        if sibling == puller_id:
+            continue
+        cfg = project_context.plugin_config("puller", sibling, project_id)
+        if cfg and cfg[0]:
+            raise HTTPException(status_code=422, detail=PULLER_MUTUAL_EXCLUSION_DETAIL)
+
+
+def save_puller_token(db, project_id: str, puller_id: str, token: str | None) -> None:
+    """Persist or clear an encrypted puller credential, ignoring masked '***' placeholders."""
+    if token is None or token == "***":
+        return
+    from .crypto import encrypt
+
+    project_context.set_plugin_secret(
+        db,
+        project_id,
+        PULL_TOKEN_KEYS[puller_id],
+        encrypt(token) if token else None,
+    )
 
 
 def _adapter_reason(project_type: str, supported: tuple[str, ...]) -> str:
@@ -483,9 +510,11 @@ def _project_adapters(scope: ProjectContext) -> list[ProjectAdapterView]:
         if not compatible:
             enabled = False
         pull = None
-        if plugin_id == "dtb":
-            puller = discovered.get(("puller", "dtb"))
-            pull_enabled, pull_parameters = saved.get(("puller", "dtb"), (False, {}))
+        if plugin_id in PULLER_ADAPTER_IDS:
+            puller = discovered.get(("puller", plugin_id))
+            pull_enabled, pull_parameters = saved.get(
+                ("puller", plugin_id), (False, {})
+            )
             if not compatible:
                 pull_enabled = False
             pull = AdapterPullView(
@@ -499,7 +528,9 @@ def _project_adapters(scope: ProjectContext) -> list[ProjectAdapterView]:
                     puller.parameters_schema if puller is not None else {}
                 ),
                 token_configured=bool(
-                    project_context.plugin_secret(scope.project_id, DTB_PULL_TOKEN_KEY)
+                    project_context.plugin_secret(
+                        scope.project_id, PULL_TOKEN_KEYS[plugin_id]
+                    )
                 ),
             )
         rows.append(
@@ -542,7 +573,6 @@ def put_project_adapters(
 ):
     from jsonschema import Draft202012Validator
 
-    from .crypto import encrypt
     from .plugins import discover
     from .project_types import source_project_types, supports_project_type
 
@@ -578,11 +608,11 @@ def put_project_adapters(
                 ),
             )
         if update.pull is not None:
-            if update.id != "dtb":
+            if update.id not in PULLER_ADAPTER_IDS:
                 raise HTTPException(status_code=422, detail="该适配器没有拉取配置")
-            puller = discovered.get(("puller", "dtb"))
+            puller = discovered.get(("puller", update.id))
             if puller is None:
-                raise HTTPException(status_code=422, detail="DTB 拉取器未注册")
+                raise HTTPException(status_code=422, detail=f"{update.id} 拉取器未注册")
             errors = sorted(
                 Draft202012Validator(puller.parameters_schema).iter_errors(
                     update.pull.parameters
@@ -607,8 +637,20 @@ def put_project_adapters(
                         scope.project_type, source_project_types(plugin)
                     ),
                 )
+
+    saved = project_context.plugin_configs(scope.project_id)
+    effective_pulls: dict[str, tuple[bool, dict]] = {
+        pid: saved.get(("puller", pid), (False, {})) for pid in PULLER_ADAPTER_IDS
+    }
+    pull_touched = False
+    for update in body.adapters:
+        if update.pull is not None and update.id in PULLER_ADAPTER_IDS:
+            effective_pulls[update.id] = (update.pull.enabled, update.pull.parameters)
+            pull_touched = True
+    if sum(1 for enabled, _ in effective_pulls.values() if enabled) > 1:
+        raise HTTPException(status_code=422, detail=PULLER_MUTUAL_EXCLUSION_DETAIL)
+
     with sessions().begin() as db:
-        schedules = []
         for update in body.adapters:
             project_context.upsert_plugin_config(
                 db,
@@ -624,28 +666,24 @@ def put_project_adapters(
                 project_context.upsert_plugin_config(
                     db,
                     "puller",
-                    "dtb",
+                    update.id,
                     update.pull.enabled,
                     parameters,
                     scope.project_id,
                 )
-                if token is not None and token != "***":
-                    project_context.set_plugin_secret(
-                        db,
-                        scope.project_id,
-                        DTB_PULL_TOKEN_KEY,
-                        encrypt(token) if token else None,
-                    )
-                interval = (
-                    update.pull.parameters.get("interval_seconds", 0)
-                    if update.pull.enabled
-                    else 0
-                )
-                schedules.append((scope.project_id, interval))
-    from .scheduler import pull_scheduler
+                save_puller_token(db, scope.project_id, update.id, token)
+    if pull_touched:
+        from .scheduler import pull_scheduler
 
-    for target, interval in schedules:
-        pull_scheduler.configure(interval, target)
+        effective_interval = next(
+            (
+                int(params.get("interval_seconds", 0))
+                for enabled, params in effective_pulls.values()
+                if enabled
+            ),
+            0,
+        )
+        pull_scheduler.configure(effective_interval, scope.project_id)
     return _project_adapters(scope)
 
 

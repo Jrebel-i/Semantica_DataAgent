@@ -6008,6 +6008,57 @@
         "summary": "Trigger Pull"
       }
     },
+    "/api/v1/pulls/ossie": {
+      "post": {
+        "operationId": "trigger_ossie_pull_api_v1_pulls_ossie_post",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "project",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Project"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PullView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Trigger Ossie Pull"
+      }
+    },
     "/api/v1/queries/plan": {
       "post": {
         "operationId": "plan_api_v1_queries_plan_post",
