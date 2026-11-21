@@ -33,15 +33,15 @@ Use this skill when a question needs warehouse knowledge or SQL. Retrieve before
 6. **Before drafting any SQL, resolve definitions and date attribution.** If two or more metric
    definitions can match the question, stop this turn and call `request_clarification`
    with the competing definitions. Do not choose a definition and do not write or validate
-   SQL in the same turn; wait for the user's choice. Ask in plain text only after the
-   clarification tool returns. For each business-date window, identify its attribution event
-   from the question or verified definition before choosing a field. Follow the event binding
-   and clarification rules in Time semantics and duration. If the attribution event is
-   unresolved and multiple candidates change the answer, call `request_clarification` and
-   wait; do not draft or validate SQL that turn. If the required event or its field cannot be
-   established, explain the missing evidence and report the knowledge gap without SQL.
-7. Subject to step 6 and all clarification rules, when a relevant table exists, write one
-   SQL statement in the requested dialect even if some fields or definitions are missing. Use only fields confirmed by
+   SQL in the same turn; follow Ambiguity and clarification and wait for the user's choice.
+   For each business-date window, use the event explicitly requested or given by a verified
+   definition; otherwise apply the measured-end default when applicable (see Time semantics
+   and duration). Adjacent event fields alone do not make the attribution ambiguous. Only if
+   the event remains unresolved and multiple candidates change the answer, clarify and wait;
+   if the required event or its field cannot be established, explain the missing evidence and
+   report the knowledge gap without SQL.
+7. Subject to step 6, when a relevant table exists, write one SQL statement in the requested
+   dialect even if some fields or definitions are missing. Use only fields confirmed by
    `describe_tables` or returned table metadata, never a column name inferred from
    convention or the metric name (for example, do not invent an `amount` column). State
    the assumptions and explain how the result differs from the requested metric. Then call
@@ -49,7 +49,7 @@ Use this skill when a question needs warehouse knowledge or SQL. Retrieve before
    evidence shows existing content is wrong. A request for a concrete computation on a
    known table, such as a row count per partition, is answerable without a formal metric
    definition; do not withhold SQL just because that definition is absent. Best-effort SQL
-   must not bypass unresolved date attribution or any required clarification. When SQL cannot
+   must not bypass step 6. When SQL cannot
    be drafted or validated under these rules, explain why and do not present final SQL.
 8. **Always** call `validate_sql` with the SQL and dialect. Do not present SQL as final
    before validation. If validation reports any table, field, syntax, join, or partition
@@ -159,7 +159,7 @@ Read `validate_sql` completely:
   When a question measures the elapsed time of a specified occurred event and does not
   separately specify an attribution event, apply the date window to the timestamp of the
   measured end event; an explicitly specified different event or verified definition
-  takes precedence. If multiple candidate events are present and the choice changes the
+  takes precedence. If the event remains unresolved and multiple candidates change the
   answer, call `request_clarification`; do not disclose an assumption instead. Never
   treat order completion, partition time, or load time as equivalent to the measured
   business event.
@@ -212,6 +212,7 @@ Read `validate_sql` completely:
 
 ## Ambiguity and clarification
 
+For business-date attribution, apply step 6 before deciding whether it is ambiguous.
 When a result has `ambiguous: true`, its confidence is `low`, several candidates have similar
 strength, or two documents define the same metric differently, stop and call
 `request_clarification` before answering:
@@ -266,4 +267,4 @@ Keep the answer focused:
 
 ## Corrections and knowledge gaps
 
-When knowledge is incomplete but a relevant table exists, subject to step 6 and the clarification and time semantics rules, attempt the best SQL that can be written using known fields, validate it, and include the complete SQL in a fenced code block in the final answer only when it passes validation (not only a summary); explicitly label the assumptions as such (in Chinese answers use “假设”), explain missing fields or definitions, and how the result differs from the requested metric. For example, a payment record count can be a clearly labelled partial result when the payment amount field is missing; do not pretend the count is an amount or invent a field that cannot pass validation. Then call `report_knowledge_gap` for the missing knowledge and, when reliable evidence shows a document or metadata comment is wrong, call `propose_correction` with its existing reference, replacement content or comment, and reason. A proposal awaits admin approval; do not treat it as already applied. If no relevant table exists or no statement using confirmed fields can pass validation, explain why and report the knowledge gap without presenting final SQL. Conflicting metric definitions still require clarification before choosing a definition or writing SQL.
+When knowledge is incomplete but a relevant table exists, subject to step 6, attempt the best SQL that can be written using known fields, validate it, and include the complete SQL in a fenced code block in the final answer only when it passes validation (not only a summary); explicitly label the assumptions as such (in Chinese answers use “假设”), explain missing fields or definitions, and how the result differs from the requested metric. For example, a payment record count can be a clearly labelled partial result when the payment amount field is missing; do not pretend the count is an amount or invent a field that cannot pass validation. Then call `report_knowledge_gap` for the missing knowledge and, when reliable evidence shows a document or metadata comment is wrong, call `propose_correction` with its existing reference, replacement content or comment, and reason. A proposal awaits admin approval; do not treat it as already applied. If no relevant table exists or no statement using confirmed fields can pass validation, explain why and report the knowledge gap without presenting final SQL. Conflicting metric definitions still require clarification before choosing a definition or writing SQL.
