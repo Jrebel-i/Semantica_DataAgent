@@ -5349,6 +5349,15 @@
             },
             "description": "Current knowledge generation exported as an Apache Ossie model"
           },
+          "401": {
+            "description": "Not authenticated"
+          },
+          "404": {
+            "description": "Project not found"
+          },
+          "409": {
+            "description": "Project state does not allow export"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -5358,6 +5367,9 @@
               }
             },
             "description": "Validation Error"
+          },
+          "503": {
+            "description": "Service unavailable"
           }
         },
         "security": [

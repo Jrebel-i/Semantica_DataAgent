@@ -54,10 +54,9 @@ def _reconcile_document_table_links(storage, records, generation):
                     parts[1].casefold(),
                     parts[2].casefold(),
                 )
-                if three in tables:
-                    candidates.append(three)
-                elif len(parts) == 3:
-                    candidates.append(("", parts[0].casefold(), parts[1].casefold()))
+                if three not in tables:
+                    continue
+                candidates.append(three)
             elif len(parts) == 2:
                 candidates.append(("", parts[0].casefold(), parts[1].casefold()))
         match = table_name(path)
