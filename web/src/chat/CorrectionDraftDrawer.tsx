@@ -17,6 +17,8 @@ export function CorrectionDraftDrawer({
   targetLabel,
   sourceGenerated = false,
   defaultCategory = "caliber",
+  initialDescription = "",
+  knowledgeGapId,
   allowDirectEdit = false,
   onClose,
   onSubmitted,
@@ -31,6 +33,8 @@ export function CorrectionDraftDrawer({
   targetLabel?: string;
   sourceGenerated?: boolean;
   defaultCategory?: string;
+  initialDescription?: string;
+  knowledgeGapId?: string;
   allowDirectEdit?: boolean;
   onClose: () => void;
   onSubmitted?: (proposalId?: string) => void;
@@ -49,12 +53,12 @@ export function CorrectionDraftDrawer({
     if (!open) return;
     setCategory(defaultCategory || "caliber");
     setTargetInput(target || "");
-    setDescription("");
+    setDescription(initialDescription);
     setDraft(null);
     setPatch("");
     setReason("");
     setError("");
-  }, [open, project, target, turnId, defaultCategory]);
+  }, [open, project, target, turnId, defaultCategory, initialDescription]);
 
   async function generateDraft() {
     if (!description.trim()) return;
@@ -114,7 +118,12 @@ export function CorrectionDraftDrawer({
             reason: reason.trim(),
             conversation_id: conversationId || undefined,
             turn_id: turnId,
-            caliber: draft?.caliber || undefined,
+            knowledge_gap_id: knowledgeGapId,
+            caliber: draft?.caliber
+              ? knowledgeGapId
+                ? Array.from(draft.caliber).slice(0, 5000).join("")
+                : draft.caliber
+              : undefined,
             reference_sql: draft?.reference_sql || undefined,
           }),
         },

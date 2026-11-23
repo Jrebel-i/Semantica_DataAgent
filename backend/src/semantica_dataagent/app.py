@@ -1401,6 +1401,8 @@ class SourceUpload(BaseModel):
     files: list[SourceFileUpload] = []
     archive_base64: str | None = None
     replace: bool = False
+    append_only: bool = False
+    knowledge_gap_id: str | None = None
 
 
 class SourceCommit(BaseModel):
@@ -1515,6 +1517,19 @@ def source_upload_files(body, target):
     return files
 
 
+def validate_source_gap(body, project_id):
+    if body.knowledge_gap_id is None:
+        return
+    from .db import KnowledgeGap
+
+    if not body.append_only:
+        raise HTTPException(422, "Knowledge gap upload must be append-only")
+    with sessions()() as db:
+        gap = db.get(KnowledgeGap, body.knowledge_gap_id)
+        if gap is None or gap.project_id != project_id or gap.status != "confirmed":
+            raise HTTPException(422, "Confirmed knowledge gap not found in project")
+
+
 @app.post("/api/v1/source/upload", response_model=SourceCommit)
 def upload_sources(
     body: SourceUpload,
@@ -1523,6 +1538,7 @@ def upload_sources(
 ):
     from . import source_directory as source
 
+    validate_source_gap(body, scope.project_id)
     category_root = source_category_root(scope)
     target, delete_root = source_upload_target(body, category_root)
     files = source_upload_files(body, target)
@@ -1538,6 +1554,7 @@ def upload_sources(
             author,
             category_root,
             delete_root.as_posix() if delete_root else None,
+            append_only=body.append_only,
         )
     try:
         auto_build.request_upload_build(scope.project_id, author)
@@ -1555,6 +1572,7 @@ def preview_sources(
 ):
     from . import source_directory as source
 
+    validate_source_gap(body, scope.project_id)
     category_root = source_category_root(scope)
     target, delete_root = source_upload_target(body, category_root)
     files = source_upload_files(body, target)
@@ -1567,6 +1585,7 @@ def preview_sources(
                 body.replace,
                 category_root,
                 delete_root.as_posix() if delete_root else None,
+                append_only=body.append_only,
             )
     except (ValueError, OSError) as exc:
         raise HTTPException(422, str(exc)) from exc

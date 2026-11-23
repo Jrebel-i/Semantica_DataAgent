@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Alert,
   Button,
@@ -18,6 +18,7 @@ import { ProjectSelector, storedProject } from "./ProjectSelector";
 import { formatRegressions } from "./EvolutionPage";
 import { formatOverlapRatio, formatProbePartitions } from "./DiscoveryPanel";
 import { TableScroll } from "./TableScroll";
+import { CorrectionDraftDrawer } from "./chat/CorrectionDraftDrawer";
 
 type L2GateReport = {
   passed?: boolean;
@@ -98,7 +99,28 @@ function initialPatchForProposal(row: Proposal): string {
 }
 
 type EvalQuestion = components["schemas"]["EvalQuestionView"];
-type Gap = { id: string; question: string; missing: string };
+type Gap = {
+  id: string;
+  project_id: string;
+  question: string;
+  missing: string;
+  status: string;
+  can_review: boolean;
+  created_at: string;
+  reviewed_at?: string | null;
+  reviewer_name?: string | null;
+};
+
+function gapDescription(question: string, missing: string): string {
+  const q = Array.from(question);
+  const m = Array.from(missing);
+  const budget = 4999;
+  const qLimit = Math.min(
+    q.length,
+    Math.max(Math.floor(budget / 2), budget - m.length),
+  );
+  return `${q.slice(0, qLimit).join("")}\n${m.slice(0, budget - qLimit).join("")}`;
+}
 type StatusFilter = "all" | "pending" | "resolved";
 type SourceFilter = "all" | "manual" | "mcp" | "evolution" | "discovery";
 
@@ -235,6 +257,16 @@ export function CorrectionsPage({
   const [activeTab, setActiveTab] = useState<"proposals" | "eval">("proposals");
   const [rows, setRows] = useState<Proposal[]>([]);
   const [missing, setMissing] = useState<Gap[]>([]);
+  const [missingProject, setMissingProject] = useState("");
+  const [draftGap, setDraftGap] = useState<Gap | null>(null);
+  const currentProject = useRef(project);
+  const requestGeneration = useRef(0);
+  const projectGeneration = useRef(0);
+  if (currentProject.current !== project) {
+    requestGeneration.current++;
+    projectGeneration.current++;
+  }
+  currentProject.current = project;
   const [selected, setSelected] = useState<Proposal | null>(null);
   const targetProposalId =
     initialProposalId ??
@@ -294,6 +326,7 @@ export function CorrectionsPage({
   const selectedMeta = selected ? statusMeta(selected.status, t) : null;
 
   const refresh = useCallback(async () => {
+    const generation = ++requestGeneration.current;
     try {
       const response = await fetch(
         `${
@@ -302,13 +335,25 @@ export function CorrectionsPage({
         { headers: { Authorization: `Bearer ${token}` } },
       );
       if (!response.ok) throw new Error();
-      if (gaps) setMissing((await response.json()) as Gap[]);
-      else setRows((await response.json()) as Proposal[]);
+      const data = await response.json();
+      if (
+        currentProject.current !== project ||
+        generation !== requestGeneration.current
+      )
+        return;
+      if (gaps) {
+        setMissing(data as Gap[]);
+        setMissingProject(project);
+      } else setRows(data as Proposal[]);
       setError("");
     } catch {
-      setError(t.correctionLoadError);
+      if (
+        currentProject.current === project &&
+        generation === requestGeneration.current
+      )
+        setError(t.correctionLoadError);
     }
-  }, [gaps, projectQuery, token, t.correctionLoadError]);
+  }, [gaps, project, projectQuery, token, t.correctionLoadError]);
 
   const loadEvalQuestions = useCallback(async () => {
     if (gaps) return;
@@ -334,7 +379,45 @@ export function CorrectionsPage({
 
   useEffect(() => {
     setSelected(null);
+    setDraftGap(null);
+    setError("");
   }, [project]);
+
+  async function reviewGap(gap: Gap, status: "confirmed" | "rejected") {
+    if (gap.project_id !== project) return;
+    const generation = projectGeneration.current;
+    try {
+      const response = await fetch(
+        `/api/v1/knowledge-gaps/${encodeURIComponent(gap.id)}/review?${projectQuery}`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ status }),
+        },
+      );
+      if (response.status === 409) {
+        if (projectGeneration.current === generation) {
+          await refresh();
+          if (projectGeneration.current === generation)
+            setError(t.gapReviewConflict);
+        }
+        return;
+      }
+      if (!response.ok)
+        throw new Error(
+          await readErrorDetail(response, t.correctionReviewError),
+        );
+      if (projectGeneration.current === generation) await refresh();
+    } catch (failure) {
+      if (projectGeneration.current === generation)
+        setError(
+          failure instanceof Error ? failure.message : t.correctionReviewError,
+        );
+    }
+  }
 
   useEffect(() => {
     if (!gaps && activeTab === "eval") {
@@ -580,13 +663,56 @@ export function CorrectionsPage({
       </div>
       {error && <Alert type="error" title={error} />}
       {gaps ? (
-        missing.length === 0 ? (
+        missingProject !== project || missing.length === 0 ? (
           <div className="empty-state">{t.emptyContext}</div>
         ) : (
           missing.map((gap) => (
             <article className="gap-card" key={gap.id}>
               <h3>{gap.question}</h3>
               <p>{gap.missing}</p>
+              <p>
+                {t.gapCreated}:{" "}
+                {gap.created_at
+                  ? new Date(gap.created_at).toLocaleString()
+                  : ""}
+              </p>
+              <p>
+                {gap.status === "confirmed"
+                  ? t.gapConfirmed
+                  : gap.status === "rejected"
+                    ? t.gapReject
+                    : t.statusPending}
+              </p>
+              {gap.reviewed_at && (
+                <p>
+                  {t.gapReviewed}: {new Date(gap.reviewed_at).toLocaleString()}{" "}
+                  {gap.reviewer_name}
+                </p>
+              )}
+              {gap.status === "pending" && gap.can_review && (
+                <Space>
+                  <Button onClick={() => void reviewGap(gap, "confirmed")}>
+                    {t.gapConfirm}
+                  </Button>
+                  <Button onClick={() => void reviewGap(gap, "rejected")}>
+                    {t.gapReject}
+                  </Button>
+                </Space>
+              )}
+              {gap.status === "confirmed" && (
+                <Space>
+                  <Button onClick={() => setDraftGap(gap)}>
+                    {t.gapCorrection}
+                  </Button>
+                  {gap.can_review && (
+                    <a
+                      href={`/source?project=${encodeURIComponent(gap.project_id)}&gap=${encodeURIComponent(gap.id)}`}
+                    >
+                      {t.gapAddKnowledge}
+                    </a>
+                  )}
+                </Space>
+              )}
             </article>
           ))
         )
@@ -1078,6 +1204,20 @@ export function CorrectionsPage({
             </section>
           )}
         </>
+      )}
+      {draftGap && draftGap.project_id === project && (
+        <CorrectionDraftDrawer
+          open
+          token={token}
+          project={draftGap.project_id}
+          messages={t}
+          knowledgeGapId={draftGap.id}
+          initialDescription={gapDescription(
+            draftGap.question,
+            draftGap.missing,
+          )}
+          onClose={() => setDraftGap(null)}
+        />
       )}
     </section>
   );

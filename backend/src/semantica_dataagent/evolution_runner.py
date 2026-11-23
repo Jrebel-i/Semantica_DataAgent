@@ -894,18 +894,6 @@ def _target_eval_inputs(
                     matched_refs.extend(item.get("matched_refs") or ())
         _maybe_add_question(f"traj-{tid}", q_text, ref_sql, dialect, matched_refs)
 
-    if not target_qs and signal.signal_kind == "knowledge_gap_or_failure":
-        for idx, q_text in enumerate(signal.details.get("questions") or ()):
-            if len(target_qs) >= 5:
-                break
-            _maybe_add_question(
-                f"gap-{signal.evidence_trajectory_ids[0] if signal.evidence_trajectory_ids else idx}-{idx}",
-                str(q_text),
-                "",
-                "doris",
-                [],
-            )
-
     if not target_qs and evidence_ids:
         for grp in mining.diagnosis_groups:
             if len(target_qs) >= 5:

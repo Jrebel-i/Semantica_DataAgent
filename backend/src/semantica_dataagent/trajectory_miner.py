@@ -16,7 +16,7 @@ from sqlglot import exp
 
 from . import eval_questions, trajectories
 from .api_time import as_utc_or_now as _as_utc
-from .db import Conversation, KnowledgeGap, QueryExecution, Setting, Turn, sessions
+from .db import Conversation, QueryExecution, Setting, Turn, sessions
 
 _PUNCT_RE = re.compile(
     r"[\s\.,;:!?\-\"'`~@#$%^&*()_+=\[\]{}|\\/<>，。；：！？、“”‘’（）【】《》、·]+"
@@ -699,11 +699,6 @@ def _mine_gaps_and_failures(
         cutoff = (
             now - timedelta(days=retention_days) if retention_days is not None else None
         )
-        gap_query = db.query(KnowledgeGap).filter(KnowledgeGap.project_id == project_id)
-        if after_at is not None:
-            gap_query = gap_query.filter(KnowledgeGap.created_at >= after_at)
-        gaps = gap_query.order_by(KnowledgeGap.created_at.asc()).all()
-
         qe_query = db.query(QueryExecution).filter(QueryExecution.status == "failed")
         if after_at is not None:
             qe_query = qe_query.filter(QueryExecution.created_at >= after_at)
@@ -763,44 +758,8 @@ def _mine_gaps_and_failures(
                     )
                 )
 
-    filtered_gaps = [
-        g
-        for g in gaps
-        if canonical_question(g.question) not in holdouts
-        and canonical_question(g.question) not in reserve_questions
-    ]
-    if filtered_gaps:
-        sample_q = trajectories.scrub_text(filtered_gaps[0].question)
-        sample_missing = trajectories.scrub_text(filtered_gaps[0].missing)
-        signals.append(
-            MinedSignal(
-                signal_kind="knowledge_gap_or_failure",
-                summary=f"知识缺口聚类（{len(filtered_gaps)} 条）：{sample_missing[:100]}",
-                evidence_trajectory_ids=diag_ids[:5],
-                details={
-                    "kind": "knowledge_gap",
-                    "count": len(filtered_gaps),
-                    "questions": [
-                        trajectories.scrub_text(g.question) for g in filtered_gaps[:5]
-                    ],
-                    "missing": [
-                        trajectories.scrub_text(g.missing) for g in filtered_gaps[:5]
-                    ],
-                    "sample_question": sample_q,
-                },
-            )
-        )
-
-    # 2. Failed trajectories & report_knowledge_gap calls & execution_failure clusters
-    failed_diag = [
-        r
-        for r in diag_rows
-        if r.get("status") == "failed"
-        or any(
-            c.get("tool_name") == "report_knowledge_gap"
-            for c in (r.get("tool_calls") or ())
-        )
-    ]
+    # 2. Failed trajectories and execution_failure clusters
+    failed_diag = [r for r in diag_rows if r.get("status") == "failed"]
     if exec_failures or failed_diag:
         categories = sorted({cat for _, cat, _ in exec_failures})
         tables: list[str] = []

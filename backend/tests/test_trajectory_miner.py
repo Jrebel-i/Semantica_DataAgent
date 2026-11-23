@@ -23,6 +23,91 @@ def _setup_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     initialize()
 
 
+def test_confirmed_gap_never_creates_evolution_signal(tmp_path, monkeypatch):
+    _setup_env(tmp_path, monkeypatch)
+    from semantica_dataagent import trajectory_miner
+    from semantica_dataagent.db import KnowledgeGap, sessions
+
+    with sessions().begin() as db:
+        db.add(
+            KnowledgeGap(
+                id="g",
+                owner_id="u",
+                question="private question",
+                missing="private gap",
+                status="confirmed",
+                reviewed_at=datetime.now(UTC),
+            )
+        )
+    result = trajectory_miner.mine_project_trajectories("default")
+    assert not result.signals
+    assert "private gap" not in json.dumps(result.to_diagnosis_payload())
+
+
+def test_successful_gap_report_is_not_a_failure_but_failed_trajectory_is(
+    tmp_path, monkeypatch
+):
+    _setup_env(tmp_path, monkeypatch)
+    from semantica_dataagent import trajectory_miner
+
+    def mine(rows):
+        return trajectory_miner._mine_gaps_and_failures(
+            "default",
+            rows,
+            reserve_rows=[],
+            holdout_conv_ids=set(),
+            holdouts=set(),
+            after_at=None,
+            now=datetime.now(UTC),
+        )
+
+    report = {
+        "id": 1,
+        "status": "completed",
+        "tool_calls": [
+            {"tool_name": "report_knowledge_gap", "arguments": {"missing": "secret"}}
+        ],
+    }
+    assert mine([report]) == []
+    signals = mine([report, {"id": 2, "status": "failed"}])
+    assert [signal.details["kind"] for signal in signals] == ["execution_failure"]
+    assert signals[0].evidence_trajectory_ids == [2]
+
+
+def test_execution_failure_keeps_existing_checkpoint_filter(tmp_path, monkeypatch):
+    _setup_env(tmp_path, monkeypatch)
+    from semantica_dataagent import trajectory_miner
+    from semantica_dataagent.db import QueryExecution, sessions
+
+    checkpoint = datetime.now(UTC) - timedelta(hours=1)
+    with sessions().begin() as db:
+        for ident, when in (
+            ("old", checkpoint - timedelta(minutes=1)),
+            ("new", checkpoint + timedelta(minutes=1)),
+        ):
+            db.add(
+                QueryExecution(
+                    id=ident,
+                    owner_id="u",
+                    status="failed",
+                    sql="select 1",
+                    created_at=when,
+                    plan_data=json.dumps(
+                        {
+                            "project_id": "default",
+                            "execution_failure": {"stage": "poll", "category": ident},
+                        }
+                    ),
+                )
+            )
+    result = trajectory_miner.mine_project_trajectories("default", after_at=checkpoint)
+    failures = [
+        s for s in result.signals if s.details.get("kind") == "execution_failure"
+    ]
+    assert len(failures) == 1
+    assert failures[0].details["categories"] == ["new"]
+
+
 def test_miner_excludes_holdout_expired_deleted_and_splits_after_dedup(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
@@ -92,6 +177,8 @@ def test_miner_excludes_holdout_expired_deleted_and_splits_after_dedup(
                 question="留出秘密指标口径是什么",
                 missing="should never leak",
                 created_at=base + timedelta(minutes=1),
+                status="confirmed",
+                reviewed_at=base + timedelta(minutes=1),
             )
         )
 
@@ -484,6 +571,8 @@ def test_miner_detects_all_five_signals_and_preserves_multi_caliber_variants(
                 question="什么是核销率？",
                 missing="缺少核销率定义",
                 created_at=base + timedelta(minutes=20),
+                status="confirmed",
+                reviewed_at=base + timedelta(minutes=20),
             )
         )
         db.add(
@@ -534,6 +623,12 @@ def test_miner_detects_all_five_signals_and_preserves_multi_caliber_variants(
         "divergent_clarification",
         "knowledge_gap_or_failure",
     }.issubset(kinds)
+    gap_and_failure = {
+        s.details.get("kind")
+        for s in res.signals
+        if s.signal_kind == "knowledge_gap_or_failure"
+    }
+    assert gap_and_failure == {"execution_failure"}
 
     clar_signal = next(
         s for s in res.signals if s.signal_kind == "divergent_clarification"

@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert, Button, Checkbox, Switch, Tag, Upload } from "antd";
 import type { components } from "./api";
 import type { Messages } from "./i18n";
-import { ProjectSelector, storedProject } from "./ProjectSelector";
+import { ProjectSelector, storedProject, useProjects } from "./ProjectSelector";
 
 type Version = components["schemas"]["SourceHistory"];
 type SourceStatus = components["schemas"]["ProjectSourceStatus"];
@@ -166,7 +166,112 @@ export function SourcePage({
   messages: Messages;
   onNavigateBuilds?: () => void;
 }) {
-  const [project, setProject] = useState(storedProject);
+  const params = new URLSearchParams(window.location.search);
+  const [project, setProject] = useState(
+    () => params.get("project") || storedProject(),
+  );
+  if (params.has("gap")) {
+    return (
+      <GapSourcePage
+        project={params.get("project") || ""}
+        gapId={params.get("gap") || ""}
+        token={token}
+        messages={t}
+      />
+    );
+  }
+  return (
+    <ProjectSourcePage
+      key={project}
+      project={project}
+      setProject={setProject}
+      token={token}
+      messages={t}
+      onNavigateBuilds={onNavigateBuilds}
+    />
+  );
+}
+
+function GapSourcePage({
+  project,
+  gapId,
+  token,
+  messages: t,
+}: {
+  project: string;
+  gapId: string;
+  token: string;
+  messages: Messages;
+}) {
+  const { projects, loaded } = useProjects(token);
+  const [validGap, setValidGap] = useState<boolean | null>(null);
+  useEffect(() => {
+    let active = true;
+    setValidGap(null);
+    if (!project || !gapId) {
+      setValidGap(false);
+      return;
+    }
+    void fetch(
+      `/api/v1/knowledge-gaps?project=${encodeURIComponent(project)}`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    )
+      .then((response) => (response.ok ? response.json() : Promise.reject()))
+      .then((rows: { id: string; status: string }[]) => {
+        if (active)
+          setValidGap(
+            rows.some((row) => row.id === gapId && row.status === "confirmed"),
+          );
+      })
+      .catch(() => {
+        if (active) setValidGap(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [project, gapId, token]);
+  if (!loaded) return null;
+  if (
+    !project ||
+    !gapId ||
+    validGap === false ||
+    !projects.some(
+      (p) => p.id === project && p.status === "active" && p.my_role === "admin",
+    )
+  ) {
+    return <Alert type="error" title={t.gapSourceUnavailable} />;
+  }
+  if (validGap === null) return null;
+  return (
+    <ProjectSourcePage
+      key={project}
+      project={project}
+      setProject={() => {}}
+      token={token}
+      messages={t}
+      appendOnly
+      gapId={gapId}
+    />
+  );
+}
+
+function ProjectSourcePage({
+  project,
+  setProject,
+  token,
+  messages: t,
+  onNavigateBuilds,
+  appendOnly = false,
+  gapId,
+}: {
+  project: string;
+  setProject: (project: string) => void;
+  token: string;
+  messages: Messages;
+  onNavigateBuilds?: () => void;
+  appendOnly?: boolean;
+  gapId?: string;
+}) {
   const [paths, setPaths] = useState<string[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [uploadMode, setUploadMode] = useState<"category" | "target">(
@@ -195,6 +300,19 @@ export function SourcePage({
   const [status, setStatus] = useState<SourceStatus | null>(null);
   const [autoBuild, setAutoBuild] = useState<boolean | null>(null);
   const [statusRefresh, setStatusRefresh] = useState(0);
+  const [projectUnavailable, setProjectUnavailable] = useState(false);
+  const unavailable = useRef(false);
+  const previewVersion = useRef(0);
+  const approvedPreview = useRef<{
+    version: number;
+    project: string;
+    body: string;
+  } | null>(null);
+  const invalidatePreview = () => {
+    previewVersion.current++;
+    approvedPreview.current = null;
+    setPreview(null);
+  };
   const request = useCallback(
     async (url: string, init?: RequestInit) => {
       const separator = url.includes("?") ? "&" : "?";
@@ -208,10 +326,18 @@ export function SourcePage({
           },
         },
       );
-      if (!response.ok) throw new Error();
+      if (!response.ok) {
+        if (appendOnly && [401, 403, 404, 409].includes(response.status)) {
+          unavailable.current = true;
+          previewVersion.current++;
+          approvedPreview.current = null;
+          setProjectUnavailable(true);
+        }
+        throw new Error();
+      }
       return response.json();
     },
-    [project, token],
+    [project, token, appendOnly],
   );
   const refresh = useCallback(async () => {
     setPaths((await request("/api/v1/source/files")) as string[]);
@@ -225,18 +351,13 @@ export function SourcePage({
   useEffect(() => {
     void loadCategories().catch(() => setCategories([]));
   }, [loadCategories]);
-  useEffect(() => {
-    setPreview(null);
-  }, [
-    files,
-    uploadMode,
-    targetDir,
-    category,
-    newCategory,
-    subfolder,
-    replace,
-    project,
-  ]);
+  useEffect(
+    () => () => {
+      previewVersion.current++;
+      approvedPreview.current = null;
+    },
+    [],
+  );
   useEffect(() => {
     let active = true;
     let timer: number | undefined;
@@ -281,6 +402,7 @@ export function SourcePage({
     (uploadMode === "target" ? targetDir.trim() : selectedCategory),
   );
   function chooseFiles(next: File[]) {
+    invalidatePreview();
     setFiles(next);
     if (!next.length || uploadMode !== "category") return;
     const root = next[0].webkitRelativePath?.split("/")[0];
@@ -308,6 +430,7 @@ export function SourcePage({
       return {
         target: targetDir.trim(),
         replace,
+        ...(appendOnly ? { append_only: true, knowledge_gap_id: gapId } : {}),
         ...values,
       };
     }
@@ -315,20 +438,26 @@ export function SourcePage({
       category: selectedCategory,
       ...(subfolder.trim() ? { subfolder: subfolder.trim() } : {}),
       replace,
+      ...(appendOnly ? { append_only: true, knowledge_gap_id: gapId } : {}),
       ...values,
     };
   }
   async function loadPreview() {
     if (!canPreviewUpload) return;
+    invalidatePreview();
+    const version = previewVersion.current;
     setBusy(true);
     try {
-      setPreview(
-        (await request("/api/v1/source/upload/preview", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(await body()),
-        })) as Preview,
-      );
+      const requestBody = JSON.stringify(await body());
+      if (version !== previewVersion.current || unavailable.current) return;
+      const result = (await request("/api/v1/source/upload/preview", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: requestBody,
+      })) as Preview;
+      if (version !== previewVersion.current || unavailable.current) return;
+      approvedPreview.current = { version, project, body: requestBody };
+      setPreview(result);
       setError("");
     } catch {
       setError(t.sourceError);
@@ -356,16 +485,25 @@ export function SourcePage({
   }
   async function send() {
     try {
-      if (!files.length || !preview) throw new Error();
+      const approved = approvedPreview.current;
+      if (
+        !preview ||
+        !approved ||
+        unavailable.current ||
+        approved.version !== previewVersion.current ||
+        approved.project !== project
+      )
+        throw new Error();
       setBusy(true);
       const result = (await request("/api/v1/source/upload", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(await body()),
+        body: approved.body,
       })) as { commit: string };
       setError("");
       setSuccess(result.commit);
       setPreview(null);
+      approvedPreview.current = null;
       await refresh();
       setStatusRefresh((value) => value + 1);
     } catch {
@@ -461,14 +599,19 @@ export function SourcePage({
               {t.sourceViewBuilds}
             </Button>
           )}
-          <ProjectSelector
-            token={token}
-            value={project}
-            onChange={setProject}
-            messages={t}
-          />
+          {!appendOnly && (
+            <ProjectSelector
+              token={token}
+              value={project}
+              onChange={setProject}
+              messages={t}
+            />
+          )}
         </div>
       </div>
+      {projectUnavailable && (
+        <Alert type="error" title={t.gapSourceUnavailable} />
+      )}
       {error && <Alert type="error" title={error} />}
       {buildNotice && <Alert type="success" title={buildNotice} />}
       {success && <Alert type="success" title={`${t.uploaded}: ${success}`} />}
@@ -481,14 +624,20 @@ export function SourcePage({
                 <Button
                   size="small"
                   type={uploadMode === "category" ? "primary" : "default"}
-                  onClick={() => setUploadMode("category")}
+                  onClick={() => {
+                    invalidatePreview();
+                    setUploadMode("category");
+                  }}
                 >
                   {t.sourceModeCategory}
                 </Button>
                 <Button
                   size="small"
                   type={uploadMode === "target" ? "primary" : "default"}
-                  onClick={() => setUploadMode("target")}
+                  onClick={() => {
+                    invalidatePreview();
+                    setUploadMode("target");
+                  }}
                 >
                   {t.sourceModeTarget}
                 </Button>
@@ -526,6 +675,7 @@ export function SourcePage({
                       aria-label={t.sourceCategory}
                       value={category}
                       onChange={(e) => {
+                        invalidatePreview();
                         setCategory(e.target.value);
                         setNewCategory("");
                       }}
@@ -545,6 +695,7 @@ export function SourcePage({
                       placeholder={t.sourceNewCategoryPlaceholder}
                       value={newCategory}
                       onChange={(e) => {
+                        invalidatePreview();
                         setNewCategory(e.target.value);
                         setCategory("");
                       }}
@@ -556,7 +707,10 @@ export function SourcePage({
                       aria-label={t.sourceSubfolder}
                       placeholder={t.sourceSubfolderPlaceholder}
                       value={subfolder}
-                      onChange={(e) => setSubfolder(e.target.value)}
+                      onChange={(e) => {
+                        invalidatePreview();
+                        setSubfolder(e.target.value);
+                      }}
                     />
                   </label>
                 </>
@@ -568,7 +722,10 @@ export function SourcePage({
                         key={preset}
                         size="small"
                         type={targetDir === preset ? "primary" : "default"}
-                        onClick={() => setTargetDir(preset)}
+                        onClick={() => {
+                          invalidatePreview();
+                          setTargetDir(preset);
+                        }}
                       >
                         {preset}/
                       </Button>
@@ -580,21 +737,29 @@ export function SourcePage({
                       aria-label={t.sourceTargetDir}
                       placeholder={t.sourceTargetDirPlaceholder}
                       value={targetDir}
-                      onChange={(e) => setTargetDir(e.target.value)}
+                      onChange={(e) => {
+                        invalidatePreview();
+                        setTargetDir(e.target.value);
+                      }}
                     />
                   </label>
                 </div>
               )}
-              <details className="advanced-options">
-                <summary>{t.sourceAdvanced}</summary>
-                <Checkbox
-                  className="plugin-enable"
-                  checked={replace}
-                  onChange={(e) => setReplace(e.target.checked)}
-                >
-                  {t.sourceReplace}
-                </Checkbox>
-              </details>
+              {!appendOnly && (
+                <details className="advanced-options">
+                  <summary>{t.sourceAdvanced}</summary>
+                  <Checkbox
+                    className="plugin-enable"
+                    checked={replace}
+                    onChange={(e) => {
+                      invalidatePreview();
+                      setReplace(e.target.checked);
+                    }}
+                  >
+                    {t.sourceReplace}
+                  </Checkbox>
+                </details>
+              )}
               <p className="field-hint">{t.sourceIndexHint}</p>
               {preview && (
                 <div className="upload-preview">
@@ -656,7 +821,7 @@ export function SourcePage({
               <div className="save-bar" style={{ marginTop: 0 }}>
                 <button
                   type="button"
-                  disabled={busy || !canPreviewUpload}
+                  disabled={busy || projectUnavailable || !canPreviewUpload}
                   onClick={() => void loadPreview()}
                 >
                   {t.sourcePreview}
@@ -664,7 +829,7 @@ export function SourcePage({
                 <button
                   type="button"
                   className={replace && preview ? "danger" : undefined}
-                  disabled={busy || !preview}
+                  disabled={busy || projectUnavailable || !preview}
                   onClick={() => void send()}
                 >
                   {replace && preview
