@@ -7,6 +7,7 @@ import math
 import re
 from collections.abc import Mapping
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Annotated, Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -278,6 +279,64 @@ class PullInstanceView(BaseModel):
     updated_at: UtcDatetime
 
 
+class PullTriggerRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    force: bool = False
+
+
+class PullView(BaseModel):
+    id: int
+    instance_id: str | None = None
+    plugin_id: str | None = None
+    trigger_type: str = "manual"
+    status: str
+    started_at: UtcDatetime
+    finished_at: UtcDatetime | None
+    tables: int
+    tasks: int
+    error: str | None
+    skipped_reason: str | None = None
+    warnings: list[str] = Field(default_factory=list)
+    commit: str | None
+    build_id: int | None
+
+    model_config = {"from_attributes": True}
+
+
+def _pull_warnings(raw: object) -> list[str]:
+    if isinstance(raw, list):
+        return [str(item) for item in raw]
+    if not isinstance(raw, str) or not raw:
+        return []
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, ValueError):
+        return []
+    if not isinstance(parsed, list):
+        return []
+    return [str(item) for item in parsed]
+
+
+def pull_view(row) -> PullView:
+    return PullView(
+        id=row.id,
+        instance_id=getattr(row, "instance_id", None),
+        plugin_id=getattr(row, "plugin_id", None),
+        trigger_type=getattr(row, "trigger_type", None) or "manual",
+        status=row.status,
+        started_at=row.started_at,
+        finished_at=row.finished_at,
+        tables=row.tables,
+        tasks=row.tasks,
+        error=row.error,
+        skipped_reason=getattr(row, "skipped_reason", None),
+        warnings=_pull_warnings(getattr(row, "warnings", None)),
+        commit=row.commit,
+        build_id=row.build_id,
+    )
+
+
 class ProjectExecutorView(BaseModel):
     id: str
     name: str
@@ -469,7 +528,11 @@ def create_pull_instance(
         )
         db.add(row)
         db.flush()
-        return _instance_view(row, plugin)
+        view = _instance_view(row, plugin)
+    from .scheduler import instance_pull_scheduler
+
+    instance_pull_scheduler.wake()
+    return view
 
 
 @router.put(
@@ -539,7 +602,11 @@ def update_pull_instance(
 
         row.updated_at = datetime.now(UTC)
         db.flush()
-        return _instance_view(row, plugin)
+        view = _instance_view(row, plugin)
+    from .scheduler import instance_pull_scheduler
+
+    instance_pull_scheduler.wake()
+    return view
 
 
 @router.delete(
@@ -551,6 +618,9 @@ def delete_pull_instance(
     instance_id: str,
     scope: Annotated[ProjectContext, Depends(admin_project_path_write_scope)],
 ):
+    from .scheduler import instance_pull_scheduler
+    from .source_directory import cleanup_pull_instance_files, repository
+
     _require_warehouse_project(scope)
     with sessions().begin() as db:
         row = db.get(ProjectPullInstance, (scope.project_id, instance_id))
@@ -559,6 +629,53 @@ def delete_pull_instance(
                 status_code=404, detail=f"拉取器实例不存在：{instance_id}"
             )
         db.delete(row)
+
+    directory = project_context.source_directory_value(scope.project_id)
+    if directory:
+        root_path = Path(directory).expanduser().resolve()
+        try:
+            if (root_path / ".git").exists():
+                with repository(directory) as root:
+                    cleanup_pull_instance_files(root, instance_id)
+            elif root_path.is_dir():
+                cleanup_pull_instance_files(root_path, instance_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+    instance_pull_scheduler.wake()
+
+
+@router.post(
+    "/api/v1/projects/{project_id}/pull-instances/{instance_id}/pull",
+    response_model=PullView,
+)
+def trigger_pull_instance(
+    project_id: str,
+    instance_id: str,
+    scope: Annotated[ProjectContext, Depends(admin_project_path_write_scope)],
+    body: PullTriggerRequest | None = None,
+):
+    from .pull_service import (
+        PullConflictError,
+        PullInstanceNotFoundError,
+        run_instance_pull,
+    )
+
+    _require_warehouse_project(scope)
+    force = body.force if body is not None else False
+    try:
+        record = run_instance_pull(
+            scope.project_id,
+            instance_id,
+            trigger_type="manual",
+            force=force,
+        )
+    except PullInstanceNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except PullConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return pull_view(record)
 
 
 @router.get(

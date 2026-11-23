@@ -511,6 +511,17 @@
             ],
             "title": "Error"
           },
+          "fallback_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fallback Reason"
+          },
           "finished_at": {
             "anyOf": [
               {
@@ -5191,6 +5202,18 @@
         "title": "PullInstanceView",
         "type": "object"
       },
+      "PullTriggerRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "force": {
+            "default": false,
+            "title": "Force",
+            "type": "boolean"
+          }
+        },
+        "title": "PullTriggerRequest",
+        "type": "object"
+      },
       "PullView": {
         "properties": {
           "build_id": {
@@ -5242,6 +5265,39 @@
             "title": "Id",
             "type": "integer"
           },
+          "instance_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Instance Id"
+          },
+          "plugin_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plugin Id"
+          },
+          "skipped_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Skipped Reason"
+          },
           "started_at": {
             "format": "date-time",
             "title": "Started At",
@@ -5258,6 +5314,18 @@
           "tasks": {
             "title": "Tasks",
             "type": "integer"
+          },
+          "trigger_type": {
+            "default": "manual",
+            "title": "Trigger Type",
+            "type": "string"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
           }
         },
         "required": [
@@ -10384,6 +10452,76 @@
           }
         ],
         "summary": "Update Pull Instance"
+      }
+    },
+    "/api/v1/projects/{project_id}/pull-instances/{instance_id}/pull": {
+      "post": {
+        "operationId": "trigger_pull_instance_api_v1_projects__project_id__pull_instances__instance_id__pull_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "instance_id",
+            "required": true,
+            "schema": {
+              "title": "Instance Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/PullTriggerRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PullView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Trigger Pull Instance"
       }
     },
     "/api/v1/projects/{project_id}/restore": {

@@ -892,6 +892,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{project_id}/pull-instances/{instance_id}/pull": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Trigger Pull Instance */
+        post: operations["trigger_pull_instance_api_v1_projects__project_id__pull_instances__instance_id__pull_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{project_id}/restore": {
         parameters: {
             query?: never;
@@ -1610,6 +1627,8 @@ export interface components {
             };
             /** Error */
             error: string | null;
+            /** Fallback Reason */
+            fallback_reason?: string | null;
             /** Finished At */
             finished_at: string | null;
             /** Id */
@@ -3205,6 +3224,14 @@ export interface components {
              */
             updated_at: string;
         };
+        /** PullTriggerRequest */
+        PullTriggerRequest: {
+            /**
+             * Force
+             * @default false
+             */
+            force: boolean;
+        };
         /** PullView */
         PullView: {
             /** Build Id */
@@ -3217,6 +3244,12 @@ export interface components {
             finished_at: string | null;
             /** Id */
             id: number;
+            /** Instance Id */
+            instance_id?: string | null;
+            /** Plugin Id */
+            plugin_id?: string | null;
+            /** Skipped Reason */
+            skipped_reason?: string | null;
             /**
              * Started At
              * Format: date-time
@@ -3228,6 +3261,13 @@ export interface components {
             tables: number;
             /** Tasks */
             tasks: number;
+            /**
+             * Trigger Type
+             * @default manual
+             */
+            trigger_type: string;
+            /** Warnings */
+            warnings?: string[];
         };
         /** PullerPluginView */
         PullerPluginView: {
@@ -5972,6 +6012,42 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    trigger_pull_instance_api_v1_projects__project_id__pull_instances__instance_id__pull_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                instance_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["PullTriggerRequest"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PullView"];
+                };
             };
             /** @description Validation Error */
             422: {

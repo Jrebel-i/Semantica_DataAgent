@@ -54,7 +54,7 @@ from .project_api import (
     project_scope,
 )
 from .project_context import ProjectContext
-from .scheduler import pull_scheduler, scheduler
+from .scheduler import instance_pull_scheduler, pull_scheduler, scheduler
 
 
 @asynccontextmanager
@@ -138,6 +138,7 @@ async def lifespan(application):
     for project_id, seconds in pull_intervals().items():
         if project_id != project_context.DEFAULT_PROJECT_ID:
             pull_scheduler.start(seconds, project_id)
+    instance_pull_scheduler.start()
     from .evolution_scheduler import evolution_scheduler
 
     evolution_scheduler.start()
@@ -152,6 +153,7 @@ async def lifespan(application):
             await asyncio.gather(cleanup_task, return_exceptions=True)
             discovery_dispatcher.stop()
             evolution_scheduler.stop()
+            instance_pull_scheduler.stop()
             pull_scheduler.stop()
             scheduler.stop()
             auto_build.pending_build_scheduler.stop()
@@ -632,6 +634,7 @@ class BuildView(BaseModel):
     build_type: Literal["full", "incremental"]
     triggered_by: str | None
     source_commit: str | None
+    fallback_reason: str | None = None
     logs: list[BuildLog]
 
 
@@ -679,6 +682,7 @@ def build_view(row: Build) -> BuildView:
         build_type=row.build_type or "full",
         triggered_by=row.triggered_by,
         source_commit=row.source_commit,
+        fallback_reason=getattr(row, "fallback_reason", None),
         logs=build_logs(row.logs),
     )
 
@@ -892,6 +896,7 @@ from .evolution_api import router as evolution_router
 app.include_router(evolution_router)
 
 from .discovery_api import router as discovery_router
+from .pull_instances import PullView, pull_view
 from .pull_instances import router as pull_instances_router
 
 app.include_router(discovery_router)
@@ -1667,25 +1672,11 @@ def mount_frontend(application: FastAPI, directory):
     )
 
 
-class PullView(BaseModel):
-    id: int
-    status: str
-    started_at: UtcDatetime
-    finished_at: UtcDatetime | None
-    tables: int
-    tasks: int
-    error: str | None
-    commit: str | None
-    build_id: int | None
-
-    model_config = {"from_attributes": True}
-
-
 def _trigger_named_pull(scope: ProjectContext, *, puller_id: str) -> PullView:
     from .pull_service import run_pull
 
     try:
-        return run_pull(scope.project_id, puller_id=puller_id)
+        return pull_view(run_pull(scope.project_id, puller_id=puller_id))
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
 
@@ -1733,7 +1724,7 @@ def list_pulls(
             .order_by(PullRecord.id.desc())
             .all()
         )
-        return [PullView.model_validate(row) for row in rows]
+        return [pull_view(row) for row in rows]
 
 
 if static_dir := os.environ.get("DATAAGENT_STATIC_DIR"):
