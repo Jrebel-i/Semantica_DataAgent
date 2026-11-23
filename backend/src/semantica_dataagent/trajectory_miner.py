@@ -25,6 +25,7 @@ _FILLER_RE = re.compile(
     r"^(?:请问|麻烦|帮我|帮忙|请|我想知道|想问一下|查一下|查询一下|统计一下)+"
 )
 _TOKEN_ID_RE = re.compile(r"[A-Za-z0-9_]+")
+_DEFAULT_GAP_WATERMARK = object()
 _CORRECTION_CUE_RE = re.compile(
     r"(不对|不是|错了|有误|搞错|写错|应该用|改用|改为|换成|替换成|漏了|少写了|加上|过滤|条件|口径是|口径为|应该是|instead|wrong|should use|filter by|actually)",
     re.IGNORECASE,
@@ -681,6 +682,7 @@ def _mine_gaps_and_failures(
     holdouts: set[str],
     after_at: datetime | None,
     now: datetime,
+    gap_after_at: datetime | None | object = _DEFAULT_GAP_WATERMARK,
 ) -> list[MinedSignal]:
     signals: list[MinedSignal] = []
     diag_ids = [int(r["id"]) for r in diag_rows]
@@ -702,8 +704,11 @@ def _mine_gaps_and_failures(
         gap_query = db.query(KnowledgeGap).filter(
             KnowledgeGap.project_id == project_id, KnowledgeGap.status == "confirmed"
         )
-        if after_at is not None:
-            gap_query = gap_query.filter(KnowledgeGap.reviewed_at >= after_at)
+        gap_watermark = (
+            after_at if gap_after_at is _DEFAULT_GAP_WATERMARK else gap_after_at
+        )
+        if gap_watermark is not None:
+            gap_query = gap_query.filter(KnowledgeGap.reviewed_at >= gap_watermark)
         gaps = gap_query.order_by(KnowledgeGap.reviewed_at.asc()).all()
 
         qe_query = db.query(QueryExecution).filter(QueryExecution.status == "failed")
@@ -825,6 +830,7 @@ def mine_project_trajectories(
     *,
     after_id: int | None = None,
     after_at: datetime | None = None,
+    gap_after_at: datetime | None | object = _DEFAULT_GAP_WATERMARK,
     now: datetime | None = None,
 ) -> MiningResult:
     """Mine project trajectories after checkpoint with strict holdout/reserve isolation."""
@@ -861,6 +867,7 @@ def mine_project_trajectories(
             holdout_conv_ids=holdout_conv_ids,
             holdouts=holdouts,
             after_at=after_at,
+            gap_after_at=gap_after_at,
             now=ts,
         )
     )

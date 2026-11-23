@@ -13,6 +13,7 @@ import { App } from "./App";
 import { getMessages } from "./i18n";
 
 beforeEach(() => {
+  localStorage.clear();
   Object.defineProperty(window, "matchMedia", {
     configurable: true,
     value: () => ({
@@ -206,6 +207,143 @@ test("confirmed gap exposes follow-up actions and pending gap can be reviewed", 
   expect(
     screen.getByRole("link", { name: "Add knowledge" }).getAttribute("href"),
   ).toBe("/source?project=default");
+});
+
+test("long gap draft posts bounded description with both contexts while card remains complete", async () => {
+  const question = "QUESTION" + "😀".repeat(12000);
+  const missing = "MISSING" + "m".repeat(12000);
+  const fetcher = vi.fn(async (url: string, options?: RequestInit) => {
+    if (url === "/api/v1/projects")
+      return Response.json([
+        {
+          id: "default",
+          name: "Default",
+          type: "document",
+          status: "active",
+          my_role: "admin",
+        },
+      ]);
+    if (options?.method === "POST")
+      return Response.json({ detail: "test" }, { status: 422 });
+    return Response.json([
+      {
+        id: "g",
+        project_id: "default",
+        question,
+        missing,
+        status: "confirmed",
+        can_review: true,
+      },
+    ]);
+  });
+  vi.stubGlobal("fetch", fetcher);
+  render(<CorrectionsPage token="token" gaps messages={getMessages("en")} />);
+  fireEvent.click(
+    await screen.findByRole("button", { name: "Propose correction" }),
+  );
+  expect(screen.getByText(question)).toBeTruthy();
+  expect(screen.getByText(missing)).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Generate draft" }));
+  await waitFor(() =>
+    expect(
+      fetcher.mock.calls.some(([url]) => url === "/api/v1/corrections/draft"),
+    ).toBe(true),
+  );
+  const call = fetcher.mock.calls.find(
+    ([url]) => url === "/api/v1/corrections/draft",
+  )!;
+  const description = JSON.parse(String(call[1]?.body)).description as string;
+  expect(Array.from(description).length).toBeLessThanOrEqual(10000);
+  expect(description).toContain("QUESTION");
+  expect(description).toContain("MISSING");
+});
+
+test("review conflict refreshes current project and shows conflict", async () => {
+  let count = 0;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string, options?: RequestInit) => {
+      if (url === "/api/v1/projects")
+        return Response.json([
+          {
+            id: "default",
+            name: "Default",
+            type: "document",
+            status: "active",
+            my_role: "admin",
+          },
+        ]);
+      if (options?.method === "POST")
+        return Response.json({ detail: "conflict" }, { status: 409 });
+      count++;
+      return Response.json([
+        {
+          id: "g",
+          project_id: "default",
+          question: "Q",
+          missing: "M",
+          status: count > 1 ? "rejected" : "pending",
+          can_review: true,
+        },
+      ]);
+    }),
+  );
+  render(<CorrectionsPage token="token" gaps messages={getMessages("zh")} />);
+  fireEvent.click(await screen.findByRole("button", { name: "确认缺口" }));
+  expect(await screen.findByText(/已被其他人审核/)).toBeTruthy();
+  expect(screen.getByText("不接纳")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "确认缺口" })).toBeNull();
+});
+
+test("late conflict after switching projects cannot refresh or alert the new project", async () => {
+  let resolveReview!: (response: Response) => void;
+  const review = new Promise<Response>((resolve) => {
+    resolveReview = resolve;
+  });
+  const fetcher = vi.fn(async (url: string, options?: RequestInit) => {
+    if (url === "/api/v1/projects")
+      return Response.json([
+        {
+          id: "default",
+          name: "Default",
+          type: "document",
+          status: "active",
+          my_role: "admin",
+        },
+        {
+          id: "other",
+          name: "Other",
+          type: "document",
+          status: "active",
+          my_role: "admin",
+        },
+      ]);
+    if (options?.method === "POST") return review;
+    const project = url.includes("project=other") ? "other" : "default";
+    return Response.json([
+      {
+        id: project,
+        project_id: project,
+        question: project,
+        missing: "missing",
+        status: "pending",
+        can_review: true,
+      },
+    ]);
+  });
+  vi.stubGlobal("fetch", fetcher);
+  render(<CorrectionsPage token="token" gaps messages={getMessages("en")} />);
+  fireEvent.click(await screen.findByRole("button", { name: "Confirm gap" }));
+  fireEvent.mouseDown(screen.getByRole("combobox", { name: "Projects" }));
+  fireEvent.click(await screen.findByTitle("Other"));
+  expect(await screen.findByText("other")).toBeTruthy();
+  await act(async () => resolveReview(Response.json({}, { status: 409 })));
+  expect(screen.queryByText(/already reviewed/)).toBeNull();
+  expect(
+    fetcher.mock.calls.filter(
+      ([url]) => url === "/api/v1/knowledge-gaps?project=other",
+    ),
+  ).toHaveLength(1);
 });
 
 test("late gaps from a previous project do not reappear after switching", async () => {

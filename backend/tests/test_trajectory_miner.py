@@ -94,13 +94,100 @@ def test_next_run_uses_previous_mining_start_not_acceptance_time(tmp_path, monke
     )
 
     def mine(*args, **kwargs):
-        captured.append(kwargs["after_at"])
+        captured.append(kwargs["gap_after_at"])
         raise RuntimeError("stop after checkpoint read")
 
     monkeypatch.setattr(trajectory_miner, "mine_project_trajectories", mine)
     with pytest.raises(RuntimeError, match="stop after checkpoint read"):
         evolution_runner.execute_evolution_run("next")
     assert captured == [start]
+
+
+def test_miner_keeps_execution_and_gap_watermarks_separate(tmp_path, monkeypatch):
+    _setup_env(tmp_path, monkeypatch)
+    from semantica_dataagent import evolution_runner, trajectory_miner
+    from semantica_dataagent.db import (
+        EvolutionCheckpoint,
+        EvolutionRun,
+        KnowledgeGap,
+        QueryExecution,
+        sessions,
+    )
+
+    start = datetime.now(UTC) - timedelta(hours=2)
+    accepted = start + timedelta(hours=1)
+    with sessions().begin() as db:
+        db.add(
+            EvolutionRun(
+                id="previous", project_id="default", status="accepted", started_at=start
+            )
+        )
+        db.add(
+            EvolutionRun(
+                id="next", project_id="default", status="running", started_at=accepted
+            )
+        )
+        db.add(
+            EvolutionCheckpoint(
+                project_id="default",
+                checkpoint_at=accepted,
+                last_run_id="previous",
+                updated_at=accepted,
+            )
+        )
+        db.add(
+            KnowledgeGap(
+                id="g",
+                owner_id="u",
+                question="gap question",
+                missing="gap detail",
+                status="confirmed",
+                reviewed_at=start + timedelta(minutes=30),
+            )
+        )
+        for ident, when, category in (
+            ("old", start + timedelta(minutes=30), "old"),
+            ("new", accepted + timedelta(minutes=1), "new"),
+        ):
+            db.add(
+                QueryExecution(
+                    id=ident,
+                    owner_id="u",
+                    status="failed",
+                    sql="select 1",
+                    created_at=when,
+                    plan_data=json.dumps(
+                        {
+                            "project_id": "default",
+                            "execution_failure": {
+                                "stage": "poll",
+                                "category": category,
+                            },
+                        }
+                    ),
+                )
+            )
+    mine = trajectory_miner.mine_project_trajectories
+    results = []
+
+    def capture(*args, **kwargs):
+        results.append(mine(*args, **kwargs))
+        raise RuntimeError("stop")
+
+    monkeypatch.setattr(
+        evolution_runner, "_resolve_run_provider_pair", lambda *args: (None, None)
+    )
+    monkeypatch.setattr(trajectory_miner, "mine_project_trajectories", capture)
+    with pytest.raises(RuntimeError, match="stop"):
+        evolution_runner.execute_evolution_run("next")
+    result = results[0]
+    signals = {
+        s.details["kind"]: s
+        for s in result.signals
+        if s.signal_kind == "knowledge_gap_or_failure"
+    }
+    assert signals["knowledge_gap"].details["questions"] == ["gap question"]
+    assert signals["execution_failure"].details["categories"] == ["new"]
 
 
 def test_miner_excludes_holdout_expired_deleted_and_splits_after_dedup(

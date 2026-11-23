@@ -137,6 +137,7 @@ const messages = {
     gapTitle: "知识缺口",
     gapConfirm: "确认缺口",
     gapReject: "不接纳",
+    gapReviewConflict: "该缺口已被其他人审核，请查看最新状态。",
     gapConfirmed: "已确认",
     gapCorrection: "发起纠错",
     gapAddKnowledge: "补充知识",
@@ -910,6 +911,8 @@ const messages = {
     gapTitle: "Knowledge gaps",
     gapConfirm: "Confirm gap",
     gapReject: "Decline",
+    gapReviewConflict:
+      "This gap was already reviewed. Check its latest status.",
     gapConfirmed: "Confirmed",
     gapCorrection: "Propose correction",
     gapAddKnowledge: "Add knowledge",

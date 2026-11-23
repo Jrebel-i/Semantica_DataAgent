@@ -1009,7 +1009,10 @@ def execute_evolution_run(
             if ckpt and ckpt.last_run_id
             else None
         )
-        ckpt_at = _as_utc(previous_run.started_at) if previous_run is not None else None
+        gap_ckpt_at = (
+            _as_utc(previous_run.started_at) if previous_run is not None else None
+        )
+        ckpt_at = _as_utc(ckpt.checkpoint_at) if ckpt is not None else None
 
     try:
         cfg = project_context.evolution_config(project_id)
@@ -1027,7 +1030,7 @@ def execute_evolution_run(
         )
 
         mining = trajectory_miner.mine_project_trajectories(
-            project_id, after_id=ckpt_id, after_at=ckpt_at
+            project_id, after_id=ckpt_id, after_at=ckpt_at, gap_after_at=gap_ckpt_at
         )
         diagnosis_payload = mining.to_diagnosis_payload()
 

@@ -110,6 +110,17 @@ type Gap = {
   reviewed_at?: string | null;
   reviewer_name?: string | null;
 };
+
+function gapDescription(question: string, missing: string): string {
+  const q = Array.from(question);
+  const m = Array.from(missing);
+  const budget = 9999;
+  const qLimit = Math.min(
+    q.length,
+    Math.max(Math.floor(budget / 2), budget - m.length),
+  );
+  return `${q.slice(0, qLimit).join("")}\n${m.slice(0, budget - qLimit).join("")}`;
+}
 type StatusFilter = "all" | "pending" | "resolved";
 type SourceFilter = "all" | "manual" | "mcp" | "evolution" | "discovery";
 
@@ -250,7 +261,11 @@ export function CorrectionsPage({
   const [draftGap, setDraftGap] = useState<Gap | null>(null);
   const currentProject = useRef(project);
   const requestGeneration = useRef(0);
-  if (currentProject.current !== project) requestGeneration.current++;
+  const projectGeneration = useRef(0);
+  if (currentProject.current !== project) {
+    requestGeneration.current++;
+    projectGeneration.current++;
+  }
   currentProject.current = project;
   const [selected, setSelected] = useState<Proposal | null>(null);
   const targetProposalId =
@@ -365,10 +380,12 @@ export function CorrectionsPage({
   useEffect(() => {
     setSelected(null);
     setDraftGap(null);
+    setError("");
   }, [project]);
 
   async function reviewGap(gap: Gap, status: "confirmed" | "rejected") {
     if (gap.project_id !== project) return;
+    const generation = projectGeneration.current;
     try {
       const response = await fetch(
         `/api/v1/knowledge-gaps/${encodeURIComponent(gap.id)}/review?${projectQuery}`,
@@ -381,13 +398,21 @@ export function CorrectionsPage({
           body: JSON.stringify({ status }),
         },
       );
+      if (response.status === 409) {
+        if (projectGeneration.current === generation) {
+          await refresh();
+          if (projectGeneration.current === generation)
+            setError(t.gapReviewConflict);
+        }
+        return;
+      }
       if (!response.ok)
         throw new Error(
           await readErrorDetail(response, t.correctionReviewError),
         );
-      if (currentProject.current === gap.project_id) await refresh();
+      if (projectGeneration.current === generation) await refresh();
     } catch (failure) {
-      if (currentProject.current === gap.project_id)
+      if (projectGeneration.current === generation)
         setError(
           failure instanceof Error ? failure.message : t.correctionReviewError,
         );
@@ -655,7 +680,7 @@ export function CorrectionsPage({
                 {gap.status === "confirmed"
                   ? t.gapConfirmed
                   : gap.status === "rejected"
-                    ? t.statusRejected
+                    ? t.gapReject
                     : t.statusPending}
               </p>
               {gap.reviewed_at && (
@@ -1187,7 +1212,10 @@ export function CorrectionsPage({
           project={draftGap.project_id}
           messages={t}
           knowledgeGapId={draftGap.id}
-          initialDescription={`${draftGap.question}\n${draftGap.missing}`}
+          initialDescription={gapDescription(
+            draftGap.question,
+            draftGap.missing,
+          )}
           onClose={() => setDraftGap(null)}
         />
       )}
