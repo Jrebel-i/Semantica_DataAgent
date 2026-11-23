@@ -8,6 +8,22 @@ def apply_overrides(records, project_id="default"):
     return apply_overrides_detailed(records, project_id=project_id).records
 
 
+def vector_text(item: dict) -> str:
+    """Build the embedding text for one table or field dictionary."""
+    parts = [
+        str(item.get("name") or ""),
+        str(item.get("comment") or ""),
+        " ".join(str(s) for s in (item.get("synonyms") or ()) if s),
+        str(item.get("instructions") or ""),
+    ]
+    return " ".join(part for part in parts if part).strip()
+
+
+def vector_texts(records) -> list[str]:
+    """Return embedding texts for all table and field records in order."""
+    return [vector_text(r.data) for r in records if r.kind in {"table", "field"}]
+
+
 def write(records, generation, storage):
     from . import project_context
     from .knowledge import reference
@@ -75,20 +91,17 @@ def write(records, generation, storage):
         "UNWIND $rows AS row CREATE (f:SDAEntity:SDAField) SET f = row, f.generation = $generation",
         {"rows": fields, "generation": generation},
     )
+    storage.rebuilt_table_keys.update(
+        (t.get("catalog") or "", t["database"], t["name"]) for t in tables
+    )
+    storage.rebuilt_field_tables.update(
+        (f.get("catalog") or "", f["database"], f["table"]) for f in fields
+    )
     entities = [("table", x) for x in tables] + [("field", x) for x in fields]
-
-    def _vector_text(x: dict) -> str:
-        parts = [
-            str(x.get("name") or ""),
-            str(x.get("comment") or ""),
-            " ".join(str(s) for s in (x.get("synonyms") or ()) if s),
-            str(x.get("instructions") or ""),
-        ]
-        return " ".join(part for part in parts if part).strip()
 
     storage.add_vectors(
         [x["ref"] for _, x in entities],
-        [_vector_text(x) for _, x in entities],
+        [vector_text(x) for _, x in entities],
         [{"scope": kind + "s", **x} for kind, x in entities],
     )
     return StageResult(

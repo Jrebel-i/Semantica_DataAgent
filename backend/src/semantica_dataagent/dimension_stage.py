@@ -145,6 +145,13 @@ def write(records, generation, storage):
                     "generation": generation,
                 },
             )
+    if hasattr(storage, "rebuilt_dim_tables"):
+        storage.rebuilt_dim_tables.update(
+            (row["database"], row["table"]) for row in values
+        )
+        storage.rebuilt_dim_tables.update(
+            (row["database"], row["table"]) for row in statuses
+        )
     return StageResult(
         counts={"dimension_value": len(values), "dimension_value_skipped": skipped}
     )

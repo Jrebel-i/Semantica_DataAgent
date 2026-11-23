@@ -855,15 +855,25 @@ def _make_fake_stores():
         def _find_node(self, node_id: int) -> dict:
             return next(n for n in self.nodes if n["id"] == node_id)
 
-        def _matches_files(self, props: dict, params: dict) -> bool:
+        def _matches_files(self, node: dict, params: dict) -> bool:
+            props = node["props"]
             files = set(params.get("files") or ())
             selected_refs = set(params.get("selected_refs") or ())
-            return (
+            touched_tables = {
+                (t.get("catalog") or "", t.get("database"), t.get("table"))
+                for t in (params.get("touched_tables") or ())
+            }
+            if (
                 props.get("source_file") in files
                 or props.get("source_key") in files
                 or bool(files.intersection(props.get("source_files") or ()))
                 or props.get("ref") in selected_refs
                 or props.get("doc_id") in selected_refs
+            ):
+                return True
+            return "SDAField" in node["labels"] and (
+                (props.get("catalog") or "", props.get("database"), props.get("table"))
+                in touched_tables
             )
 
         def execute_query(self, query: str, params: dict):
@@ -871,6 +881,29 @@ def _make_fake_stores():
             if q.startswith(("CREATE INDEX", "CREATE FULLTEXT INDEX", "CALL db.await")):
                 return {"success": True, "records": []}
             gen = params.get("generation")
+
+            if (
+                "MATCH (f:SDAField {generation:$generation})" in q
+                and "RETURN f.ref AS ref" in q
+            ):
+                touched_tables = {
+                    (t.get("catalog") or "", t.get("database"), t.get("table"))
+                    for t in (params.get("tables") or ())
+                }
+                refs = [
+                    {"ref": n["props"]["ref"]}
+                    for n in self.nodes
+                    if "SDAField" in n["labels"]
+                    and n["props"].get("generation") == gen
+                    and (
+                        n["props"].get("catalog") or "",
+                        n["props"].get("database"),
+                        n["props"].get("table"),
+                    )
+                    in touched_tables
+                    and n["props"].get("ref")
+                ]
+                return {"success": True, "records": refs}
 
             if (
                 "MATCH (n:SDAEntity {generation:$generation}) WHERE n.source_file IN $files"
@@ -882,7 +915,7 @@ def _make_fake_stores():
                     for n in self.nodes
                     if "SDAEntity" in n["labels"]
                     and n["props"].get("generation") == gen
-                    and self._matches_files(n["props"], params)
+                    and self._matches_files(n, params)
                     and n["props"].get("ref")
                 ]
                 return {"success": True, "records": refs}
@@ -947,7 +980,7 @@ def _make_fake_stores():
                     for n in self.nodes
                     if "SDAEntity" in n["labels"]
                     and n["props"].get("generation") == gen
-                    and self._matches_files(n["props"], params)
+                    and self._matches_files(n, params)
                 }
                 if "DELETE batch_relationship" in q:
                     keep = [

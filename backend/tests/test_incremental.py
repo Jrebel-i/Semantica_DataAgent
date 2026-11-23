@@ -563,29 +563,69 @@ def test_run_build_full_and_incremental_relates_to_with_in_memory_stores(
                 return False
             return all(node["props"].get(k) == v for k, v in filter_props.items())
 
+        def _matches_incremental(self, node, params):
+            files = set(params.get("files") or ())
+            selected_refs = set(params.get("selected_refs") or ())
+            touched_tables = {
+                (
+                    t.get("catalog") or "",
+                    t.get("database"),
+                    t.get("table"),
+                )
+                for t in (params.get("touched_tables") or ())
+            }
+            props = node["props"]
+            if (
+                props.get("source_file") in files
+                or props.get("source_key") in files
+                or bool(files.intersection(props.get("source_files") or ()))
+                or props.get("ref") in selected_refs
+                or props.get("doc_id") in selected_refs
+            ):
+                return True
+            return "SDAField" in node["labels"] and (
+                (props.get("catalog") or "", props.get("database"), props.get("table"))
+                in touched_tables
+            )
+
         def execute_query(self, query, params):
             q = " ".join(query.split())
             if q.startswith(("CREATE INDEX", "CREATE FULLTEXT INDEX", "CALL db.")):
                 return {"success": True, "records": []}
+            if (
+                "MATCH (f:SDAField {generation:$generation})" in q
+                and "RETURN f.ref AS ref" in q
+            ):
+                touched_tables = {
+                    (t.get("catalog") or "", t.get("database"), t.get("table"))
+                    for t in (params.get("tables") or ())
+                }
+                refs = [
+                    {"ref": n["props"]["ref"]}
+                    for n in self.nodes
+                    if "SDAField" in n["labels"]
+                    and n["props"].get("generation") == params["generation"]
+                    and (
+                        n["props"].get("catalog") or "",
+                        n["props"].get("database"),
+                        n["props"].get("table"),
+                    )
+                    in touched_tables
+                    and n["props"].get("ref")
+                ]
+                return {"success": True, "records": refs}
             # Incremental ref lookup
             if (
                 "MATCH (n:SDAEntity {generation:$generation}) WHERE n.source_file IN $files"
                 in q
                 and "RETURN n.ref AS ref" in q
             ):
-                files = set(params["files"])
                 refs = [
                     {"ref": n["props"]["ref"]}
                     for n in self.nodes
                     if "SDAEntity" in n["labels"]
                     and n["props"].get("generation") == params["generation"]
-                    and (
-                        n["props"].get("source_file") in files
-                        or n["props"].get("source_key") in files
-                        or bool(
-                            files.intersection(n["props"].get("source_files") or ())
-                        )
-                    )
+                    and self._matches_incremental(n, params)
                     and n["props"].get("ref")
                 ]
                 return {"success": True, "records": refs}
@@ -645,19 +685,12 @@ def test_run_build_full_and_incremental_relates_to_with_in_memory_stores(
                 in q
             ):
                 if "DELETE batch_relationship" in q:
-                    files = set(params["files"])
                     victims = {
                         n["id"]
                         for n in self.nodes
                         if "SDAEntity" in n["labels"]
                         and n["props"].get("generation") == params["generation"]
-                        and (
-                            n["props"].get("source_file") in files
-                            or n["props"].get("source_key") in files
-                            or bool(
-                                files.intersection(n["props"].get("source_files") or ())
-                            )
-                        )
+                        and self._matches_incremental(n, params)
                     }
                     keep = [
                         r
@@ -668,19 +701,12 @@ def test_run_build_full_and_incremental_relates_to_with_in_memory_stores(
                     self.rels = keep
                     return {"success": True, "records": [{"deleted": deleted}]}
                 if "DETACH DELETE n" in q:
-                    files = set(params["files"])
                     victims = {
                         n["id"]
                         for n in self.nodes
                         if "SDAEntity" in n["labels"]
                         and n["props"].get("generation") == params["generation"]
-                        and (
-                            n["props"].get("source_file") in files
-                            or n["props"].get("source_key") in files
-                            or bool(
-                                files.intersection(n["props"].get("source_files") or ())
-                            )
-                        )
+                        and self._matches_incremental(n, params)
                     }
                     self.rels = [
                         r

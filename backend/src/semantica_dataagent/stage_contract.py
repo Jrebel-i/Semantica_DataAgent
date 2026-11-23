@@ -47,6 +47,12 @@ class StorageHandles:
     _embedding_dimension: int | None = None
     _cache_initialized: bool = False
     _lock: object = field(default_factory=Lock)
+    rebuilt_table_keys: set[tuple[str, str, str]] = field(default_factory=set)
+    rebuilt_field_tables: set[tuple[str, str, str]] = field(default_factory=set)
+    rebuilt_dim_tables: set[tuple[str, str]] = field(default_factory=set)
+    rebuilt_doc_refs: set[str] = field(default_factory=set)
+    rebuilt_task_names: set[str] = field(default_factory=set)
+    _precomputed_vectors: dict[str, list[float]] = field(default_factory=dict)
 
     def execute(self, query, parameters):
         from .knowledge import execute
@@ -104,41 +110,36 @@ class StorageHandles:
                 self._embedding_dimension = cache.dimension
             return cache
 
-    def add_vectors(self, ids, texts, metadata):
+    def _resolve_vectors(self, unique_texts: list[str]) -> dict[str, list[float]]:
         from .embedding_cache import float32_values
         from .knowledge import embed
 
-        if not (len(ids) == len(texts) == len(metadata)):
-            raise ValueError("Vector ids, texts and metadata must have equal lengths")
-        if any(not item.get("scope") for item in metadata):
-            raise ValueError("Each vector must have a scope")
-        texts = list(texts)
-        if not texts:
-            return
-        positions = {}
-        for index, text in enumerate(texts):
-            positions.setdefault(text, []).append(index)
-        unique_texts = list(positions)
+        vectors: dict[str, list[float]] = {}
         with self._lock:
-            self._embedding_inputs += len(texts)
-            self._embedding_unique += len(unique_texts)
+            for text in unique_texts:
+                if text in self._precomputed_vectors:
+                    vectors[text] = self._precomputed_vectors[text]
+
+        uncached_candidates = [text for text in unique_texts if text not in vectors]
+        if not uncached_candidates:
+            return vectors
+
         cache = self._cache_for_call()
-        vectors = {}
         hits = misses = 0
         if cache is not None:
-            misses = len(unique_texts)
+            misses = len(uncached_candidates)
             if cache.dimension is not None:
-                vectors = cache.lookup(unique_texts)
+                cached = cache.lookup(uncached_candidates)
                 if cache.enabled:
-                    hits = len(vectors)
+                    hits = len(cached)
                     misses -= hits
+                    vectors.update(cached)
                 else:
                     cache = None
-                    vectors = {}
                     misses = 0
 
-        missing = [text for text in unique_texts if text not in vectors]
-        new_vectors = {}
+        missing = [text for text in uncached_candidates if text not in vectors]
+        new_vectors: dict[str, list[float]] = {}
         for offset in range(0, len(missing), 32):
             batch = missing[offset : offset + 32]
             embedded = embed(self._settings, batch, self._embedding_stats)
@@ -154,11 +155,41 @@ class StorageHandles:
             if self._embedding_dimension is None and new_vectors:
                 self._embedding_dimension = len(next(iter(new_vectors.values())))
                 cache.dimension = self._embedding_dimension
-            hit_texts = [text for text in unique_texts if text not in new_vectors]
+            hit_texts = [
+                text for text in uncached_candidates if text not in new_vectors
+            ]
             with self._lock:
                 self._embedding_cache_hits += hits
                 self._embedding_cache_misses += misses
             cache.store(hit_texts, new_vectors)
+        return vectors
+
+    def precompute_vectors(self, texts) -> dict[str, list[float]]:
+        """Compute and cache embeddings in memory before storage mutation."""
+        unique_texts = list(dict.fromkeys(texts))
+        if not unique_texts:
+            return {}
+        vectors = self._resolve_vectors(unique_texts)
+        with self._lock:
+            self._precomputed_vectors.update(vectors)
+        return vectors
+
+    def add_vectors(self, ids, texts, metadata):
+        if not (len(ids) == len(texts) == len(metadata)):
+            raise ValueError("Vector ids, texts and metadata must have equal lengths")
+        if any(not item.get("scope") for item in metadata):
+            raise ValueError("Each vector must have a scope")
+        texts = list(texts)
+        if not texts:
+            return
+        positions = {}
+        for index, text in enumerate(texts):
+            positions.setdefault(text, []).append(index)
+        unique_texts = list(positions)
+        with self._lock:
+            self._embedding_inputs += len(texts)
+            self._embedding_unique += len(unique_texts)
+        vectors = self._resolve_vectors(unique_texts)
 
         pending_vectors, pending_ids, pending_metadata = [], [], []
 

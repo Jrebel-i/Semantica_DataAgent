@@ -7,6 +7,15 @@ from .refs import bounded_ref
 from .stage_contract import StageResult, delete_batches
 
 
+def vector_texts(records) -> list[str]:
+    """Return embedding texts for all task records."""
+    return [
+        r.data["name"] + " " + r.data.get("description", "")
+        for r in records
+        if r.kind == "task"
+    ]
+
+
 def rank_task_hits(hits):
     """Demote output-less tasks while preserving relevance within each group."""
     return sorted(hits, key=lambda item: not item.get("has_output", False))
@@ -69,8 +78,10 @@ def write(records, generation, storage):
     parsed_tasks = {
         task.data["name"]: parse_task(task, schema=schema) for task in all_tasks
     }
-    rebuild_all = not storage.is_incremental or any(
-        record.kind == "lineage" for record in records
+    rebuild_all = (
+        not storage.is_incremental
+        or any(record.kind == "lineage" for record in records)
+        or bool(getattr(storage, "_touched_lineage", False))
     )
     if rebuild_all:
         tasks = all_tasks
@@ -114,7 +125,17 @@ def write(records, generation, storage):
         )
     names = [r.data["name"] for r in tasks]
     if len(names) != len(set(names)):
+        seen_tasks: dict[str, str] = {}
+        for task_rec in tasks:
+            tname = task_rec.data["name"]
+            prov = task_rec.source_file or "<unknown>"
+            if tname in seen_tasks:
+                raise ValueError(
+                    f"Duplicate task name {tname!r}: {seen_tasks[tname]} vs {prov}"
+                )
+            seen_tasks[tname] = prov
         raise ValueError("Duplicate task name")
+    storage.rebuilt_task_names.update(names)
     declarations = {}
     for record in all_declarations:
         task_id = record.data.get("task_id")
@@ -275,6 +296,83 @@ def write(records, generation, storage):
                 for r in rows
             ],
         )
+    if (
+        storage.is_incremental
+        and not rebuild_all
+        and getattr(storage, "rebuilt_table_keys", None)
+    ):
+        rebuilt_table_names: set[str] = set()
+        for cat, db, tbl in storage.rebuilt_table_keys:
+            rebuilt_table_names.add(f"{db}.{tbl}")
+            if cat:
+                rebuilt_table_names.add(f"{cat}.{db}.{tbl}")
+        rebuilt_task_set = set(names)
+        relink_rows = []
+        relink_edges = []
+        for task in all_tasks:
+            tname = task.data["name"]
+            if tname in rebuilt_task_set:
+                continue
+            ref = bounded_ref("task:" + quote(tname, safe=""), truncations)
+            declared = list(declarations.get(tname, {}))
+            result, resolved = resolve_task(task, declared, parsed_tasks[tname])
+            reads = sorted(
+                n
+                for n in (set(result.reads) | {u for u, _ in declared})
+                if n in rebuilt_table_names
+            )
+            writes = sorted(
+                n
+                for n in (set(result.writes) | {d for _, d in declared})
+                if n in rebuilt_table_names
+            )
+            if reads or writes:
+                relink_rows.append({"ref": ref, "reads": reads, "writes": writes})
+            for u, d, e in resolved:
+                if u in rebuilt_table_names or d in rebuilt_table_names:
+                    relink_edges.append(
+                        {
+                            "upstream": u,
+                            "downstream": d,
+                            "evidence": e,
+                            "parse_status": result.status,
+                            "task_id": tname,
+                            "ref": ref,
+                            **_edge_provenance(
+                                task,
+                                declarations.get(tname, {}).get((u, d), []),
+                                storage.build_id,
+                            ),
+                        }
+                    )
+        if relink_rows:
+            storage.execute(
+                """UNWIND $rows AS row MATCH (task:SDATask {generation:$generation, ref:row.ref})
+                UNWIND row.reads AS name
+                UNWIND [i IN range(0, size(name) - 1) WHERE substring(name, i, 1) = '.' | i] AS sep
+                MATCH (table:SDATable {generation:$generation, database:substring(name, 0, sep), name:substring(name, sep + 1)})
+                MERGE (task)-[:READS]->(table)""",
+                {"rows": relink_rows, "generation": generation},
+            )
+            storage.execute(
+                """UNWIND $rows AS row MATCH (task:SDATask {generation:$generation, ref:row.ref})
+                UNWIND row.writes AS name
+                UNWIND [i IN range(0, size(name) - 1) WHERE substring(name, i, 1) = '.' | i] AS sep
+                MATCH (table:SDATable {generation:$generation, database:substring(name, 0, sep), name:substring(name, sep + 1)})
+                MERGE (task)-[:PRODUCES]->(table)""",
+                {"rows": relink_rows, "generation": generation},
+            )
+        if relink_edges:
+            storage.execute(
+                """UNWIND $rows AS row
+                UNWIND [i IN range(0, size(row.upstream) - 1) WHERE substring(row.upstream, i, 1) = '.' | i] AS up_sep
+                UNWIND [i IN range(0, size(row.downstream) - 1) WHERE substring(row.downstream, i, 1) = '.' | i] AS down_sep
+                MATCH (a:SDATable {generation:$generation, database:substring(row.upstream, 0, up_sep), name:substring(row.upstream, up_sep + 1)})
+                MATCH (b:SDATable {generation:$generation, database:substring(row.downstream, 0, down_sep), name:substring(row.downstream, down_sep + 1)})
+                MERGE (a)-[r:DEPENDS_ON {task_id: row.task_id, upstream: row.upstream, downstream: row.downstream}]->(b)
+                ON CREATE SET r = row""",
+                {"rows": relink_edges, "generation": generation},
+            )
     column_count, column_failures = write_column_lineage(
         all_records, all_tasks, parsed_tasks, schema, generation, storage
     )

@@ -76,6 +76,17 @@ def _reconcile_document_table_links(storage, records, generation):
                         "name": actual[2],
                     }
                 )
+    if getattr(storage, "is_incremental", False):
+        rebuilt_doc_refs = getattr(storage, "rebuilt_doc_refs", set())
+        rebuilt_table_keys = getattr(storage, "rebuilt_table_keys", set())
+        links = [
+            link
+            for link in links
+            if link["ref"] in rebuilt_doc_refs
+            or (link["catalog"], link["database"], link["name"]) in rebuilt_table_keys
+        ]
+        if not links:
+            return
     link_table_documents(storage.execute, generation, links)
 
 
@@ -185,6 +196,24 @@ def _reconcile_foreign_keys(storage, records, generation):
     )
 
 
+def _link_nodes(storage, label, where_clause, query_params, link_query, generation):
+    where = f"{where_clause} " if where_clause else ""
+    nodes = storage.execute(
+        f"MATCH (n:{label} {{generation:$generation}}) {where}RETURN elementId(n) AS id",
+        query_params,
+    )
+    ids = [node["id"] for node in nodes]
+    for offset in range(0, len(ids), RELATIONSHIP_BATCH_SIZE):
+        storage.execute(
+            f"MATCH (n:{label} {{generation:$generation}}) WHERE elementId(n) IN $ids "
+            + link_query,
+            {
+                "generation": generation,
+                "ids": ids[offset : offset + RELATIONSHIP_BATCH_SIZE],
+            },
+        )
+
+
 def reconcile(storage, records, generation):
     categories = {}
     for record in records:
@@ -222,34 +251,92 @@ def reconcile(storage, records, generation):
         "UNWIND $rows AS row MERGE (c:SDAEntity:SDACategory {generation:$generation, name:row.name}) ON CREATE SET c.ref = row.ref, c.source_file = row.source_file, c.source_key = row.source_key, c.source_files = row.source_files, c.build_id = $build_id WITH c, row WHERE c.source_file <> row.source_file OR c.source_key <> row.source_key OR c.source_files <> row.source_files SET c.source_file = row.source_file, c.source_key = row.source_key, c.source_files = row.source_files, c.build_id = $build_id",
         {"generation": generation, "rows": rows, "build_id": storage.build_id},
     )
-    relationships = [
-        (
-            "SDAField",
-            "MATCH (t:SDATable {generation:$generation, database:n.database, name:n.table}) WHERE coalesce(t.catalog, '') = coalesce(n.catalog, '') MERGE (t)-[:HAS_FIELD]->(n)",
-        ),
-        (
-            "SDADimensionValue",
-            "MATCH (f:SDAField {generation:$generation, database:n.database, table:n.table, name:n.field}) MERGE (f)-[:HAS_VALUE]->(n)",
-        ),
-        (
-            "SDADocument",
-            "MATCH (c:SDACategory {generation:$generation, name:n.category}) MERGE (c)-[:HAS_DOCUMENT]->(n)",
-        ),
-    ]
-    for label, link_query in relationships:
-        nodes = storage.execute(
-            f"MATCH (n:{label} {{generation:$generation}}) RETURN elementId(n) AS id",
-            {"generation": generation},
-        )
-        ids = [node["id"] for node in nodes]
-        for offset in range(0, len(ids), RELATIONSHIP_BATCH_SIZE):
-            storage.execute(
-                f"MATCH (n:{label} {{generation:$generation}}) WHERE elementId(n) IN $ids "
-                + link_query,
-                {
-                    "generation": generation,
-                    "ids": ids[offset : offset + RELATIONSHIP_BATCH_SIZE],
-                },
+    is_incremental = bool(getattr(storage, "is_incremental", False))
+    build_id = getattr(storage, "build_id", None)
+    rebuilt_table_keys = set(getattr(storage, "rebuilt_table_keys", set()))
+    rebuilt_field_tables = set(getattr(storage, "rebuilt_field_tables", set()))
+    rebuilt_dim_tables = set(getattr(storage, "rebuilt_dim_tables", set()))
+    rebuilt_doc_refs = set(getattr(storage, "rebuilt_doc_refs", set()))
+
+    if is_incremental:
+        field_tables = [
+            {"catalog": c, "database": db, "table": tbl}
+            for c, db, tbl in sorted(rebuilt_table_keys | rebuilt_field_tables)
+        ]
+        dim_tables = [
+            {"database": db, "table": tbl}
+            for db, tbl in sorted(
+                {(db, tbl) for _, db, tbl in rebuilt_field_tables} | rebuilt_dim_tables
+            )
+        ]
+        doc_refs = sorted(rebuilt_doc_refs)
+        scoped_queries = []
+        if field_tables:
+            scoped_queries.append(
+                (
+                    "SDAField",
+                    (
+                        "WHERE ($build_id IS NOT NULL AND n.build_id = $build_id) "
+                        "OR any(t IN $tables WHERE t.database = n.database AND t.table = n.table AND coalesce(t.catalog, '') = coalesce(n.catalog, ''))"
+                    ),
+                    {
+                        "generation": generation,
+                        "build_id": build_id,
+                        "tables": field_tables,
+                    },
+                    "MATCH (t:SDATable {generation:$generation, database:n.database, name:n.table}) WHERE coalesce(t.catalog, '') = coalesce(n.catalog, '') MERGE (t)-[:HAS_FIELD]->(n)",
+                )
+            )
+        if dim_tables:
+            scoped_queries.append(
+                (
+                    "SDADimensionValue",
+                    (
+                        "WHERE ($build_id IS NOT NULL AND n.build_id = $build_id) "
+                        "OR any(t IN $tables WHERE t.database = n.database AND t.table = n.table)"
+                    ),
+                    {
+                        "generation": generation,
+                        "build_id": build_id,
+                        "tables": dim_tables,
+                    },
+                    "MATCH (f:SDAField {generation:$generation, database:n.database, table:n.table, name:n.field}) MERGE (f)-[:HAS_VALUE]->(n)",
+                )
+            )
+        if doc_refs:
+            scoped_queries.append(
+                (
+                    "SDADocument",
+                    "WHERE ($build_id IS NOT NULL AND n.build_id = $build_id) OR n.ref IN $doc_refs",
+                    {
+                        "generation": generation,
+                        "build_id": build_id,
+                        "doc_refs": doc_refs,
+                    },
+                    "MATCH (c:SDACategory {generation:$generation, name:n.category}) MERGE (c)-[:HAS_DOCUMENT]->(n)",
+                )
+            )
+        for label, where_clause, query_params, link_query in scoped_queries:
+            _link_nodes(
+                storage, label, where_clause, query_params, link_query, generation
+            )
+    else:
+        for label, link_query in (
+            (
+                "SDAField",
+                "MATCH (t:SDATable {generation:$generation, database:n.database, name:n.table}) WHERE coalesce(t.catalog, '') = coalesce(n.catalog, '') MERGE (t)-[:HAS_FIELD]->(n)",
+            ),
+            (
+                "SDADimensionValue",
+                "MATCH (f:SDAField {generation:$generation, database:n.database, table:n.table, name:n.field}) MERGE (f)-[:HAS_VALUE]->(n)",
+            ),
+            (
+                "SDADocument",
+                "MATCH (c:SDACategory {generation:$generation, name:n.category}) MERGE (c)-[:HAS_DOCUMENT]->(n)",
+            ),
+        ):
+            _link_nodes(
+                storage, label, "", {"generation": generation}, link_query, generation
             )
     _reconcile_document_table_links(storage, records, generation)
 
