@@ -420,6 +420,106 @@ test("a late preview from the previous project cannot be uploaded in the new pro
   ).toBe(false);
 });
 
+test.each(["file", "category"])(
+  "changing %s while preview is pending cannot authorize upload",
+  async (change) => {
+    let resolvePreview!: (response: Response) => void;
+    const pending = new Promise<Response>((resolve) => {
+      resolvePreview = resolve;
+    });
+    const fetcher = vi.fn(async (url: string) => {
+      if (url === "/api/v1/projects") return Response.json(projects);
+      if (url.includes("upload/preview")) return pending;
+      return Response.json([]);
+    });
+    vi.stubGlobal("fetch", fetcher);
+    render(<SourcePage token="t" messages={getMessages("zh")} />);
+    fireEvent.change(screen.getByLabelText("选择文件"), {
+      target: { files: [new File(["old"], "old.md")] },
+    });
+    fireEvent.change(screen.getByLabelText("新建知识类"), {
+      target: { value: "metrics" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "预览" }));
+    await waitFor(() =>
+      expect(
+        fetcher.mock.calls.some(([url]) => url.includes("upload/preview")),
+      ).toBe(true),
+    );
+    if (change === "file")
+      fireEvent.change(screen.getByLabelText("选择文件"), {
+        target: { files: [new File(["new"], "new.md")] },
+      });
+    else
+      fireEvent.change(screen.getByLabelText("新建知识类"), {
+        target: { value: "other" },
+      });
+    await act(async () =>
+      resolvePreview(
+        Response.json({
+          category: "metrics",
+          target: "knowledge/metrics",
+          added: ["old.md"],
+          overwritten: [],
+          unchanged: [],
+          deleted: [],
+          counts: { added: 1, overwritten: 0, unchanged: 0, deleted: 0 },
+          truncated: false,
+        }),
+      ),
+    );
+    expect(
+      (screen.getByRole("button", { name: "确认上传" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+    expect(
+      fetcher.mock.calls.some(([url]) =>
+        url.includes("/api/v1/source/upload?"),
+      ),
+    ).toBe(false);
+  },
+);
+
+test("upload sends exactly the body and project that were previewed", async () => {
+  const calls: { url: string; body: string }[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string, options?: RequestInit) => {
+      if (url === "/api/v1/projects") return Response.json(projects);
+      if (options?.method === "POST") {
+        calls.push({ url, body: String(options.body) });
+        if (url.includes("preview"))
+          return Response.json({
+            category: "metrics",
+            target: "knowledge/metrics",
+            added: ["a.md"],
+            overwritten: [],
+            unchanged: [],
+            deleted: [],
+            counts: { added: 1, overwritten: 0, unchanged: 0, deleted: 0 },
+            truncated: false,
+          });
+        return Response.json({ commit: "abc" });
+      }
+      return Response.json([]);
+    }),
+  );
+  render(<SourcePage token="t" messages={getMessages("zh")} />);
+  fireEvent.change(screen.getByLabelText("选择文件"), {
+    target: { files: [new File(["content"], "a.md")] },
+  });
+  fireEvent.change(screen.getByLabelText("新建知识类"), {
+    target: { value: "metrics" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "预览" }));
+  await screen.findByText("新增 1 个");
+  fireEvent.click(screen.getByRole("button", { name: "确认上传" }));
+  await waitFor(() => expect(calls).toHaveLength(2));
+  expect(calls[0].url).toBe("/api/v1/source/upload/preview?project=default");
+  expect(calls[1].url).toBe("/api/v1/source/upload?project=default");
+  expect(calls[1].body).toBe(calls[0].body);
+});
+
 test("browses source history and compares versions", async () => {
   localStorage.setItem("token", "token");
   const fetcher = vi.fn(async (url: string) => {

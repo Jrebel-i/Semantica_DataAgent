@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert, Button, Checkbox, Switch, Tag, Upload } from "antd";
 import type { components } from "./api";
 import type { Messages } from "./i18n";
@@ -301,6 +301,18 @@ function ProjectSourcePage({
   const [autoBuild, setAutoBuild] = useState<boolean | null>(null);
   const [statusRefresh, setStatusRefresh] = useState(0);
   const [projectUnavailable, setProjectUnavailable] = useState(false);
+  const unavailable = useRef(false);
+  const previewVersion = useRef(0);
+  const approvedPreview = useRef<{
+    version: number;
+    project: string;
+    body: string;
+  } | null>(null);
+  const invalidatePreview = () => {
+    previewVersion.current++;
+    approvedPreview.current = null;
+    setPreview(null);
+  };
   const request = useCallback(
     async (url: string, init?: RequestInit) => {
       const separator = url.includes("?") ? "&" : "?";
@@ -315,8 +327,12 @@ function ProjectSourcePage({
         },
       );
       if (!response.ok) {
-        if (appendOnly && [401, 403, 404, 409].includes(response.status))
+        if (appendOnly && [401, 403, 404, 409].includes(response.status)) {
+          unavailable.current = true;
+          previewVersion.current++;
+          approvedPreview.current = null;
           setProjectUnavailable(true);
+        }
         throw new Error();
       }
       return response.json();
@@ -335,18 +351,13 @@ function ProjectSourcePage({
   useEffect(() => {
     void loadCategories().catch(() => setCategories([]));
   }, [loadCategories]);
-  useEffect(() => {
-    setPreview(null);
-  }, [
-    files,
-    uploadMode,
-    targetDir,
-    category,
-    newCategory,
-    subfolder,
-    replace,
-    project,
-  ]);
+  useEffect(
+    () => () => {
+      previewVersion.current++;
+      approvedPreview.current = null;
+    },
+    [],
+  );
   useEffect(() => {
     let active = true;
     let timer: number | undefined;
@@ -391,6 +402,7 @@ function ProjectSourcePage({
     (uploadMode === "target" ? targetDir.trim() : selectedCategory),
   );
   function chooseFiles(next: File[]) {
+    invalidatePreview();
     setFiles(next);
     if (!next.length || uploadMode !== "category") return;
     const root = next[0].webkitRelativePath?.split("/")[0];
@@ -432,15 +444,20 @@ function ProjectSourcePage({
   }
   async function loadPreview() {
     if (!canPreviewUpload) return;
+    invalidatePreview();
+    const version = previewVersion.current;
     setBusy(true);
     try {
-      setPreview(
-        (await request("/api/v1/source/upload/preview", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(await body()),
-        })) as Preview,
-      );
+      const requestBody = JSON.stringify(await body());
+      if (version !== previewVersion.current || unavailable.current) return;
+      const result = (await request("/api/v1/source/upload/preview", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: requestBody,
+      })) as Preview;
+      if (version !== previewVersion.current || unavailable.current) return;
+      approvedPreview.current = { version, project, body: requestBody };
+      setPreview(result);
       setError("");
     } catch {
       setError(t.sourceError);
@@ -468,16 +485,25 @@ function ProjectSourcePage({
   }
   async function send() {
     try {
-      if (!files.length || !preview) throw new Error();
+      const approved = approvedPreview.current;
+      if (
+        !preview ||
+        !approved ||
+        unavailable.current ||
+        approved.version !== previewVersion.current ||
+        approved.project !== project
+      )
+        throw new Error();
       setBusy(true);
       const result = (await request("/api/v1/source/upload", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(await body()),
+        body: approved.body,
       })) as { commit: string };
       setError("");
       setSuccess(result.commit);
       setPreview(null);
+      approvedPreview.current = null;
       await refresh();
       setStatusRefresh((value) => value + 1);
     } catch {
@@ -598,14 +624,20 @@ function ProjectSourcePage({
                 <Button
                   size="small"
                   type={uploadMode === "category" ? "primary" : "default"}
-                  onClick={() => setUploadMode("category")}
+                  onClick={() => {
+                    invalidatePreview();
+                    setUploadMode("category");
+                  }}
                 >
                   {t.sourceModeCategory}
                 </Button>
                 <Button
                   size="small"
                   type={uploadMode === "target" ? "primary" : "default"}
-                  onClick={() => setUploadMode("target")}
+                  onClick={() => {
+                    invalidatePreview();
+                    setUploadMode("target");
+                  }}
                 >
                   {t.sourceModeTarget}
                 </Button>
@@ -643,6 +675,7 @@ function ProjectSourcePage({
                       aria-label={t.sourceCategory}
                       value={category}
                       onChange={(e) => {
+                        invalidatePreview();
                         setCategory(e.target.value);
                         setNewCategory("");
                       }}
@@ -662,6 +695,7 @@ function ProjectSourcePage({
                       placeholder={t.sourceNewCategoryPlaceholder}
                       value={newCategory}
                       onChange={(e) => {
+                        invalidatePreview();
                         setNewCategory(e.target.value);
                         setCategory("");
                       }}
@@ -673,7 +707,10 @@ function ProjectSourcePage({
                       aria-label={t.sourceSubfolder}
                       placeholder={t.sourceSubfolderPlaceholder}
                       value={subfolder}
-                      onChange={(e) => setSubfolder(e.target.value)}
+                      onChange={(e) => {
+                        invalidatePreview();
+                        setSubfolder(e.target.value);
+                      }}
                     />
                   </label>
                 </>
@@ -685,7 +722,10 @@ function ProjectSourcePage({
                         key={preset}
                         size="small"
                         type={targetDir === preset ? "primary" : "default"}
-                        onClick={() => setTargetDir(preset)}
+                        onClick={() => {
+                          invalidatePreview();
+                          setTargetDir(preset);
+                        }}
                       >
                         {preset}/
                       </Button>
@@ -697,7 +737,10 @@ function ProjectSourcePage({
                       aria-label={t.sourceTargetDir}
                       placeholder={t.sourceTargetDirPlaceholder}
                       value={targetDir}
-                      onChange={(e) => setTargetDir(e.target.value)}
+                      onChange={(e) => {
+                        invalidatePreview();
+                        setTargetDir(e.target.value);
+                      }}
                     />
                   </label>
                 </div>
@@ -708,7 +751,10 @@ function ProjectSourcePage({
                   <Checkbox
                     className="plugin-enable"
                     checked={replace}
-                    onChange={(e) => setReplace(e.target.checked)}
+                    onChange={(e) => {
+                      invalidatePreview();
+                      setReplace(e.target.checked);
+                    }}
                   >
                     {t.sourceReplace}
                   </Checkbox>
