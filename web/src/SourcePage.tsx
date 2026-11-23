@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Alert, Button, Checkbox, Switch, Tag, Upload } from "antd";
 import type { components } from "./api";
 import type { Messages } from "./i18n";
-import { ProjectSelector, storedProject } from "./ProjectSelector";
+import { ProjectSelector, storedProject, useProjects } from "./ProjectSelector";
 
 type Version = components["schemas"]["SourceHistory"];
 type SourceStatus = components["schemas"]["ProjectSourceStatus"];
@@ -166,11 +166,20 @@ export function SourcePage({
   messages: Messages;
   onNavigateBuilds?: () => void;
 }) {
+  const params = new URLSearchParams(window.location.search);
   const [project, setProject] = useState(
-    () =>
-      new URLSearchParams(window.location.search).get("project") ||
-      storedProject(),
+    () => params.get("project") || storedProject(),
   );
+  if (params.has("gap")) {
+    return (
+      <GapSourcePage
+        project={params.get("project") || ""}
+        gapId={params.get("gap") || ""}
+        token={token}
+        messages={t}
+      />
+    );
+  }
   return (
     <ProjectSourcePage
       key={project}
@@ -183,18 +192,85 @@ export function SourcePage({
   );
 }
 
+function GapSourcePage({
+  project,
+  gapId,
+  token,
+  messages: t,
+}: {
+  project: string;
+  gapId: string;
+  token: string;
+  messages: Messages;
+}) {
+  const { projects, loaded } = useProjects(token);
+  const [validGap, setValidGap] = useState<boolean | null>(null);
+  useEffect(() => {
+    let active = true;
+    setValidGap(null);
+    if (!project || !gapId) {
+      setValidGap(false);
+      return;
+    }
+    void fetch(
+      `/api/v1/knowledge-gaps?project=${encodeURIComponent(project)}`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    )
+      .then((response) => (response.ok ? response.json() : Promise.reject()))
+      .then((rows: { id: string; status: string }[]) => {
+        if (active)
+          setValidGap(
+            rows.some((row) => row.id === gapId && row.status === "confirmed"),
+          );
+      })
+      .catch(() => {
+        if (active) setValidGap(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [project, gapId, token]);
+  if (!loaded) return null;
+  if (
+    !project ||
+    !gapId ||
+    validGap === false ||
+    !projects.some(
+      (p) => p.id === project && p.status === "active" && p.my_role === "admin",
+    )
+  ) {
+    return <Alert type="error" title={t.gapSourceUnavailable} />;
+  }
+  if (validGap === null) return null;
+  return (
+    <ProjectSourcePage
+      key={project}
+      project={project}
+      setProject={() => {}}
+      token={token}
+      messages={t}
+      appendOnly
+      gapId={gapId}
+    />
+  );
+}
+
 function ProjectSourcePage({
   project,
   setProject,
   token,
   messages: t,
   onNavigateBuilds,
+  appendOnly = false,
+  gapId,
 }: {
   project: string;
   setProject: (project: string) => void;
   token: string;
   messages: Messages;
   onNavigateBuilds?: () => void;
+  appendOnly?: boolean;
+  gapId?: string;
 }) {
   const [paths, setPaths] = useState<string[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
@@ -224,6 +300,7 @@ function ProjectSourcePage({
   const [status, setStatus] = useState<SourceStatus | null>(null);
   const [autoBuild, setAutoBuild] = useState<boolean | null>(null);
   const [statusRefresh, setStatusRefresh] = useState(0);
+  const [projectUnavailable, setProjectUnavailable] = useState(false);
   const request = useCallback(
     async (url: string, init?: RequestInit) => {
       const separator = url.includes("?") ? "&" : "?";
@@ -237,10 +314,14 @@ function ProjectSourcePage({
           },
         },
       );
-      if (!response.ok) throw new Error();
+      if (!response.ok) {
+        if (appendOnly && [401, 403, 404, 409].includes(response.status))
+          setProjectUnavailable(true);
+        throw new Error();
+      }
       return response.json();
     },
-    [project, token],
+    [project, token, appendOnly],
   );
   const refresh = useCallback(async () => {
     setPaths((await request("/api/v1/source/files")) as string[]);
@@ -337,6 +418,7 @@ function ProjectSourcePage({
       return {
         target: targetDir.trim(),
         replace,
+        ...(appendOnly ? { append_only: true, knowledge_gap_id: gapId } : {}),
         ...values,
       };
     }
@@ -344,6 +426,7 @@ function ProjectSourcePage({
       category: selectedCategory,
       ...(subfolder.trim() ? { subfolder: subfolder.trim() } : {}),
       replace,
+      ...(appendOnly ? { append_only: true, knowledge_gap_id: gapId } : {}),
       ...values,
     };
   }
@@ -490,14 +573,19 @@ function ProjectSourcePage({
               {t.sourceViewBuilds}
             </Button>
           )}
-          <ProjectSelector
-            token={token}
-            value={project}
-            onChange={setProject}
-            messages={t}
-          />
+          {!appendOnly && (
+            <ProjectSelector
+              token={token}
+              value={project}
+              onChange={setProject}
+              messages={t}
+            />
+          )}
         </div>
       </div>
+      {projectUnavailable && (
+        <Alert type="error" title={t.gapSourceUnavailable} />
+      )}
       {error && <Alert type="error" title={error} />}
       {buildNotice && <Alert type="success" title={buildNotice} />}
       {success && <Alert type="success" title={`${t.uploaded}: ${success}`} />}
@@ -614,16 +702,18 @@ function ProjectSourcePage({
                   </label>
                 </div>
               )}
-              <details className="advanced-options">
-                <summary>{t.sourceAdvanced}</summary>
-                <Checkbox
-                  className="plugin-enable"
-                  checked={replace}
-                  onChange={(e) => setReplace(e.target.checked)}
-                >
-                  {t.sourceReplace}
-                </Checkbox>
-              </details>
+              {!appendOnly && (
+                <details className="advanced-options">
+                  <summary>{t.sourceAdvanced}</summary>
+                  <Checkbox
+                    className="plugin-enable"
+                    checked={replace}
+                    onChange={(e) => setReplace(e.target.checked)}
+                  >
+                    {t.sourceReplace}
+                  </Checkbox>
+                </details>
+              )}
               <p className="field-hint">{t.sourceIndexHint}</p>
               {preview && (
                 <div className="upload-preview">
@@ -685,7 +775,7 @@ function ProjectSourcePage({
               <div className="save-bar" style={{ marginTop: 0 }}>
                 <button
                   type="button"
-                  disabled={busy || !canPreviewUpload}
+                  disabled={busy || projectUnavailable || !canPreviewUpload}
                   onClick={() => void loadPreview()}
                 >
                   {t.sourcePreview}
@@ -693,7 +783,7 @@ function ProjectSourcePage({
                 <button
                   type="button"
                   className={replace && preview ? "danger" : undefined}
-                  disabled={busy || !preview}
+                  disabled={busy || projectUnavailable || !preview}
                   onClick={() => void send()}
                 >
                   {replace && preview

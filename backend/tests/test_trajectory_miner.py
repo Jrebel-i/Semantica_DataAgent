@@ -23,131 +23,67 @@ def _setup_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     initialize()
 
 
-def test_gap_review_time_and_successful_report_are_not_failures(tmp_path, monkeypatch):
+def test_confirmed_gap_never_creates_evolution_signal(tmp_path, monkeypatch):
     _setup_env(tmp_path, monkeypatch)
     from semantica_dataagent import trajectory_miner
     from semantica_dataagent.db import KnowledgeGap, sessions
 
-    now = datetime.now(UTC)
     with sessions().begin() as db:
-        for status in ("pending", "rejected", "confirmed", "reserved", "holdout"):
-            db.add(
-                KnowledgeGap(
-                    id=status,
-                    project_id="default",
-                    owner_id="u",
-                    question=status,
-                    missing=status,
-                    status="confirmed" if status in ("reserved", "holdout") else status,
-                    created_at=now - timedelta(days=2),
-                    reviewed_at=now if status != "pending" else None,
-                )
-            )
-    signals = trajectory_miner._mine_gaps_and_failures(
-        "default",
-        [
-            {
-                "id": 1,
-                "status": "success",
-                "tool_calls": [{"tool_name": "report_knowledge_gap"}],
-            }
-        ],
-        reserve_rows=[{"question": "reserved"}],
-        holdout_conv_ids=set(),
-        holdouts={"holdout"},
-        after_at=now - timedelta(days=1),
-        now=now,
-    )
-    assert [s.details["kind"] for s in signals] == ["knowledge_gap"]
-    assert signals[0].details["questions"] == ["confirmed"]
-
-
-def test_next_run_uses_previous_mining_start_not_acceptance_time(tmp_path, monkeypatch):
-    _setup_env(tmp_path, monkeypatch)
-    from semantica_dataagent import evolution_runner, trajectory_miner
-    from semantica_dataagent.db import EvolutionCheckpoint, EvolutionRun, sessions
-
-    start = datetime.now(UTC) - timedelta(hours=1)
-    accepted = start + timedelta(minutes=30)
-    with sessions().begin() as db:
-        db.add(
-            EvolutionRun(
-                id="previous", project_id="default", status="accepted", started_at=start
-            )
-        )
-        db.add(
-            EvolutionRun(
-                id="next", project_id="default", status="running", started_at=accepted
-            )
-        )
-        db.add(
-            EvolutionCheckpoint(
-                project_id="default",
-                checkpoint_at=accepted,
-                last_run_id="previous",
-                updated_at=accepted,
-            )
-        )
-    captured = []
-    monkeypatch.setattr(
-        evolution_runner, "_resolve_run_provider_pair", lambda *args: (None, None)
-    )
-
-    def mine(*args, **kwargs):
-        captured.append(kwargs["gap_after_at"])
-        raise RuntimeError("stop after checkpoint read")
-
-    monkeypatch.setattr(trajectory_miner, "mine_project_trajectories", mine)
-    with pytest.raises(RuntimeError, match="stop after checkpoint read"):
-        evolution_runner.execute_evolution_run("next")
-    assert captured == [start]
-
-
-def test_miner_keeps_execution_and_gap_watermarks_separate(tmp_path, monkeypatch):
-    _setup_env(tmp_path, monkeypatch)
-    from semantica_dataagent import evolution_runner, trajectory_miner
-    from semantica_dataagent.db import (
-        EvolutionCheckpoint,
-        EvolutionRun,
-        KnowledgeGap,
-        QueryExecution,
-        sessions,
-    )
-
-    start = datetime.now(UTC) - timedelta(hours=2)
-    accepted = start + timedelta(hours=1)
-    with sessions().begin() as db:
-        db.add(
-            EvolutionRun(
-                id="previous", project_id="default", status="accepted", started_at=start
-            )
-        )
-        db.add(
-            EvolutionRun(
-                id="next", project_id="default", status="running", started_at=accepted
-            )
-        )
-        db.add(
-            EvolutionCheckpoint(
-                project_id="default",
-                checkpoint_at=accepted,
-                last_run_id="previous",
-                updated_at=accepted,
-            )
-        )
         db.add(
             KnowledgeGap(
                 id="g",
                 owner_id="u",
-                question="gap question",
-                missing="gap detail",
+                question="private question",
+                missing="private gap",
                 status="confirmed",
-                reviewed_at=start + timedelta(minutes=30),
+                reviewed_at=datetime.now(UTC),
             )
         )
-        for ident, when, category in (
-            ("old", start + timedelta(minutes=30), "old"),
-            ("new", accepted + timedelta(minutes=1), "new"),
+    result = trajectory_miner.mine_project_trajectories("default")
+    assert not result.signals
+    assert "private gap" not in json.dumps(result.to_diagnosis_payload())
+
+
+def test_successful_gap_report_is_not_a_failure_but_failed_trajectory_is(
+    tmp_path, monkeypatch
+):
+    _setup_env(tmp_path, monkeypatch)
+    from semantica_dataagent import trajectory_miner
+
+    def mine(rows):
+        return trajectory_miner._mine_gaps_and_failures(
+            "default",
+            rows,
+            reserve_rows=[],
+            holdout_conv_ids=set(),
+            holdouts=set(),
+            after_at=None,
+            now=datetime.now(UTC),
+        )
+
+    report = {
+        "id": 1,
+        "status": "completed",
+        "tool_calls": [
+            {"tool_name": "report_knowledge_gap", "arguments": {"missing": "secret"}}
+        ],
+    }
+    assert mine([report]) == []
+    signals = mine([report, {"id": 2, "status": "failed"}])
+    assert [signal.details["kind"] for signal in signals] == ["execution_failure"]
+    assert signals[0].evidence_trajectory_ids == [2]
+
+
+def test_execution_failure_keeps_existing_checkpoint_filter(tmp_path, monkeypatch):
+    _setup_env(tmp_path, monkeypatch)
+    from semantica_dataagent import trajectory_miner
+    from semantica_dataagent.db import QueryExecution, sessions
+
+    checkpoint = datetime.now(UTC) - timedelta(hours=1)
+    with sessions().begin() as db:
+        for ident, when in (
+            ("old", checkpoint - timedelta(minutes=1)),
+            ("new", checkpoint + timedelta(minutes=1)),
         ):
             db.add(
                 QueryExecution(
@@ -159,35 +95,17 @@ def test_miner_keeps_execution_and_gap_watermarks_separate(tmp_path, monkeypatch
                     plan_data=json.dumps(
                         {
                             "project_id": "default",
-                            "execution_failure": {
-                                "stage": "poll",
-                                "category": category,
-                            },
+                            "execution_failure": {"stage": "poll", "category": ident},
                         }
                     ),
                 )
             )
-    mine = trajectory_miner.mine_project_trajectories
-    results = []
-
-    def capture(*args, **kwargs):
-        results.append(mine(*args, **kwargs))
-        raise RuntimeError("stop")
-
-    monkeypatch.setattr(
-        evolution_runner, "_resolve_run_provider_pair", lambda *args: (None, None)
-    )
-    monkeypatch.setattr(trajectory_miner, "mine_project_trajectories", capture)
-    with pytest.raises(RuntimeError, match="stop"):
-        evolution_runner.execute_evolution_run("next")
-    result = results[0]
-    signals = {
-        s.details["kind"]: s
-        for s in result.signals
-        if s.signal_kind == "knowledge_gap_or_failure"
-    }
-    assert signals["knowledge_gap"].details["questions"] == ["gap question"]
-    assert signals["execution_failure"].details["categories"] == ["new"]
+    result = trajectory_miner.mine_project_trajectories("default", after_at=checkpoint)
+    failures = [
+        s for s in result.signals if s.details.get("kind") == "execution_failure"
+    ]
+    assert len(failures) == 1
+    assert failures[0].details["categories"] == ["new"]
 
 
 def test_miner_excludes_holdout_expired_deleted_and_splits_after_dedup(
@@ -710,7 +628,7 @@ def test_miner_detects_all_five_signals_and_preserves_multi_caliber_variants(
         for s in res.signals
         if s.signal_kind == "knowledge_gap_or_failure"
     }
-    assert {"knowledge_gap", "execution_failure"}.issubset(gap_and_failure)
+    assert gap_and_failure == {"execution_failure"}
 
     clar_signal = next(
         s for s in res.signals if s.signal_kind == "divergent_clarification"

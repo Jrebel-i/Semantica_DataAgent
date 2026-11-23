@@ -894,18 +894,6 @@ def _target_eval_inputs(
                     matched_refs.extend(item.get("matched_refs") or ())
         _maybe_add_question(f"traj-{tid}", q_text, ref_sql, dialect, matched_refs)
 
-    if not target_qs and signal.signal_kind == "knowledge_gap_or_failure":
-        for idx, q_text in enumerate(signal.details.get("questions") or ()):
-            if len(target_qs) >= 5:
-                break
-            _maybe_add_question(
-                f"gap-{signal.evidence_trajectory_ids[0] if signal.evidence_trajectory_ids else idx}-{idx}",
-                str(q_text),
-                "",
-                "doris",
-                [],
-            )
-
     if not target_qs and evidence_ids:
         for grp in mining.diagnosis_groups:
             if len(target_qs) >= 5:
@@ -1001,17 +989,6 @@ def execute_evolution_run(
         actor_id = run_row.created_by or "evolution"
         ckpt = db.get(EvolutionCheckpoint, project_id)
         ckpt_id = ckpt.checkpoint_trajectory_id if ckpt is not None else None
-        # A confirmation can arrive after mining but before acceptance. Keep
-        # checkpoint_at as the scheduler's acceptance time and use the prior
-        # run's start as a conservative mining watermark, including recovery.
-        previous_run = (
-            db.get(EvolutionRun, ckpt.last_run_id)
-            if ckpt and ckpt.last_run_id
-            else None
-        )
-        gap_ckpt_at = (
-            _as_utc(previous_run.started_at) if previous_run is not None else None
-        )
         ckpt_at = _as_utc(ckpt.checkpoint_at) if ckpt is not None else None
 
     try:
@@ -1030,7 +1007,7 @@ def execute_evolution_run(
         )
 
         mining = trajectory_miner.mine_project_trajectories(
-            project_id, after_id=ckpt_id, after_at=ckpt_at, gap_after_at=gap_ckpt_at
+            project_id, after_id=ckpt_id, after_at=ckpt_at
         )
         diagnosis_payload = mining.to_diagnosis_payload()
 

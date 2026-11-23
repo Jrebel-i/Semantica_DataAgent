@@ -114,7 +114,7 @@ type Gap = {
 function gapDescription(question: string, missing: string): string {
   const q = Array.from(question);
   const m = Array.from(missing);
-  const budget = 9999;
+  const budget = 4999;
   const qLimit = Math.min(
     q.length,
     Math.max(Math.floor(budget / 2), budget - m.length),
@@ -706,7 +706,7 @@ export function CorrectionsPage({
                   </Button>
                   {gap.can_review && (
                     <a
-                      href={`/source?project=${encodeURIComponent(gap.project_id)}`}
+                      href={`/source?project=${encodeURIComponent(gap.project_id)}&gap=${encodeURIComponent(gap.id)}`}
                     >
                       {t.gapAddKnowledge}
                     </a>

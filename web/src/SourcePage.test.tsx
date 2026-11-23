@@ -67,6 +67,133 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  history.replaceState(null, "", "/");
+});
+
+test("gap upload refuses inaccessible project without falling back", async () => {
+  history.replaceState(null, "", "/source?project=missing&gap=gap1");
+  const fetcher = vi.fn(async (url: string) =>
+    url === "/api/v1/projects" ? Response.json(projects) : Response.json([]),
+  );
+  vi.stubGlobal("fetch", fetcher);
+  render(<SourcePage token="t" messages={getMessages("en")} />);
+  expect(await screen.findByText(/project is unavailable/i)).toBeTruthy();
+  expect(screen.queryByRole("button", { name: /preview/i })).toBeNull();
+  expect(
+    fetcher.mock.calls.some(([url]) => url.includes("project=default")),
+  ).toBe(false);
+});
+
+test("gap upload refuses a gap belonging to another project", async () => {
+  history.replaceState(null, "", "/source?project=docs&gap=gap1");
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) =>
+      url === "/api/v1/projects" ? Response.json(projects) : Response.json([]),
+    ),
+  );
+  render(<SourcePage token="t" messages={getMessages("en")} />);
+  expect(await screen.findByText(/project is unavailable/i)).toBeTruthy();
+  expect(screen.queryByRole("button", { name: /preview/i })).toBeNull();
+});
+
+test("gap upload uses append-only mode on preview and submit", async () => {
+  history.replaceState(null, "", "/source?project=docs&gap=gap1");
+  const requests: { url: string; body: any }[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string, options?: RequestInit) => {
+      if (url === "/api/v1/projects") return Response.json(projects);
+      if (url === "/api/v1/knowledge-gaps?project=docs")
+        return Response.json([{ id: "gap1", status: "confirmed" }]);
+      if (options?.method === "POST") {
+        requests.push({ url, body: JSON.parse(String(options.body)) });
+        if (url.includes("preview"))
+          return Response.json({
+            category: "metrics",
+            target: "knowledge/metrics",
+            added: ["knowledge/metrics/a.md"],
+            overwritten: [],
+            unchanged: [],
+            deleted: [],
+            counts: { added: 1, overwritten: 0, unchanged: 0, deleted: 0 },
+            truncated: false,
+          });
+        return Response.json({ commit: "abc" });
+      }
+      return Response.json([]);
+    }),
+  );
+  render(<SourcePage token="t" messages={getMessages("zh")} />);
+  fireEvent.change(await screen.findByLabelText("选择文件"), {
+    target: { files: [new File(["content"], "a.md")] },
+  });
+  fireEvent.change(screen.getByLabelText("新建知识类"), {
+    target: { value: "metrics" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "预览" }));
+  await screen.findByText("新增 1 个");
+  fireEvent.click(screen.getByRole("button", { name: "确认上传" }));
+  await waitFor(() => expect(requests).toHaveLength(2));
+  expect(
+    requests.every(
+      (r) =>
+        r.url.endsWith("project=docs") &&
+        r.body.append_only === true &&
+        !r.body.replace,
+    ),
+  ).toBe(true);
+});
+
+test("gap upload disables submit when project access is revoked after preview", async () => {
+  history.replaceState(null, "", "/source?project=docs&gap=gap1");
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string, options?: RequestInit) => {
+      if (url === "/api/v1/projects") return Response.json(projects);
+      if (url === "/api/v1/knowledge-gaps?project=docs")
+        return Response.json([{ id: "gap1", status: "confirmed" }]);
+      if (url.includes("upload/preview"))
+        return Response.json({
+          category: "metrics",
+          target: "knowledge/metrics",
+          added: ["a"],
+          overwritten: [],
+          unchanged: [],
+          deleted: [],
+          counts: { added: 1, overwritten: 0, unchanged: 0, deleted: 0 },
+          truncated: false,
+        });
+      if (options?.method === "POST") return Response.json({}, { status: 403 });
+      return Response.json([]);
+    }),
+  );
+  render(<SourcePage token="t" messages={getMessages("en")} />);
+  fireEvent.change(await screen.findByLabelText("Select files"), {
+    target: { files: [new File(["x"], "a.md")] },
+  });
+  fireEvent.change(screen.getByLabelText("New knowledge category"), {
+    target: { value: "metrics" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Preview" }));
+  await waitFor(() =>
+    expect(
+      (
+        screen.getByRole("button", {
+          name: "Confirm upload",
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(false),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Confirm upload" }));
+  expect(await screen.findByText(/project is unavailable/i)).toBeTruthy();
+  expect(
+    (
+      screen.getByRole("button", {
+        name: "Confirm upload",
+      }) as HTMLButtonElement
+    ).disabled,
+  ).toBe(true);
 });
 
 test("folder upload fills the category, previews, then confirms", async () => {

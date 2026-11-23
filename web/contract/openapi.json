@@ -5314,6 +5314,11 @@
       },
       "SourceUpload": {
         "properties": {
+          "append_only": {
+            "default": false,
+            "title": "Append Only",
+            "type": "boolean"
+          },
           "archive_base64": {
             "anyOf": [
               {
@@ -5343,6 +5348,17 @@
             },
             "title": "Files",
             "type": "array"
+          },
+          "knowledge_gap_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Knowledge Gap Id"
           },
           "replace": {
             "default": false,

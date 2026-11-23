@@ -206,7 +206,7 @@ test("confirmed gap exposes follow-up actions and pending gap can be reviewed", 
   ).toBeTruthy();
   expect(
     screen.getByRole("link", { name: "Add knowledge" }).getAttribute("href"),
-  ).toBe("/source?project=default");
+  ).toBe("/source?project=default&gap=g2");
 });
 
 test("long gap draft posts bounded description with both contexts while card remains complete", async () => {
@@ -223,8 +223,23 @@ test("long gap draft posts bounded description with both contexts while card rem
           my_role: "admin",
         },
       ]);
-    if (options?.method === "POST")
-      return Response.json({ detail: "test" }, { status: 422 });
+    if (url === "/api/v1/corrections/draft") {
+      const description = JSON.parse(String(options?.body)).description;
+      return Response.json({
+        target: "document:metrics/a.md",
+        target_kind: "document",
+        patch: "new",
+        reason: "fix",
+        caliber: description,
+        gate_report: { passed: true },
+      });
+    }
+    if (options?.method === "POST") {
+      const proposal = JSON.parse(String(options.body));
+      return Array.from(proposal.caliber as string).length > 5000
+        ? Response.json({ detail: "caliber too long" }, { status: 422 })
+        : Response.json({ id: "p", status: "pending" }, { status: 201 });
+    }
     return Response.json([
       {
         id: "g",
@@ -256,6 +271,28 @@ test("long gap draft posts bounded description with both contexts while card rem
   expect(Array.from(description).length).toBeLessThanOrEqual(10000);
   expect(description).toContain("QUESTION");
   expect(description).toContain("MISSING");
+  await screen.findByText("document:metrics/a.md");
+  fireEvent.click(
+    screen.getAllByRole("button", { name: "Propose correction" }).at(-1)!,
+  );
+  await waitFor(() =>
+    expect(
+      fetcher.mock.calls.some(
+        ([url]) => url === "/api/v1/corrections?project=default",
+      ),
+    ).toBe(true),
+  );
+  const proposal = JSON.parse(
+    String(
+      fetcher.mock.calls.find(
+        ([url]) => url === "/api/v1/corrections?project=default",
+      )![1]?.body,
+    ),
+  );
+  expect(Array.from(proposal.caliber).length).toBeLessThanOrEqual(5000);
+  expect(proposal.caliber).toContain("QUESTION");
+  expect(proposal.caliber).toContain("MISSING");
+  expect(proposal.knowledge_gap_id).toBe("g");
 });
 
 test("review conflict refreshes current project and shows conflict", async () => {

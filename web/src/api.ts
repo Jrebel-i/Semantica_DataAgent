@@ -3185,6 +3185,11 @@ export interface components {
         };
         /** SourceUpload */
         SourceUpload: {
+            /**
+             * Append Only
+             * @default false
+             */
+            append_only: boolean;
             /** Archive Base64 */
             archive_base64?: string | null;
             /** Category */
@@ -3194,6 +3199,8 @@ export interface components {
              * @default []
              */
             files: components["schemas"]["SourceFileUpload"][];
+            /** Knowledge Gap Id */
+            knowledge_gap_id?: string | null;
             /**
              * Replace
              * @default false

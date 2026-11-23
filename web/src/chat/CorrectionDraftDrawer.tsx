@@ -119,7 +119,11 @@ export function CorrectionDraftDrawer({
             conversation_id: conversationId || undefined,
             turn_id: turnId,
             knowledge_gap_id: knowledgeGapId,
-            caliber: draft?.caliber || undefined,
+            caliber: draft?.caliber
+              ? knowledgeGapId
+                ? Array.from(draft.caliber).slice(0, 5000).join("")
+                : draft.caliber
+              : undefined,
             reference_sql: draft?.reference_sql || undefined,
           }),
         },

@@ -70,6 +70,7 @@ def test_gap_proposal_requires_confirmed_same_project_and_review(tmp_path, monke
             "patch": "new\n",
             "reason": "fix",
             "knowledge_gap_id": "gap",
+            "caliber": "合" * 5000,
         }
         assert (
             client.post(

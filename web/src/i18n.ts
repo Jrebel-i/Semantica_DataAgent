@@ -138,6 +138,7 @@ const messages = {
     gapConfirm: "确认缺口",
     gapReject: "不接纳",
     gapReviewConflict: "该缺口已被其他人审核，请查看最新状态。",
+    gapSourceUnavailable: "该缺口所属项目不可用或您无上传权限。",
     gapConfirmed: "已确认",
     gapCorrection: "发起纠错",
     gapAddKnowledge: "补充知识",
@@ -913,6 +914,8 @@ const messages = {
     gapReject: "Decline",
     gapReviewConflict:
       "This gap was already reviewed. Check its latest status.",
+    gapSourceUnavailable:
+      "The gap project is unavailable or you lack upload permission.",
     gapConfirmed: "Confirmed",
     gapCorrection: "Propose correction",
     gapAddKnowledge: "Add knowledge",
