@@ -161,6 +161,7 @@ export function PluginsPage({
         </div>
       </div>
       {failure && <Alert type="error" title={t.error} />}
+      <Alert type="info" title={t.pluginsProjectScopeHint} />
       <section className="card form-card">
         <h2 className="card-title">{t.dimLimit}</h2>
         <label>
@@ -301,128 +302,136 @@ export function PluginsPage({
           {t.save}
         </button>
       </section>
-      {plugins.map((plugin) => {
-        const key = `${plugin.category}/${plugin.id}`;
-        const issues = errors[key] || [];
-        return (
-          <section className="card form-card" key={key}>
-            <h2 className="card-title">
-              {plugin.display_name} ({plugin.category} / {plugin.id} /{" "}
-              {plugin.version})
-            </h2>
-            <Checkbox
-              checked={plugin.enabled}
-              onChange={(e) => {
-                const next = { ...plugin, enabled: e.target.checked };
-                change(next);
-                void save(next).then((ok) => {
-                  if (!ok)
-                    setPlugins((old) =>
-                      old.map((p) =>
-                        p.id === plugin.id && p.category === plugin.category
-                          ? { ...p, enabled: plugin.enabled }
-                          : p,
-                      ),
-                    );
-                });
-              }}
-            >
-              {t.enabled}
-            </Checkbox>
-            {Object.entries(plugin.parameters_schema.properties || {}).map(
-              ([name, schema]) => {
-                const value = plugin.parameters[name] ?? schema.default;
-                const set = (v: unknown) =>
-                  change({
-                    ...plugin,
-                    parameters: { ...plugin.parameters, [name]: v },
+      {plugins
+        .filter(
+          (plugin) =>
+            plugin.category !== "puller" && plugin.category !== "executor",
+        )
+        .map((plugin) => {
+          const key = `${plugin.category}/${plugin.id}`;
+          const issues = errors[key] || [];
+          return (
+            <section className="card form-card" key={key}>
+              <h2 className="card-title">
+                {plugin.display_name} ({plugin.category} / {plugin.id} /{" "}
+                {plugin.version})
+              </h2>
+              <Checkbox
+                checked={plugin.enabled}
+                onChange={(e) => {
+                  const next = { ...plugin, enabled: e.target.checked };
+                  change(next);
+                  void save(next).then((ok) => {
+                    if (!ok)
+                      setPlugins((old) =>
+                        old.map((p) =>
+                          p.id === plugin.id && p.category === plugin.category
+                            ? { ...p, enabled: plugin.enabled }
+                            : p,
+                        ),
+                      );
                   });
-                return (
-                  <div className="field plugin-param" key={name}>
-                    <span className="field-label">
-                      {schema.title || name}
-                      {plugin.parameters_schema.required?.includes(name)
-                        ? " *"
-                        : " "}
-                    </span>
-                    <span>
-                      {schema.enum ? (
-                        <select
-                          aria-label={name}
-                          value={schema.enum.findIndex(
-                            (item) => item === value,
-                          )}
-                          onChange={(e) => {
-                            const index = Number(e.target.value);
-                            if (index >= 0) set(schema.enum?.[index]);
-                          }}
-                        >
-                          <option value={-1}></option>
-                          {schema.enum.map((v, index) => (
-                            <option key={index} value={index}>
-                              {String(v)}
-                            </option>
-                          ))}
-                        </select>
-                      ) : schema.type === "boolean" ? (
-                        <Checkbox
-                          aria-label={name}
-                          checked={value === true}
-                          onChange={(e) => set(e.target.checked)}
-                        />
-                      ) : schema.type === "array" ? (
-                        <textarea
-                          aria-label={name}
-                          value={Array.isArray(value) ? value.join("\n") : ""}
-                          onChange={(e) =>
-                            set(
-                              e.target.value ? e.target.value.split("\n") : [],
-                            )
-                          }
-                        />
-                      ) : (
-                        <input
-                          aria-label={name}
-                          type={
-                            schema.format === "password"
-                              ? "password"
-                              : schema.type === "integer"
-                                ? "number"
-                                : "text"
-                          }
-                          value={value == null ? "" : String(value)}
-                          onChange={(e) =>
-                            set(
-                              schema.type === "integer" && e.target.value !== ""
-                                ? Number(e.target.value)
-                                : e.target.value,
-                            )
-                          }
-                        />
-                      )}
-                    </span>
-                    {issues
-                      .filter((issue) => issue.path[0] === name)
-                      .map((issue, i) => (
-                        <p role="alert" key={i}>
-                          {issue.message}
-                        </p>
-                      ))}
-                  </div>
-                );
-              },
-            )}
-            {issues
-              .filter((issue) => !issue.path.length)
-              .map((issue, i) => (
-                <p role="alert" key={i}>
-                  {issue.message}
-                </p>
-              ))}
-            <button onClick={() => void save(plugin)}>{t.save}</button>
-          </section>
-        );
-      })}
+                }}
+              >
+                {t.enabled}
+              </Checkbox>
+              {Object.entries(plugin.parameters_schema.properties || {}).map(
+                ([name, schema]) => {
+                  const value = plugin.parameters[name] ?? schema.default;
+                  const set = (v: unknown) =>
+                    change({
+                      ...plugin,
+                      parameters: { ...plugin.parameters, [name]: v },
+                    });
+                  return (
+                    <div className="field plugin-param" key={name}>
+                      <span className="field-label">
+                        {schema.title || name}
+                        {plugin.parameters_schema.required?.includes(name)
+                          ? " *"
+                          : " "}
+                      </span>
+                      <span>
+                        {schema.enum ? (
+                          <select
+                            aria-label={name}
+                            value={schema.enum.findIndex(
+                              (item) => item === value,
+                            )}
+                            onChange={(e) => {
+                              const index = Number(e.target.value);
+                              if (index >= 0) set(schema.enum?.[index]);
+                            }}
+                          >
+                            <option value={-1}></option>
+                            {schema.enum.map((v, index) => (
+                              <option key={index} value={index}>
+                                {String(v)}
+                              </option>
+                            ))}
+                          </select>
+                        ) : schema.type === "boolean" ? (
+                          <Checkbox
+                            aria-label={name}
+                            checked={value === true}
+                            onChange={(e) => set(e.target.checked)}
+                          />
+                        ) : schema.type === "array" ? (
+                          <textarea
+                            aria-label={name}
+                            value={Array.isArray(value) ? value.join("\n") : ""}
+                            onChange={(e) =>
+                              set(
+                                e.target.value
+                                  ? e.target.value.split("\n")
+                                  : [],
+                              )
+                            }
+                          />
+                        ) : (
+                          <input
+                            aria-label={name}
+                            type={
+                              schema.format === "password"
+                                ? "password"
+                                : schema.type === "integer"
+                                  ? "number"
+                                  : "text"
+                            }
+                            value={value == null ? "" : String(value)}
+                            onChange={(e) =>
+                              set(
+                                schema.type === "integer" &&
+                                  e.target.value !== ""
+                                  ? Number(e.target.value)
+                                  : e.target.value,
+                              )
+                            }
+                          />
+                        )}
+                      </span>
+                      {issues
+                        .filter((issue) => issue.path[0] === name)
+                        .map((issue, i) => (
+                          <p role="alert" key={i}>
+                            {issue.message}
+                          </p>
+                        ))}
+                    </div>
+                  );
+                },
+              )}
+              {issues
+                .filter((issue) => !issue.path.length)
+                .map((issue, i) => (
+                  <p role="alert" key={i}>
+                    {issue.message}
+                  </p>
+                ))}
+              <button onClick={() => void save(plugin)}>{t.save}</button>
+            </section>
+          );
+        })}
       {rules && (
         <section className="card form-card">
           <h2 className="card-title">{t.filters}</h2>

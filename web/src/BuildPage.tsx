@@ -1,7 +1,7 @@
 import { PullsPanel } from "./PullsPanel";
 import { ProjectSelector, storedProject } from "./ProjectSelector";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Alert, Button, Descriptions, Input, Table, Tag } from "antd";
+import { Alert, Button, Descriptions, Input, Space, Table, Tag } from "antd";
 import type { components } from "./api";
 import type { Messages } from "./i18n";
 import { TableScroll } from "./TableScroll";
@@ -28,11 +28,53 @@ const countLabels: Record<string, keyof Messages> = {
   field: "entityField",
   task: "entityTask",
   lineage: "entityLineage",
+  column_lineage: "entityColumnLineage",
   dimension_value: "entityDimensionValue",
   document: "entityDocument",
+  relationship: "entityRelationship",
   chunk: "entityChunk",
   category: "entityCategory",
+  embedding_inputs: "embeddingInputs",
+  embedding_unique: "embeddingUnique",
+  embedding_cache_hits: "embeddingCacheHits",
+  embedding_cache_misses: "embeddingCacheMisses",
+  stale_overrides: "staleOverridesCount",
 };
+
+const entitySummaryKeys = [
+  "table",
+  "field",
+  "task",
+  "lineage",
+  "column_lineage",
+  "dimension_value",
+  "document",
+  "relationship",
+  "added",
+  "changed",
+  "deleted",
+] as const;
+
+function fallbackReasonLabel(
+  reason: string | null | undefined,
+  t: Messages,
+): string | null {
+  if (!reason) return null;
+  switch (reason) {
+    case "no_previous_full":
+      return t.fallbackNoPreviousFull;
+    case "config_changed":
+      return t.fallbackConfigChanged;
+    case "previous_full_failed":
+      return t.fallbackPreviousFullFailed;
+    case "threshold_exceeded":
+      return t.fallbackThresholdExceeded;
+    case "incremental_failed":
+      return t.fallbackIncrementalFailed;
+    default:
+      return reason;
+  }
+}
 
 function displayTime(value: string | null) {
   return value ? new Date(value).toLocaleString() : "—";
@@ -250,21 +292,35 @@ export function BuildPage({
                   { title: t.buildId, dataIndex: "id" },
                   {
                     title: t.buildStatus,
-                    render: (_, row) => (
-                      <div className="build-status-tags">
-                        <Tag color={statusColors[row.status]}>
-                          {t[row.status]}
-                        </Tag>
-                        {(row.stale_overrides?.length ?? 0) > 0 && (
-                          <Tag color="warning">
-                            {t.staleOverridesBadge.replace(
-                              "{count}",
-                              String(row.stale_overrides?.length ?? 0),
-                            )}
+                    render: (_, row) => {
+                      const fallbackLabel = fallbackReasonLabel(
+                        row.fallback_reason,
+                        t,
+                      );
+                      return (
+                        <div className="build-status-tags">
+                          <Tag color={statusColors[row.status]}>
+                            {t[row.status]}
                           </Tag>
-                        )}
-                      </div>
-                    ),
+                          {fallbackLabel && (
+                            <Tag color="orange">
+                              {t.fallbackBadge.replace(
+                                "{reason}",
+                                fallbackLabel,
+                              )}
+                            </Tag>
+                          )}
+                          {(row.stale_overrides?.length ?? 0) > 0 && (
+                            <Tag color="warning">
+                              {t.staleOverridesBadge.replace(
+                                "{count}",
+                                String(row.stale_overrides?.length ?? 0),
+                              )}
+                            </Tag>
+                          )}
+                        </div>
+                      );
+                    },
                   },
                   {
                     title: t.buildType,
@@ -369,6 +425,15 @@ export function BuildPage({
                     : []),
                 ]}
               />
+              {selected.fallback_reason && (
+                <Alert
+                  style={{ marginTop: 16 }}
+                  type="warning"
+                  showIcon
+                  title={t.fallbackNoticeTitle}
+                  description={fallbackReasonLabel(selected.fallback_reason, t)}
+                />
+              )}
               {(selected.stale_overrides?.length ?? 0) > 0 && (
                 <Alert
                   style={{ marginTop: 16 }}
@@ -392,6 +457,19 @@ export function BuildPage({
               <h3 className="card-title" style={{ marginTop: 16 }}>
                 {t.buildStats}
               </h3>
+              {entitySummaryKeys.some(
+                (key) => (selected.counts[key] ?? 0) > 0,
+              ) && (
+                <Space wrap style={{ marginBottom: 12 }}>
+                  {entitySummaryKeys
+                    .filter((key) => (selected.counts[key] ?? 0) > 0)
+                    .map((key) => (
+                      <Tag key={key} color="blue">
+                        {`${t[countLabels[key]]}: ${selected.counts[key]}`}
+                      </Tag>
+                    ))}
+                </Space>
+              )}
               <TableScroll label={t.buildStats}>
                 <Table
                   rowKey="key"

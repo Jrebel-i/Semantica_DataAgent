@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Alert,
   Button,
@@ -18,6 +18,7 @@ import { TableScroll } from "./TableScroll";
 
 type ProjectRow = components["schemas"]["ProjectView"];
 type EvolutionPolicy = components["schemas"]["EvolutionPolicyView"];
+type PullInstance = components["schemas"]["PullInstanceView"];
 type ProjectRole = "admin" | "member";
 
 type MemberRow = {
@@ -43,17 +44,25 @@ type ParamSchema = {
   required?: string[];
 };
 
-type AdapterPull = Omit<
-  components["schemas"]["AdapterPullView"],
-  "parameters_schema"
-> & { parameters_schema: ParamSchema };
-
 type AdapterRow = Omit<
   components["schemas"]["ProjectAdapterView"],
-  "parameters_schema" | "pull"
+  "parameters_schema"
 > & {
   parameters_schema: ParamSchema;
-  pull: AdapterPull | null;
+};
+
+type PullerPlugin = Omit<
+  components["schemas"]["PullerPluginView"],
+  "parameters_schema"
+> & {
+  parameters_schema: ParamSchema;
+};
+
+type ProjectExecutor = Omit<
+  components["schemas"]["ProjectExecutorView"],
+  "parameters_schema"
+> & {
+  parameters_schema: ParamSchema;
 };
 
 const PROJECT_TYPE_LABELS: Record<string, string> = {
@@ -61,23 +70,122 @@ const PROJECT_TYPE_LABELS: Record<string, string> = {
   document: "文档型",
 };
 
+function isSecretField(
+  name: string,
+  field: ParamSchema,
+  secretKeys?: string[],
+) {
+  return field.format === "password" || (secretKeys?.includes(name) ?? false);
+}
+
+function buildPullParametersPayload(
+  schema: ParamSchema,
+  values: Record<string, unknown>,
+  secretKeys: string[],
+  configuredSecrets: Set<string>,
+): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
+  const properties = schema.properties || {};
+  for (const [name, field] of Object.entries(properties)) {
+    const raw = values[name];
+    if (isSecretField(name, field, secretKeys)) {
+      const wasConfigured = configuredSecrets.has(name);
+      if (raw === "***") {
+        if (wasConfigured) result[name] = "***";
+      } else if (raw === "") {
+        if (wasConfigured) result[name] = "";
+      } else if (typeof raw === "string" && raw.length > 0) {
+        result[name] = raw;
+      }
+      continue;
+    }
+    const effective = raw !== undefined ? raw : field.default;
+    if (effective === undefined || effective === null || effective === "") {
+      continue;
+    }
+    if (field.type === "integer" || field.type === "number") {
+      const num = Number(effective);
+      if (Number.isFinite(num)) result[name] = num;
+    } else {
+      result[name] = effective;
+    }
+  }
+  return result;
+}
+
+function cleanExecutorParameters(
+  schema: ParamSchema,
+  values: Record<string, unknown>,
+): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
+  const properties = schema.properties || {};
+  for (const [name, field] of Object.entries(properties)) {
+    const raw = values[name];
+    if (raw === undefined || raw === null || raw === "") continue;
+    if (field.type === "integer" || field.type === "number") {
+      const num = Number(raw);
+      if (Number.isFinite(num)) result[name] = num;
+    } else {
+      result[name] = raw;
+    }
+  }
+  return result;
+}
+
+async function parseErrorDetail(
+  response: Response,
+  fallback: string,
+): Promise<string> {
+  try {
+    const body = (await response.json()) as {
+      detail?:
+        | string
+        | Array<{
+            path?: (string | number)[];
+            loc?: (string | number)[];
+            message?: string;
+            msg?: string;
+          }>;
+    };
+    if (typeof body.detail === "string" && body.detail) return body.detail;
+    if (Array.isArray(body.detail) && body.detail.length > 0) {
+      const joined = body.detail
+        .map((issue) => {
+          const rawPath = issue.path ?? issue.loc;
+          const path = rawPath?.length ? rawPath.join(".") : "";
+          const message = issue.message ?? issue.msg ?? "";
+          if (path && message) return `${path}: ${message}`;
+          return message || path;
+        })
+        .filter((item) => item.length > 0)
+        .join("; ");
+      return joined || fallback;
+    }
+  } catch {
+    // Ignore non-JSON bodies
+  }
+  return fallback;
+}
+
 function ParameterFields({
   schema,
   values,
   disabled,
-  tokenConfigured,
+  secretKeys,
   onChange,
 }: {
   schema: ParamSchema;
   values: Record<string, unknown>;
   disabled: boolean;
-  tokenConfigured?: boolean;
+  secretKeys?: string[];
   onChange: (name: string, value: unknown) => void;
 }) {
   return (
     <>
       {Object.entries(schema.properties || {}).map(([name, field]) => {
         const value = values[name] ?? field.default;
+        const secret = isSecretField(name, field, secretKeys);
+        const isNumeric = field.type === "integer" || field.type === "number";
         return (
           <label className="field" key={name}>
             <span className="field-label">
@@ -120,23 +228,12 @@ function ParameterFields({
               <Input
                 aria-label={name}
                 disabled={disabled}
-                type={
-                  field.format === "password"
-                    ? "password"
-                    : field.type === "integer"
-                      ? "number"
-                      : "text"
-                }
-                placeholder={
-                  field.format === "password" && tokenConfigured
-                    ? undefined
-                    : undefined
-                }
+                type={secret ? "password" : isNumeric ? "number" : "text"}
                 value={value == null ? "" : String(value)}
                 onChange={(event) =>
                   onChange(
                     name,
-                    field.type === "integer" && event.target.value !== ""
+                    isNumeric && event.target.value !== ""
                       ? Number(event.target.value)
                       : event.target.value,
                   )
@@ -193,85 +290,134 @@ export function ProjectsPage({
   const [policyBusy, setPolicyBusy] = useState(false);
   const [policyError, setPolicyError] = useState("");
   const [policyNotice, setPolicyNotice] = useState("");
+  const [pullerPlugins, setPullerPlugins] = useState<PullerPlugin[]>([]);
+  const [pullInstances, setPullInstances] = useState<PullInstance[]>([]);
+  const [pullError, setPullError] = useState("");
+  const [instanceModalOpen, setInstanceModalOpen] = useState(false);
+  const [editingInstance, setEditingInstance] = useState<PullInstance | null>(
+    null,
+  );
+  const [instId, setInstId] = useState("");
+  const [instPluginId, setInstPluginId] = useState("");
+  const [instDisplayName, setInstDisplayName] = useState("");
+  const [instEnabled, setInstEnabled] = useState(true);
+  const [instScheduleCron, setInstScheduleCron] = useState("");
+  const [instTimezone, setInstTimezone] = useState("Asia/Shanghai");
+  const [instCatalogPrefix, setInstCatalogPrefix] = useState("");
+  const [instTaskNamespace, setInstTaskNamespace] = useState("");
+  const [instDropThreshold, setInstDropThreshold] = useState("0.5");
+  const [instParams, setInstParams] = useState<Record<string, unknown>>({});
+  const [instFormError, setInstFormError] = useState("");
+  const [instSaving, setInstSaving] = useState(false);
+  const [deleteInstanceTarget, setDeleteInstanceTarget] =
+    useState<PullInstance | null>(null);
+  const [executors, setExecutors] = useState<ProjectExecutor[]>([]);
+  const [executorError, setExecutorError] = useState("");
+  const [executorNotice, setExecutorNotice] = useState("");
+  const [executorBusy, setExecutorBusy] = useState(false);
+
+  const projectLoadGen = useRef(0);
+  const projectAbortRef = useRef<AbortController | null>(null);
+  const savedEnabledExecutorsRef = useRef<Set<string>>(new Set());
 
   const authHeaders = { Authorization: `Bearer ${token}` };
-  const refresh = useCallback(async () => {
-    try {
-      const response = await fetch("/api/v1/projects", {
-        headers: authHeaders,
-      });
-      if (!response.ok) throw new Error();
-      setRows((await response.json()) as ProjectRow[]);
-    } catch {
-      setError(t.projectError);
-    }
-  }, [token, t.projectError]);
+  const refresh = useCallback(
+    async (signal?: AbortSignal) => {
+      try {
+        const response = await fetch("/api/v1/projects", {
+          headers: authHeaders,
+          signal,
+        });
+        if (!response.ok) throw new Error();
+        const data = (await response.json()) as ProjectRow[];
+        if (signal?.aborted) return;
+        setRows(data);
+      } catch {
+        if (!signal?.aborted) setError(t.projectError);
+      }
+    },
+    [token, t.projectError],
+  );
   useEffect(() => {
-    void refresh();
+    const controller = new AbortController();
+    void refresh(controller.signal);
+    return () => {
+      controller.abort();
+      projectAbortRef.current?.abort();
+    };
   }, [refresh]);
 
   const loadMembers = useCallback(
-    async (projectId: string) => {
+    async (
+      projectId: string,
+      signal?: AbortSignal,
+      expectedGen = projectLoadGen.current,
+    ) => {
       try {
         const [memberResponse, userResponse] = await Promise.all([
           fetch(`/api/v1/projects/${projectId}/members`, {
             headers: authHeaders,
+            signal,
           }),
-          fetch("/api/v1/users", { headers: authHeaders }),
+          fetch("/api/v1/users", { headers: authHeaders, signal }),
         ]);
         if (!memberResponse.ok || !userResponse.ok) throw new Error();
-        setMembers((await memberResponse.json()) as MemberRow[]);
-        setUsers((await userResponse.json()) as UserRow[]);
+        const [nextMembers, nextUsers] = (await Promise.all([
+          memberResponse.json(),
+          userResponse.json(),
+        ])) as [MemberRow[], UserRow[]];
+        if (signal?.aborted || projectLoadGen.current !== expectedGen) return;
+        setMembers(nextMembers);
+        setUsers(nextUsers);
         setMemberError("");
       } catch {
-        setMemberError(t.memberError);
+        if (!signal?.aborted && projectLoadGen.current === expectedGen) {
+          setMemberError(t.memberError);
+        }
       }
     },
     [token, t.memberError],
   );
 
   const loadAdapters = useCallback(
-    async (projectId: string) => {
+    async (
+      projectId: string,
+      signal?: AbortSignal,
+      expectedGen = projectLoadGen.current,
+    ) => {
       try {
         const response = await fetch(`/api/v1/projects/${projectId}/adapters`, {
           headers: authHeaders,
+          signal,
         });
         if (!response.ok) throw new Error();
-        const rows = (await response.json()) as AdapterRow[];
-        setAdapters(
-          rows.map((row) => {
-            if (!row.pull) return row;
-            const parameters = { ...row.pull.parameters };
-            Object.entries(row.pull.parameters_schema.properties || {}).forEach(
-              ([name, schema]) => {
-                if (
-                  schema.format === "password" &&
-                  row.pull?.token_configured
-                ) {
-                  parameters[name] = "***";
-                }
-              },
-            );
-            return { ...row, pull: { ...row.pull, parameters } };
-          }),
-        );
+        const nextAdapters = (await response.json()) as AdapterRow[];
+        if (signal?.aborted || projectLoadGen.current !== expectedGen) return;
+        setAdapters(nextAdapters);
         setAdapterError("");
       } catch {
-        setAdapterError(t.adapterSaveFailed);
+        if (!signal?.aborted && projectLoadGen.current === expectedGen) {
+          setAdapterError(t.adapterSaveFailed);
+        }
       }
     },
     [token, t.adapterSaveFailed],
   );
 
   const loadPolicy = useCallback(
-    async (projectId: string) => {
+    async (
+      projectId: string,
+      signal?: AbortSignal,
+      expectedGen = projectLoadGen.current,
+    ) => {
       try {
         const response = await fetch(
           `/api/v1/projects/${projectId}/evolution-policy`,
-          { headers: authHeaders },
+          { headers: authHeaders, signal },
         );
         if (!response.ok) return;
         const data = (await response.json()) as Partial<EvolutionPolicy>;
+        if (signal?.aborted || projectLoadGen.current !== expectedGen) return;
         setPolicy({
           correction_require_review: data.correction_require_review ?? true,
           evolution_require_review: data.evolution_require_review ?? true,
@@ -284,19 +430,109 @@ export function ProjectsPage({
     [token],
   );
 
+  const loadPullerSection = useCallback(
+    async (
+      projectId: string,
+      signal?: AbortSignal,
+      expectedGen = projectLoadGen.current,
+    ) => {
+      try {
+        const [pluginsRes, instancesRes] = await Promise.all([
+          fetch("/api/v1/puller-plugins", { headers: authHeaders, signal }),
+          fetch(
+            `/api/v1/projects/${encodeURIComponent(projectId)}/pull-instances`,
+            { headers: authHeaders, signal },
+          ),
+        ]);
+        if (!pluginsRes.ok || !instancesRes.ok) throw new Error();
+        const [nextPlugins, nextInstances] = (await Promise.all([
+          pluginsRes.json(),
+          instancesRes.json(),
+        ])) as [PullerPlugin[], PullInstance[]];
+        if (signal?.aborted || projectLoadGen.current !== expectedGen) return;
+        setPullerPlugins(Array.isArray(nextPlugins) ? nextPlugins : []);
+        setPullInstances(Array.isArray(nextInstances) ? nextInstances : []);
+        setPullError("");
+      } catch {
+        if (!signal?.aborted && projectLoadGen.current === expectedGen) {
+          setPullError(t.pullInstanceSaveFailed);
+        }
+      }
+    },
+    [token, t.pullInstanceSaveFailed],
+  );
+
+  const loadExecutors = useCallback(
+    async (
+      projectId: string,
+      signal?: AbortSignal,
+      expectedGen = projectLoadGen.current,
+    ) => {
+      try {
+        const response = await fetch(
+          `/api/v1/projects/${encodeURIComponent(projectId)}/executors`,
+          { headers: authHeaders, signal },
+        );
+        if (!response.ok) throw new Error();
+        const nextExecutors = (await response.json()) as ProjectExecutor[];
+        if (signal?.aborted || projectLoadGen.current !== expectedGen) return;
+        const list = Array.isArray(nextExecutors) ? nextExecutors : [];
+        savedEnabledExecutorsRef.current = new Set(
+          list.filter((row) => row.enabled).map((row) => row.id),
+        );
+        setExecutors(list);
+        setExecutorError("");
+      } catch {
+        if (!signal?.aborted && projectLoadGen.current === expectedGen) {
+          setExecutorError(t.executorSaveFailed);
+        }
+      }
+    },
+    [token, t.executorSaveFailed],
+  );
+
   async function openProject(project: ProjectRow) {
+    projectAbortRef.current?.abort();
+    const controller = new AbortController();
+    projectAbortRef.current = controller;
+    const expectedGen = projectLoadGen.current + 1;
+    projectLoadGen.current = expectedGen;
+
     setSelected(project);
     setMemberError("");
     setAdapterError("");
     setPolicyError("");
     setPolicyNotice("");
+    setPullError("");
+    setExecutorError("");
+    setExecutorNotice("");
     setAdapters([]);
+    setMembers([]);
+    setUsers([]);
+    setPullerPlugins([]);
+    setPullInstances([]);
+    savedEnabledExecutorsRef.current = new Set();
+    setExecutors([]);
+    setInstanceModalOpen(false);
+    setEditingInstance(null);
+    setDeleteInstanceTarget(null);
     setAddUserId(undefined);
     setAddRole("member");
+
     await Promise.all([
-      project.my_role === "admin" ? loadMembers(project.id) : undefined,
-      project.my_role === "admin" ? loadPolicy(project.id) : undefined,
-      loadAdapters(project.id),
+      project.my_role === "admin"
+        ? loadMembers(project.id, controller.signal, expectedGen)
+        : undefined,
+      project.my_role === "admin"
+        ? loadPolicy(project.id, controller.signal, expectedGen)
+        : undefined,
+      loadAdapters(project.id, controller.signal, expectedGen),
+      project.type === "warehouse"
+        ? loadPullerSection(project.id, controller.signal, expectedGen)
+        : undefined,
+      project.type === "warehouse"
+        ? loadExecutors(project.id, controller.signal, expectedGen)
+        : undefined,
     ]);
   }
 
@@ -346,26 +582,13 @@ export function ProjectsPage({
     );
   }
 
-  function updateAdapterParameter(
-    id: string,
-    name: string,
-    value: unknown,
-    pull = false,
-  ) {
+  function updateAdapterParameter(id: string, name: string, value: unknown) {
     setAdapters((old) =>
-      old.map((row) => {
-        if (row.id !== id) return row;
-        if (pull && row.pull) {
-          return {
-            ...row,
-            pull: {
-              ...row.pull,
-              parameters: { ...row.pull.parameters, [name]: value },
-            },
-          };
-        }
-        return { ...row, parameters: { ...row.parameters, [name]: value } };
-      }),
+      old.map((row) =>
+        row.id === id
+          ? { ...row, parameters: { ...row.parameters, [name]: value } }
+          : row,
+      ),
     );
   }
 
@@ -380,14 +603,6 @@ export function ProjectsPage({
             id: row.id,
             enabled: row.enabled,
             parameters: row.parameters,
-            ...(row.pull
-              ? {
-                  pull: {
-                    enabled: row.pull.enabled,
-                    parameters: row.pull.parameters,
-                  },
-                }
-              : {}),
           })),
         }),
       });
@@ -396,6 +611,231 @@ export function ProjectsPage({
       await loadAdapters(selected.id);
     } catch {
       setAdapterError(t.adapterSaveFailed);
+    }
+  }
+
+  function secretKeysForPlugin(plugin: PullerPlugin | undefined): string[] {
+    if (!plugin) return [];
+    const keys = new Set<string>(plugin.secret_keys || []);
+    Object.entries(plugin.parameters_schema.properties || {}).forEach(
+      ([key, field]) => {
+        if (field.format === "password") keys.add(key);
+      },
+    );
+    return Array.from(keys);
+  }
+
+  function configuredSecretSet(
+    instance: PullInstance | null,
+    plugin: PullerPlugin | undefined,
+  ): Set<string> {
+    if (!instance) return new Set();
+    if (instance.configured_secrets && instance.configured_secrets.length > 0) {
+      return new Set(instance.configured_secrets);
+    }
+    if (instance.secret_configured) {
+      return new Set(secretKeysForPlugin(plugin));
+    }
+    return new Set();
+  }
+
+  function openCreateInstance() {
+    const defaultPlugin = pullerPlugins[0];
+    setEditingInstance(null);
+    setInstId("");
+    setInstPluginId(defaultPlugin?.id ?? "dtb");
+    setInstDisplayName("");
+    setInstEnabled(true);
+    setInstScheduleCron("");
+    setInstTimezone("Asia/Shanghai");
+    setInstCatalogPrefix("");
+    setInstTaskNamespace("");
+    setInstDropThreshold("0.5");
+    setInstParams({});
+    setInstFormError("");
+    setInstanceModalOpen(true);
+  }
+
+  function openEditInstance(instance: PullInstance) {
+    const plugin = pullerPlugins.find((p) => p.id === instance.plugin_id);
+    const configured = configuredSecretSet(instance, plugin);
+    const initialParams: Record<string, unknown> = { ...instance.parameters };
+    for (const key of configured) {
+      initialParams[key] = "***";
+    }
+    setEditingInstance(instance);
+    setInstId(instance.id);
+    setInstPluginId(instance.plugin_id);
+    setInstDisplayName(instance.display_name);
+    setInstEnabled(instance.enabled);
+    setInstScheduleCron(instance.schedule_cron ?? "");
+    setInstTimezone(instance.timezone || "Asia/Shanghai");
+    setInstCatalogPrefix(instance.catalog_prefix ?? "");
+    setInstTaskNamespace(instance.task_namespace ?? "");
+    setInstDropThreshold(String(instance.drop_threshold ?? 0.5));
+    setInstParams(initialParams);
+    setInstFormError("");
+    setInstanceModalOpen(true);
+  }
+
+  async function savePullInstance() {
+    if (!selected) return;
+    const plugin = pullerPlugins.find((p) => p.id === instPluginId);
+    const secretKeys = secretKeysForPlugin(plugin);
+    const configured = configuredSecretSet(editingInstance, plugin);
+    const parametersPayload = buildPullParametersPayload(
+      plugin?.parameters_schema ?? { type: "object", properties: {} },
+      instParams,
+      secretKeys,
+      configured,
+    );
+    const dropValue = Number(instDropThreshold || "0.5");
+
+    setInstSaving(true);
+    setInstFormError("");
+    try {
+      const url = editingInstance
+        ? `/api/v1/projects/${encodeURIComponent(selected.id)}/pull-instances/${encodeURIComponent(editingInstance.id)}`
+        : `/api/v1/projects/${encodeURIComponent(selected.id)}/pull-instances`;
+      const method = editingInstance ? "PUT" : "POST";
+      const body = editingInstance
+        ? {
+            display_name: instDisplayName.trim(),
+            enabled: instEnabled,
+            parameters: parametersPayload,
+            schedule_cron: instScheduleCron.trim() || null,
+            timezone: instTimezone.trim() || "Asia/Shanghai",
+            catalog_prefix: instCatalogPrefix.trim() || null,
+            task_namespace: instTaskNamespace.trim() || null,
+            drop_threshold: dropValue,
+          }
+        : {
+            id: instId.trim(),
+            plugin_id: instPluginId,
+            display_name: instDisplayName.trim(),
+            enabled: instEnabled,
+            parameters: parametersPayload,
+            schedule_cron: instScheduleCron.trim() || null,
+            timezone: instTimezone.trim() || "Asia/Shanghai",
+            catalog_prefix: instCatalogPrefix.trim() || null,
+            task_namespace: instTaskNamespace.trim() || null,
+            drop_threshold: dropValue,
+          };
+      const response = await fetch(url, {
+        method,
+        headers: { ...authHeaders, "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!response.ok) {
+        throw new Error(
+          await parseErrorDetail(response, t.pullInstanceSaveFailed),
+        );
+      }
+      setInstanceModalOpen(false);
+      setEditingInstance(null);
+      setPullError("");
+      await loadPullerSection(selected.id);
+    } catch (failure) {
+      setInstFormError(
+        failure instanceof Error ? failure.message : t.pullInstanceSaveFailed,
+      );
+    } finally {
+      setInstSaving(false);
+    }
+  }
+
+  async function deletePullInstance() {
+    if (!selected || !deleteInstanceTarget) return;
+    setInstSaving(true);
+    try {
+      const response = await fetch(
+        `/api/v1/projects/${encodeURIComponent(selected.id)}/pull-instances/${encodeURIComponent(deleteInstanceTarget.id)}`,
+        { method: "DELETE", headers: authHeaders },
+      );
+      if (!response.ok) {
+        throw new Error(
+          await parseErrorDetail(response, t.pullInstanceSaveFailed),
+        );
+      }
+      setDeleteInstanceTarget(null);
+      setPullError("");
+      await loadPullerSection(selected.id);
+    } catch (failure) {
+      setPullError(
+        failure instanceof Error ? failure.message : t.pullInstanceSaveFailed,
+      );
+      setDeleteInstanceTarget(null);
+    } finally {
+      setInstSaving(false);
+    }
+  }
+
+  function toggleExecutorEnabled(id: string, checked: boolean) {
+    setExecutors((old) =>
+      old.map((row) =>
+        row.id === id
+          ? { ...row, enabled: checked }
+          : checked
+            ? { ...row, enabled: false }
+            : row,
+      ),
+    );
+    setExecutorNotice("");
+  }
+
+  function updateExecutorParameter(id: string, name: string, value: unknown) {
+    setExecutors((old) =>
+      old.map((row) =>
+        row.id === id
+          ? { ...row, parameters: { ...row.parameters, [name]: value } }
+          : row,
+      ),
+    );
+    setExecutorNotice("");
+  }
+
+  async function saveExecutors() {
+    if (!selected) return;
+    setExecutorBusy(true);
+    setExecutorError("");
+    setExecutorNotice("");
+    try {
+      const payloadExecutors = executors
+        .filter(
+          (row) => row.enabled || savedEnabledExecutorsRef.current.has(row.id),
+        )
+        .map((row) => ({
+          id: row.id,
+          enabled: row.enabled,
+          parameters: cleanExecutorParameters(
+            row.parameters_schema,
+            row.parameters,
+          ),
+        }));
+      const response = await fetch(
+        `/api/v1/projects/${encodeURIComponent(selected.id)}/executors`,
+        {
+          method: "PUT",
+          headers: { ...authHeaders, "Content-Type": "application/json" },
+          body: JSON.stringify({ executors: payloadExecutors }),
+        },
+      );
+      if (!response.ok) {
+        throw new Error(await parseErrorDetail(response, t.executorSaveFailed));
+      }
+      const updated = (await response.json()) as ProjectExecutor[];
+      const nextList = Array.isArray(updated) ? updated : [];
+      savedEnabledExecutorsRef.current = new Set(
+        nextList.filter((row) => row.enabled).map((row) => row.id),
+      );
+      setExecutors(nextList);
+      setExecutorNotice(t.executorSaved);
+    } catch (failure) {
+      setExecutorError(
+        failure instanceof Error ? failure.message : t.executorSaveFailed,
+      );
+    } finally {
+      setExecutorBusy(false);
     }
   }
 
@@ -548,13 +988,24 @@ export function ProjectsPage({
   }
 
   if (selected) {
-    const canEditAdapters = selected.my_role === "admin";
+    const isAdmin = selected.my_role === "admin";
+    const isActive = selected.status === "active";
+    const canEditProject = isAdmin && isActive;
+    const canEditAdapters = canEditProject;
     const adminCount = members.filter((item) => item.role === "admin").length;
     const lastAdmin = (member: MemberRow) =>
       member.role === "admin" && adminCount <= 1;
     const availableUsers = users.filter(
       (user) => !members.some((member) => member.id === user.id),
     );
+    const activePullerPlugin = pullerPlugins.find(
+      (plugin) => plugin.id === instPluginId,
+    );
+    const activeSecretKeys = secretKeysForPlugin(activePullerPlugin);
+    const hasConfiguredSecretForModal =
+      editingInstance !== null &&
+      configuredSecretSet(editingInstance, activePullerPlugin).size > 0;
+    const allExecutorsDisabled = executors.every((item) => !item.enabled);
     return (
       <section className="stack admin-page">
         <div className="page-header">
@@ -586,11 +1037,21 @@ export function ProjectsPage({
                   {format === "yaml" ? t.exportOssieYaml : t.exportOssieJson}
                 </Button>
               ))}
-            <Button autoInsertSpace={false} onClick={() => setSelected(null)}>
+            <Button
+              autoInsertSpace={false}
+              onClick={() => {
+                projectAbortRef.current?.abort();
+                projectLoadGen.current += 1;
+                setSelected(null);
+              }}
+            >
               {t.backToProjects}
             </Button>
           </div>
         </div>
+        {!isActive && (
+          <Alert type="info" showIcon title={t.projectArchivedNotice} />
+        )}
         {memberError && <Alert type="error" title={memberError} />}
         <div className="card section-card">
           <h2 className="card-title">{t.sourceAdapters}</h2>
@@ -632,76 +1093,183 @@ export function ProjectsPage({
                         updateAdapterParameter(adapter.id, name, value)
                       }
                     />
-                    {adapter.pull && (
-                      <div className="stack">
-                        <h3 className="card-title">
-                          {adapter.id === "ossie"
-                            ? t.adapterPullOssie
-                            : t.adapterPull}
-                        </h3>
-                        <Checkbox
-                          checked={adapter.pull.enabled}
-                          disabled={!canEditAdapters}
-                          onChange={(event) => {
-                            const nextEnabled = event.target.checked;
-                            setAdapters((old) =>
-                              old.map((row) => {
-                                if (row.id === adapter.id && row.pull) {
-                                  return {
-                                    ...row,
-                                    pull: {
-                                      ...row.pull,
-                                      enabled: nextEnabled,
-                                    },
-                                  };
-                                }
-                                if (nextEnabled && row.pull?.enabled) {
-                                  return {
-                                    ...row,
-                                    pull: { ...row.pull, enabled: false },
-                                  };
-                                }
-                                return row;
-                              }),
-                            );
-                          }}
-                        >
-                          {t.enabled}
-                        </Checkbox>
-                        <ParameterFields
-                          schema={adapter.pull.parameters_schema}
-                          values={adapter.pull.parameters}
-                          disabled={!canEditAdapters}
-                          tokenConfigured={adapter.pull.token_configured}
-                          onChange={(name, value) =>
-                            updateAdapterParameter(
-                              adapter.id,
-                              name,
-                              value,
-                              true,
-                            )
-                          }
-                        />
-                        {adapter.pull.token_configured && (
-                          <p className="field-hint">{t.adapterTokenSaved}</p>
-                        )}
-                      </div>
-                    )}
                   </div>
                 )}
               </div>
             ))}
           </div>
-          {canEditAdapters && (
+          {isAdmin && (
             <Button
               autoInsertSpace={false}
               type="primary"
+              disabled={!canEditAdapters}
               onClick={() => void saveAdapters()}
             >
               {t.adapterSave}
             </Button>
           )}
         </div>
+        {selected.type === "warehouse" && (
+          <div
+            className="card section-card"
+            data-testid="puller-instances-section"
+          >
+            <div className="card-title-row">
+              <div>
+                <h2 className="card-title">{t.pullerInstances}</h2>
+                <p className="page-subtitle">{t.pullerInstancesHint}</p>
+              </div>
+              {isAdmin && (
+                <Button
+                  autoInsertSpace={false}
+                  type="primary"
+                  disabled={!canEditProject}
+                  onClick={openCreateInstance}
+                >
+                  {t.addPullerInstance}
+                </Button>
+              )}
+            </div>
+            {pullError && <Alert type="error" title={pullError} />}
+            <TableScroll label={t.pullerInstances}>
+              <Table
+                rowKey="id"
+                dataSource={pullInstances}
+                pagination={false}
+                locale={{ emptyText: t.noPullerInstances }}
+                columns={[
+                  { title: t.pullInstanceId, dataIndex: "id" },
+                  {
+                    title: t.pullInstanceDisplayName,
+                    dataIndex: "display_name",
+                  },
+                  {
+                    title: t.pullerPlugin,
+                    render: (_, row) => <Tag>{row.plugin_id}</Tag>,
+                  },
+                  {
+                    title: t.enabled,
+                    render: (_, row) => (
+                      <Tag color={row.enabled ? "green" : "default"}>
+                        {row.enabled ? t.enabled : t.disabled}
+                      </Tag>
+                    ),
+                  },
+                  {
+                    title: t.pullScheduleCron,
+                    render: (_, row) =>
+                      `${row.schedule_cron || t.pullManualOnly} (${row.timezone})`,
+                  },
+                  {
+                    title: `${t.pullCatalogPrefix} / ${t.pullTaskNamespace}`,
+                    render: (_, row) =>
+                      `${row.catalog_prefix || "—"} / ${row.task_namespace || "—"}`,
+                  },
+                  { title: t.pullDropThreshold, dataIndex: "drop_threshold" },
+                  {
+                    title: t.pullLastTableCount,
+                    render: (_, row) => row.last_table_count ?? "—",
+                  },
+                  {
+                    title: t.pullSecretConfigured,
+                    render: (_, row) => (
+                      <Tag color={row.secret_configured ? "green" : "default"}>
+                        {row.secret_configured
+                          ? t.pullSecretSaved
+                          : t.pullSecretUnconfigured}
+                      </Tag>
+                    ),
+                  },
+                  ...(isAdmin
+                    ? [
+                        {
+                          title: t.actions,
+                          render: (_: unknown, row: PullInstance) => (
+                            <Space wrap>
+                              <Button
+                                autoInsertSpace={false}
+                                disabled={!canEditProject}
+                                onClick={() => openEditInstance(row)}
+                              >
+                                {t.providerEdit}
+                              </Button>
+                              <Button
+                                autoInsertSpace={false}
+                                danger
+                                disabled={!canEditProject}
+                                onClick={() => setDeleteInstanceTarget(row)}
+                              >
+                                {t.deleteAction}
+                              </Button>
+                            </Space>
+                          ),
+                        },
+                      ]
+                    : []),
+                ]}
+              />
+            </TableScroll>
+          </div>
+        )}
+        {selected.type === "warehouse" && (
+          <div className="card section-card" data-testid="executors-section">
+            <h2 className="card-title">{t.queryExecutors}</h2>
+            <p className="page-subtitle">{t.queryExecutorsHint}</p>
+            {executorError && <Alert type="error" title={executorError} />}
+            {executorNotice && <Alert type="success" title={executorNotice} />}
+            {allExecutorsDisabled && (
+              <Alert type="info" showIcon title={t.executorDisabledHint} />
+            )}
+            <div className="stack">
+              {executors.map((executor) => (
+                <div
+                  key={executor.id}
+                  className="adapter-row"
+                  data-testid={`executor-${executor.id}`}
+                >
+                  <Space wrap>
+                    <Checkbox
+                      checked={executor.enabled}
+                      disabled={!canEditProject || !executor.compatible}
+                      onChange={(event) =>
+                        toggleExecutorEnabled(executor.id, event.target.checked)
+                      }
+                    >
+                      {executor.name}
+                    </Checkbox>
+                    <Tag>{executor.id}</Tag>
+                  </Space>
+                  {executor.reason && (
+                    <p className="field-hint">{executor.reason}</p>
+                  )}
+                  {executor.enabled && executor.compatible && (
+                    <div className="stack">
+                      <ParameterFields
+                        schema={executor.parameters_schema}
+                        values={executor.parameters}
+                        disabled={!canEditProject}
+                        onChange={(name, value) =>
+                          updateExecutorParameter(executor.id, name, value)
+                        }
+                      />
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+            {isAdmin && (
+              <Button
+                autoInsertSpace={false}
+                type="primary"
+                disabled={!canEditProject || executorBusy}
+                loading={executorBusy}
+                onClick={() => void saveExecutors()}
+              >
+                {t.executorSave}
+              </Button>
+            )}
+          </div>
+        )}
         {selected.my_role === "admin" && (
           <div className="card section-card">
             <h2 className="card-title">{t.evolutionPolicyTitle}</h2>
@@ -844,6 +1412,151 @@ export function ProjectsPage({
             onCancel={() => setConfirmMember(null)}
           >
             <p>{`${t.confirmRemoveMember}: ${confirmMember.name}`}</p>
+          </Modal>
+        )}
+        {instanceModalOpen && (
+          <Modal
+            open
+            title={editingInstance ? t.editPullerInstance : t.addPullerInstance}
+            okText={t.save}
+            cancelText={t.cancel}
+            confirmLoading={instSaving}
+            onOk={() => void savePullInstance()}
+            onCancel={() => {
+              setInstanceModalOpen(false);
+              setEditingInstance(null);
+            }}
+          >
+            <div className="stack">
+              {instFormError && <Alert type="error" title={instFormError} />}
+              <label className="field">
+                <span className="field-label">{t.pullerPlugin}</span>
+                <Select
+                  aria-label={t.pullerPlugin}
+                  disabled={editingInstance !== null || !canEditProject}
+                  value={instPluginId}
+                  onChange={(value) => {
+                    setInstPluginId(value);
+                    setInstParams({});
+                  }}
+                  options={pullerPlugins.map((plugin) => ({
+                    value: plugin.id,
+                    label: `${plugin.display_name} (${plugin.id})`,
+                  }))}
+                />
+              </label>
+              <label className="field">
+                <span className="field-label">{t.pullInstanceId}</span>
+                <Input
+                  aria-label={t.pullInstanceId}
+                  disabled={editingInstance !== null || !canEditProject}
+                  value={instId}
+                  onChange={(event) => setInstId(event.target.value)}
+                />
+                <p className="field-hint">{t.pullInstanceIdHint}</p>
+              </label>
+              <label className="field">
+                <span className="field-label">{t.pullInstanceDisplayName}</span>
+                <Input
+                  aria-label={t.pullInstanceDisplayName}
+                  disabled={!canEditProject}
+                  value={instDisplayName}
+                  onChange={(event) => setInstDisplayName(event.target.value)}
+                />
+              </label>
+              <Checkbox
+                checked={instEnabled}
+                disabled={!canEditProject}
+                onChange={(event) => setInstEnabled(event.target.checked)}
+              >
+                {t.enabled}
+              </Checkbox>
+              <label className="field">
+                <span className="field-label">{t.pullScheduleCron}</span>
+                <Input
+                  aria-label={t.pullScheduleCron}
+                  disabled={!canEditProject}
+                  value={instScheduleCron}
+                  placeholder="02:30"
+                  onChange={(event) => setInstScheduleCron(event.target.value)}
+                />
+                <p className="field-hint">{t.pullScheduleCronHint}</p>
+              </label>
+              <label className="field">
+                <span className="field-label">{t.pullTimezone}</span>
+                <Input
+                  aria-label={t.pullTimezone}
+                  disabled={!canEditProject}
+                  value={instTimezone}
+                  onChange={(event) => setInstTimezone(event.target.value)}
+                />
+              </label>
+              <label className="field">
+                <span className="field-label">{t.pullCatalogPrefix}</span>
+                <Input
+                  aria-label={t.pullCatalogPrefix}
+                  disabled={!canEditProject}
+                  value={instCatalogPrefix}
+                  onChange={(event) => setInstCatalogPrefix(event.target.value)}
+                />
+              </label>
+              <label className="field">
+                <span className="field-label">{t.pullTaskNamespace}</span>
+                <Input
+                  aria-label={t.pullTaskNamespace}
+                  disabled={!canEditProject}
+                  value={instTaskNamespace}
+                  onChange={(event) => setInstTaskNamespace(event.target.value)}
+                />
+              </label>
+              <label className="field">
+                <span className="field-label">{t.pullDropThreshold}</span>
+                <Input
+                  aria-label={t.pullDropThreshold}
+                  disabled={!canEditProject}
+                  type="number"
+                  step="0.05"
+                  min="0.01"
+                  max="1"
+                  value={instDropThreshold}
+                  onChange={(event) => setInstDropThreshold(event.target.value)}
+                />
+                <p className="field-hint">{t.pullDropThresholdHint}</p>
+              </label>
+              {activePullerPlugin && (
+                <ParameterFields
+                  schema={activePullerPlugin.parameters_schema}
+                  values={instParams}
+                  disabled={!canEditProject}
+                  secretKeys={activeSecretKeys}
+                  onChange={(name, value) =>
+                    setInstParams((old) => ({ ...old, [name]: value }))
+                  }
+                />
+              )}
+              {hasConfiguredSecretForModal && (
+                <p className="field-hint">{t.pullSecretMaskHint}</p>
+              )}
+            </div>
+          </Modal>
+        )}
+        {deleteInstanceTarget !== null && (
+          <Modal
+            open
+            title={t.deletePullerInstance}
+            okText={t.deleteAction}
+            cancelText={t.cancel}
+            okButtonProps={{ danger: true }}
+            confirmLoading={instSaving}
+            onOk={() => void deletePullInstance()}
+            onCancel={() => setDeleteInstanceTarget(null)}
+          >
+            <p>
+              {t.confirmDeletePullerInstance.replace(
+                "{name}",
+                deleteInstanceTarget.display_name,
+              )}
+            </p>
           </Modal>
         )}
       </section>

@@ -346,3 +346,74 @@ test("skips overlapping build poll ticks while an earlier builds request is pend
     vi.useRealTimers();
   }
 });
+
+test("displays fallback_reason labels, entity-level counts and stale_overrides together", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) => {
+      if (url === "/api/v1/projects")
+        return Response.json([
+          {
+            id: "default",
+            name: "业务数据",
+            type: "warehouse",
+            status: "active",
+            created_at: "2026-01-01T00:00:00Z",
+            my_role: "admin",
+          },
+        ]);
+      if (url === "/api/v1/projects/default/schedule")
+        return Response.json({ interval_seconds: 0 });
+      if (url === "/api/v1/generations?project=default")
+        return Response.json({
+          generations: [],
+          behind: false,
+          source_head: null,
+        });
+      if (url === "/api/v1/builds?project=default")
+        return Response.json([
+          {
+            id: 9,
+            project_id: "default",
+            status: "succeeded",
+            started_at: "2026-01-03T00:00:00Z",
+            finished_at: "2026-01-03T00:01:00Z",
+            counts: {
+              table: 4,
+              field: 18,
+              column_lineage: 6,
+              relationship: 2,
+              embedding_cache_hits: 15,
+            },
+            error: null,
+            build_type: "full",
+            fallback_reason: "threshold_exceeded",
+            triggered_by: "定时拉取",
+            source_commit: "c".repeat(40),
+            logs: [],
+            stale_overrides: [
+              {
+                kind: "table",
+                key: "shop.deprecated",
+                reason: "Table shop.deprecated not found",
+              },
+            ],
+          },
+        ]);
+      return Response.json([]);
+    }),
+  );
+
+  render(<BuildPage token="token" messages={getMessages("zh")} />);
+  const badge = await screen.findByText("回退全量：实体变更比例超过增量阈值");
+  expect(badge).toBeTruthy();
+  fireEvent.click(badge.closest("tr")!);
+  expect(
+    await screen.findByText("已自动回退为全量构建（新建知识代兜底）"),
+  ).toBeTruthy();
+  expect(screen.getByText("表: 4")).toBeTruthy();
+  expect(screen.getByText("字段血缘: 6")).toBeTruthy();
+  expect(screen.getByText("外键关系: 2")).toBeTruthy();
+  expect(screen.getByText("向量缓存命中")).toBeTruthy();
+  expect(screen.getByText("部分语义覆盖条目在本次构建中已失效")).toBeTruthy();
+});
