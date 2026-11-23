@@ -243,7 +243,7 @@ def create_discovery_run(
     """Validate preconditions and reserve a single running discovery_runs row."""
     # Pre-flight personal DTB token (400) & executor availability (503)
     discovery_executor.require_personal_dtb_token(owner_id)
-    discovery_executor.resolve_executor_plugin()
+    discovery_executor.resolve_executor_plugin(project_id=project_id)
 
     now = datetime.now(UTC)
     run_id = uuid.uuid4().hex
@@ -651,7 +651,9 @@ async def _execute_discovery_run_async(run_id: str, owner_id: str) -> None:
     partial_reasons: list[str] = []
 
     try:
-        runtime = discovery_executor.resolve_discovery_dtb_runtime(owner_id)
+        runtime = discovery_executor.resolve_discovery_dtb_runtime(
+            owner_id, project_id=project_id
+        )
     except DiscoveryExecutionError as exc:
         _update_run_fields(
             run_id,
@@ -684,6 +686,7 @@ async def _execute_discovery_run_async(run_id: str, owner_id: str) -> None:
                 owner_id=owner_id,
                 config=cfg,
                 runtime=runtime,
+                project_id=project_id,
             )
             queries_fetched = fetched.raw_row_count
             mining_result = query_history_miner.mine_query_history(

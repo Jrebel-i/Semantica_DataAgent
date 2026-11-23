@@ -1004,6 +1004,7 @@ async def _resolve_table_latest_partitions(
                 timeout_seconds=timeout_seconds,
                 runtime=runtime,
                 require_limit=False,
+                project_id=project_id,
             )
         except DiscoveryAuthenticationError:
             raise
@@ -1063,7 +1064,9 @@ async def probe_fk_candidates(
     resolved_runtime = (
         runtime
         if runtime is not None
-        else discovery_executor.resolve_discovery_dtb_runtime(owner_id)
+        else discovery_executor.resolve_discovery_dtb_runtime(
+            owner_id, project_id=project_id
+        )
     )
     indexed = _index_physical_tables(tables)
     effective_concurrency = min(2, max(1, int(probe_concurrency)))
@@ -1156,6 +1159,7 @@ async def probe_fk_candidates(
                     timeout_seconds=probe_timeout_seconds,
                     runtime=resolved_runtime,
                     require_limit=True,
+                    project_id=project_id,
                 )
             except DiscoveryAuthenticationError as exc:
                 auth_errors.append(exc)
@@ -1238,6 +1242,7 @@ async def probe_fk_candidates(
                     timeout_seconds=probe_timeout_seconds,
                     runtime=resolved_runtime,
                     require_limit=True,
+                    project_id=project_id,
                 )
             except DiscoveryAuthenticationError as exc:
                 auth_errors.append(exc)

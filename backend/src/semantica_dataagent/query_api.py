@@ -4,6 +4,7 @@ import asyncio
 import csv
 import hashlib
 import hmac
+import inspect
 import io
 import json
 import logging
@@ -15,7 +16,7 @@ from typing import Annotated, Literal
 from urllib.parse import urlsplit
 
 import sqlglot
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response
 from fastapi.security import HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field
@@ -40,8 +41,9 @@ from .db import (
 from .dtb_executor import column_names
 from .failure_diagnostics import safe_dtb_category, safe_query_stage
 from .plugins import ExecutorAuthenticationError, ExecutorError, configured
-from .project_api import require_query_project_access
-from .project_context import project_is_frozen
+from .project_api import require_query_project_access, resolve_project_scope
+from .project_context import DEFAULT_PROJECT_ID, ProjectNotFound, project_is_frozen
+from .project_context import project_type as _project_type
 from .table_catalog import (
     executable_name,
     match_table,
@@ -105,22 +107,57 @@ def _record_execution_failure(db, row, stage, category):
     row.plan_data = json.dumps(plan, ensure_ascii=False)
 
 
-def _config():
-    for category, plugin, enabled, params in configured():
+def _validate_executor_url(url: object) -> None:
+    if not isinstance(url, str):
+        raise HTTPException(503, "执行器地址无效")
+    parsed = urlsplit(url)
+    if (
+        parsed.scheme not in ("http", "https")
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise HTTPException(503, "执行器地址无效")
+
+
+def _config(project_id: str | None = None):
+    resolved_project_id = project_id or DEFAULT_PROJECT_ID
+    try:
+        ptype = _project_type(resolved_project_id)
+    except ProjectNotFound as exc:
+        raise HTTPException(404, "Project not found") from exc
+    if ptype == "document":
+        raise HTTPException(422, "文档型项目不支持查询执行器，仅支持知识问答")
+    for category, plugin, enabled, params in configured(
+        resolved_project_id, project_type=ptype
+    ):
         if category == "executor" and enabled:
-            url = params.get("base_url", "")
-            parsed = urlsplit(url)
+            schema_props = (
+                getattr(plugin, "parameters_schema", {}).get("properties", {})
+                if isinstance(getattr(plugin, "parameters_schema", None), dict)
+                else {}
+            )
             if (
-                parsed.scheme not in ("http", "https")
-                or not parsed.hostname
-                or parsed.username
-                or parsed.password
-                or parsed.query
-                or parsed.fragment
+                getattr(plugin, "id", None) == "dtb"
+                or "base_url" in params
+                or "base_url" in schema_props
             ):
-                raise HTTPException(503, "执行器地址无效")
+                _validate_executor_url(params.get("base_url", ""))
+            elif "endpoint" in params or "endpoint" in schema_props:
+                _validate_executor_url(params.get("endpoint", ""))
             return plugin, params
-    raise HTTPException(503, "尚未启用执行器")
+    raise HTTPException(503, "当前项目尚未启用查询执行器，仅支持知识问答")
+
+
+def _call_config(project_id: str | None = None):
+    try:
+        return _config(project_id)
+    except TypeError:
+        if not inspect.signature(_config).parameters:
+            return _config()
+        raise
 
 
 def _partition_terms(where):
@@ -444,16 +481,27 @@ def _cleanup_expired_conversation_results(query_id: str, user: Requester) -> Non
 
 
 @router.post("/api/v1/queries/plan")
-async def plan(body: PlanInput, user: Annotated[Requester, Depends(current_requester)]):
-    return await _create_plan(body, user)
+async def plan(
+    body: PlanInput,
+    user: Annotated[Requester, Depends(current_requester)],
+    request: Request,
+):
+    project = request.query_params.get("project")
+    scope = resolve_project_scope(project, user)
+    return await _create_plan(body, user, project_id=scope.project_id)
 
 
 async def _create_plan(
     body, user, conversation_id=None, turn_id=None, source=None, project_id=None
 ):
     tree = _validate_sql(body.sql)
-    tables, latest_partition = _partition_analysis(tree, project_id=project_id)
-    plugin, config = _config()
+    resolved_project_id = project_id or DEFAULT_PROJECT_ID
+    try:
+        tables, latest_partition = _partition_analysis(tree, project_id=project_id)
+    except HTTPException:
+        _call_config(resolved_project_id)
+        raise
+    plugin, config = _call_config(resolved_project_id)
     estimate = await plugin.bind(config, "").estimate(body.sql)
     query_id = uuid.uuid4().hex
     plan_data = {
@@ -465,7 +513,7 @@ async def _create_plan(
         "estimated_rows": estimate.get("rows"),
         "row_limit": config.get("row_limit", 1000),
         "execution_limit": config.get("download_limit", 100000),
-        "project_id": project_id or "default",
+        "project_id": resolved_project_id,
     }
     if latest_partition:
         plan_data["partition_selection"] = "latest_at_runtime"
@@ -505,10 +553,16 @@ async def propose_query(sql: str, project_id: str | None = None) -> dict:
     """
     from . import sql_validation
     from .mcp_context import current_conversation_id, current_requester, current_turn_id
-    from .mcp_contract import ToolInvalidInput
+    from .mcp_contract import ToolInvalidInput, ToolUnavailable
 
     if not isinstance(sql, str) or not sql.strip():
         raise ToolInvalidInput("sql 参数不能为空")
+    resolved_project_id = project_id or DEFAULT_PROJECT_ID
+    try:
+        if _project_type(resolved_project_id) == "document":
+            raise ToolInvalidInput("文档型项目不支持查询执行器，仅支持知识问答")
+    except ProjectNotFound as exc:
+        raise ToolInvalidInput("项目不存在") from exc
     validation = (
         sql_validation.validate_sql(sql, dialect="doris")
         if project_id in (None, "default")
@@ -543,6 +597,8 @@ async def propose_query(sql: str, project_id: str | None = None) -> dict:
     except HTTPException as exc:
         if 400 <= exc.status_code < 500:
             raise ToolInvalidInput(str(exc.detail)) from exc
+        if exc.status_code == 503:
+            raise ToolUnavailable(str(exc.detail)) from exc
         raise
 
 
@@ -559,12 +615,18 @@ async def execute_query(
     """
     from .conversation_api import public_base_url
     from .mcp_context import current_conversation_id, current_requester
-    from .mcp_contract import ToolInvalidInput
+    from .mcp_contract import ToolInvalidInput, ToolUnavailable
 
     if bool(sql) == bool(confirmation_id):
         raise ToolInvalidInput("请只提供 SQL 或确认 id")
     if current_conversation_id():
         raise ToolInvalidInput("在线查询须在会话中确认")
+    resolved_project_id = project_id or DEFAULT_PROJECT_ID
+    try:
+        if _project_type(resolved_project_id) == "document":
+            raise ToolInvalidInput("文档型项目不支持查询执行器，仅支持知识问答")
+    except ProjectNotFound as exc:
+        raise ToolInvalidInput("项目不存在") from exc
     user = current_requester()
     try:
         if sql:
@@ -592,6 +654,8 @@ async def execute_query(
         )
         return result
     except HTTPException as exc:
+        if exc.status_code == 503:
+            raise ToolUnavailable(str(exc.detail)) from exc
         raise ToolInvalidInput(str(exc.detail)) from exc
 
 
@@ -611,7 +675,7 @@ async def _execute(
         if expected_project_id is not None and project_id != expected_project_id:
             raise HTTPException(404, "查询不存在")
         require_query_project_access(db, project_id, user)
-        plugin, config = _config()
+        plugin, config = _call_config(project_id)
         limit = body.limit if body.limit is not None else config.get("row_limit", 1000)
         if limit > config.get("row_limit", 1000):
             raise HTTPException(422, "超过返回行数上限")
@@ -990,7 +1054,8 @@ def get_result(query_id: str, user: Annotated[Requester, Depends(current_request
         if row is None or row.owner_id != user.id:
             raise HTTPException(404, "查询不存在")
         result = json.loads(row.rows) if row.rows else None
-        _, config = _config()
+        project_id = _plan_project_id(db, row)
+        _, config = _call_config(project_id)
         return {
             "id": row.id,
             "status": row.status,
@@ -1085,9 +1150,11 @@ def _plan_project_id(db, row, *, not_found_detail: str = "查询不存在") -> s
     return project_id
 
 
-def _require_query_project_access(db, row, user: Requester) -> None:
+def _require_query_project_access(db, row, user: Requester) -> str:
     """All query access follows the project recorded on the plan itself."""
-    require_query_project_access(db, _plan_project_id(db, row), user)
+    project_id = _plan_project_id(db, row)
+    require_query_project_access(db, project_id, user)
+    return project_id
 
 
 DOWNLOAD_LINK_TTL_SECONDS = 30 * 60
@@ -1207,12 +1274,13 @@ async def download(
 ):
     _cleanup_expired_conversation_results(query_id, user)
     denial = None
+    project_id: str | None = None
     with sessions()() as db:
         row = db.get(QueryExecution, query_id)
         if row is None or row.owner_id != user.id or row.status != "succeeded":
             raise HTTPException(404, "查询结果不存在")
         try:
-            _require_query_project_access(db, row, user)
+            project_id = _require_query_project_access(db, row, user)
         except HTTPException as exc:
             denial = exc
         if denial is None:
@@ -1277,7 +1345,7 @@ async def download(
             f"rejected_{denial.status_code}",
         )
         raise denial
-    plugin, config = _config()
+    plugin, config = _call_config(project_id)
     try:
         async with asyncio.timeout(config.get("timeout_seconds", 300)):
             content, content_type = await plugin.bind(config, token).download(

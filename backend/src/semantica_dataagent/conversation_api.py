@@ -956,7 +956,7 @@ async def confirm_query(
     request: Request,
     requester: Annotated[Requester, Depends(query_requester)],
 ):
-    from .query_api import _config, execute_for_turn
+    from .query_api import _call_config, execute_for_turn
 
     with sessions().begin() as db:
         db.execute(text("BEGIN IMMEDIATE"))
@@ -990,7 +990,7 @@ async def confirm_query(
         turn.finished_at = None
     try:
         result = await execute_for_turn(query_id, requester, conversation_id, turn_id)
-        _, config = _config()
+        _, config = _call_config(conversation_project_id)
         with sessions()() as db:
             saved = db.get(QueryExecution, query_id)
             full = json.loads(saved.rows)
