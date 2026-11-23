@@ -23,6 +23,45 @@ def _setup_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     initialize()
 
 
+def test_gap_review_time_and_successful_report_are_not_failures(tmp_path, monkeypatch):
+    _setup_env(tmp_path, monkeypatch)
+    from semantica_dataagent import trajectory_miner
+    from semantica_dataagent.db import KnowledgeGap, sessions
+
+    now = datetime.now(UTC)
+    with sessions().begin() as db:
+        for status in ("pending", "rejected", "confirmed"):
+            db.add(
+                KnowledgeGap(
+                    id=status,
+                    project_id="default",
+                    owner_id="u",
+                    question=status,
+                    missing=status,
+                    status=status,
+                    created_at=now - timedelta(days=2),
+                    reviewed_at=now if status != "pending" else None,
+                )
+            )
+    signals = trajectory_miner._mine_gaps_and_failures(
+        "default",
+        [
+            {
+                "id": 1,
+                "status": "success",
+                "tool_calls": [{"tool_name": "report_knowledge_gap"}],
+            }
+        ],
+        reserve_rows=[],
+        holdout_conv_ids=set(),
+        holdouts=set(),
+        after_at=now - timedelta(days=1),
+        now=now,
+    )
+    assert [s.details["kind"] for s in signals] == ["knowledge_gap"]
+    assert signals[0].details["questions"] == ["confirmed"]
+
+
 def test_miner_excludes_holdout_expired_deleted_and_splits_after_dedup(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):

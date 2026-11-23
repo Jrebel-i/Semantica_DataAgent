@@ -166,7 +166,36 @@ export function SourcePage({
   messages: Messages;
   onNavigateBuilds?: () => void;
 }) {
-  const [project, setProject] = useState(storedProject);
+  const [project, setProject] = useState(
+    () =>
+      new URLSearchParams(window.location.search).get("project") ||
+      storedProject(),
+  );
+  return (
+    <ProjectSourcePage
+      key={project}
+      project={project}
+      setProject={setProject}
+      token={token}
+      messages={t}
+      onNavigateBuilds={onNavigateBuilds}
+    />
+  );
+}
+
+function ProjectSourcePage({
+  project,
+  setProject,
+  token,
+  messages: t,
+  onNavigateBuilds,
+}: {
+  project: string;
+  setProject: (project: string) => void;
+  token: string;
+  messages: Messages;
+  onNavigateBuilds?: () => void;
+}) {
   const [paths, setPaths] = useState<string[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [uploadMode, setUploadMode] = useState<"category" | "target">(

@@ -699,10 +699,12 @@ def _mine_gaps_and_failures(
         cutoff = (
             now - timedelta(days=retention_days) if retention_days is not None else None
         )
-        gap_query = db.query(KnowledgeGap).filter(KnowledgeGap.project_id == project_id)
+        gap_query = db.query(KnowledgeGap).filter(
+            KnowledgeGap.project_id == project_id, KnowledgeGap.status == "confirmed"
+        )
         if after_at is not None:
-            gap_query = gap_query.filter(KnowledgeGap.created_at >= after_at)
-        gaps = gap_query.order_by(KnowledgeGap.created_at.asc()).all()
+            gap_query = gap_query.filter(KnowledgeGap.reviewed_at >= after_at)
+        gaps = gap_query.order_by(KnowledgeGap.reviewed_at.asc()).all()
 
         qe_query = db.query(QueryExecution).filter(QueryExecution.status == "failed")
         if after_at is not None:
@@ -791,16 +793,8 @@ def _mine_gaps_and_failures(
             )
         )
 
-    # 2. Failed trajectories & report_knowledge_gap calls & execution_failure clusters
-    failed_diag = [
-        r
-        for r in diag_rows
-        if r.get("status") == "failed"
-        or any(
-            c.get("tool_name") == "report_knowledge_gap"
-            for c in (r.get("tool_calls") or ())
-        )
-    ]
+    # 2. Failed trajectories and execution_failure clusters
+    failed_diag = [r for r in diag_rows if r.get("status") == "failed"]
     if exec_failures or failed_diag:
         categories = sorted({cat for _, cat, _ in exec_failures})
         tables: list[str] = []

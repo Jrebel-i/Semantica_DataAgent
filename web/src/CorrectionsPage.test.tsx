@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -123,6 +124,123 @@ test("knowledge gaps show question and missing information", async () => {
   expect(await screen.findByText("Which metric?")).toBeTruthy();
   expect(screen.getByText("Definition")).toBeTruthy();
   expect(urls).toContain("/api/v1/knowledge-gaps?project=default");
+});
+
+test("confirmed gap exposes follow-up actions and pending gap can be reviewed", async () => {
+  const fetcher = vi.fn(async (url: string, options?: RequestInit) => {
+    if (url === "/api/v1/projects")
+      return Response.json([
+        {
+          id: "default",
+          name: "Default",
+          type: "document",
+          status: "active",
+          my_role: "admin",
+        },
+      ]);
+    if (options?.method === "POST") return Response.json({});
+    return Response.json([
+      {
+        id: "g1",
+        project_id: "default",
+        question: "Q1",
+        missing: "M1",
+        status: "pending",
+        can_review: true,
+        created_at: "2026-01-01T00:00:00Z",
+      },
+      {
+        id: "g2",
+        project_id: "default",
+        question: "Q2",
+        missing: "M2",
+        status: "confirmed",
+        can_review: true,
+        created_at: "2026-01-01T00:00:00Z",
+        reviewed_at: "2026-01-02T00:00:00Z",
+      },
+    ]);
+  });
+  vi.stubGlobal("fetch", fetcher);
+  render(<CorrectionsPage token="token" gaps messages={getMessages("en")} />);
+  fireEvent.click(await screen.findByRole("button", { name: "Confirm gap" }));
+  await waitFor(() =>
+    expect(
+      fetcher.mock.calls.some(
+        ([url, options]) =>
+          url === "/api/v1/knowledge-gaps/g1/review?project=default" &&
+          options?.body === JSON.stringify({ status: "confirmed" }),
+      ),
+    ).toBe(true),
+  );
+  expect(
+    screen.getByRole("button", { name: "Propose correction" }),
+  ).toBeTruthy();
+  expect(
+    screen.getByRole("link", { name: "Add knowledge" }).getAttribute("href"),
+  ).toBe("/source?project=default");
+});
+
+test("late gaps from a previous project do not reappear after switching", async () => {
+  let resolveOld!: (value: Response) => void;
+  const old = new Promise<Response>((resolve) => {
+    resolveOld = resolve;
+  });
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) => {
+      if (url === "/api/v1/projects")
+        return Response.json([
+          {
+            id: "default",
+            name: "Default",
+            type: "document",
+            status: "active",
+            my_role: "admin",
+          },
+          {
+            id: "other",
+            name: "Other",
+            type: "document",
+            status: "active",
+            my_role: "admin",
+          },
+        ]);
+      if (url === "/api/v1/knowledge-gaps?project=default") return old;
+      return Response.json([
+        {
+          id: "new",
+          project_id: "other",
+          question: "New question",
+          missing: "New",
+          status: "pending",
+          can_review: true,
+        },
+      ]);
+    }),
+  );
+  render(<CorrectionsPage token="token" gaps messages={getMessages("en")} />);
+  fireEvent.mouseDown(
+    await screen.findByRole("combobox", { name: "Projects" }),
+  );
+  fireEvent.click(await screen.findByTitle("Other"));
+  expect(await screen.findByText("New question")).toBeTruthy();
+  await act(async () => {
+    resolveOld(
+      Response.json([
+        {
+          id: "old",
+          project_id: "default",
+          question: "Old question",
+          missing: "Old",
+          status: "pending",
+          can_review: true,
+        },
+      ]),
+    );
+  });
+  await waitFor(() => expect(screen.queryByText("Old question")).toBeNull());
+  expect(screen.getByText("New question")).toBeTruthy();
 });
 
 test("filters correction proposals by status and displays status tags", async () => {

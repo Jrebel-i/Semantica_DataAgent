@@ -541,6 +541,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/knowledge-gaps/{gap_id}/review": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Review Gap */
+        post: operations["review_gap_api_v1_knowledge_gaps__gap_id__review_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/me": {
         parameters: {
             query?: never;
@@ -2520,8 +2537,21 @@ export interface components {
              */
             task_include: string[];
         };
+        /** GapReview */
+        GapReview: {
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "confirmed" | "rejected";
+        };
         /** GapView */
         GapView: {
+            /**
+             * Can Review
+             * @default false
+             */
+            can_review: boolean;
             /**
              * Created At
              * Format: date-time
@@ -2537,6 +2567,14 @@ export interface components {
             project_id: string;
             /** Question */
             question: string;
+            /** Reviewed At */
+            reviewed_at: string | null;
+            /** Reviewer Id */
+            reviewer_id: string | null;
+            /** Reviewer Name */
+            reviewer_name: string | null;
+            /** Status */
+            status: string;
         };
         /** GenerationView */
         GenerationView: {
@@ -2831,6 +2869,8 @@ export interface components {
             expected_fields?: string[] | null;
             /** Expected Tables */
             expected_tables?: string[] | null;
+            /** Knowledge Gap Id */
+            knowledge_gap_id?: string | null;
             /**
              * Patch
              * @default
@@ -4743,6 +4783,43 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["GapView"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    review_gap_api_v1_knowledge_gaps__gap_id__review_post: {
+        parameters: {
+            query?: {
+                project?: string | null;
+            };
+            header?: never;
+            path: {
+                gap_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GapReview"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GapView"];
                 };
             };
             /** @description Validation Error */

@@ -240,6 +240,59 @@ test("changing the project switches every source request", async () => {
   expect(calls).toContain("/api/v1/categories?project=docs");
 });
 
+test("a late preview from the previous project cannot be uploaded in the new project", async () => {
+  let resolvePreview!: (value: Response) => void;
+  const delayed = new Promise<Response>((resolve) => {
+    resolvePreview = resolve;
+  });
+  const fetcher = vi.fn(async (url: string) => {
+    if (url === "/api/v1/projects") return Response.json(projects);
+    if (url === "/api/v1/source/upload/preview?project=default") return delayed;
+    return Response.json([]);
+  });
+  vi.stubGlobal("fetch", fetcher);
+  render(<SourcePage token="t" messages={getMessages("zh")} />);
+  fireEvent.change(screen.getByLabelText("选择文件"), {
+    target: { files: [new File(["x"], "x.md")] },
+  });
+  fireEvent.change(screen.getByLabelText("新建知识类"), {
+    target: { value: "metrics" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "预览" }));
+  await waitFor(() =>
+    expect(
+      fetcher.mock.calls.some(
+        ([url]) => url === "/api/v1/source/upload/preview?project=default",
+      ),
+    ).toBe(true),
+  );
+  fireEvent.mouseDown(screen.getAllByRole("combobox")[0]);
+  fireEvent.click(await screen.findByTitle("Platform Docs"));
+  await act(async () =>
+    resolvePreview(
+      Response.json({
+        category: "metrics",
+        target: "knowledge/metrics",
+        added: [],
+        overwritten: [],
+        unchanged: [],
+        deleted: [],
+        counts: { added: 0, overwritten: 0, unchanged: 0, deleted: 0 },
+        truncated: false,
+      }),
+    ),
+  );
+  expect(
+    (screen.getByRole("button", { name: "确认上传" }) as HTMLButtonElement)
+      .disabled,
+  ).toBe(true);
+  expect(
+    fetcher.mock.calls.some(
+      ([url]) => url === "/api/v1/source/upload?project=docs",
+    ),
+  ).toBe(false);
+});
+
 test("browses source history and compares versions", async () => {
   localStorage.setItem("token", "token");
   const fetcher = vi.fn(async (url: string) => {
