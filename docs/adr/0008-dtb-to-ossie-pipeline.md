@@ -1,5 +1,7 @@
 # DTB 元数据与任务 SQL 自动转换为 Apache Ossie 与混合维度落盘
 
+Status: superseded by [ADR-0012](0012-pluggable-pullers-and-entity-incremental-build.md)
+
 第六期面向主题域项目打通从 DTB 到 Apache Ossie（`0.3.0.dev0`）语义模型的全自动转换与定时拉取闭环，在保持无需人工审批即可端到端流通的同时兼顾构建确定性：
 
 1. **双形态统一核心（`dtb_ossie.py`）**：离线 CLI 子命令 `semantica-dataagent convert-dtb-ossie` 与内置在线拉取器 `DtbOssiePuller`（注册于 `semantica_dataagent.pullers`，`id="ossie"`，展示名 `DTB 拉取为 Ossie`）复用同一套确定性转换管线 `convert_dtb_to_ossie`。
