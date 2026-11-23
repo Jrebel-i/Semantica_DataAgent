@@ -315,11 +315,6 @@ export function App() {
     { path: "/status", label: t.status },
   ];
   const subNavigation = (() => {
-    if (path === "/knowledge" || path === "/search")
-      return [
-        { path: "/knowledge", label: t.knowledge },
-        { path: "/search", label: t.searchDebug },
-      ];
     if (
       [
         "/builds",

@@ -303,9 +303,14 @@ test("search debug is accessible from navigation", async () => {
       return Response.json({});
     }),
   );
-  render(<App />);
+  const { container } = render(<App />);
   fireEvent.click(await screen.findByRole("link", { name: "知识库" }));
-  fireEvent.click(await screen.findByRole("link", { name: "检索调试" }));
+  expect(container.querySelector(".sub-nav")).toBeNull();
+  expect(screen.queryByRole("link", { name: "知识浏览" })).toBeNull();
+  expect(screen.queryByRole("link", { name: "检索调试" })).toBeNull();
+
+  fireEvent.click(screen.getByRole("link", { name: "搜索" }));
+  expect(container.querySelector(".sub-nav")).toBeNull();
   expect(screen.getByRole("heading", { name: "检索调试" })).toBeTruthy();
   expect(screen.getByLabelText("查询内容")).toBeTruthy();
 });
