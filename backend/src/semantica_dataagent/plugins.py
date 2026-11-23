@@ -1,8 +1,9 @@
 """Entry point contracts and persisted plugin configuration."""
 
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from importlib.metadata import entry_points
-from typing import Literal, Protocol
+from typing import Any, ClassVar, Literal, Protocol
 
 from jsonschema import Draft202012Validator
 
@@ -31,6 +32,64 @@ class ParseResult:
     column_edges: list[tuple[str, str, str, str]] | None = None
     column_status: str = "unsupported"
     column_reason: str | None = None
+
+
+@dataclass(frozen=True)
+class PullItemFailure:
+    kind: str
+    target: str
+    reason: str
+
+
+@dataclass(frozen=True)
+class PullArtifact:
+    ossie_models: dict[str, bytes]
+    tasks: list[dict[str, Any]] = field(default_factory=list)
+    dimension_values: list[dict[str, Any]] = field(default_factory=list)
+    table_count: int = 0
+    task_count: int = 0
+    stats: dict[str, int] = field(default_factory=dict)
+    failures: list[PullItemFailure] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class PullContext:
+    project_id: str
+    instance_id: str
+    parameters: dict[str, Any]
+    secrets: dict[str, str] = field(default_factory=dict)
+    catalog_prefix: str | None = None
+    task_namespace: str | None = None
+
+    @property
+    def secret(self) -> str | None:
+        if "token" in self.secrets:
+            return self.secrets["token"]
+        if len(self.secrets) == 1:
+            return next(iter(self.secrets.values()))
+        return None
+
+
+class PullerPlugin(Protocol):
+    id: str
+    version: str
+    display_name: str
+    parameters_schema: ClassVar[dict]
+
+    def pull(self, context: PullContext) -> PullArtifact: ...
+
+
+def secret_parameter_keys(schema: Mapping[str, Any]) -> set[str]:
+    """Return top-level parameter names declared as password/secret credentials."""
+    properties = schema.get("properties")
+    if not isinstance(properties, Mapping):
+        return set()
+    return {
+        str(key)
+        for key, prop in properties.items()
+        if isinstance(prop, Mapping)
+        and (prop.get("format") == "password" or prop.get("x-secret") is True)
+    }
 
 
 class ExecutorError(RuntimeError):
@@ -77,7 +136,7 @@ def discover():
 
 
 def configured(project_id=None, project_type=None):
-    """Return plugins for one project, excluding incompatible source adapters."""
+    """Return plugins for one project, excluding incompatible source/executor plugins."""
     from .project_types import supports_project_type
 
     plugins = discover()
@@ -88,8 +147,10 @@ def configured(project_id=None, project_type=None):
     result = []
     for (category, _), plugin in plugins.items():
         if project_id not in (None, project_context.DEFAULT_PROJECT_ID) and (
-            category not in {"source", "parser"}
+            category not in {"source", "parser", "executor"}
         ):
+            continue
+        if category == "executor" and project_type == "document":
             continue
         if category == "source" and not supports_project_type(plugin, project_type):
             continue

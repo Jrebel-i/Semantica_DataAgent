@@ -84,6 +84,7 @@ def test_rest_time_fields_have_utc_offset(client, monkeypatch):
         KnowledgeGeneration,
         PersonalDtbToken,
         ProjectAudit,
+        ProjectPullInstance,
         Provider,
         PullRecord,
         Token,
@@ -193,6 +194,15 @@ def test_rest_time_fields_have_utc_offset(client, monkeypatch):
                     finished_at=datetime(2026, 1, 1, 0, 1),
                     tables=1,
                     tasks=0,
+                ),
+                ProjectPullInstance(
+                    project_id="default",
+                    id="time-inst",
+                    plugin_id="dtb",
+                    display_name="Time Instance",
+                    last_triggered_at=datetime(2026, 1, 1, 2, 0),
+                    created_at=datetime(2026, 1, 1),
+                    updated_at=datetime(2026, 1, 1, 1, 0),
                 ),
                 EvolutionCheckpoint(
                     project_id="default",
@@ -344,6 +354,9 @@ def test_rest_time_fields_have_utc_offset(client, monkeypatch):
         "builds": c.get("/api/v1/builds", headers=headers).json(),
         "pull_ossie": c.post("/api/v1/pulls/ossie", headers=headers).json(),
         "pulls": c.get("/api/v1/pulls", headers=headers).json(),
+        "pull_instances": c.get(
+            "/api/v1/projects/default/pull-instances", headers=headers
+        ).json(),
         "generations": c.get("/api/v1/generations", headers=headers).json(),
         "providers": c.get("/api/v1/providers", headers=headers).json(),
         "conversations": c.get("/api/v1/conversations", headers=headers).json(),

@@ -173,6 +173,8 @@ class Build(Base):
     dimension_tables: Mapped[str | None]
     generated_files: Mapped[str | None]
     stale_overrides: Mapped[str] = mapped_column(default="[]", server_default="[]")
+    entity_hashes: Mapped[str | None]
+    fallback_reason: Mapped[str | None]
 
 
 class PluginConfig(Base):
@@ -364,16 +366,47 @@ class PullRecord(Base):
     __tablename__ = "pull_records"
     id: Mapped[int] = mapped_column(primary_key=True)
     project_id: Mapped[str] = mapped_column(default="default", server_default="default")
+    instance_id: Mapped[str | None]
+    plugin_id: Mapped[str | None]
+    trigger_type: Mapped[str] = mapped_column(default="manual", server_default="manual")
     status: Mapped[str]
     started_at: Mapped[datetime]
     finished_at: Mapped[datetime | None]
     tables: Mapped[int] = mapped_column(default=0)
     tasks: Mapped[int] = mapped_column(default=0)
     error: Mapped[str | None]
+    skipped_reason: Mapped[str | None]
+    warnings: Mapped[str] = mapped_column(default="[]", server_default="[]")
     commit: Mapped[str | None]
     build_id: Mapped[int | None]
     source_directory: Mapped[str | None]
     operation_id: Mapped[str | None]
+
+
+class ProjectPullInstance(Base):
+    """Per-project configured puller instance with isolated namespace and schedule."""
+
+    __tablename__ = "project_pull_instances"
+    __table_args__ = (Index("ix_project_pull_instances_project", "project_id"),)
+
+    project_id: Mapped[str] = mapped_column(primary_key=True)
+    id: Mapped[str] = mapped_column(primary_key=True)
+    plugin_id: Mapped[str]
+    display_name: Mapped[str]
+    enabled: Mapped[bool] = mapped_column(default=True, server_default="1")
+    parameters: Mapped[str] = mapped_column(default="{}", server_default="{}")
+    encrypted_secrets: Mapped[str] = mapped_column(default="{}", server_default="{}")
+    schedule_cron: Mapped[str | None]
+    timezone: Mapped[str] = mapped_column(
+        default="Asia/Shanghai", server_default="Asia/Shanghai"
+    )
+    catalog_prefix: Mapped[str | None]
+    task_namespace: Mapped[str | None]
+    drop_threshold: Mapped[float] = mapped_column(default=0.5, server_default="0.5")
+    last_table_count: Mapped[int | None]
+    last_triggered_at: Mapped[datetime | None]
+    created_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC))
+    updated_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC))
 
 
 class InteractionTrajectory(Base):

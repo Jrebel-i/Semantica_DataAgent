@@ -892,8 +892,10 @@ from .evolution_api import router as evolution_router
 app.include_router(evolution_router)
 
 from .discovery_api import router as discovery_router
+from .pull_instances import router as pull_instances_router
 
 app.include_router(discovery_router)
+app.include_router(pull_instances_router)
 
 
 def _mcp_project_id() -> str:

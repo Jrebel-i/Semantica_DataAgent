@@ -40,6 +40,7 @@ from .db import (
     ProjectDeletion,
     ProjectMember,
     ProjectPendingBuild,
+    ProjectPullInstance,
     ProjectSetting,
     PullRecord,
     QueryExecution,
@@ -262,6 +263,9 @@ def _delete_database(project_id: str, settings: dict) -> None:
             synchronize_session=False
         )
         project_context.delete_plugin_configs(db, project_id)
+        db.query(ProjectPullInstance).filter(
+            ProjectPullInstance.project_id == project_id
+        ).delete(synchronize_session=False)
         db.query(PullRecord).filter(PullRecord.project_id == project_id).delete(
             synchronize_session=False
         )
