@@ -1145,3 +1145,110 @@ def test_revoke_turn_feedback_removes_draft_and_respects_confirmations(
             ).status_code
             == 409
         )
+
+
+def test_turn_feedback_accurate_accepts_propose_query_plan_turn(
+    tmp_path: Path, monkeypatch
+):
+    import json
+    import uuid
+    from datetime import UTC, datetime
+
+    from semantica_dataagent.app import app
+    from semantica_dataagent.db import (
+        Conversation,
+        Token,
+        Turn,
+        TurnEvent,
+        digest,
+        sessions,
+    )
+    from semantica_dataagent.project_api import create_project_record
+
+    admin_token = _configure(tmp_path, monkeypatch)
+    admin_headers = {"Authorization": f"Bearer {admin_token}"}
+    with sessions()() as db:
+        admin_id = db.get(Token, digest(admin_token)).id
+    project = create_project_record("Propose Query Warehouse", "warehouse")
+
+    now = datetime.now(UTC)
+    conv_id = uuid.uuid4().hex
+    with sessions().begin() as db:
+        db.add(
+            Conversation(
+                id=conv_id,
+                project_id=project.id,
+                owner_id=admin_id,
+                title="propose_query",
+                agent="pi",
+                provider_id="p1",
+                model="m1",
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        turn = Turn(
+            conversation_id=conv_id,
+            provider_id="p1",
+            model="m1",
+            effort="medium",
+            sequence=1,
+            question="昨日订单数是多少",
+            status="completed",
+            answer="共 12 单。",
+            sql="[]",
+            citations="[]",
+            started_at=now,
+            finished_at=now,
+        )
+        db.add(turn)
+        db.flush()
+        turn_id = turn.id
+        db.add_all(
+            [
+                TurnEvent(
+                    turn_id=turn_id,
+                    seq=0,
+                    type="tool_end",
+                    data=json.dumps(
+                        {
+                            "name": "mcp__semantica__propose_query",
+                            "is_error": False,
+                            "summary": "ok",
+                        }
+                    ),
+                ),
+                TurnEvent(
+                    turn_id=turn_id,
+                    seq=1,
+                    type="query_plan",
+                    data=json.dumps(
+                        {
+                            "id": "qp-fb",
+                            "sql": "SELECT COUNT(*) FROM shop.orders WHERE dt = '2026-01-01'",
+                        }
+                    ),
+                ),
+            ]
+        )
+
+    with TestClient(app, headers=admin_headers) as client:
+        detail = client.get(f"/api/v1/conversations/{conv_id}")
+        assert detail.status_code == 200
+        assert detail.json()["turns"][0]["has_validated_sql"] is True
+        assert detail.json()["turns"][0]["sql"] == [
+            {
+                "sql": "SELECT COUNT(*) FROM shop.orders WHERE dt = '2026-01-01'",
+                "dialect": "doris",
+            }
+        ]
+        fb = client.post(
+            f"/api/v1/conversations/{conv_id}/turns/{turn_id}/feedback",
+            json={"rating": "accurate"},
+        )
+        assert fb.status_code == 201, fb.text
+        assert fb.json()["eval_question"]["dialect"] == "doris"
+        assert (
+            fb.json()["eval_question"]["reference_sql"]
+            == "SELECT COUNT(*) FROM shop.orders WHERE dt = '2026-01-01'"
+        )

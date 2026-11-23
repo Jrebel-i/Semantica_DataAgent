@@ -65,9 +65,16 @@ test.each(["approve", "edited", "reject"])(
             ]),
     );
     vi.stubGlobal("fetch", fetcher);
-    render(<CorrectionsPage token="token" messages={getMessages("en")} />);
+    const { container } = render(
+      <CorrectionsPage token="token" messages={getMessages("en")} />,
+    );
     fireEvent.click(await screen.findByRole("button", { name: /document:a/ }));
-    expect(screen.getByText("-old +new")).toBeTruthy();
+    expect(screen.getByText("Before")).toBeTruthy();
+    expect(screen.getByText("After")).toBeTruthy();
+    expect(screen.getByText("+1")).toBeTruthy();
+    expect(screen.getByText("-1")).toBeTruthy();
+    expect(container.querySelector(".diff-code-del")?.textContent).toBe("old");
+    expect(container.querySelector(".diff-code-add")?.textContent).toBe("new");
     if (action === "edited")
       fireEvent.change(screen.getByLabelText("Edited content"), {
         target: { value: "edited" },
@@ -857,4 +864,73 @@ test("filters by discovery source and renders structured discovery_evidence veri
       ),
     ).toBe(true),
   );
+});
+
+test("renders git-style before/after diff viewer for Chinese markdown proposals and supports mode switch", async () => {
+  const diff = [
+    "--- knowledge/business-scenarios/air/README.md",
+    "+++ knowledge/business-scenarios/air/README.md",
+    "@@ -58,3 +58,3 @@",
+    " 针对大盘航司同时分析验价、预订及转化时：",
+    "-按验价量降序并明确设置足额的返回行数。",
+    "+按验价量降序；该参考案例显式使用 `LIMIT 2000`。",
+  ].join("\n");
+
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) => {
+      if (url === "/api/v1/projects") {
+        return Response.json([
+          {
+            id: "default",
+            name: "业务数据",
+            type: "warehouse",
+            status: "active",
+            created_at: "2026-01-01T00:00:00Z",
+            my_role: "admin",
+          },
+        ]);
+      }
+      return Response.json([
+        {
+          id: "prop-md",
+          target: "document:business-scenarios/air/README.md",
+          reason: "补充 LIMIT 2000 要求",
+          diff,
+          patch: "updated",
+          status: "approved",
+          source: "manual",
+          target_kind: "document",
+        },
+      ]);
+    }),
+  );
+
+  const { container } = render(
+    <CorrectionsPage token="token" messages={getMessages("zh")} />,
+  );
+
+  fireEvent.click(
+    await screen.findByRole("button", {
+      name: /document:business-scenarios\/air\/README\.md/,
+    }),
+  );
+
+  expect(screen.getByText("修改前")).toBeTruthy();
+  expect(screen.getByText("修改后")).toBeTruthy();
+  expect(screen.getByText("+1")).toBeTruthy();
+  expect(screen.getByText("-1")).toBeTruthy();
+  expect(screen.getByText("第 58 行 → 第 58 行")).toBeTruthy();
+  expect(container.textContent).not.toContain("--- knowledge/");
+  expect(container.textContent).not.toContain("+++ knowledge/");
+  expect(container.textContent).not.toContain("@@ -58,3 +58,3 @@");
+  expect(
+    container.querySelectorAll("mark.diff-mark-add").length,
+  ).toBeGreaterThan(0);
+
+  fireEvent.click(screen.getByRole("button", { name: "行内对比" }));
+  expect(
+    container.querySelector(".diff-viewer")?.getAttribute("data-diff-mode"),
+  ).toBe("unified");
+  expect(screen.getByText("变更内容")).toBeTruthy();
 });

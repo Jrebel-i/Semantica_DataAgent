@@ -12,6 +12,7 @@ import {
 } from "antd";
 import type { components } from "./api";
 import { readErrorDetail } from "./httpErrors";
+import { DiffViewer } from "./DiffViewer";
 import type { Messages } from "./i18n";
 import { safeDecodePath } from "./paths";
 import { ProjectSelector, storedProject } from "./ProjectSelector";
@@ -801,7 +802,12 @@ export function CorrectionsPage({
                         t={t}
                       />
                     )}
-                    <pre className="diff-block">{selected.diff}</pre>
+                    <DiffViewer
+                      diff={selected.diff}
+                      messages={t}
+                      title={safeDecodePath(selected.target)}
+                      defaultMode="split"
+                    />
                     {canRevert && (
                       <div className="save-bar" style={{ marginTop: 12 }}>
                         <button

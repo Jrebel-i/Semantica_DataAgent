@@ -816,8 +816,11 @@ def turn_validated_sql(
             return sql_text, (dialect if dialect in DIALECTS else "hive")
 
     has_validate_pass = False
+    has_propose_query_pass = False
+    latest_plan_sql: str | None = None
     for event in events:
-        if getattr(event, "type", None) != "tool_end":
+        event_type = getattr(event, "type", None)
+        if event_type not in {"tool_end", "query_plan"}:
             continue
         raw = getattr(event, "data", None)
         if isinstance(raw, str):
@@ -829,23 +832,34 @@ def turn_validated_sql(
             payload = raw
         else:
             continue
+        if not isinstance(payload, dict):
+            continue
+        if event_type == "query_plan":
+            plan_sql = str(payload.get("sql") or "").strip()
+            if plan_sql:
+                latest_plan_sql = plan_sql
+            continue
+        short_name = str(payload.get("name") or "").split("__")[-1]
         if (
-            str(payload.get("name") or "").split("__")[-1] == "validate_sql"
+            short_name == "validate_sql"
             and not payload.get("is_error")
             and "status=pass" in str(payload.get("summary") or "")
         ):
             has_validate_pass = True
-            break
+        elif short_name == "propose_query" and not payload.get("is_error"):
+            has_propose_query_pass = True
 
-    if not has_validate_pass:
-        return None
-
-    for item in reversed(sql_blocks):
-        if isinstance(item, dict):
-            sql_text = str(item.get("sql") or "").strip()
-            if sql_text:
-                dialect = str(item.get("dialect") or "hive").lower()
-                return sql_text, (dialect if dialect in DIALECTS else "hive")
+    if has_validate_pass or has_propose_query_pass:
+        for item in reversed(sql_blocks):
+            if isinstance(item, dict):
+                sql_text = str(item.get("sql") or "").strip()
+                if sql_text:
+                    dialect = str(item.get("dialect") or "hive").lower()
+                    return sql_text, (dialect if dialect in DIALECTS else "hive")
+        if latest_plan_sql:
+            return latest_plan_sql, "doris"
+    elif latest_plan_sql:
+        return latest_plan_sql, "doris"
     return None
 
 

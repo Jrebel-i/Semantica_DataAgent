@@ -8,7 +8,7 @@ import uuid
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import (
     APIRouter,
@@ -221,6 +221,46 @@ def _event(row: TurnEvent) -> EventView:
     return EventView(seq=row.seq, type=row.type, data=json.loads(row.data))
 
 
+def _extract_query_plan_sql(raw: Any) -> str | None:
+    if isinstance(raw, str):
+        try:
+            payload = json.loads(raw)
+        except ValueError:
+            return None
+    elif isinstance(raw, dict):
+        payload = raw
+    else:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    sql = str(payload.get("sql") or "").strip()
+    return sql or None
+
+
+def _latest_query_plan_sql_from_events(events: list[TurnEvent]) -> str | None:
+    for event in reversed(events):
+        if event.type != "query_plan":
+            continue
+        sql = _extract_query_plan_sql(event.data)
+        if sql:
+            return sql
+    return None
+
+
+def _latest_query_plan_sql_from_db(db, turn_id: int) -> str | None:
+    rows = (
+        db.query(TurnEvent)
+        .filter_by(turn_id=turn_id, type="query_plan")
+        .order_by(TurnEvent.seq.desc())
+        .all()
+    )
+    for event in rows:
+        sql = _extract_query_plan_sql(event.data)
+        if sql:
+            return sql
+    return None
+
+
 def _turn(
     row: Turn,
     events: list[TurnEvent],
@@ -231,6 +271,10 @@ def _turn(
     from .eval_questions import turn_validated_sql
 
     sql_blocks = json.loads(row.sql)
+    if not sql_blocks:
+        plan_sql = _latest_query_plan_sql_from_events(events)
+        if plan_sql:
+            sql_blocks = [{"sql": plan_sql, "dialect": "doris"}]
     validated = turn_validated_sql(sql_blocks, events)
     return TurnView(
         id=row.id,
@@ -336,6 +380,7 @@ def _record_event(turn_id: int, seq: int, event: AgentEvent) -> None:
 def _finish_turn(turn_id: int, status: str, event: AgentEvent | None, error=None):
     conversation_id: str | None = None
     secrets: tuple[str, ...] = ()
+    effective_sql: list[dict] | None = None
     with sessions().begin() as db:
         row = db.get(Turn, turn_id)
         if row is None:
@@ -348,10 +393,36 @@ def _finish_turn(turn_id: int, status: str, event: AgentEvent | None, error=None
             row.error = error
         if event is not None and event.type == DONE:
             row.answer = event.data.get("text", "")
-            row.sql = json.dumps(event.data.get("sql", []), ensure_ascii=False)
+            done_sql = event.data.get("sql", [])
+            if done_sql:
+                effective_sql = done_sql
+            else:
+                try:
+                    existing_sql = json.loads(row.sql or "[]")
+                except ValueError:
+                    existing_sql = []
+                if isinstance(existing_sql, list) and existing_sql:
+                    effective_sql = existing_sql
+                else:
+                    plan_sql = _latest_query_plan_sql_from_db(db, turn_id)
+                    effective_sql = (
+                        [{"sql": plan_sql, "dialect": "doris"}] if plan_sql else []
+                    )
+            row.sql = json.dumps(effective_sql, ensure_ascii=False)
             row.citations = json.dumps(
                 event.data.get("citations", []), ensure_ascii=False
             )
+        else:
+            try:
+                existing_sql = json.loads(row.sql or "[]")
+            except ValueError:
+                existing_sql = []
+            if not (isinstance(existing_sql, list) and existing_sql):
+                plan_sql = _latest_query_plan_sql_from_db(db, turn_id)
+                if plan_sql:
+                    row.sql = json.dumps(
+                        [{"sql": plan_sql, "dialect": "doris"}], ensure_ascii=False
+                    )
         conversation = db.get(Conversation, row.conversation_id)
         if conversation is not None:
             conversation.updated_at = datetime.now(UTC)
@@ -361,11 +432,7 @@ def _finish_turn(turn_id: int, status: str, event: AgentEvent | None, error=None
 
             secrets = (decrypt(provider.api_key),)
     if conversation_id is not None:
-        final_sql = (
-            event.data.get("sql", [])
-            if event is not None and event.type == DONE
-            else None
-        )
+        final_sql = effective_sql if event is not None and event.type == DONE else None
         citations = (
             event.data.get("citations", [])
             if event is not None and event.type == DONE

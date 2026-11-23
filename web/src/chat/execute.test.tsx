@@ -340,3 +340,94 @@ test("执行失败后显示错误并可重试", async () => {
   ).toBeNull();
   expect(attempts).toBe(2);
 });
+
+test("断连失败且 turn.sql 为空时仍保留展示 query_plan 的 SQL", async () => {
+  const plan = {
+    id: "query-disconnect",
+    sql: "SELECT product_type, supplier_code\nFROM dm.dm_ancillary_orders\nWHERE dt = '2026-11-17'",
+    data_source: "doris_ai",
+    tables: ["dm.dm_ancillary_orders"],
+    estimated_partitions: 1,
+    estimated_rows: 61,
+    row_limit: 1000,
+  };
+  const result = {
+    id: plan.id,
+    columns: ["product_type", "supplier_code"],
+    rows: [["BAGGAGE", "KUL-AAB"]],
+    row_count: 1,
+  };
+  const conversation = {
+    id: "conv-disconnect",
+    title: "辅营订单统计",
+    agent: "pi",
+    provider_id: provider.id,
+    model: provider.models[0],
+    created_at: "2026-11-23T00:00:00Z",
+    updated_at: "2026-11-23T00:00:01Z",
+    turn_count: 1,
+    resumable: true,
+  };
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/v1/agents")
+        return json([{ id: "pi", available: true }]);
+      if (url === "/api/v1/providers") return json([provider]);
+      if (url === "/api/v1/conversations") return json([conversation]);
+      if (url === "/api/v1/conversations/conv-disconnect")
+        return json({
+          ...conversation,
+          turns: [
+            {
+              id: 1,
+              sequence: 1,
+              question: "统计辅营订单",
+              status: "failed",
+              answer: "",
+              sql: [],
+              citations: [],
+              error: "Client disconnected",
+              started_at: conversation.created_at,
+              finished_at: conversation.updated_at,
+              events: [
+                {
+                  seq: 0,
+                  type: "tool_start",
+                  data: { id: "t1", name: "mcp__semantica__propose_query" },
+                },
+                {
+                  seq: 1,
+                  type: "tool_end",
+                  data: {
+                    id: "t1",
+                    name: "mcp__semantica__propose_query",
+                    is_error: false,
+                    summary: "ok",
+                  },
+                },
+                { seq: 2, type: "query_plan", data: plan },
+                { seq: 3, type: "query_result", data: result },
+              ],
+            },
+          ],
+        });
+      return new Response("", { status: 404 });
+    }),
+  );
+
+  const { container } = render(
+    <ChatPage token="token" role="user" messages={getMessages("zh")} />,
+  );
+  await openHistory("辅营订单统计");
+  expect(await screen.findByText("Client disconnected")).toBeTruthy();
+  expect(container.querySelector(".query-result-preview")).toBeTruthy();
+  expect(container.querySelectorAll(".sql-block")).toHaveLength(1);
+  expect(container.querySelector(".sql-block")?.textContent).toContain(
+    "SELECT product_type, supplier_code",
+  );
+  expect(container.querySelector(".sql-block")?.textContent).toContain(
+    "FROM dm.dm_ancillary_orders",
+  );
+});

@@ -516,6 +516,8 @@ def test_confirmed_query_resumes_agent_and_respects_interpretation_setting(
     detail = c.get(f"/api/v1/conversations/{conversation_id}", headers=headers).json()
     assert detail["turns"][0]["answer"] == "结论"
     assert detail["turns"][0]["effort"] == "high"
+    assert detail["turns"][0]["sql"] == [{"sql": "SELECT 1", "dialect": "doris"}]
+    assert detail["turns"][0]["has_validated_sql"] is True
     assert any(
         event["type"] == "query_result" for event in detail["turns"][0]["events"]
     )
@@ -703,6 +705,178 @@ def test_expired_online_confirmation_cannot_execute(client, monkeypatch):
     assert executions == []
     detail = c.get(f"/api/v1/conversations/{conversation_id}", headers=headers).json()
     assert detail["turns"][0]["status"] == "awaiting_confirmation"
+
+
+def test_query_plan_sql_survives_post_execution_disconnect_and_historical_rows(
+    client, monkeypatch
+):
+    from semantica_dataagent import agent_runner, knowledge, query_api, sql_validation
+    from semantica_dataagent.auth import Requester
+    from semantica_dataagent.db import Conversation, Token, Turn, TurnEvent, sessions
+    from semantica_dataagent.mcp_context import bind_mcp_context
+
+    class Executor:
+        def bind(self, config, token):
+            return self
+
+        async def estimate(self, sql):
+            return {"partitions": 1, "rows": 1}
+
+        async def submit(self, sql, limit):
+            return "query-key"
+
+        async def wait(self, key):
+            return {"columns": ["value"], "data": [[99]]}
+
+    monkeypatch.setattr(knowledge, "describe", lambda **_: [])
+    monkeypatch.setattr(
+        sql_validation, "validate_sql", lambda *a, **kw: {"status": "pass"}
+    )
+    monkeypatch.setattr(query_api, "_config", lambda: (Executor(), {}))
+    c, token = client
+    headers = {"Authorization": f"Bearer {token}"}
+    c.put("/api/v1/me/dtb-token", headers=headers, json={"token": "fake"})
+    with sessions()() as db:
+        owner = db.query(Token).first()
+        requester = Requester(id=owner.id, role=owner.role, token=token)
+
+    class DisconnectAfterResultRunner:
+        agent_id = "pi"
+
+        def __init__(self):
+            self.calls = 0
+
+        def available(self):
+            return True
+
+        async def run(self, request):
+            self.calls += 1
+            if self.calls == 1:
+                with bind_mcp_context(
+                    requester, request.conversation_id, str(request.turn_id)
+                ):
+                    plan = await query_api.propose_query("SELECT 7 AS answer")
+                yield AgentEvent(
+                    TOOL_END,
+                    {
+                        "id": "call-1",
+                        "name": "mcp__semantica__propose_query",
+                        "is_error": False,
+                        "summary": "ok",
+                    },
+                )
+                yield AgentEvent("query_plan", plan)
+            else:
+                # Simulate post-execution interpretation stream ending without DONE
+                if False:
+                    yield AgentEvent(DONE, {})
+
+    monkeypatch.setitem(agent_runner.RUNNERS, "pi", DisconnectAfterResultRunner())
+    provider = c.post(
+        "/api/v1/providers",
+        headers=headers,
+        json={
+            "name": "Local",
+            "base_url": "http://127.0.0.1:3425",
+            "models": ["model"],
+        },
+    ).json()
+    ask_res = c.post(
+        "/api/v1/conversations/ask",
+        headers=headers,
+        json={
+            "question": "查询数值",
+            "agent": "pi",
+            "provider_id": provider["id"],
+            "model": "model",
+        },
+    )
+    initial = _sse(ask_res.text)
+    plan = next(data for name, data in initial if name == "query_plan")
+    conv_id = initial[0][1]["conversation_id"]
+    turn_id = initial[0][1]["turn_id"]
+
+    exec_res = c.post(
+        f"/api/v1/conversations/{conv_id}/turns/{turn_id}/queries/{plan['id']}/execute",
+        headers=headers,
+    )
+    assert exec_res.status_code == 200, exec_res.text
+    detail = c.get(f"/api/v1/conversations/{conv_id}", headers=headers).json()
+    turn = detail["turns"][0]
+    assert turn["status"] == "failed"
+    assert turn["sql"] == [{"sql": "SELECT 7 AS answer", "dialect": "doris"}]
+    assert turn["has_validated_sql"] is True
+    assert any(ev["type"] == "query_result" for ev in turn["events"])
+
+    # Historical rows stored with sql='[]' and query_plan event must also recover SQL
+    with sessions().begin() as db:
+        db.add(
+            Conversation(
+                id="conv-historical-plan",
+                owner_id=owner.id,
+                title="历史会话",
+                agent="pi",
+                provider_id=provider["id"],
+                model="model",
+            )
+        )
+        hist_turn = Turn(
+            conversation_id="conv-historical-plan",
+            sequence=1,
+            question="历史查询",
+            status="failed",
+            answer="",
+            sql="[]",
+            citations="[]",
+            error="Client disconnected",
+        )
+        db.add(hist_turn)
+        db.flush()
+        db.add_all(
+            [
+                TurnEvent(
+                    turn_id=hist_turn.id,
+                    seq=0,
+                    type="tool_end",
+                    data=json.dumps(
+                        {
+                            "name": "mcp__semantica__propose_query",
+                            "is_error": False,
+                            "summary": "planned",
+                        }
+                    ),
+                ),
+                TurnEvent(
+                    turn_id=hist_turn.id,
+                    seq=1,
+                    type="query_plan",
+                    data=json.dumps(
+                        {"id": "qp-hist", "sql": "SELECT 42 FROM shop.orders"}
+                    ),
+                ),
+                TurnEvent(
+                    turn_id=hist_turn.id,
+                    seq=2,
+                    type="query_result",
+                    data=json.dumps(
+                        {
+                            "id": "qp-hist",
+                            "columns": ["c"],
+                            "rows": [[42]],
+                            "row_count": 1,
+                        }
+                    ),
+                ),
+            ]
+        )
+
+    hist_detail = c.get(
+        "/api/v1/conversations/conv-historical-plan", headers=headers
+    ).json()
+    assert hist_detail["turns"][0]["sql"] == [
+        {"sql": "SELECT 42 FROM shop.orders", "dialect": "doris"}
+    ]
+    assert hist_detail["turns"][0]["has_validated_sql"] is True
 
 
 def test_expired_session_removes_saved_query_rows(client):
