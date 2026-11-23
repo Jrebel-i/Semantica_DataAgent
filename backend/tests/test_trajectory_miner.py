@@ -30,7 +30,7 @@ def test_gap_review_time_and_successful_report_are_not_failures(tmp_path, monkey
 
     now = datetime.now(UTC)
     with sessions().begin() as db:
-        for status in ("pending", "rejected", "confirmed"):
+        for status in ("pending", "rejected", "confirmed", "reserved", "holdout"):
             db.add(
                 KnowledgeGap(
                     id=status,
@@ -38,7 +38,7 @@ def test_gap_review_time_and_successful_report_are_not_failures(tmp_path, monkey
                     owner_id="u",
                     question=status,
                     missing=status,
-                    status=status,
+                    status="confirmed" if status in ("reserved", "holdout") else status,
                     created_at=now - timedelta(days=2),
                     reviewed_at=now if status != "pending" else None,
                 )
@@ -52,14 +52,55 @@ def test_gap_review_time_and_successful_report_are_not_failures(tmp_path, monkey
                 "tool_calls": [{"tool_name": "report_knowledge_gap"}],
             }
         ],
-        reserve_rows=[],
+        reserve_rows=[{"question": "reserved"}],
         holdout_conv_ids=set(),
-        holdouts=set(),
+        holdouts={"holdout"},
         after_at=now - timedelta(days=1),
         now=now,
     )
     assert [s.details["kind"] for s in signals] == ["knowledge_gap"]
     assert signals[0].details["questions"] == ["confirmed"]
+
+
+def test_next_run_uses_previous_mining_start_not_acceptance_time(tmp_path, monkeypatch):
+    _setup_env(tmp_path, monkeypatch)
+    from semantica_dataagent import evolution_runner, trajectory_miner
+    from semantica_dataagent.db import EvolutionCheckpoint, EvolutionRun, sessions
+
+    start = datetime.now(UTC) - timedelta(hours=1)
+    accepted = start + timedelta(minutes=30)
+    with sessions().begin() as db:
+        db.add(
+            EvolutionRun(
+                id="previous", project_id="default", status="accepted", started_at=start
+            )
+        )
+        db.add(
+            EvolutionRun(
+                id="next", project_id="default", status="running", started_at=accepted
+            )
+        )
+        db.add(
+            EvolutionCheckpoint(
+                project_id="default",
+                checkpoint_at=accepted,
+                last_run_id="previous",
+                updated_at=accepted,
+            )
+        )
+    captured = []
+    monkeypatch.setattr(
+        evolution_runner, "_resolve_run_provider_pair", lambda *args: (None, None)
+    )
+
+    def mine(*args, **kwargs):
+        captured.append(kwargs["after_at"])
+        raise RuntimeError("stop after checkpoint read")
+
+    monkeypatch.setattr(trajectory_miner, "mine_project_trajectories", mine)
+    with pytest.raises(RuntimeError, match="stop after checkpoint read"):
+        evolution_runner.execute_evolution_run("next")
+    assert captured == [start]
 
 
 def test_miner_excludes_holdout_expired_deleted_and_splits_after_dedup(
@@ -131,6 +172,8 @@ def test_miner_excludes_holdout_expired_deleted_and_splits_after_dedup(
                 question="留出秘密指标口径是什么",
                 missing="should never leak",
                 created_at=base + timedelta(minutes=1),
+                status="confirmed",
+                reviewed_at=base + timedelta(minutes=1),
             )
         )
 
@@ -523,6 +566,8 @@ def test_miner_detects_all_five_signals_and_preserves_multi_caliber_variants(
                 question="什么是核销率？",
                 missing="缺少核销率定义",
                 created_at=base + timedelta(minutes=20),
+                status="confirmed",
+                reviewed_at=base + timedelta(minutes=20),
             )
         )
         db.add(
@@ -573,6 +618,12 @@ def test_miner_detects_all_five_signals_and_preserves_multi_caliber_variants(
         "divergent_clarification",
         "knowledge_gap_or_failure",
     }.issubset(kinds)
+    gap_and_failure = {
+        s.details.get("kind")
+        for s in res.signals
+        if s.signal_kind == "knowledge_gap_or_failure"
+    }
+    assert {"knowledge_gap", "execution_failure"}.issubset(gap_and_failure)
 
     clar_signal = next(
         s for s in res.signals if s.signal_kind == "divergent_clarification"

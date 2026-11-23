@@ -1001,7 +1001,15 @@ def execute_evolution_run(
         actor_id = run_row.created_by or "evolution"
         ckpt = db.get(EvolutionCheckpoint, project_id)
         ckpt_id = ckpt.checkpoint_trajectory_id if ckpt is not None else None
-        ckpt_at = _as_utc(ckpt.checkpoint_at) if ckpt is not None else None
+        # A confirmation can arrive after mining but before acceptance. Keep
+        # checkpoint_at as the scheduler's acceptance time and use the prior
+        # run's start as a conservative mining watermark, including recovery.
+        previous_run = (
+            db.get(EvolutionRun, ckpt.last_run_id)
+            if ckpt and ckpt.last_run_id
+            else None
+        )
+        ckpt_at = _as_utc(previous_run.started_at) if previous_run is not None else None
 
     try:
         cfg = project_context.evolution_config(project_id)

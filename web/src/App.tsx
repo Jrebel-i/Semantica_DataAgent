@@ -270,6 +270,15 @@ export function App() {
       label: t.sidebarKnowledge,
       icon: <DatabaseOutlined />,
     },
+    ...(!canManageProject && projectMember
+      ? [
+          {
+            path: "/knowledge-gaps",
+            label: t.gapTitle,
+            icon: <DatabaseOutlined />,
+          },
+        ]
+      : []),
     ...(canManageProject
       ? [
           {

@@ -179,24 +179,81 @@ def test_review_permissions_and_concurrent_decisions(tmp_path, monkeypatch):
         )
 
 
-def test_upgrade_preserves_historical_gaps_as_pending(tmp_path):
+def test_upgrade_preserves_historical_gaps_as_pending(tmp_path, monkeypatch):
     import sqlite3
 
     from alembic import command
     from alembic.script import ScriptDirectory
+    from cryptography.fernet import Fernet
+    from semantica_dataagent import cli
     from test_cli_migrate import _config
 
     path = tmp_path / "old.sqlite"
     config = _config(path)
     command.upgrade(config, "0041")
+    monkeypatch.setenv("DATAAGENT_DB_PATH", str(path))
+    monkeypatch.setenv("DATAAGENT_ENCRYPTION_KEY", Fernet.generate_key().decode())
     with sqlite3.connect(path) as db:
         db.execute(
             "INSERT INTO knowledge_gaps (id, project_id, owner_id, question, missing, created_at) VALUES (?, ?, ?, ?, ?, ?)",
             ("old", "default", "owner", "question", "missing", "2026-01-01 00:00:00"),
         )
-    command.upgrade(config, "head")
+        db.execute(
+            "INSERT INTO tokens (digest, name, role, id, created_at) VALUES ('digest', 'name', 'user', 'owner', '2026-01-01')"
+        )
+        db.execute(
+            "INSERT INTO project_members (project_id, token_id, role) VALUES ('default', 'owner', 'member')"
+        )
+        db.execute(
+            "INSERT INTO conversations (id, owner_id, title, agent, provider_id, model, created_at, updated_at) VALUES ('c', 'owner', 'title', 'agent', 'provider', 'model', '2026-01-01', '2026-01-01')"
+        )
+        db.execute(
+            "INSERT INTO correction_proposals (id, owner_id, target, patch, original, diff, reason, status, created_at) VALUES ('p', 'owner', 'target', 'patch', 'original', 'diff', 'reason', 'pending', '2026-01-01')"
+        )
+        db.execute(
+            "INSERT INTO builds (id, status, started_at, counts) VALUES (123, 'succeeded', '2026-01-01', '{}')"
+        )
+        db.execute("INSERT INTO settings (key, value) VALUES ('synthetic', 'value')")
+        db.execute("INSERT INTO knowledge_generations (name) VALUES ('synthetic')")
+        db.execute(
+            "INSERT INTO generation_pointer (id, generation) VALUES (1, 'synthetic')"
+        )
+        tables = (
+            "conversations",
+            "tokens",
+            "correction_proposals",
+            "builds",
+            "settings",
+            "knowledge_generations",
+            "generation_pointer",
+            "projects",
+            "project_members",
+        )
+        columns = {
+            table: [row[1] for row in db.execute(f"PRAGMA table_info({table})")]
+            for table in tables
+        }
+        before = {
+            table: db.execute(
+                f"SELECT {', '.join(columns[table])} FROM {table} ORDER BY rowid"
+            ).fetchall()
+            for table in tables
+        }
+    assert cli.main(["migrate"]) == 0
     assert ScriptDirectory.from_config(config).get_heads() == ["0042"]
+    backups = list(tmp_path.glob("old.sqlite.bak-*"))
+    assert len(backups) == 1
+    with sqlite3.connect(backups[0]) as backup:
+        assert backup.execute("SELECT version_num FROM alembic_version").fetchone() == (
+            "0041",
+        )
     with sqlite3.connect(path) as db:
+        assert {
+            table: db.execute(
+                f"SELECT {', '.join(columns[table])} FROM {table} ORDER BY rowid"
+            ).fetchall()
+            for table in tables
+        } == before
         assert db.execute(
             "SELECT id, project_id, owner_id, question, missing, status, reviewed_at, reviewer_id, reviewer_name FROM knowledge_gaps"
         ).fetchone() == (
@@ -210,3 +267,18 @@ def test_upgrade_preserves_historical_gaps_as_pending(tmp_path):
             None,
             None,
         )
+
+
+def test_reported_gap_starts_pending(tmp_path, monkeypatch):
+    from semantica_dataagent.auth import Requester
+    from semantica_dataagent.db import KnowledgeGap, sessions
+    from semantica_dataagent.gaps import report_knowledge_gap
+    from semantica_dataagent.mcp_context import bind_mcp_context
+
+    configure(tmp_path, monkeypatch)
+    with bind_mcp_context(Requester(id="reporter", role="user", token="synthetic")):
+        gap_id = report_knowledge_gap("question", "missing")["gap_id"]
+    with sessions()() as db:
+        gap = db.get(KnowledgeGap, gap_id)
+        assert gap.status == "pending"
+        assert gap.reviewed_at is None

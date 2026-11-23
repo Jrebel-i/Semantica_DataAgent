@@ -9,6 +9,7 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { CorrectionsPage } from "./CorrectionsPage";
+import { App } from "./App";
 import { getMessages } from "./i18n";
 
 beforeEach(() => {
@@ -124,6 +125,32 @@ test("knowledge gaps show question and missing information", async () => {
   expect(await screen.findByText("Which metric?")).toBeTruthy();
   expect(screen.getByText("Definition")).toBeTruthy();
   expect(urls).toContain("/api/v1/knowledge-gaps?project=default");
+});
+
+test("project members can open knowledge gaps from navigation", async () => {
+  localStorage.setItem("token", "token");
+  history.pushState(null, "", "/search");
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) => {
+      if (url === "/api/v1/me") return Response.json({ role: "user" });
+      if (url === "/api/v1/projects")
+        return Response.json([
+          {
+            id: "default",
+            name: "Default",
+            type: "document",
+            status: "active",
+            my_role: "member",
+          },
+        ]);
+      return Response.json([]);
+    }),
+  );
+  render(<App />);
+  fireEvent.click(await screen.findByText("知识缺口"));
+  expect(await screen.findByRole("heading", { name: "知识缺口" })).toBeTruthy();
+  history.pushState(null, "", "/");
 });
 
 test("confirmed gap exposes follow-up actions and pending gap can be reviewed", async () => {
