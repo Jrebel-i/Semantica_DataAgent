@@ -4,7 +4,7 @@ import uuid
 from datetime import UTC, datetime
 from threading import Lock
 
-from sqlalchemy import Index, create_engine
+from sqlalchemy import Index, create_engine, event
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
 
@@ -118,12 +118,28 @@ def _reset_after_fork() -> None:
 os.register_at_fork(after_in_child=_reset_after_fork)
 
 
+def _configure_sqlite_engine(engine, path: str) -> None:
+    """Apply busy timeout, normal sync, and persistent WAL mode to SQLite engines."""
+
+    @event.listens_for(engine, "connect")
+    def _on_connect(dbapi_connection, _connection_record):
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA busy_timeout=30000")
+        cursor.execute("PRAGMA synchronous=NORMAL")
+        cursor.close()
+
+    if path != ":memory:" and not path.startswith("file:"):
+        with engine.connect() as conn:
+            conn.exec_driver_sql("PRAGMA journal_mode=WAL")
+            conn.commit()
+
+
 def _sessions_for_path(path: str):
     with _factory_lock:
         if path not in _factories:
-            _factories[path] = sessionmaker(
-                create_engine(f"sqlite:///{path}", connect_args={"timeout": 30})
-            )
+            engine = create_engine(f"sqlite:///{path}", connect_args={"timeout": 30})
+            _configure_sqlite_engine(engine, path)
+            _factories[path] = sessionmaker(engine)
         return _factories[path]
 
 

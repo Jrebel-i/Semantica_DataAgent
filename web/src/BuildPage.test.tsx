@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -274,4 +275,74 @@ test("renders stale_overrides warning badge and detail list on build cards", asy
   expect(
     screen.getByText(/Field shop\.orders\.legacy_col not found/),
   ).toBeTruthy();
+});
+
+test("skips overlapping build poll ticks while an earlier builds request is pending", async () => {
+  let buildsFetchCount = 0;
+  let resolveBuilds: ((response: Response) => void) | null = null;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((url: string) => {
+      if (url === "/api/v1/projects")
+        return Promise.resolve(
+          Response.json([
+            {
+              id: "default",
+              name: "业务数据",
+              type: "warehouse",
+              status: "active",
+              created_at: "2026-01-01T00:00:00Z",
+              my_role: "admin",
+            },
+          ]),
+        );
+      if (url === "/api/v1/projects/default/schedule")
+        return Promise.resolve(Response.json({ interval_seconds: 0 }));
+      if (url === "/api/v1/generations?project=default")
+        return Promise.resolve(
+          Response.json({
+            generations: [],
+            behind: false,
+            source_head: null,
+          }),
+        );
+      if (url === "/api/v1/builds?project=default") {
+        buildsFetchCount += 1;
+        if (buildsFetchCount === 1) {
+          return new Promise<Response>((resolve) => {
+            resolveBuilds = resolve;
+          });
+        }
+        return Promise.resolve(Response.json([]));
+      }
+      return Promise.resolve(Response.json([]));
+    }),
+  );
+
+  vi.useFakeTimers();
+  try {
+    render(<BuildPage token="token" messages={getMessages("zh")} />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(buildsFetchCount).toBe(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(6_000);
+    });
+    expect(buildsFetchCount).toBe(1);
+
+    await act(async () => {
+      resolveBuilds?.(Response.json([]));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+    expect(buildsFetchCount).toBe(2);
+  } finally {
+    vi.useRealTimers();
+  }
 });

@@ -248,6 +248,7 @@ export function EvolutionPage({
   const projectRef = useRef(project);
   projectRef.current = project;
   const requestGenRef = useRef(0);
+  const pollInFlightRef = useRef(false);
 
   const [providers, setProviders] = useState<Provider[]>([]);
   const [config, setConfig] = useState<EvolutionConfig>(DEFAULT_CONFIG);
@@ -346,9 +347,15 @@ export function EvolutionPage({
   useEffect(() => {
     if (activeTab !== "evolution" || !hasRunning) return;
     const timer = window.setInterval(() => {
-      void loadProjectData(projectRef.current).catch(() => {
-        // Keep last valid state on transient poll error
-      });
+      if (pollInFlightRef.current) return;
+      pollInFlightRef.current = true;
+      void loadProjectData(projectRef.current)
+        .catch(() => {
+          // Keep last valid state on transient poll error
+        })
+        .finally(() => {
+          pollInFlightRef.current = false;
+        });
     }, 3000);
     return () => window.clearInterval(timer);
   }, [activeTab, hasRunning, loadProjectData, project]);

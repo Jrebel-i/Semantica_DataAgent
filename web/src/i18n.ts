@@ -455,6 +455,7 @@ const messages = {
     deleteConversationRunning: "会话正在运行，稍后再试",
     deleteConversationFailed: "删除失败，请重试",
     loadingConversation: "正在加载对话…",
+    conversationLoadTimeout: "加载对话超时，请重试",
     toolCalls: "工具调用",
     toolRunning: "运行中",
     toolDone: "完成",
@@ -1245,6 +1246,8 @@ const messages = {
     deleteConversationFailed:
       "Could not delete the conversation. Please try again.",
     loadingConversation: "Loading conversation…",
+    conversationLoadTimeout:
+      "Loading the conversation timed out. Please try again.",
     toolCalls: "Tool calls",
     toolRunning: "Running",
     toolDone: "Done",

@@ -1,6 +1,6 @@
 import { PullsPanel } from "./PullsPanel";
 import { ProjectSelector, storedProject } from "./ProjectSelector";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert, Button, Descriptions, Input, Table, Tag } from "antd";
 import type { components } from "./api";
 import type { Messages } from "./i18n";
@@ -52,17 +52,39 @@ export function BuildPage({
   const [interval, setInterval] = useState("0");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const projectRef = useRef(project);
+  projectRef.current = project;
+  const mountedRef = useRef(true);
+  const loadInFlightCount = useRef(0);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
   const projectQuery = `project=${encodeURIComponent(project)}`;
   const load = useCallback(async () => {
-    const response = await fetch(`/api/v1/builds?${projectQuery}`, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!response.ok) throw new Error();
-    setBuilds((await response.json()) as Build[]);
-    const versions = await fetch(`/api/v1/generations?${projectQuery}`, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    if (versions.ok) setGenerations((await versions.json()) as Generations);
+    const targetProject = project;
+    loadInFlightCount.current += 1;
+    try {
+      const response = await fetch(`/api/v1/builds?${projectQuery}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!response.ok) throw new Error();
+      const nextBuilds = (await response.json()) as Build[];
+      if (!mountedRef.current || projectRef.current !== targetProject) return;
+      setBuilds(nextBuilds);
+      const versions = await fetch(`/api/v1/generations?${projectQuery}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (versions.ok) {
+        const nextGenerations = (await versions.json()) as Generations;
+        if (!mountedRef.current || projectRef.current !== targetProject) return;
+        setGenerations(nextGenerations);
+      }
+    } finally {
+      loadInFlightCount.current = Math.max(0, loadInFlightCount.current - 1);
+    }
   }, [project, projectQuery, token]);
   useEffect(() => {
     let active = true;
@@ -80,8 +102,11 @@ export function BuildPage({
     };
   }, [project, token]);
   useEffect(() => {
-    void load().catch(() => setError(t.buildError));
+    void load().catch(() => {
+      if (mountedRef.current) setError(t.buildError);
+    });
     const timer = window.setInterval(() => {
+      if (loadInFlightCount.current > 0) return;
       void load().catch(() => undefined);
     }, 2000);
     return () => window.clearInterval(timer);

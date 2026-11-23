@@ -376,9 +376,13 @@ test("conversation deep links open the addressed conversation with the current t
     }),
   ).toBeTruthy();
   expect(await screen.findByText("深链接问题")).toBeTruthy();
-  expect(fetcher).toHaveBeenCalledWith("/api/v1/conversations/conv-deep", {
-    headers: { Authorization: "Bearer deep-token" },
-  });
+  expect(fetcher).toHaveBeenCalledWith(
+    "/api/v1/conversations/conv-deep",
+    expect.objectContaining({
+      headers: { Authorization: "Bearer deep-token" },
+      signal: expect.any(AbortSignal),
+    }),
+  );
   expect(window.location.pathname).toBe("/chat/conv-deep");
   history.replaceState(null, "", "/");
 });

@@ -298,6 +298,7 @@ export function DiscoveryPanel({
   projectRef.current = project;
   const requestGenRef = useRef(0);
   const detailGenRef = useRef(0);
+  const pollInFlightRef = useRef(false);
 
   const isDocumentProject = projectInfo?.type === "document";
   const isArchivedProject =
@@ -514,15 +515,24 @@ export function DiscoveryPanel({
   useEffect(() => {
     if (!hasRunning || isDocumentProject || unsupportedByServer) return;
     const timer = window.setInterval(() => {
+      if (pollInFlightRef.current) return;
+      pollInFlightRef.current = true;
       const currentProject = projectRef.current;
-      void loadProjectData(currentProject).catch(() => {
-        // Keep last valid state on transient poll error
-      });
-      if (selectedRunId) {
-        void loadRunDetail(currentProject, selectedRunId).catch(() => {
+      const tasks: Promise<unknown>[] = [
+        loadProjectData(currentProject).catch(() => {
           // Keep last valid state on transient poll error
-        });
+        }),
+      ];
+      if (selectedRunId) {
+        tasks.push(
+          loadRunDetail(currentProject, selectedRunId).catch(() => {
+            // Keep last valid state on transient poll error
+          }),
+        );
       }
+      void Promise.allSettled(tasks).finally(() => {
+        pollInFlightRef.current = false;
+      });
     }, 3000);
     return () => window.clearInterval(timer);
   }, [

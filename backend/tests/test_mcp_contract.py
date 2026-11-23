@@ -643,3 +643,78 @@ def test_unclassified_tools_are_listed_and_callable_on_generic_servers():
         assert not result.isError
 
     asyncio.run(run())
+
+
+def test_sync_tools_offload_to_worker_thread_without_blocking_event_loop(monkeypatch):
+    import threading
+
+    from semantica_dataagent import project_context
+    from semantica_dataagent.auth import Requester
+    from semantica_dataagent.mcp_context import (
+        bind_mcp_context,
+        current_conversation_id,
+        current_project_id,
+    )
+
+    monkeypatch.setattr(project_context, "project_type", lambda _pid: "warehouse")
+
+    async def run():
+        main_thread_id = threading.get_ident()
+        loop = asyncio.get_running_loop()
+        worker_started = asyncio.Event()
+        release_worker = threading.Event()
+        observed: dict[str, object] = {}
+        finish_order: list[str] = []
+
+        server = FastMCP("test")
+
+        @server.tool()
+        def blocking_tool(label: str) -> dict:
+            observed["thread_id"] = threading.get_ident()
+            observed["project_id"] = current_project_id()
+            observed["conversation_id"] = current_conversation_id()
+            loop.call_soon_threadsafe(worker_started.set)
+            assert release_worker.wait(timeout=2.0), "timed out waiting for release"
+            finish_order.append("tool")
+            return {"label": label}
+
+        install_contract(server)
+        server.get_context = lambda: None
+        handler = server._mcp_server.request_handlers[CallToolRequest]
+
+        async def call_blocking():
+            try:
+                with bind_mcp_context(
+                    Requester(id="t1", role="admin", token="tok"),
+                    conversation_id="conv-ctx",
+                    project_id="proj-ctx",
+                ):
+                    return (
+                        await handler(
+                            CallToolRequest(
+                                method="tools/call",
+                                params=CallToolRequestParams(
+                                    name="blocking_tool", arguments={"label": "ok"}
+                                ),
+                            )
+                        )
+                    ).root
+            finally:
+                release_worker.set()
+
+        async def unrelated_coroutine():
+            try:
+                await asyncio.wait_for(worker_started.wait(), timeout=2.0)
+                finish_order.append("concurrent")
+            finally:
+                release_worker.set()
+
+        result, _ = await asyncio.gather(call_blocking(), unrelated_coroutine())
+        assert not result.isError, result.structuredContent
+        assert result.structuredContent == {"label": "ok"}
+        assert observed["thread_id"] != main_thread_id
+        assert observed["project_id"] == "proj-ctx"
+        assert observed["conversation_id"] == "conv-ctx"
+        assert finish_order == ["concurrent", "tool"]
+
+    asyncio.run(run())

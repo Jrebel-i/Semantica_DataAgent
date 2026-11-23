@@ -31,6 +31,8 @@ import { useAsk } from "./chat/useAsk";
 import { turnFailed } from "./chat/turnEvents";
 import { readErrorDetail } from "./httpErrors";
 
+const CONVERSATION_LOAD_TIMEOUT_MS = 30_000;
+
 export {
   citationDisplayName,
   citationLabel,
@@ -68,6 +70,13 @@ export function ChatPage({
   const deepLinkLoaded = useRef("");
   const deepLinkTarget = useRef(initialConversationId);
   const conversationLoad = useRef({ sequence: 0, id: "" });
+  const conversationAbort = useRef<AbortController | null>(null);
+  useEffect(
+    () => () => {
+      conversationAbort.current?.abort();
+    },
+    [],
+  );
   const [turns, setTurns] = useState<Turn[]>([]);
   const [live, setLive] = useState<LiveTurn | null>(null);
   const [expiredPlans, setExpiredPlans] = useState<string[]>([]);
@@ -349,6 +358,14 @@ export function ChatPage({
   }
 
   async function openConversation(id: string, fromDeepLink = false) {
+    conversationAbort.current?.abort();
+    const controller = new AbortController();
+    conversationAbort.current = controller;
+    let timedOut = false;
+    const timeoutId = window.setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, CONVERSATION_LOAD_TIMEOUT_MS);
     const sequence = conversationLoad.current.sequence + 1;
     conversationLoad.current = { sequence, id };
     setLoadingConversation(true);
@@ -356,6 +373,7 @@ export function ChatPage({
     try {
       const response = await fetch(`/api/v1/conversations/${id}`, {
         headers: { Authorization: `Bearer ${token}` },
+        signal: controller.signal,
       });
       if (!response.ok) throw new Error();
       const detail = (await response.json()) as ConversationDetail;
@@ -363,10 +381,17 @@ export function ChatPage({
       if (fromDeepLink && deepLinkTarget.current !== id) return;
       applyConversation(detail);
     } catch {
-      if (conversationLoad.current.sequence === sequence) {
+      if (conversationLoad.current.sequence !== sequence) return;
+      if (timedOut) {
+        setError(t.conversationLoadTimeout);
+      } else if (!controller.signal.aborted) {
         setError(t.askError);
       }
     } finally {
+      window.clearTimeout(timeoutId);
+      if (conversationAbort.current === controller) {
+        conversationAbort.current = null;
+      }
       if (conversationLoad.current.sequence === sequence) {
         setLoadingConversation(false);
       }
@@ -426,6 +451,8 @@ export function ChatPage({
     if (initialConversationId === currentConversationId) {
       deepLinkLoaded.current = initialConversationId;
       if (conversationLoad.current.id !== initialConversationId) {
+        conversationAbort.current?.abort();
+        conversationAbort.current = null;
         conversationLoad.current = {
           sequence: conversationLoad.current.sequence + 1,
           id: "",
@@ -440,6 +467,8 @@ export function ChatPage({
   }, [initialConversationId, token, currentConversationId]);
 
   function newConversation() {
+    conversationAbort.current?.abort();
+    conversationAbort.current = null;
     conversationLoad.current = {
       sequence: conversationLoad.current.sequence + 1,
       id: "",

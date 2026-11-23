@@ -153,6 +153,25 @@ def cleanup_conversation_attachments(conversation_id: str) -> None:
 
 def cleanup_expired_sessions() -> None:
     """Serialize cleanup with turn creation so active work cannot be removed."""
+    with sessions()() as db:
+        cutoff = retention_cutoff(db)
+        active = db.query(Turn.conversation_id).filter(Turn.status == "running")
+        has_expired_conversation = (
+            db.query(Conversation.id)
+            .filter(
+                Conversation.resumable.is_(True),
+                Conversation.updated_at < cutoff,
+                ~Conversation.id.in_(active),
+            )
+            .first()
+            is not None
+        )
+        has_expired = (
+            has_expired_conversation
+            or trajectories.has_expired_local_trajectories(db, cutoff)
+        )
+    if not has_expired:
+        return
     with sessions().begin() as db:
         db.execute(text("BEGIN IMMEDIATE"))
         cutoff = retention_cutoff(db)

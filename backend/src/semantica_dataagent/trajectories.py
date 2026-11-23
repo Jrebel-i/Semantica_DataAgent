@@ -601,6 +601,19 @@ def delete_project_trajectories(db: Session, project_id: str) -> int:
     )
 
 
+def has_expired_local_trajectories(db: Session, cutoff: datetime) -> bool:
+    """Check without acquiring a write lock whether any local_mcp trajectory has expired."""
+    return (
+        db.query(InteractionTrajectory.id)
+        .filter(
+            InteractionTrajectory.source_type == "local_mcp",
+            InteractionTrajectory.last_activity_at < cutoff,
+        )
+        .first()
+        is not None
+    )
+
+
 def delete_expired_local_trajectories(db: Session, cutoff: datetime) -> int:
     """Synchronously purge local_mcp trajectory windows older than the retention cutoff."""
     return (

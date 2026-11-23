@@ -1179,14 +1179,16 @@ class MCPAuthentication:
             credentials = None
             try:
                 credentials = await bearer(request)
-                requester = authenticate_mcp(
+                requester = await asyncio.to_thread(
+                    authenticate_mcp,
                     credentials,
                     request.headers.get("x-dataagent-conversation-id"),
                     request.headers.get("x-dataagent-turn-id"),
                 )
             except HTTPException as exc:
                 if exc.status_code in (401, 409):
-                    _audit_mcp_auth_rejection(
+                    await asyncio.to_thread(
+                        _audit_mcp_auth_rejection,
                         credentials,
                         exc.status_code,
                         request.headers.get("x-dataagent-conversation-id"),
@@ -1247,8 +1249,11 @@ class MCPAuthentication:
                     query_project if query_project is not None else header_project
                 )
                 try:
-                    project_id = resolve_mcp_project(
-                        requester, requester.project_id, requested
+                    project_id = await asyncio.to_thread(
+                        resolve_mcp_project,
+                        requester,
+                        requester.project_id,
+                        requested,
                     )
                     project_error, project_error_status = None, None
                 except ToolInvalidInput as exc:

@@ -2816,3 +2816,55 @@ def test_conversation_management_sorting_validation_and_ownership(client):
         ).json()["pinned"]
         is False
     )
+
+
+def test_sqlite_sessions_enable_wal_mode(client):
+    from sqlalchemy import text
+
+    from semantica_dataagent.db import sessions
+
+    with sessions()() as db:
+        mode = db.execute(text("PRAGMA journal_mode")).scalar()
+    assert str(mode).lower() == "wal"
+
+
+def test_cleanup_expired_sessions_skips_write_lock_when_nothing_expired(client):
+    from datetime import UTC, datetime, timedelta
+
+    from sqlalchemy import event
+
+    from semantica_dataagent import conversation_api
+    from semantica_dataagent.db import Conversation, Token, sessions
+
+    engine = sessions().kw["bind"]
+    begin_immediate_calls: list[str] = []
+
+    def record_sql(_conn, _cursor, statement, _parameters, _context, _executemany):
+        if "BEGIN IMMEDIATE" in statement.upper():
+            begin_immediate_calls.append(statement)
+
+    event.listen(engine, "before_cursor_execute", record_sql)
+    try:
+        conversation_api.cleanup_expired_sessions()
+        assert begin_immediate_calls == []
+
+        with sessions().begin() as db:
+            owner = db.query(Token).first()
+            db.add(
+                Conversation(
+                    id="expired-fast-path",
+                    owner_id=owner.id,
+                    title="expired",
+                    agent="pi",
+                    provider_id="p",
+                    model="m",
+                    updated_at=datetime.now(UTC) - timedelta(days=31),
+                )
+            )
+
+        conversation_api.cleanup_expired_sessions()
+        assert len(begin_immediate_calls) == 1
+        with sessions()() as db:
+            assert db.get(Conversation, "expired-fast-path").resumable is False
+    finally:
+        event.remove(engine, "before_cursor_execute", record_sql)

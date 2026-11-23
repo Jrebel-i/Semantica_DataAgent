@@ -1,6 +1,8 @@
 """Common validation, pagination and error handling for registered MCP tools."""
 
+import asyncio
 import base64
+import functools
 import hashlib
 import json
 import logging
@@ -159,13 +161,22 @@ def install_contract(server):
     for tool in tools.values():
         tool.parameters["additionalProperties"] = False
         tool.parameters.setdefault("properties", {})["cursor"] = {"type": "string"}
+        if not tool.is_async:
+            sync_fn = tool.fn
+
+            @functools.wraps(sync_fn)
+            async def _offloaded(*args, _fn=sync_fn, **kwargs):
+                return await asyncio.to_thread(_fn, *args, **kwargs)
+
+            tool.fn = _offloaded
+            tool.is_async = True
 
     original_list_tools = server._mcp_server.request_handlers[ListToolsRequest]
 
     async def list_tools(request):
         result = await original_list_tools(request)
         try:
-            project_type = current_project_type()
+            project_type = await asyncio.to_thread(current_project_type)
         except Exception:  # noqa: BLE001 - the capability guard fails closed
             project_type = None
         result.root.tools = (
@@ -188,9 +199,10 @@ def install_contract(server):
                 "invalid_input", "Unknown tool", False, "Check available tools"
             )
         try:
-            ensure_tool_supported(current_project_type(), name)
+            project_type = await asyncio.to_thread(current_project_type)
+            ensure_tool_supported(project_type, name)
         except (ToolInvalidInput, LookupError, ValueError) as exc:
-            _audit_bound_project_rejection()
+            await asyncio.to_thread(_audit_bound_project_rejection)
             return classify_error(exc)
         try:
             jsonschema.validate(arguments, tool.parameters)
@@ -333,7 +345,8 @@ def install_contract(server):
         finally:
             _captured_structured.reset(holder_token)
         trusted_name = name if name in tools else UNKNOWN_TOOL_NAME
-        try:
+
+        def _record_telemetry() -> None:
             requester = current_requester()
             conversation_id = current_conversation_id()
             supplied_turn = current_turn_id()
@@ -443,6 +456,9 @@ def install_contract(server):
                 },
                 secrets,
             )
+
+        try:
+            await asyncio.to_thread(_record_telemetry)
         except Exception:  # noqa: BLE001 - reporting must never change a tool result
             import logging
 
