@@ -18,7 +18,7 @@ from verify_sample_build import (
     prepare_database,
 )
 
-from semantica_dataagent.dtb_source import DtbAdapter
+from semantica_dataagent.dtb_snapshot import DtbSnapshotReader
 from semantica_dataagent.markdown import MarkdownAdapter, chunks
 
 TASK_COLUMNS = [
@@ -254,7 +254,7 @@ def test_sample_writes_a_buildable_dtb_and_markdown_source(tmp_path):
         "filtered": 0,
     }
 
-    adapter = DtbAdapter()
+    adapter = DtbSnapshotReader()
     result = adapter.read(
         output, {"snapshot_path": "dtb", "dimensions_path": "dimensions"}
     )

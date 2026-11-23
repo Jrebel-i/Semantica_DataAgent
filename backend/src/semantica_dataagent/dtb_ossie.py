@@ -21,7 +21,7 @@ from sqlglot.errors import ErrorLevel, SqlglotError
 from sqlglot.optimizer.scope import Scope, traverse_scope
 
 from .canonical import Record
-from .dtb_source import DtbAdapter
+from .dtb_snapshot import DtbSnapshotReader
 from .dtb_tasks import DtbTaskParser, extract_task_sql_statements
 from .ossie_export import (
     ExportFormat,
@@ -904,7 +904,7 @@ def convert_dtb_to_ossie(
     if dimension_tables is not None:
         adapter_params["dimension_tables"] = dimension_tables
 
-    read_result = DtbAdapter().read(Path(source_dir), adapter_params)
+    read_result = DtbSnapshotReader().read(Path(source_dir), adapter_params)
     if (
         read_result.stats.get("table_rows_skipped", 0) > 0
         or read_result.stats.get("task_rows_unreadable", 0) > 0
@@ -1281,11 +1281,6 @@ DTB_PULLER_PARAMETERS_SCHEMA: dict[str, Any] = {
     "properties": {
         "url": {"type": "string", "format": "uri", "title": "DTB 服务地址"},
         "token": {"type": "string", "format": "password", "title": "DTB 访问凭据"},
-        "interval_seconds": {
-            "type": "integer",
-            "minimum": 0,
-            "title": "自动拉取间隔（秒）",
-        },
         "layer": {
             "type": "string",
             "enum": ["dimensions"],
@@ -1350,9 +1345,9 @@ def _validate_dtb_url(raw_url: Any) -> str:
 class DtbPluginPuller:
     """Unified PullerPlugin converting DTB metadata, tasks, and dimensions to PullArtifact."""
 
-    id = "ossie"
+    id = "dtb"
     version = "1"
-    display_name = "DTB 拉取为 Ossie"
+    display_name = "DTB"
     parameters_schema: ClassVar[dict] = DTB_PULLER_PARAMETERS_SCHEMA
 
     def __init__(self, fetcher: Any | None = None) -> None:
@@ -1441,69 +1436,3 @@ class DtbPluginPuller:
             stats=stats,
             failures=item_failures,
         )
-
-
-class DtbOssiePuller(DtbPluginPuller):
-    """Pull DTB metadata and dimensions and convert them into Ossie outputs."""
-
-    def fetch(
-        self,
-        client,
-        base_url: str,
-        token: str,
-        parameters: dict[str, Any] | None = None,
-        *,
-        ossie_path: str = "ossie",
-    ) -> tuple[dict[str, bytes], dict[str, Any]]:
-        """Pull DTB snapshot & dimensions and convert them to Ossie + dimension files."""
-        from .dtb_puller import DtbPuller
-
-        params = parameters or {}
-        model_name = str(params.get("model_name") or "dtb_semantic_model")
-        low_limit = int(params.get("low_cardinality_limit", 20))
-        sample_limit = int(params.get("sample_limit", 5))
-        dim_row_limit = int(params.get("dimension_row_limit", 50000))
-        rel_ossie = safe_name(ossie_path).as_posix()
-
-        dtb_scope = {
-            k: params[k]
-            for k in ("layer", "max_tables", "dimension_row_limit")
-            if k in params
-        }
-        raw_files, dtb_counts = DtbPuller().fetch(
-            client, base_url, token, dtb_scope or None
-        )
-
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            for name, content in raw_files.items():
-                dest = root / "dtb" / "snapshot" / name
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                dest.write_bytes(content)
-            converted = convert_dtb_to_ossie(
-                root,
-                snapshot_path="dtb",
-                dimensions_path="dtb/snapshot/dimensions",
-                dimension_row_limit=dim_row_limit,
-                model_name=model_name,
-                format="yaml",
-                low_cardinality_limit=low_limit,
-                sample_limit=sample_limit,
-            )
-
-        out_files: dict[str, bytes] = {
-            f"{rel_ossie}/{model_name}.yaml": converted.ossie_content.encode("utf-8")
-        }
-        if converted.dimension_values:
-            out_files["dimension_values.json"] = (
-                json.dumps(converted.dimension_values, ensure_ascii=False, indent=2)
-                + "\n"
-            ).encode("utf-8")
-
-        counts = {
-            **dtb_counts,
-            "datasets": converted.stats.get("datasets", 0),
-            "relationships": converted.stats.get("relationships", 0),
-            "dimension_values": converted.stats.get("dimension_values", 0),
-        }
-        return out_files, counts

@@ -1,4 +1,4 @@
-"""DTB export source adapter: task JSON, table-info workbook and dimension rows."""
+"""DTB export snapshot reader: task JSON, table-info workbook and dimension rows."""
 
 import hashlib
 import io
@@ -7,9 +7,7 @@ import re
 import warnings
 from collections import Counter
 from pathlib import Path
-from typing import ClassVar
 
-from jsonschema import validate
 from openpyxl import load_workbook
 
 from .canonical import ReadResult, Record
@@ -92,50 +90,11 @@ def _qualified(value):
     return f"{parts[-2]}.{parts[-1]}"
 
 
-class DtbAdapter:
-    id = "dtb"
-    version = "1.0.0"
-    display_name = "DTB export"
-    project_types = ("warehouse",)
-    parameters_schema: ClassVar[dict] = {
-        "type": "object",
-        "properties": {
-            "snapshot_path": {
-                "type": "string",
-                "default": "dtb",
-                "description": "Directory holding versioned dtb snapshots, relative to the source directory.",
-            },
-            "snapshot": {
-                "type": "string",
-                "description": "Exact snapshot directory name; overrides the latest snapshot.",
-            },
-            "latest": {
-                "type": "boolean",
-                "default": True,
-                "description": "Read the newest snapshot under snapshot_path.",
-            },
-            "dimensions_path": {
-                "type": "string",
-                "default": "dimensions",
-                "description": "Directory holding one subdirectory per dimension table.",
-            },
-            "dimension_tables": {
-                "type": "array",
-                "items": {"type": "string"},
-                "description": "Only read these dimension table directories.",
-            },
-            "dimension_row_limit": {
-                "type": "integer",
-                "minimum": 1,
-                "default": 50000,
-                "description": "Maximum rows read per dimension table.",
-            },
-        },
-        "additionalProperties": False,
-    }
+class DtbSnapshotReader:
+    """Read DTB snapshot directories (任务信息.json, 表信息.xlsx, dimensions) to canonical records."""
 
-    def read(self, directory, parameters):
-        validate(parameters, self.parameters_schema)
+    def read(self, directory, parameters=None):
+        parameters = parameters or {}
         base = Path(directory)
         if not base.is_dir():
             raise ValueError(f"Source directory does not exist: {base}")

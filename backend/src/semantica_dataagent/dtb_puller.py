@@ -7,7 +7,6 @@ import re
 import tempfile
 import time
 from pathlib import Path
-from typing import ClassVar
 from urllib.parse import quote
 
 import httpx
@@ -15,6 +14,7 @@ import sqlglot
 from sqlglot import exp
 
 from .dtb_auth import authentication_failed
+from .dtb_snapshot import DtbSnapshotReader
 
 TASK_SQL = "select version_id,\nversion_code,message,committer,task_id,task_name,\n(case when task_type_id=1 then 'shell'\nwhen task_type_id=2 then 'merge onself'\nwhen task_type_id=3 then 'spark sql'\nelse '' end) as task_type\n,task_conf,task_src,project_name,upstream_tasks,output_table_name,a.create_time,a.modify_time\n from(\n    select *,rank() over(partition by task_id order by modify_time desc) rk  from mysql.data_tool_box_emr.task_version\n    where status!=1 and task_type_id!=4\n) a\nleft join  mysql.data_tool_box_emr.project b\non a.project_id=b.project_id\nwhere rk=1 and status=2"
 TABLE_SQL = "select a.*,b.column_name,b.seq_no,b.column_type,b.column_comment,b.column_business_comment from\n(\n    select table_id,table_name,database_name,create_time,modify_time,\n    comment,output_task_id,output_task_name,use_direction\n    from mysql.data_tool_box_emr.metadata_table where catalog_type='HIVE' and status='在用'\n) a\n left join mysql.data_tool_box_emr.metadata_column b on a.table_id=b.table_id"
@@ -185,43 +185,7 @@ class TableFailure(ValueError):
 
 
 class DtbPuller:
-    id = "dtb"
-    version = "1"
-    display_name = "DTB"
-    parameters_schema: ClassVar[dict] = {
-        "type": "object",
-        "properties": {
-            "url": {"type": "string", "format": "uri"},
-            "token": {"type": "string", "format": "password"},
-            "interval_seconds": {"type": "integer", "minimum": 0},
-            "layer": {"type": "string", "enum": ["dimensions"]},
-            "max_tables": {"type": "integer", "minimum": 1, "maximum": 100},
-            "model_name": {
-                "type": "string",
-                "pattern": r"^[A-Za-z0-9_][A-Za-z0-9_-]{0,63}$",
-                "default": "dtb_semantic_model",
-            },
-            "low_cardinality_limit": {
-                "type": "integer",
-                "minimum": 1,
-                "maximum": 500,
-                "default": 20,
-            },
-            "sample_limit": {
-                "type": "integer",
-                "minimum": 1,
-                "maximum": 50,
-                "default": 5,
-            },
-            "dimension_row_limit": {
-                "type": "integer",
-                "minimum": 1,
-                "maximum": MAX_ROW_LIMIT,
-                "default": 50000,
-            },
-        },
-        "additionalProperties": False,
-    }
+    """Internal DTB HTTP client helper for metadata, tasks, and dimension rows."""
 
     @staticmethod
     def _get(client, base_url, token, endpoint, params=None):
@@ -650,7 +614,6 @@ class DtbPuller:
         return DtbPluginPuller(fetcher=self).pull(context)
 
     def fetch(self, client, base_url, token, parameters=None):
-        from .dtb_source import DtbAdapter
 
         parameters = parameters or {}
         layer = parameters.get("layer", "dimensions")
@@ -760,7 +723,7 @@ class DtbPuller:
                 dest = root / "dtb" / "snapshot" / name
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 dest.write_bytes(content)
-            result = DtbAdapter().read(
+            result = DtbSnapshotReader().read(
                 root,
                 {
                     "dimensions_path": "dtb/snapshot/dimensions",

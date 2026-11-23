@@ -145,19 +145,6 @@ class Scheduler:
 scheduler = Scheduler()
 
 
-def _scheduled_pull(project_id=None):
-    project_id = project_id or DEFAULT_PROJECT_ID
-    if project_context.project_is_frozen(project_id):
-        LOGGER.debug("Skipping scheduled pull for frozen project %s", project_id)
-        return
-    from .pull_service import run_pull
-
-    run_pull(project_id)
-
-
-pull_scheduler = Scheduler(_scheduled_pull)
-
-
 def _expand_cron_field(
     expr: str, label: str, low: int, high: int, *, is_weekday: bool = False
 ) -> tuple[int, ...]:
@@ -435,7 +422,6 @@ instance_pull_scheduler = PullInstanceScheduler()
 
 def _reset_after_fork() -> None:
     scheduler.fork_child()
-    pull_scheduler.fork_child()
     instance_pull_scheduler.fork_child()
 
 

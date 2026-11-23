@@ -112,13 +112,6 @@ def _project_deletion_lock():
         pass
 
 
-def _pull_lock():
-    from semantica_dataagent import pull_service
-
-    with pull_service._lock_for("fork-test"):
-        pass
-
-
 def _instance_pull_lock():
     from semantica_dataagent import pull_service
 
@@ -179,13 +172,11 @@ def _discovery_dispatcher_lock():
         "build_queue",
         "pending_builds",
         "scheduler",
-        "pull_scheduler",
         "instance_pull_scheduler",
         "evolution_scheduler",
         "discovery_dispatcher",
         "embedding_limiter",
         "project_deletion",
-        "pull_service",
         "pull_service_instance",
         "telemetry",
         "provider_probe",
@@ -211,11 +202,6 @@ def test_forked_child_resets_other_process_global_locks(name):
         from semantica_dataagent import scheduler
 
         lock, action = scheduler.scheduler._condition, scheduler.scheduler.due_projects
-    elif name == "pull_scheduler":
-        from semantica_dataagent import scheduler
-
-        lock = scheduler.pull_scheduler._condition
-        action = scheduler.pull_scheduler.due_projects
     elif name == "instance_pull_scheduler":
         from semantica_dataagent import scheduler
 
@@ -239,10 +225,6 @@ def test_forked_child_resets_other_process_global_locks(name):
         from semantica_dataagent import project_deletion
 
         lock, action = project_deletion._locks_guard, _project_deletion_lock
-    elif name == "pull_service":
-        from semantica_dataagent import pull_service
-
-        lock, action = pull_service._locks_guard, _pull_lock
     elif name == "pull_service_instance":
         from semantica_dataagent import pull_service
 

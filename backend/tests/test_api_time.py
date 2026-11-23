@@ -298,19 +298,6 @@ def test_rest_time_fields_have_utc_offset(client, monkeypatch):
     )
     monkeypatch.setattr(
         pull_service,
-        "run_pull",
-        lambda project_id, *, puller_id="dtb": PullRecord(
-            id=999,
-            project_id=project_id,
-            status="succeeded",
-            started_at=datetime(2026, 1, 1),
-            finished_at=datetime(2026, 1, 1, 0, 1),
-            tables=1,
-            tasks=0,
-        ),
-    )
-    monkeypatch.setattr(
-        pull_service,
         "run_instance_pull",
         lambda project_id, instance_id, *, trigger_type="manual", force=False: (
             PullRecord(
@@ -371,7 +358,6 @@ def test_rest_time_fields_have_utc_offset(client, monkeypatch):
         "knowledge_gaps": c.get("/api/v1/knowledge-gaps", headers=headers).json(),
         "build": c.get(f"/api/v1/builds/{build_id}", headers=headers).json(),
         "builds": c.get("/api/v1/builds", headers=headers).json(),
-        "pull_ossie": c.post("/api/v1/pulls/ossie", headers=headers).json(),
         "pull_instance_trigger": c.post(
             "/api/v1/projects/default/pull-instances/time-inst/pull", headers=headers
         ).json(),

@@ -51,9 +51,19 @@ def partition_row(table_id, table_name, partition_name="", records="1", rk="1"):
 
 
 def puller():
-    plugins = discover()
-    assert ("puller", "dtb") in plugins, "DTB puller must be discoverable"
-    return plugins[("puller", "dtb")]
+    from semantica_dataagent.dtb_puller import DtbPuller
+
+    return DtbPuller()
+
+
+def test_converged_dtb_puller_plugin_is_discovered():
+    found = discover()
+    assert ("puller", "dtb") in found
+    assert ("puller", "ossie") not in found
+    plugin = found[("puller", "dtb")]
+    assert plugin.id == "dtb"
+    assert plugin.display_name == "DTB"
+    assert "interval_seconds" not in plugin.parameters_schema["properties"]
 
 
 def metadata_row(

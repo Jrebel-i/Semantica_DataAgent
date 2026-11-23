@@ -54,7 +54,7 @@ from .project_api import (
     project_scope,
 )
 from .project_context import ProjectContext
-from .scheduler import instance_pull_scheduler, pull_scheduler, scheduler
+from .scheduler import instance_pull_scheduler, scheduler
 
 
 @asynccontextmanager
@@ -131,13 +131,6 @@ async def lifespan(application):
     build_queue.start()
     auto_build.pending_build_scheduler.start()
     project_context.start_schedule()
-    from .pull_service import interval as pull_interval
-    from .pull_service import intervals as pull_intervals
-
-    pull_scheduler.start(pull_interval())
-    for project_id, seconds in pull_intervals().items():
-        if project_id != project_context.DEFAULT_PROJECT_ID:
-            pull_scheduler.start(seconds, project_id)
     instance_pull_scheduler.start()
     from .evolution_scheduler import evolution_scheduler
 
@@ -154,7 +147,6 @@ async def lifespan(application):
             discovery_dispatcher.stop()
             evolution_scheduler.stop()
             instance_pull_scheduler.stop()
-            pull_scheduler.stop()
             scheduler.stop()
             auto_build.pending_build_scheduler.stop()
             build_queue.stop()
@@ -1351,27 +1343,11 @@ def update_plugin(
                 for error in errors
             ],
         )
-    from .project_api import (
-        PULLER_ADAPTER_IDS,
-        ensure_puller_not_conflicting,
-        save_puller_token,
-    )
-
     parameters = dict(body.parameters)
-    is_puller = category == "puller" and plugin_id in PULLER_ADAPTER_IDS
-    token = parameters.pop("token", None) if is_puller else None
-    if is_puller and body.enabled:
-        ensure_puller_not_conflicting(project_context.DEFAULT_PROJECT_ID, plugin_id)
     with sessions().begin() as db:
-        if is_puller:
-            save_puller_token(db, project_context.DEFAULT_PROJECT_ID, plugin_id, token)
         project_context.upsert_plugin_config(
             db, category, plugin_id, body.enabled, parameters
         )
-    if is_puller:
-        from .pull_service import interval as pull_interval
-
-        pull_scheduler.configure(pull_interval())
     return PluginView(
         category=category,
         id=plugin.id,
@@ -1670,29 +1646,6 @@ def mount_frontend(application: FastAPI, directory):
     application.mount(
         "/", FrontendFiles(directory=directory, html=True), name="frontend"
     )
-
-
-def _trigger_named_pull(scope: ProjectContext, *, puller_id: str) -> PullView:
-    from .pull_service import run_pull
-
-    try:
-        return pull_view(run_pull(scope.project_id, puller_id=puller_id))
-    except ValueError as exc:
-        raise HTTPException(409, str(exc)) from exc
-
-
-@app.post("/api/v1/pulls/dtb", response_model=PullView)
-def trigger_pull(
-    scope: Annotated[ProjectContext, Depends(admin_project_scope)],
-):
-    return _trigger_named_pull(scope, puller_id="dtb")
-
-
-@app.post("/api/v1/pulls/ossie", response_model=PullView)
-def trigger_ossie_pull(
-    scope: Annotated[ProjectContext, Depends(admin_project_scope)],
-):
-    return _trigger_named_pull(scope, puller_id="ossie")
 
 
 @app.get("/api/v1/pulls", response_model=list[PullView])

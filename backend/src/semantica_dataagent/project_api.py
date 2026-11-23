@@ -325,33 +325,18 @@ class ProjectScheduleView(BaseModel):
     interval_seconds: int
 
 
-class AdapterPullUpdate(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    enabled: bool = True
-    parameters: dict = Field(default_factory=dict)
-
-
 class ProjectAdapterUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     id: str
     enabled: bool
     parameters: dict = Field(default_factory=dict)
-    pull: AdapterPullUpdate | None = None
 
 
 class ProjectAdaptersUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     adapters: list[ProjectAdapterUpdate]
-
-
-class AdapterPullView(BaseModel):
-    enabled: bool
-    parameters: dict
-    parameters_schema: dict
-    token_configured: bool
 
 
 class ProjectAdapterView(BaseModel):
@@ -363,7 +348,6 @@ class ProjectAdapterView(BaseModel):
     parameters_schema: dict
     compatible: bool
     reason: str | None
-    pull: AdapterPullView | None = None
 
 
 def _schedule_interval(db, project_id: str) -> int:
@@ -538,35 +522,7 @@ def set_project_evolution_policy(
 
 
 ADAPTER_DEFAULT_ENABLED = frozenset({"canonical", "markdown"})
-PULLER_ADAPTER_IDS = ("dtb", "ossie")
-PULL_TOKEN_KEYS = {pid: f"puller.{pid}.token" for pid in PULLER_ADAPTER_IDS}
-DTB_PULL_TOKEN_KEY = PULL_TOKEN_KEYS["dtb"]
-PULLER_MUTUAL_EXCLUSION_DETAIL = "同一项目不能同时启用 DTB 拉取与 DTB 拉取为 Ossie"
 PROJECT_TYPE_LABELS = {"warehouse": "数仓型", "document": "文档型"}
-
-
-def ensure_puller_not_conflicting(project_id: str, puller_id: str) -> None:
-    """Reject enabling a puller when a sibling puller is already enabled on the project."""
-    for sibling in PULLER_ADAPTER_IDS:
-        if sibling == puller_id:
-            continue
-        cfg = project_context.plugin_config("puller", sibling, project_id)
-        if cfg and cfg[0]:
-            raise HTTPException(status_code=422, detail=PULLER_MUTUAL_EXCLUSION_DETAIL)
-
-
-def save_puller_token(db, project_id: str, puller_id: str, token: str | None) -> None:
-    """Persist or clear an encrypted puller credential, ignoring masked '***' placeholders."""
-    if token is None or token == "***":
-        return
-    from .crypto import encrypt
-
-    project_context.set_plugin_secret(
-        db,
-        project_id,
-        PULL_TOKEN_KEYS[puller_id],
-        encrypt(token) if token else None,
-    )
 
 
 def _adapter_reason(project_type: str, supported: tuple[str, ...]) -> str:
@@ -594,30 +550,6 @@ def _project_adapters(scope: ProjectContext) -> list[ProjectAdapterView]:
         )
         if not compatible:
             enabled = False
-        pull = None
-        if plugin_id in PULLER_ADAPTER_IDS:
-            puller = discovered.get(("puller", plugin_id))
-            pull_enabled, pull_parameters = saved.get(
-                ("puller", plugin_id), (False, {})
-            )
-            if not compatible:
-                pull_enabled = False
-            pull = AdapterPullView(
-                enabled=pull_enabled,
-                parameters={
-                    key: value
-                    for key, value in pull_parameters.items()
-                    if key != "token"
-                },
-                parameters_schema=(
-                    puller.parameters_schema if puller is not None else {}
-                ),
-                token_configured=bool(
-                    project_context.plugin_secret(
-                        scope.project_id, PULL_TOKEN_KEYS[plugin_id]
-                    )
-                ),
-            )
         rows.append(
             ProjectAdapterView(
                 id=plugin_id,
@@ -630,7 +562,6 @@ def _project_adapters(scope: ProjectContext) -> list[ProjectAdapterView]:
                 reason=None
                 if compatible
                 else _adapter_reason(scope.project_type, supported),
-                pull=pull,
             )
         )
     return rows
@@ -692,48 +623,6 @@ def put_project_adapters(
                     scope.project_type, source_project_types(plugin)
                 ),
             )
-        if update.pull is not None:
-            if update.id not in PULLER_ADAPTER_IDS:
-                raise HTTPException(status_code=422, detail="该适配器没有拉取配置")
-            puller = discovered.get(("puller", update.id))
-            if puller is None:
-                raise HTTPException(status_code=422, detail=f"{update.id} 拉取器未注册")
-            errors = sorted(
-                Draft202012Validator(puller.parameters_schema).iter_errors(
-                    update.pull.parameters
-                ),
-                key=lambda error: list(map(str, error.absolute_path)),
-            )
-            if errors:
-                raise HTTPException(
-                    status_code=422,
-                    detail=[
-                        {
-                            "path": list(error.absolute_path),
-                            "message": error.message,
-                        }
-                        for error in errors
-                    ],
-                )
-            if update.pull.enabled and not compatible:
-                raise HTTPException(
-                    status_code=422,
-                    detail=_adapter_reason(
-                        scope.project_type, source_project_types(plugin)
-                    ),
-                )
-
-    saved = project_context.plugin_configs(scope.project_id)
-    effective_pulls: dict[str, tuple[bool, dict]] = {
-        pid: saved.get(("puller", pid), (False, {})) for pid in PULLER_ADAPTER_IDS
-    }
-    pull_touched = False
-    for update in body.adapters:
-        if update.pull is not None and update.id in PULLER_ADAPTER_IDS:
-            effective_pulls[update.id] = (update.pull.enabled, update.pull.parameters)
-            pull_touched = True
-    if sum(1 for enabled, _ in effective_pulls.values() if enabled) > 1:
-        raise HTTPException(status_code=422, detail=PULLER_MUTUAL_EXCLUSION_DETAIL)
 
     with sessions().begin() as db:
         for update in body.adapters:
@@ -745,30 +634,6 @@ def put_project_adapters(
                 update.parameters,
                 scope.project_id,
             )
-            if update.pull is not None:
-                parameters = dict(update.pull.parameters)
-                token = parameters.pop("token", None)
-                project_context.upsert_plugin_config(
-                    db,
-                    "puller",
-                    update.id,
-                    update.pull.enabled,
-                    parameters,
-                    scope.project_id,
-                )
-                save_puller_token(db, scope.project_id, update.id, token)
-    if pull_touched:
-        from .scheduler import pull_scheduler
-
-        effective_interval = next(
-            (
-                int(params.get("interval_seconds", 0))
-                for enabled, params in effective_pulls.values()
-                if enabled
-            ),
-            0,
-        )
-        pull_scheduler.configure(effective_interval, scope.project_id)
     return _project_adapters(scope)
 
 

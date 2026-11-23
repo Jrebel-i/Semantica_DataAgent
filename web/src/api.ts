@@ -1048,40 +1048,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/pulls/dtb": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Trigger Pull */
-        post: operations["trigger_pull_api_v1_pulls_dtb_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/pulls/ossie": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Trigger Ossie Pull */
-        post: operations["trigger_ossie_pull_api_v1_pulls_ossie_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/v1/queries/plan": {
         parameters: {
             query?: never;
@@ -1479,33 +1445,6 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
-        /** AdapterPullUpdate */
-        AdapterPullUpdate: {
-            /**
-             * Enabled
-             * @default true
-             */
-            enabled: boolean;
-            /** Parameters */
-            parameters?: {
-                [key: string]: unknown;
-            };
-        };
-        /** AdapterPullView */
-        AdapterPullView: {
-            /** Enabled */
-            enabled: boolean;
-            /** Parameters */
-            parameters: {
-                [key: string]: unknown;
-            };
-            /** Parameters Schema */
-            parameters_schema: {
-                [key: string]: unknown;
-            };
-            /** Token Configured */
-            token_configured: boolean;
-        };
         /** AgentView */
         AgentView: {
             /** Available */
@@ -2747,7 +2686,6 @@ export interface components {
             parameters?: {
                 [key: string]: unknown;
             };
-            pull?: components["schemas"]["AdapterPullUpdate"] | null;
         };
         /** ProjectAdapterView */
         ProjectAdapterView: {
@@ -2769,7 +2707,6 @@ export interface components {
             };
             /** Project Types */
             project_types: string[];
-            pull?: components["schemas"]["AdapterPullView"] | null;
             /** Reason */
             reason: string | null;
         };
@@ -6378,68 +6315,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PullView"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    trigger_pull_api_v1_pulls_dtb_post: {
-        parameters: {
-            query?: {
-                project?: string | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["PullView"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    trigger_ossie_pull_api_v1_pulls_ossie_post: {
-        parameters: {
-            query?: {
-                project?: string | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["PullView"];
                 };
             };
             /** @description Validation Error */

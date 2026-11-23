@@ -1124,28 +1124,7 @@ def test_structured_overrides_overlay_canonical_and_ossie_and_survive_repulls(
         )
         assert sql_res["status"] == "pass", sql_res
 
-    # DTB re-pull (publish_pull) must never delete/overwrite overrides/semantic_overrides.yaml
-    dtb_repo = tmp_path / "dtb-repull-check"
-    with source_directory.repository(dtb_repo) as droot:
-        (droot / "overrides").mkdir()
-        (droot / "overrides" / "semantic_overrides.yaml").write_text(
-            yaml.safe_dump(override_payload, allow_unicode=True, sort_keys=False),
-            encoding="utf-8",
-        )
-        source_directory.git(droot, "add", "overrides/semantic_overrides.yaml")
-        source_directory.git(droot, "commit", "-m", "keep overrides", author="tester")
-        source_directory.publish_pull(droot, {"表信息.json": b"[]"})
-        source_directory.publish_pull(droot, {"表信息.json": b"[]"})
-        assert (
-            yaml.safe_load(
-                (droot / "overrides" / "semantic_overrides.yaml").read_text(
-                    encoding="utf-8"
-                )
-            )["tables"]["shop.orders"]["comment"]
-            == "人工审定订单表"
-        )
-
-    # DTB拉取为Ossie (publish_ossie_pull) also preserves overrides and overlays them on Ossie build
+    # Instance pull (publish_pull_instance) preserves overrides and overlays them on Ossie build
     with source_directory.repository(src) as root:
         (root / "tables.json").unlink()
         (root / "fields.json").unlink()
@@ -1198,17 +1177,17 @@ def test_structured_overrides_overlay_canonical_and_ossie_and_survive_repulls(
                 },
             ],
         }
-        source_directory.publish_ossie_pull(
+        source_directory.publish_pull_instance(
             root,
+            "inst_dtb",
             {
-                "ossie/shop_pulled.yaml": yaml.safe_dump(
-                    ossie_v1, allow_unicode=True
-                ).encode("utf-8")
+                "shop_pulled.yaml": yaml.safe_dump(ossie_v1, allow_unicode=True).encode(
+                    "utf-8"
+                )
             },
-            ossie_path="ossie",
             operation_id="ossie-pull-1",
         )
-        # Re-pull overwrites ossie/shop_pulled.yaml, must still leave overrides intact
+        # Re-pull overwrites ossie/inst_dtb/shop_pulled.yaml, must still leave overrides intact
         ossie_v2 = {
             **ossie_v1,
             "datasets": [
@@ -1216,14 +1195,14 @@ def test_structured_overrides_overlay_canonical_and_ossie_and_survive_repulls(
                 ossie_v1["datasets"][1],
             ],
         }
-        source_directory.publish_ossie_pull(
+        source_directory.publish_pull_instance(
             root,
+            "inst_dtb",
             {
-                "ossie/shop_pulled.yaml": yaml.safe_dump(
-                    ossie_v2, allow_unicode=True
-                ).encode("utf-8")
+                "shop_pulled.yaml": yaml.safe_dump(ossie_v2, allow_unicode=True).encode(
+                    "utf-8"
+                )
             },
-            ossie_path="ossie",
             operation_id="ossie-pull-2",
         )
         assert (root / "overrides" / "semantic_overrides.yaml").is_file()

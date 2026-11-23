@@ -1400,7 +1400,6 @@ def test_convert_dtb_ossie_cli_and_full_build_round_trip(tmp_path, monkeypatch, 
                         {"id": "ossie", "enabled": True, "parameters": {}},
                         {"id": "canonical", "enabled": True, "parameters": {}},
                         {"id": "markdown", "enabled": True, "parameters": {}},
-                        {"id": "dtb", "enabled": False, "parameters": {}},
                     ]
                 },
             ).status_code
