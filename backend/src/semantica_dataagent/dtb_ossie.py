@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import re
 import tempfile
@@ -10,9 +11,11 @@ from dataclasses import dataclass, field
 from functools import cache
 from pathlib import Path
 from typing import Any, ClassVar
+from urllib.parse import urlsplit
 
+import httpx
 import sqlglot
-from jsonschema import Draft202012Validator
+from jsonschema import Draft202012Validator, ValidationError
 from sqlglot import exp
 from sqlglot.errors import ErrorLevel, SqlglotError
 from sqlglot.optimizer.scope import Scope, traverse_scope
@@ -29,9 +32,13 @@ from .ossie_export import (
     write_ossie_file,
 )
 from .ossie_source import OSSIE_TARGET_VERSION
+from .plugins import PullArtifact, PullContext, PullItemFailure
 from .source_directory import relative, safe, safe_name
 
 MODEL_NAME_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_-]{0,63}$")
+_CATALOG_PREFIX_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
+_TASK_NAMESPACE_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}$")
+_VALID_TASK_DIALECTS = frozenset({"hive", "spark", "doris"})
 _TEMPORAL_COL_RE = re.compile(
     r"^(?:dt|pt|ds|day_num|bizdate|stat_date|etl_date)$"
     r"|_(?:date|day|dt|time|month)$",
@@ -45,23 +52,23 @@ _MAX_DISPLAY_VALUE_CHARS = 120
 
 
 @cache
-def _dimension_validator() -> Draft202012Validator:
-    packaged = (
-        Path(__file__).resolve().parent
-        / "schemas"
-        / "v2"
-        / "dimension_value.schema.json"
-    )
+def _schema_validator(filename: str) -> Draft202012Validator:
+    packaged = Path(__file__).resolve().parent / "schemas" / "v2" / filename
     schema_path = (
         packaged
         if packaged.is_file()
-        else Path(__file__).resolve().parents[3]
-        / "schemas"
-        / "v2"
-        / "dimension_value.schema.json"
+        else Path(__file__).resolve().parents[3] / "schemas" / "v2" / filename
     )
     schema = json.loads(schema_path.read_text(encoding="utf-8"))
     return Draft202012Validator(schema)
+
+
+def _dimension_validator() -> Draft202012Validator:
+    return _schema_validator("dimension_value.schema.json")
+
+
+def _task_validator() -> Draft202012Validator:
+    return _schema_validator("task.schema.json")
 
 
 def _format_dim_literal(value: str) -> str:
@@ -80,6 +87,7 @@ def _apply_hybrid_dimensions(
     low_cardinality_limit: int,
     sample_limit: int,
     stats: Counter[str],
+    catalog_prefix: str | None = None,
 ) -> list[dict[str, Any]]:
     counts_by_col: dict[tuple[str, str], dict[str, Counter[str]]] = defaultdict(
         lambda: defaultdict(Counter)
@@ -108,7 +116,10 @@ def _apply_hybrid_dimensions(
         }
         row_id = d.get("row_id")
         if isinstance(row_id, str) and row_id.strip():
-            entry["row_id"] = row_id
+            if catalog_prefix and not row_id.startswith(f"{catalog_prefix}."):
+                entry["row_id"] = f"{catalog_prefix}.{row_id}"
+            else:
+                entry["row_id"] = row_id
         raw_by_table[tkey].append(entry)
 
     high_card_tables: set[tuple[str, str]] = set()
@@ -187,12 +198,16 @@ def _apply_hybrid_dimensions(
 
 @dataclass(frozen=True)
 class DtbOssieResult:
-    """Converted Apache Ossie document, serialized text, and high-cardinality dims."""
+    """Converted Apache Ossie document, serialized text, tasks, and high-cardinality dims."""
 
     document: dict[str, Any]
     ossie_content: str
     dimension_values: list[dict[str, Any]] = field(default_factory=list)
     stats: dict[str, int] = field(default_factory=dict)
+    tasks: list[dict[str, Any]] = field(default_factory=list)
+
+
+DtbToOssieResult = DtbOssieResult
 
 
 def _normalize_ident(name: str) -> str:
@@ -790,6 +805,57 @@ def _pick_relationship_direction(
     return t1, t2, [c1 for c1, _ in cols], [c2 for _, c2 in cols]
 
 
+def _normalize_optional_prefix(
+    value: str | None, pattern: re.Pattern[str], label: str
+) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError(f"Invalid {label}: must be a string")  # noqa: TRY004
+    cleaned = value.strip()
+    if not cleaned:
+        return None
+    if not pattern.fullmatch(cleaned):
+        raise ValueError(f"Invalid {label}: {cleaned!r}")
+    return cleaned
+
+
+def _qualify_table_ref(name: str, catalog_prefix: str | None) -> str:
+    if not catalog_prefix or name.count(".") != 1:
+        return name
+    return f"{catalog_prefix}.{name}"
+
+
+def _build_canonical_task(
+    record: Record,
+    *,
+    task_namespace: str | None,
+    validator: Draft202012Validator,
+) -> dict[str, Any]:
+    raw_name = str(record.data.get("name") or "").strip()
+    if not raw_name:
+        raise ValueError("DTB task is missing name")
+    task_name = f"{task_namespace}:{raw_name}" if task_namespace else raw_name
+    task_dict: dict[str, Any] = {
+        "name": task_name,
+        "sql": str(record.data.get("sql") or ""),
+    }
+    task_type = record.data.get("type")
+    if isinstance(task_type, str):
+        task_dict["type"] = task_type
+    description = record.data.get("description")
+    if isinstance(description, str) and description.strip():
+        task_dict["description"] = description.strip()
+    parameters = record.data.get("parameters")
+    if isinstance(parameters, dict):
+        task_dict["parameters"] = copy.deepcopy(parameters)
+    dialect = record.data.get("dialect")
+    if isinstance(dialect, str) and dialect in _VALID_TASK_DIALECTS:
+        task_dict["dialect"] = dialect
+    validator.validate(task_dict)
+    return task_dict
+
+
 def convert_dtb_to_ossie(
     source_dir: Path,
     *,
@@ -804,8 +870,10 @@ def convert_dtb_to_ossie(
     low_cardinality_limit: int = 20,
     sample_limit: int = 5,
     database: str | None = None,
+    catalog_prefix: str | None = None,
+    task_namespace: str | None = None,
 ) -> DtbOssieResult:
-    """Convert a DTB snapshot directory into a validated Apache Ossie model + dim values."""
+    """Convert a DTB snapshot directory into a validated Apache Ossie model, tasks, and dim values."""
     if not isinstance(model_name, str) or not MODEL_NAME_RE.fullmatch(model_name):
         raise ValueError(
             "Invalid model_name: must match ^[A-Za-z0-9_][A-Za-z0-9_-]{0,63}$"
@@ -818,6 +886,12 @@ def convert_dtb_to_ossie(
         raise ValueError("dimension_row_limit must be >= 1")
     if format not in ("yaml", "json"):
         raise ValueError(f"Unsupported Ossie format: {format!r}")
+    normalized_catalog = _normalize_optional_prefix(
+        catalog_prefix, _CATALOG_PREFIX_RE, "catalog_prefix"
+    )
+    normalized_namespace = _normalize_optional_prefix(
+        task_namespace, _TASK_NAMESPACE_RE, "task_namespace"
+    )
 
     adapter_params: dict[str, Any] = {
         "snapshot_path": snapshot_path,
@@ -886,9 +960,21 @@ def convert_dtb_to_ossie(
     strategies_by_target: dict[tuple[str, str], set[str]] = defaultdict(set)
     sql_parser = DtbTaskParser()
 
+    tasks_list: list[dict[str, Any]] = []
+    seen_task_names: set[str] = set()
+    task_validator = _task_validator()
+
     for task in read_result.records:
         if task.kind != "task":
             continue
+        canonical_task = _build_canonical_task(
+            task,
+            task_namespace=normalized_namespace,
+            validator=task_validator,
+        )
+        if canonical_task["name"] not in seen_task_names:
+            seen_task_names.add(canonical_task["name"])
+            tasks_list.append(canonical_task)
         ttype = str(task.data.get("type") or "").strip().lower()
         if ttype == "merge_onself":
             m_target = _merge_onself_target(task, schema)
@@ -983,7 +1069,11 @@ def convert_dtb_to_ossie(
 
     # Map datasets via ossie_export shared naming rules
     sorted_keys_3 = [
-        ("", schema.tables_by_key[k]["database"], schema.tables_by_key[k]["name"])
+        (
+            normalized_catalog or "",
+            schema.tables_by_key[k]["database"],
+            schema.tables_by_key[k]["name"],
+        )
         for k in sorted(schema.tables_by_key)
     ]
     dataset_names_3 = _assign_dataset_names(sorted_keys_3)
@@ -1006,13 +1096,21 @@ def convert_dtb_to_ossie(
     for tkey in sorted(schema.tables_by_key):
         tmeta = schema.tables_by_key[tkey]
         ds_name = dataset_names[tkey]
-        parts = (tmeta["database"], tmeta["name"])
+        parts = (
+            (normalized_catalog, tmeta["database"], tmeta["name"])
+            if normalized_catalog
+            else (tmeta["database"], tmeta["name"])
+        )
         raw_fields = sorted(fields_by_table.get(tkey, []), key=lambda x: str(x["name"]))
         ossie_fields = [_build_field(f, ds_name, parts) for f in raw_fields]
 
         ds: dict[str, Any] = {
             "name": ds_name,
-            "source": f"{tmeta['database']}.{tmeta['name']}",
+            "source": (
+                f"{normalized_catalog}.{tmeta['database']}.{tmeta['name']}"
+                if normalized_catalog
+                else f"{tmeta['database']}.{tmeta['name']}"
+            ),
         }
         if tmeta["comment"]:
             ds["description"] = tmeta["comment"]
@@ -1026,7 +1124,10 @@ def convert_dtb_to_ossie(
         if tkey in strategies_by_target and schema.partition_cols.get(tkey):
             strat_list = [_strategy_text(c) for c in sorted(strategies_by_target[tkey])]
             inst_lines.extend(strat_list)
-        upstreams = sorted(upstreams_by_target.get(tkey, ()))
+        upstreams = sorted(
+            _qualify_table_ref(u, normalized_catalog)
+            for u in upstreams_by_target.get(tkey, ())
+        )
         if upstreams:
             shown = ", ".join(upstreams[:_MAX_UPSTREAMS_IN_DOC])
             suffix = (
@@ -1088,6 +1189,7 @@ def convert_dtb_to_ossie(
         low_cardinality_limit=low_cardinality_limit,
         sample_limit=sample_limit,
         stats=stats,
+        catalog_prefix=normalized_catalog,
     )
 
     document: dict[str, Any] = {
@@ -1102,11 +1204,13 @@ def convert_dtb_to_ossie(
     ossie_content = serialize_ossie(document, format)
     stats["datasets"] = len(datasets)
     stats["relationships"] = len(rels_list)
+    stats["tasks"] = len(tasks_list)
     return DtbOssieResult(
         document=document,
         ossie_content=ossie_content,
         dimension_values=dimension_values,
         stats=dict(stats),
+        tasks=tasks_list,
     )
 
 
@@ -1118,8 +1222,9 @@ def write_dtb_ossie_output(
     model_name: str = "dtb_semantic_model",
     format: ExportFormat = "yaml",
     dimension_filename: str = "dimension_values.json",
+    tasks_filename: str = "tasks.json",
 ) -> dict[str, Path]:
-    """Atomically write converted Ossie model and optional dimension_values.json."""
+    """Atomically write converted Ossie model and optional dimension_values.json / tasks.json."""
     if not isinstance(model_name, str) or not MODEL_NAME_RE.fullmatch(model_name):
         raise ValueError(
             "Invalid model_name: must match ^[A-Za-z0-9_][A-Za-z0-9_-]{0,63}$"
@@ -1137,6 +1242,9 @@ def write_dtb_ossie_output(
     rel_dim = relative(dimension_filename)
     if any(part.startswith(".") for part in rel_dim.parts):
         raise ValueError("dimension_filename must not use hidden segments")
+    rel_tasks = relative(tasks_filename)
+    if any(part.startswith(".") for part in rel_tasks.parts):
+        raise ValueError("tasks_filename must not use hidden segments")
     ext = "json" if format == "json" else "yaml"
     ossie_target = safe(out_root, rel_ossie / f"{model_name}.{ext}")
     if not ossie_target.parent.resolve().is_relative_to(out_resolved):
@@ -1144,6 +1252,9 @@ def write_dtb_ossie_output(
     dim_target = safe(out_root, rel_dim)
     if not dim_target.parent.resolve().is_relative_to(out_resolved):
         raise ValueError("Dimension output path escapes output directory")
+    tasks_target = safe(out_root, rel_tasks)
+    if not tasks_target.parent.resolve().is_relative_to(out_resolved):
+        raise ValueError("Tasks output path escapes output directory")
     write_ossie_file(ossie_target, result.ossie_content)
 
     written: dict[str, Path] = {"ossie": ossie_target}
@@ -1153,59 +1264,187 @@ def write_dtb_ossie_output(
             json.dumps(result.dimension_values, ensure_ascii=False, indent=2) + "\n",
         )
         written["dimension_values"] = dim_target
+    if result.tasks:
+        write_ossie_file(
+            tasks_target,
+            json.dumps(result.tasks, ensure_ascii=False, indent=2) + "\n",
+        )
+        written["tasks"] = tasks_target
     return written
 
 
-class DtbOssiePuller:
-    """Pull DTB metadata and dimensions and convert them into Ossie outputs."""
+write_ossie_outputs = write_dtb_ossie_output
+
+
+DTB_PULLER_PARAMETERS_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "url": {"type": "string", "format": "uri", "title": "DTB 服务地址"},
+        "token": {"type": "string", "format": "password", "title": "DTB 访问凭据"},
+        "interval_seconds": {
+            "type": "integer",
+            "minimum": 0,
+            "title": "自动拉取间隔（秒）",
+        },
+        "layer": {
+            "type": "string",
+            "enum": ["dimensions"],
+            "default": "dimensions",
+            "title": "拉取层级",
+        },
+        "max_tables": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "title": "最大拉取表数",
+        },
+        "model_name": {
+            "type": "string",
+            "pattern": r"^[A-Za-z0-9_][A-Za-z0-9_-]{0,63}$",
+            "default": "dtb_semantic_model",
+            "title": "语义模型名称",
+        },
+        "low_cardinality_limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 500,
+            "default": 20,
+            "title": "低基数内联阈值",
+        },
+        "sample_limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 50,
+            "default": 5,
+            "title": "高基数抽样数量",
+        },
+        "dimension_row_limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 500000,
+            "default": 50000,
+            "title": "单维表最大行数",
+        },
+    },
+    "additionalProperties": False,
+}
+
+
+def _validate_dtb_url(raw_url: Any) -> str:
+    if not isinstance(raw_url, str) or not raw_url.strip():
+        raise ValueError("Invalid DTB URL")
+    url = raw_url.strip()
+    parsed = urlsplit(url)
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ValueError("Invalid DTB URL")
+    return url
+
+
+class DtbPluginPuller:
+    """Unified PullerPlugin converting DTB metadata, tasks, and dimensions to PullArtifact."""
 
     id = "ossie"
     version = "1"
     display_name = "DTB 拉取为 Ossie"
-    parameters_schema: ClassVar[dict] = {
-        "type": "object",
-        "properties": {
-            "url": {"type": "string", "format": "uri", "title": "DTB 服务地址"},
-            "token": {"type": "string", "format": "password", "title": "DTB 访问凭据"},
-            "interval_seconds": {
-                "type": "integer",
-                "minimum": 0,
-                "title": "自动拉取间隔（秒）",
+    parameters_schema: ClassVar[dict] = DTB_PULLER_PARAMETERS_SCHEMA
+
+    def __init__(self, fetcher: Any | None = None) -> None:
+        self._fetcher = fetcher
+
+    def pull(self, context: PullContext) -> PullArtifact:
+        """Pull DTB metadata/tasks/dimensions and return a validated PullArtifact."""
+        params = dict(context.parameters or {})
+        try:
+            Draft202012Validator(self.parameters_schema).validate(params)
+        except ValidationError as exc:
+            raise ValueError(exc.message) from exc
+
+        url = _validate_dtb_url(params.get("url"))
+        token = context.secret
+        if not isinstance(token, str) or not token.strip():
+            raise ValueError("DTB token is required")
+
+        layer = str(params.get("layer") or "dimensions")
+        max_tables = params.get("max_tables")
+        model_name = str(params.get("model_name") or "dtb_semantic_model")
+        low_limit = int(params.get("low_cardinality_limit", 20))
+        sample_limit = int(params.get("sample_limit", 5))
+        dimension_row_limit = int(params.get("dimension_row_limit", 50000))
+
+        dtb_scope: dict[str, Any] = {
+            "layer": layer,
+            "dimension_row_limit": dimension_row_limit,
+        }
+        if max_tables is not None:
+            dtb_scope["max_tables"] = max_tables
+
+        fetcher = self._fetcher
+        if fetcher is None:
+            from .dtb_puller import DtbPuller
+
+            fetcher = DtbPuller()
+
+        with httpx.Client(timeout=30, follow_redirects=False) as client:
+            raw_files, dtb_counts = fetcher.fetch(client, url, token, dtb_scope)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for name, content in raw_files.items():
+                dest = root / "dtb" / "snapshot" / name
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_bytes(content)
+            converted = convert_dtb_to_ossie(
+                root,
+                snapshot_path="dtb",
+                dimensions_path="dtb/snapshot/dimensions",
+                dimension_row_limit=dimension_row_limit,
+                model_name=model_name,
+                format="yaml",
+                low_cardinality_limit=low_limit,
+                sample_limit=sample_limit,
+                catalog_prefix=context.catalog_prefix,
+                task_namespace=context.task_namespace,
+            )
+
+        item_failures = [
+            PullItemFailure(
+                kind="dimension_table",
+                target=str(item.get("table") or ""),
+                reason=str(item.get("reason") or "dimension_fetch_failed"),
+            )
+            for item in (dtb_counts.get("failures") or [])
+            if isinstance(item, dict)
+        ]
+        table_count = int(converted.stats.get("datasets", 0))
+        task_count = len(converted.tasks)
+        stats: dict[str, int] = {
+            **{k: int(v) for k, v in converted.stats.items()},
+            "tables": int(dtb_counts.get("tables", table_count)),
+            "tasks": task_count,
+            "failures": len(item_failures),
+        }
+        return PullArtifact(
+            ossie_models={
+                f"{model_name}.yaml": converted.ossie_content.encode("utf-8")
             },
-            "layer": {
-                "type": "string",
-                "enum": ["dimensions"],
-                "title": "拉取层级",
-            },
-            "max_tables": {
-                "type": "integer",
-                "minimum": 1,
-                "maximum": 100,
-                "title": "最大拉取表数",
-            },
-            "model_name": {
-                "type": "string",
-                "pattern": r"^[A-Za-z0-9_][A-Za-z0-9_-]{0,63}$",
-                "default": "dtb_semantic_model",
-                "title": "语义模型名称",
-            },
-            "low_cardinality_limit": {
-                "type": "integer",
-                "minimum": 1,
-                "maximum": 500,
-                "default": 20,
-                "title": "低基数内联阈值",
-            },
-            "sample_limit": {
-                "type": "integer",
-                "minimum": 1,
-                "maximum": 50,
-                "default": 5,
-                "title": "高基数抽样数量",
-            },
-        },
-        "additionalProperties": False,
-    }
+            tasks=converted.tasks,
+            dimension_values=converted.dimension_values,
+            table_count=table_count,
+            task_count=task_count,
+            stats=stats,
+            failures=item_failures,
+        )
+
+
+class DtbOssiePuller(DtbPluginPuller):
+    """Pull DTB metadata and dimensions and convert them into Ossie outputs."""
 
     def fetch(
         self,
@@ -1223,9 +1462,14 @@ class DtbOssiePuller:
         model_name = str(params.get("model_name") or "dtb_semantic_model")
         low_limit = int(params.get("low_cardinality_limit", 20))
         sample_limit = int(params.get("sample_limit", 5))
+        dim_row_limit = int(params.get("dimension_row_limit", 50000))
         rel_ossie = safe_name(ossie_path).as_posix()
 
-        dtb_scope = {k: params[k] for k in ("layer", "max_tables") if k in params}
+        dtb_scope = {
+            k: params[k]
+            for k in ("layer", "max_tables", "dimension_row_limit")
+            if k in params
+        }
         raw_files, dtb_counts = DtbPuller().fetch(
             client, base_url, token, dtb_scope or None
         )
@@ -1240,6 +1484,7 @@ class DtbOssiePuller:
                 root,
                 snapshot_path="dtb",
                 dimensions_path="dtb/snapshot/dimensions",
+                dimension_row_limit=dim_row_limit,
                 model_name=model_name,
                 format="yaml",
                 low_cardinality_limit=low_limit,

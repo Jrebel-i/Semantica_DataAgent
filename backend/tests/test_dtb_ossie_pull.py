@@ -203,6 +203,7 @@ def test_dtb_ossie_puller_is_registered_and_transforms_fake_dtb_response():
         "model_name",
         "low_cardinality_limit",
         "sample_limit",
+        "dimension_row_limit",
     } <= set(puller.parameters_schema["properties"])
 
     dim_city_rows = [
@@ -886,3 +887,249 @@ def test_project_ossie_pull_config_exclusion_lifecycle_and_end_to_end_build(
         assert "项目已归档" in arch_resp.text
         with sessions()() as db:
             assert db.query(PullRecord).count() == before_cnt
+
+
+def test_puller_plugin_pull_returns_validated_artifact_with_prefixes(monkeypatch):
+    from pathlib import Path
+
+    import yaml
+    from jsonschema import validate
+
+    from semantica_dataagent.dtb_ossie import DtbOssiePuller, DtbPluginPuller
+    from semantica_dataagent.dtb_puller import DtbPuller
+    from semantica_dataagent.ossie_export import validate_ossie_document
+    from semantica_dataagent.plugins import PullArtifact, PullContext
+
+    task_schema = json.loads(
+        (
+            Path(__file__).resolve().parents[2] / "schemas" / "v2" / "task.schema.json"
+        ).read_text(encoding="utf-8")
+    )
+    dim_schema = json.loads(
+        (
+            Path(__file__).resolve().parents[2]
+            / "schemas"
+            / "v2"
+            / "dimension_value.schema.json"
+        ).read_text(encoding="utf-8")
+    )
+
+    dim_city_rows = [
+        {"city_code": f"C{i:02d}", "city_name": f"城市_{i:02d}"} for i in range(1, 8)
+    ]
+    fake = _FakeDtb(
+        metadata_rows=[
+            _metadata_row(1, "dim_city", "city_code", 1, "string", "城市编码"),
+            _metadata_row(1, "dim_city", "city_name", 2, "string", "城市名称"),
+            _metadata_row(2, "dim_flag", "flag_code", 1, "string", "标记编码"),
+        ],
+        table_rows=[
+            _table_row(
+                1,
+                "dimensions",
+                "dim_city",
+                "city_code",
+                "string",
+                1,
+                "城市维表",
+                "城市编码",
+            ),
+            _table_row(
+                1,
+                "dimensions",
+                "dim_city",
+                "city_name",
+                "string",
+                2,
+                "城市维表",
+                "城市名称",
+            ),
+            _table_row(
+                2,
+                "dimensions",
+                "dim_flag",
+                "flag_code",
+                "string",
+                1,
+                "标记维表",
+                "标记编码",
+            ),
+        ],
+        dimension_rows={
+            "dim_city": dim_city_rows,
+            "dim_flag": [{"flag_code": "Y"}, {"flag_code": "N"}],
+        },
+        task_rows=[
+            [
+                "t_city",
+                "spark sql",
+                "INSERT OVERWRITE TABLE dimensions.dim_city SELECT city_code, city_name FROM dimensions.dim_city",
+            ]
+        ],
+    )
+    real_client = httpx.Client
+    monkeypatch.setattr(
+        "semantica_dataagent.dtb_ossie.httpx.Client",
+        lambda *args, **kwargs: real_client(
+            transport=httpx.MockTransport(fake), timeout=30
+        ),
+    )
+
+    ctx = PullContext(
+        project_id="proj_1",
+        instance_id="inst_a",
+        parameters={
+            "url": "https://dtb.example",
+            "layer": "dimensions",
+            "model_name": "city_model",
+            "low_cardinality_limit": 5,
+            "sample_limit": 2,
+            "dimension_row_limit": 250,
+        },
+        secrets={"token": "secret-token"},
+        catalog_prefix="lake_a",
+        task_namespace="ns_a",
+    )
+
+    for plugin in (DtbOssiePuller(), DtbPluginPuller(), DtbPuller()):
+        artifact = plugin.pull(ctx)
+        assert isinstance(artifact, PullArtifact)
+        assert set(artifact.ossie_models) == {"city_model.yaml"}
+        parsed_model = yaml.safe_load(
+            artifact.ossie_models["city_model.yaml"].decode("utf-8")
+        )
+        validate_ossie_document(parsed_model)
+        sources = {ds["source"] for ds in parsed_model["datasets"]}
+        assert sources == {"lake_a.dimensions.dim_city", "lake_a.dimensions.dim_flag"}
+        city_ds = next(
+            ds
+            for ds in parsed_model["datasets"]
+            if ds["source"] == "lake_a.dimensions.dim_city"
+        )
+        code_field = next(f for f in city_ds["fields"] if f["name"] == "city_code")
+        assert "抽样前 2 个" in code_field["ai_context"]["instructions"]
+
+        assert artifact.task_count == 1
+        assert len(artifact.tasks) == 1
+        validate(artifact.tasks[0], task_schema)
+        assert artifact.tasks[0]["name"] == "ns_a:t_city"
+
+        assert artifact.table_count == 2
+        assert len(artifact.dimension_values) == 14
+        for item in artifact.dimension_values:
+            validate(item, dim_schema)
+            assert item["row_id"].startswith("lake_a.dimensions.dim_city:")
+        assert artifact.failures == []
+        assert all(isinstance(v, int) for v in artifact.stats.values())
+
+
+def test_puller_plugin_validates_credentials_limits_and_partial_failures(monkeypatch):
+    import pytest
+
+    from semantica_dataagent.dtb_ossie import DtbOssiePuller
+    from semantica_dataagent.dtb_puller import DtbPuller
+    from semantica_dataagent.plugins import PullContext, PullItemFailure
+
+    plugin = DtbOssiePuller()
+    with pytest.raises(ValueError, match="token"):
+        plugin.pull(
+            PullContext(
+                project_id="p1",
+                instance_id="i1",
+                parameters={"url": "https://dtb.example"},
+                secrets={},
+            )
+        )
+    with pytest.raises(ValueError, match="URL"):
+        plugin.pull(
+            PullContext(
+                project_id="p1",
+                instance_id="i1",
+                parameters={"url": "ftp://dtb.example"},
+                secrets={"token": "tok"},
+            )
+        )
+    with pytest.raises(ValueError):
+        plugin.pull(
+            PullContext(
+                project_id="p1",
+                instance_id="i1",
+                parameters={
+                    "url": "https://dtb.example",
+                    "dimension_row_limit": 500001,
+                },
+                secrets={"token": "tok"},
+            )
+        )
+
+    observed_sqls: list[str] = []
+    fake = _FakeDtb(
+        metadata_rows=[
+            # dim_bad has 2 partition columns -> triggers multiple_partition_fields failure
+            _metadata_row(1, "dim_bad", "day_num", 10001, "string"),
+            _metadata_row(1, "dim_bad", "hour_num", 10002, "string"),
+            _metadata_row(2, "dim_good", "code", 1, "string"),
+        ],
+        table_rows=[
+            _table_row(1, "dimensions", "dim_bad", "day_num", "string", 10001),
+            _table_row(1, "dimensions", "dim_bad", "hour_num", "string", 10002),
+            _table_row(2, "dimensions", "dim_good", "code", "string", 1),
+        ],
+        dimension_rows={"dim_good": [{"code": "A"}, {"code": "B"}]},
+        stats=(
+            PARTITION_HEADER
+            + "\n1,dim_bad,dimensions,,,bad,,day_num=20261105,1,,1\n"
+            + "2,dim_good,dimensions,,,good,,,0,,1\n"
+        ),
+        task_rows=[["t_good", "spark sql", "SELECT code FROM dimensions.dim_good"]],
+    )
+
+    def capturing_transport(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/data-query/async-execute":
+            observed_sqls.append(json.loads(request.content)["sql"])
+        return fake(request)
+
+    real_client = httpx.Client
+    monkeypatch.setattr(
+        "semantica_dataagent.dtb_ossie.httpx.Client",
+        lambda *args, **kwargs: real_client(
+            transport=httpx.MockTransport(capturing_transport), timeout=30
+        ),
+    )
+
+    # Configurable dimension_row_limit overrides legacy 100 cap even when max_tables is set
+    with real_client(transport=httpx.MockTransport(capturing_transport)) as client:
+        _, dtb_counts = DtbPuller().fetch(
+            client,
+            "https://dtb.example",
+            "tok",
+            {"layer": "dimensions", "max_tables": 2, "dimension_row_limit": 250},
+        )
+        assert dtb_counts["failures"] == [
+            {"table": "dim_bad", "reason": "multiple_partition_fields"}
+        ]
+    assert any("LIMIT 250" in sql for sql in observed_sqls)
+
+    observed_sqls.clear()
+    artifact = plugin.pull(
+        PullContext(
+            project_id="p1",
+            instance_id="i1",
+            parameters={
+                "url": "https://dtb.example",
+                "max_tables": 2,
+                "dimension_row_limit": 321,
+            },
+            secrets={"token": "tok"},
+        )
+    )
+    assert any("LIMIT 321" in sql for sql in observed_sqls)
+    assert artifact.failures == [
+        PullItemFailure(
+            kind="dimension_table",
+            target="dim_bad",
+            reason="multiple_partition_fields",
+        )
+    ]
+    assert artifact.task_count == 1
+    assert artifact.table_count == 2
