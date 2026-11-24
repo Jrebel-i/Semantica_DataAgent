@@ -127,7 +127,7 @@ const providers = [
   },
 ];
 
-test("switches presets, saves config, triggers discovery run with seed_eval_drafts off by default, and renders candidate probing breakdown + proposal link", async () => {
+test("switches presets, saves config, keeps enable_fk_probing & generate_eval_drafts off by default, and renders synthesis stats + proposal link", async () => {
   let savedConfig = { ...baseConfig };
   const runs = [
     {
@@ -136,17 +136,29 @@ test("switches presets, saves config, triggers discovery run with seed_eval_draf
       status: "partial",
       mine_query_history: true,
       probe_relationships: true,
+      enable_fk_probing: true,
       seed_eval_drafts: false,
+      generate_eval_drafts: false,
+      top_templates: 20,
       config_snapshot: {},
       queries_fetched: 120,
       templates_clustered: 14,
+      templates_synthesized: 10,
       candidates_recalled: 5,
       candidates_probed: 3,
+      fk_candidates_probed: 3,
       candidates_passed: 1,
+      fk_candidates_verified: 1,
       candidates_skipped: 1,
       candidates_failed: 1,
       proposals_created: 1,
+      duplicates_skipped: 2,
+      l1_rejected: 1,
       eval_drafts_created: 0,
+      llm_used: true,
+      llm_error: "部分模板归纳降级" as string | null,
+      summary:
+        "已聚类 14 个高频 SQL 模板（归纳前 10 个），生成 1 条待审批纠错提案。",
       error: "探活超时：1 个候选跳过" as string | null,
       created_by: "admin",
       started_at: "2026-05-01T01:00:00Z",
@@ -232,26 +244,29 @@ test("switches presets, saves config, triggers discovery run with seed_eval_draf
         return Response.json(savedConfig);
       }
       if (
-        input === "/api/v1/discovery/runs?project=default" &&
+        input === "/api/v1/projects/default/discovery/runs" &&
         method === "GET"
       ) {
         return Response.json(runs);
       }
       if (
-        input === "/api/v1/discovery/runs/drun-1?project=default" &&
+        input === "/api/v1/projects/default/discovery/runs/drun-1" &&
         method === "GET"
       ) {
         return Response.json(runDetails["drun-1"]);
       }
       if (
-        input === "/api/v1/discovery/runs?project=default" &&
+        input === "/api/v1/projects/default/discovery/runs" &&
         method === "POST"
       ) {
         const created = {
           ...runs[0],
           id: "drun-2",
           status: "completed",
+          enable_fk_probing: false,
+          probe_relationships: false,
           error: null,
+          llm_error: null,
           proposals_created: 0,
         };
         runs.unshift(created);
@@ -259,7 +274,7 @@ test("switches presets, saves config, triggers discovery run with seed_eval_draf
         return Response.json(created, { status: 202 });
       }
       if (
-        input === "/api/v1/discovery/runs/drun-2?project=default" &&
+        input === "/api/v1/projects/default/discovery/runs/drun-2" &&
         method === "GET"
       ) {
         return Response.json(runDetails["drun-2"]);
@@ -278,12 +293,15 @@ test("switches presets, saves config, triggers discovery run with seed_eval_draf
     />,
   );
 
-  // Run detail + candidate probing evidence + deep link
+  // Run detail + new Phase 11 metrics + candidate probing evidence + deep link
   expect(
     await screen.findByText(
       "relationship:shop.orders:shop.users:fk_orders_users",
     ),
   ).toBeTruthy();
+  expect(screen.getByText(/已归纳模板: 10/)).toBeTruthy();
+  expect(screen.getByText(/跳过重复: 2/)).toBeTruthy();
+  expect(screen.getByText("部分模板归纳降级")).toBeTruthy();
   expect(screen.getByText(/94\.0%/)).toBeTruthy();
   expect(screen.getByText(/shop\.orders\(dt=2026-05-01\)/)).toBeTruthy();
   expect(screen.getByText(/partition_missing_fail_closed/)).toBeTruthy();
@@ -342,19 +360,30 @@ test("switches presets, saves config, triggers discovery run with seed_eval_draf
   );
   expect(await screen.findByText("冷启动发现配置已保存")).toBeTruthy();
 
-  // seed_eval_drafts checkbox MUST be unchecked by default
+  // enable_fk_probing and generate_eval_drafts MUST be unchecked by default
   const mineBox = screen.getByLabelText(/查询历史挖掘/) as HTMLInputElement;
   const probeBox = screen.getByLabelText(
-    /外键关系数据探活/,
+    /启用外键关系数据探活/,
   ) as HTMLInputElement;
   const seedBox = screen.getByLabelText(
     /同步生成待确认评测题集草稿/,
   ) as HTMLInputElement;
   expect(mineBox.checked).toBe(true);
-  expect(probeBox.checked).toBe(true);
+  expect(probeBox.checked).toBe(false);
   expect(seedBox.checked).toBe(false);
 
-  // Trigger run with optional per-run override
+  // Opt-in enable_fk_probing + customize top_templates & trigger provider/model
+  fireEvent.click(probeBox);
+  expect(probeBox.checked).toBe(true);
+  fireEvent.change(screen.getByLabelText("聚类模板归纳上限 (top_templates)"), {
+    target: { value: "15" },
+  });
+  fireEvent.change(screen.getByLabelText("本次模型供应方（可选）"), {
+    target: { value: "prov-1" },
+  });
+  fireEvent.change(screen.getByLabelText("本次模型（可选）"), {
+    target: { value: "gpt-4.1" },
+  });
   fireEvent.change(screen.getByLabelText("本次覆盖：单次探活候选上限"), {
     target: { value: "8" },
   });
@@ -364,11 +393,14 @@ test("switches presets, saves config, triggers discovery run with seed_eval_draf
     expect(
       requests.some(
         (r) =>
-          r.url === "/api/v1/discovery/runs?project=default" &&
+          r.url === "/api/v1/projects/default/discovery/runs" &&
           r.method === "POST" &&
           (r.body as Record<string, unknown>)?.mine_query_history === true &&
-          (r.body as Record<string, unknown>)?.probe_relationships === true &&
-          (r.body as Record<string, unknown>)?.seed_eval_drafts === false &&
+          (r.body as Record<string, unknown>)?.enable_fk_probing === true &&
+          (r.body as Record<string, unknown>)?.generate_eval_drafts === false &&
+          (r.body as Record<string, unknown>)?.top_templates === 15 &&
+          (r.body as Record<string, unknown>)?.provider_id === "prov-1" &&
+          (r.body as Record<string, unknown>)?.model === "gpt-4.1" &&
           (r.body as Record<string, unknown>)?.max_fk_candidates === 8,
       ),
     ).toBe(true),
@@ -388,7 +420,7 @@ test("missing personal DTB token displays alert with /personal-settings link and
       if (input === "/api/v1/projects/default/discovery-config") {
         return Response.json(baseConfig);
       }
-      if (input === "/api/v1/discovery/runs?project=default") {
+      if (input === "/api/v1/projects/default/discovery/runs") {
         return Response.json([]);
       }
       return Response.json({});
@@ -431,7 +463,7 @@ test("document projects show unsupported notice and archived warehouse projects 
       if (input.endsWith("/discovery-config")) {
         return Response.json(baseConfig);
       }
-      if (input.startsWith("/api/v1/discovery/runs")) {
+      if (input.includes("/discovery/runs")) {
         return Response.json([]);
       }
       return Response.json({});
@@ -496,7 +528,7 @@ test("project switch discards stale delayed discovery config and run responses f
       if (input === "/api/v1/projects/default/discovery-config") {
         return defaultConfigPromise;
       }
-      if (input === "/api/v1/discovery/runs?project=default") {
+      if (input === "/api/v1/projects/default/discovery/runs") {
         return Response.json([]);
       }
       if (input === "/api/v1/projects/alpha/discovery-config") {
@@ -506,7 +538,7 @@ test("project switch discards stale delayed discovery config and run responses f
           lookback_days: 21,
         });
       }
-      if (input === "/api/v1/discovery/runs?project=alpha") {
+      if (input === "/api/v1/projects/alpha/discovery/runs") {
         return Response.json([]);
       }
       return Response.json({});
@@ -561,24 +593,28 @@ test("switching from Self-Evolution tab to Cold-Start Discovery tab loads discov
     vi.fn(async (input: string) => {
       if (input === "/api/v1/projects") return Response.json(projects);
       if (input === "/api/v1/providers") return Response.json([]);
-      if (input === "/api/v1/projects/default/evolution-config") {
+      if (input === "/api/v1/trace-source-plugins") return Response.json([]);
+      if (input === "/api/v1/projects/default/evolution/config") {
         return Response.json({
-          auto_evolve_enabled: false,
-          min_trajectories: 30,
-          min_interval_hours: 24,
-          max_idle_days: 7,
-          max_rounds: 3,
-          max_eval_cases: 20,
+          project_id: "default",
+          enabled: false,
+          trace_source_plugin: null,
+          trace_source_parameters: {},
+          trace_source_secrets: {},
+          configured_secrets: [],
+          secret_configured: false,
+          schedule_cron: null,
+          timezone: "Asia/Shanghai",
           evolution_provider_id: null,
           evolution_model: null,
-          judge_provider_id: null,
-          judge_model: null,
-          checkpoint_trajectory_id: null,
-          checkpoint_at: null,
-          pending_trajectories: 0,
+          max_traces_per_run: 200,
+          last_trace_timestamp: null,
+          last_triggered_at: null,
+          next_run_at: null,
+          global_langfuse_configured: false,
         });
       }
-      if (input === "/api/v1/evolution/runs?project=default") {
+      if (input === "/api/v1/projects/default/evolution/runs") {
         return Response.json([]);
       }
       if (input === "/api/v1/me/dtb-token") {
@@ -587,7 +623,7 @@ test("switching from Self-Evolution tab to Cold-Start Discovery tab loads discov
       if (input === "/api/v1/projects/default/discovery-config") {
         return Response.json(baseConfig);
       }
-      if (input === "/api/v1/discovery/runs?project=default") {
+      if (input === "/api/v1/projects/default/discovery/runs") {
         return Response.json([]);
       }
       return Response.json({});

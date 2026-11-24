@@ -109,3 +109,74 @@ def test_filter_drops_content_fields_unless_capture_is_explicitly_enabled():
         "name": "validate_sql",
         "metadata": {"duration_ms": 3},
     }
+
+
+def test_filter_always_attaches_project_tag_and_metadata_and_scrubs_messages():
+    module = telemetry()
+    event = {
+        "id": "trace-123",
+        "name": "online-conversation",
+        "input": "Q Bearer secret-tok",
+        "output": "A password=hunter2",
+        "messages": [
+            {"role": "system", "content": "hidden system"},
+            {"role": "user", "content": "Q Bearer secret-tok"},
+            {"role": "tool", "content": "raw tool output"},
+            {
+                "role": "assistant",
+                "content": "A password=hunter2",
+            },
+        ],
+        "metadata": {"project_id": "sales", "agent": "pi"},
+    }
+
+    default_payload = module._filtered(event, ("secret-tok",), capture_content=False)
+    assert default_payload["tags"] == ["project:sales"]
+    assert default_payload["metadata"]["project_id"] == "sales"
+    assert "messages" not in default_payload["metadata"]
+    assert "input" not in default_payload and "output" not in default_payload
+
+    content_payload = module._filtered(event, ("secret-tok",), capture_content=True)
+    assert content_payload["tags"] == ["project:sales"]
+    assert content_payload["metadata"]["project_id"] == "sales"
+    assert content_payload["metadata"]["messages"] == [
+        {"role": "user", "content": "Q Bearer [REDACTED]"},
+        {"role": "assistant", "content": "A password=[REDACTED]"},
+    ]
+    encoded = str(content_payload)
+    assert "hidden system" not in encoded
+    assert "raw tool output" not in encoded
+    assert "secret-tok" not in encoded
+    assert "hunter2" not in encoded
+
+
+def test_filter_scrubs_metadata_messages_on_non_conversation_events():
+    module = telemetry()
+    event = {
+        "name": "validate_sql",
+        "metadata": {
+            "project_id": "sales",
+            "messages": [
+                {"role": "tool", "content": "secret tool payload"},
+                {"role": "user", "content": {"rows": [["LEAK_ROW"]]}},
+                {"role": "assistant", "content": "ok Bearer secret-tok"},
+            ],
+        },
+    }
+    payload = module._filtered(event, ("secret-tok",), capture_content=True)
+    assert payload["metadata"]["messages"] == [
+        {"role": "assistant", "content": "ok Bearer [REDACTED]"}
+    ]
+    assert "secret tool payload" not in str(payload)
+    assert "LEAK_ROW" not in str(payload)
+
+    # When all metadata.messages are disallowed/empty, metadata["messages"] is dropped completely
+    bad_only = {
+        "name": "validate_sql",
+        "metadata": {
+            "project_id": "sales",
+            "messages": [{"role": "tool", "content": "only-tool"}],
+        },
+    }
+    cleaned = module._filtered(bad_only, capture_content=True)
+    assert "messages" not in cleaned["metadata"]

@@ -275,6 +275,52 @@ def latest_scheduled_slot(
     return None
 
 
+def next_scheduled_slot(
+    cron_expr: str, tz_name: str | None, after_utc: datetime
+) -> datetime | None:
+    """Return the earliest UTC timestamp > after_utc matching cron_expr in tz_name."""
+    minutes, hours, days, months, weekdays = _parse_cron_fields(cron_expr)
+    after_norm = as_utc(after_utc)
+    try:
+        tz = ZoneInfo((tz_name or "").strip() or "Asia/Shanghai")
+    except (ZoneInfoNotFoundError, ValueError, KeyError) as exc:
+        raise ValueError(f"无效时区：{tz_name}") from exc
+    after_local = after_norm.astimezone(tz)
+    current_date: date = after_local.date()
+
+    for offset in range(_MAX_SLOT_LOOKBACK_DAYS):
+        day = current_date + timedelta(days=offset)
+        cron_weekday = (day.weekday() + 1) % 7
+        if (
+            day.month not in months
+            or day.day not in days
+            or cron_weekday not in weekdays
+        ):
+            continue
+        day_candidates: list[datetime] = []
+        for hour in hours:
+            for minute in minutes:
+                for fold in (0, 1):
+                    local_dt = datetime(
+                        day.year, day.month, day.day, hour, minute, tzinfo=tz, fold=fold
+                    )
+                    utc_dt = local_dt.astimezone(UTC)
+                    roundtrip = utc_dt.astimezone(tz)
+                    if (
+                        roundtrip.year,
+                        roundtrip.month,
+                        roundtrip.day,
+                        roundtrip.hour,
+                        roundtrip.minute,
+                    ) != (day.year, day.month, day.day, hour, minute):
+                        continue
+                    if utc_dt > after_norm:
+                        day_candidates.append(utc_dt)
+        if day_candidates:
+            return min(day_candidates)
+    return None
+
+
 def is_instance_due(instance, now_utc: datetime) -> bool:
     """Return True iff a scheduled slot lies strictly after anchor and <= now_utc."""
     if not getattr(instance, "enabled", False):

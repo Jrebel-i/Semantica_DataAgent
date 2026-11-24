@@ -232,7 +232,11 @@ def test_upgrade_preserves_historical_gaps_as_pending(tmp_path, monkeypatch):
             "project_members",
         )
         columns = {
-            table: [row[1] for row in db.execute(f"PRAGMA table_info({table})")]
+            table: [
+                row[1]
+                for row in db.execute(f"PRAGMA table_info({table})")
+                if not (table == "knowledge_generations" and row[1] == "is_candidate")
+            ]
             for table in tables
         }
         before = {
@@ -242,7 +246,7 @@ def test_upgrade_preserves_historical_gaps_as_pending(tmp_path, monkeypatch):
             for table in tables
         }
     assert cli.main(["migrate"]) == 0
-    assert ScriptDirectory.from_config(config).get_heads() == ["0043"]
+    assert ScriptDirectory.from_config(config).get_heads() == ["0044"]
     backups = list(tmp_path.glob("old.sqlite.bak-*"))
     assert len(backups) == 1
     with sqlite3.connect(backups[0]) as backup:

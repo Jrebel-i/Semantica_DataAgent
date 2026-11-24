@@ -833,44 +833,49 @@ test("projectAdmin can open evolution dashboard and navigate to generated propos
           },
         ]);
       }
-      if (url === "/api/v1/projects/default/evolution-config") {
+      if (url === "/api/v1/trace-source-plugins") return Response.json([]);
+      if (url === "/api/v1/projects/default/evolution/config") {
         return Response.json({
-          auto_evolve_enabled: false,
-          min_trajectories: 30,
-          min_interval_hours: 24,
-          max_idle_days: 7,
-          max_rounds: 3,
-          max_eval_cases: 20,
+          project_id: "default",
+          enabled: false,
+          trace_source_plugin: "langfuse",
+          trace_source_parameters: {},
+          trace_source_secrets: {},
+          configured_secrets: [],
+          secret_configured: false,
+          schedule_cron: null,
+          timezone: "Asia/Shanghai",
           evolution_provider_id: null,
           evolution_model: null,
-          judge_provider_id: null,
-          judge_model: null,
-          checkpoint_trajectory_id: null,
-          checkpoint_at: null,
-          pending_trajectories: 0,
+          max_traces_per_run: 200,
+          last_trace_timestamp: null,
+          last_triggered_at: null,
+          next_run_at: null,
+          global_langfuse_configured: false,
         });
       }
-      if (url === "/api/v1/evolution/runs?project=default") {
+      if (url === "/api/v1/projects/default/evolution/runs") {
         return Response.json([
           {
             id: "run-route-1",
             project_id: "default",
-            status: "accepted",
             trigger_type: "manual",
-            created_by: "padmin",
-            diagnosis_trajectory_ids: [1],
-            reserve_trajectory_ids: [2],
-            max_rounds: 3,
-            max_eval_cases: 20,
-            rounds_completed: 1,
+            status: "succeeded",
+            trace_source_plugin: "langfuse",
+            traces_fetched: 3,
+            proposals_created: 1,
+            duplicates_skipped: 0,
+            l1_rejected: 0,
+            proposal_ids: ["prop-88"],
             proposal_id: "prop-88",
-            stop_reason: "accepted",
+            window_since: "2026-01-01T00:00:00Z",
+            window_until: "2026-01-01T00:01:00Z",
+            summary: "生成 1 条待审批纠错提案。",
             error: null,
-            signal_summary: {},
-            created_at: "2026-01-01T00:00:00Z",
+            created_by: "padmin",
             started_at: "2026-01-01T00:00:00Z",
             finished_at: "2026-01-01T00:01:00Z",
-            rounds: [],
+            created_at: "2026-01-01T00:00:00Z",
           },
         ]);
       }

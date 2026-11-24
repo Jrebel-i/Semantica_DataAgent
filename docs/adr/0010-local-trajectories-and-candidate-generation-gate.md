@@ -1,6 +1,6 @@
 # 网关同源采集本地问答轨迹，通过隔离候选知识代与防泄漏门禁完成自主演化
 
-Status: accepted
+Status: superseded by [ADR-0013](0013-unified-llm-knowledge-evolution-and-trace-source.md)
 
 自主演化需要完整可观测的检索与 SQL 校验过程，但不能把业务查询数据行或未经验证的改动直接写入线上知识代。参照 `ruc-datalab/EvoOntology` 的工程原则并结合 [0003](0003-knowledge-generations.md) 的多知识代架构与安全数据边界，第八期确立以下两项边界决策：
 

@@ -400,7 +400,17 @@ def put_project_discovery_config(
 
 
 DiscoveryRunStatus = Literal["running", "completed", "partial", "failed", "incomplete"]
-DiscoveryCandidateKind = Literal["relationship", "metric", "filter_rule", "eval_draft"]
+DiscoveryCandidateKind = Literal[
+    "relationship",
+    "metric",
+    "filter_rule",
+    "table",
+    "field",
+    "override",
+    "document",
+    "synthesized",
+    "eval_draft",
+]
 DiscoveryCandidateDecision = Literal[
     "proposed", "skipped", "failed", "deduplicated", "rejected"
 ]
@@ -410,8 +420,13 @@ class DiscoveryRunTrigger(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     mine_query_history: bool = True
-    probe_relationships: bool = True
-    seed_eval_drafts: bool = False
+    enable_fk_probing: bool = False
+    probe_relationships: bool | None = None
+    generate_eval_drafts: bool = False
+    seed_eval_drafts: bool | None = None
+    top_templates: int | None = Field(default=None, ge=1, le=100)
+    provider_id: str | None = None
+    model: str | None = None
     lookback_days: int | None = Field(default=None, ge=1, le=90)
     max_queries: int | None = Field(default=None, ge=50, le=20000)
     min_frequency: int | None = Field(default=None, ge=1, le=500)
@@ -422,6 +437,7 @@ class DiscoveryRunTrigger(BaseModel):
     probe_concurrency: int | None = Field(default=None, ge=1, le=2)
 
     @field_validator(
+        "top_templates",
         "lookback_days",
         "max_queries",
         "min_frequency",
@@ -444,6 +460,14 @@ class DiscoveryRunTrigger(BaseModel):
             raise ValueError("包含度阈值不接受布尔值")  # noqa: TRY004 - Pydantic requires ValueError for 422
         if isinstance(value, (int, float)) and not math.isfinite(float(value)):
             raise ValueError("包含度阈值必须为有限数值")
+        return value
+
+    @field_validator("provider_id", "model", mode="before")
+    @classmethod
+    def _normalize_optional_str(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            stripped = value.strip()
+            return stripped or None
         return value
 
 
@@ -471,17 +495,29 @@ class DiscoveryRunView(BaseModel):
     status: DiscoveryRunStatus
     mine_query_history: bool
     probe_relationships: bool
+    enable_fk_probing: bool = False
     seed_eval_drafts: bool
+    generate_eval_drafts: bool = False
+    top_templates: int = 20
     config_snapshot: dict[str, Any] = Field(default_factory=dict)
     queries_fetched: int = 0
     templates_clustered: int = 0
+    templates_synthesized: int = 0
     candidates_recalled: int = 0
     candidates_probed: int = 0
+    fk_candidates_probed: int = 0
     candidates_passed: int = 0
+    fk_candidates_verified: int = 0
     candidates_skipped: int = 0
     candidates_failed: int = 0
     proposals_created: int = 0
+    duplicates_skipped: int = 0
+    l1_rejected: int = 0
     eval_drafts_created: int = 0
+    proposal_ids: list[str] = Field(default_factory=list)
+    llm_used: bool = False
+    llm_error: str | None = None
+    summary: str = ""
     error: str | None = None
     created_by: str | None = None
     started_at: UtcDatetime
@@ -501,25 +537,51 @@ def _admin_read_project_scope(
     return _require_project_admin(scope, requester)
 
 
-@router.post(
-    "/api/v1/discovery/runs",
-    status_code=202,
-    response_model=DiscoveryRunView,
-)
-def trigger_discovery_run(
-    scope: Annotated[ProjectContext, Depends(admin_project_scope)],
-    requester: Annotated[Requester, Depends(current_requester)],
-    body: DiscoveryRunTrigger | None = None,
-):
+def _trigger_discovery_run_for_scope(
+    scope: ProjectContext,
+    requester: Requester,
+    body: DiscoveryRunTrigger | None,
+) -> DiscoveryRunView:
+    if scope.status in FROZEN_STATUSES:
+        raise HTTPException(status_code=409, detail=ARCHIVED_DETAIL)
     if scope.project_type != "warehouse":
         raise HTTPException(status_code=422, detail="文档型项目不支持知识发现运行")
     req = body or DiscoveryRunTrigger()
+    if "enable_fk_probing" in req.model_fields_set:
+        effective_fk_probing = req.enable_fk_probing
+    elif (
+        "probe_relationships" in req.model_fields_set
+        and req.probe_relationships is not None
+    ):
+        effective_fk_probing = req.probe_relationships
+    else:
+        effective_fk_probing = False
+
+    if "generate_eval_drafts" in req.model_fields_set:
+        effective_eval_drafts = req.generate_eval_drafts
+    elif (
+        "seed_eval_drafts" in req.model_fields_set and req.seed_eval_drafts is not None
+    ):
+        effective_eval_drafts = req.seed_eval_drafts
+    else:
+        effective_eval_drafts = False
+
     if (
         not req.mine_query_history
-        and not req.probe_relationships
-        and not req.seed_eval_drafts
+        and not effective_fk_probing
+        and not effective_eval_drafts
     ):
         raise HTTPException(status_code=422, detail="请至少开启一项知识发现步骤")
+
+    if req.provider_id is not None or req.model is not None:
+        with sessions()() as db:
+            current_cfg = project_context.discovery_config(scope.project_id, db)
+            eff_prov = (
+                req.provider_id
+                if req.provider_id is not None
+                else current_cfg.get("provider_id")
+            )
+            _validate_provider_model(db, eff_prov, req.model)
 
     overrides = {
         "lookback_days": req.lookback_days,
@@ -536,8 +598,11 @@ def trigger_discovery_run(
             scope.project_id,
             owner_id=requester.id,
             mine_query_history=req.mine_query_history,
-            probe_relationships=req.probe_relationships,
-            seed_eval_drafts=req.seed_eval_drafts,
+            enable_fk_probing=effective_fk_probing,
+            generate_eval_drafts=effective_eval_drafts,
+            top_templates=req.top_templates,
+            provider_id=req.provider_id,
+            model=req.model,
             overrides=overrides,
         )
     except discovery_executor.DiscoveryTokenMissingError as exc:
@@ -555,10 +620,7 @@ def trigger_discovery_run(
     return DiscoveryRunView.model_validate(created)
 
 
-@router.get("/api/v1/discovery/runs", response_model=list[DiscoveryRunView])
-def list_discovery_runs(
-    scope: Annotated[ProjectContext, Depends(_admin_read_project_scope)],
-):
+def _list_discovery_runs_for_scope(scope: ProjectContext) -> list[DiscoveryRunView]:
     with sessions()() as db:
         runs = (
             db.query(DiscoveryRun)
@@ -572,11 +634,9 @@ def list_discovery_runs(
         ]
 
 
-@router.get("/api/v1/discovery/runs/{run_id}", response_model=DiscoveryRunDetailView)
-def get_discovery_run(
-    run_id: str,
-    scope: Annotated[ProjectContext, Depends(_admin_read_project_scope)],
-):
+def _get_discovery_run_for_scope(
+    run_id: str, scope: ProjectContext
+) -> DiscoveryRunDetailView:
     with sessions()() as db:
         run = db.get(DiscoveryRun, run_id)
         if run is None or run.project_id != scope.project_id:
@@ -590,3 +650,68 @@ def get_discovery_run(
         return DiscoveryRunDetailView.model_validate(
             discovery_runner.serialize_run(run, candidates)
         )
+
+
+@router.post(
+    "/api/v1/discovery/runs",
+    status_code=202,
+    response_model=DiscoveryRunView,
+)
+def trigger_discovery_run(
+    scope: Annotated[ProjectContext, Depends(admin_project_scope)],
+    requester: Annotated[Requester, Depends(current_requester)],
+    body: DiscoveryRunTrigger | None = None,
+):
+    return _trigger_discovery_run_for_scope(scope, requester, body)
+
+
+@router.post(
+    "/api/v1/projects/{project_id}/discovery/runs",
+    status_code=202,
+    response_model=DiscoveryRunView,
+)
+def trigger_project_discovery_run(
+    project_id: str,
+    scope: Annotated[ProjectContext, Depends(admin_project_path_scope)],
+    requester: Annotated[Requester, Depends(current_requester)],
+    body: DiscoveryRunTrigger | None = None,
+):
+    return _trigger_discovery_run_for_scope(scope, requester, body)
+
+
+@router.get("/api/v1/discovery/runs", response_model=list[DiscoveryRunView])
+def list_discovery_runs(
+    scope: Annotated[ProjectContext, Depends(_admin_read_project_scope)],
+):
+    return _list_discovery_runs_for_scope(scope)
+
+
+@router.get(
+    "/api/v1/projects/{project_id}/discovery/runs",
+    response_model=list[DiscoveryRunView],
+)
+def list_project_discovery_runs(
+    project_id: str,
+    scope: Annotated[ProjectContext, Depends(admin_project_path_scope)],
+):
+    return _list_discovery_runs_for_scope(scope)
+
+
+@router.get("/api/v1/discovery/runs/{run_id}", response_model=DiscoveryRunDetailView)
+def get_discovery_run(
+    run_id: str,
+    scope: Annotated[ProjectContext, Depends(_admin_read_project_scope)],
+):
+    return _get_discovery_run_for_scope(run_id, scope)
+
+
+@router.get(
+    "/api/v1/projects/{project_id}/discovery/runs/{run_id}",
+    response_model=DiscoveryRunDetailView,
+)
+def get_project_discovery_run(
+    project_id: str,
+    run_id: str,
+    scope: Annotated[ProjectContext, Depends(admin_project_path_scope)],
+):
+    return _get_discovery_run_for_scope(run_id, scope)

@@ -38,6 +38,9 @@ codex = "semantica_dataagent.codex_runner:CodexRunner"
 [project.entry-points."semantica_dataagent.pullers"]
 dtb = "semantica_dataagent.dtb_ossie:DtbPluginPuller"
 
+[project.entry-points."semantica_dataagent.trace_sources"]
+langfuse = "semantica_dataagent.trace_sources:LangfuseTraceSource"
+
 [project.scripts]
 semantica-dataagent = "semantica_dataagent.cli:main"
 [dependency-groups]

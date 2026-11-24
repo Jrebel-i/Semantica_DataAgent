@@ -70,102 +70,81 @@ const providers = [
   },
 ];
 
-test("renders config, saves updates, triggers manual run, shows rounds/L1/L2 and links to proposal", async () => {
+const traceSourcePlugins = [
+  {
+    id: "langfuse",
+    version: "1.0.0",
+    display_name: "Langfuse",
+    secret_parameter_keys: ["secret_key"],
+    parameters_schema: {
+      type: "object",
+      properties: {
+        base_url: {
+          type: "string",
+          format: "uri",
+          title: "Langfuse Base URL",
+        },
+        public_key: {
+          type: "string",
+          title: "Public Key",
+        },
+        secret_key: {
+          type: "string",
+          format: "password",
+          title: "Secret Key",
+        },
+      },
+      required: ["base_url", "public_key", "secret_key"],
+    },
+  },
+];
+
+test("configures TraceSource plugin with masked secrets, Cron schedule, watermark, manual window trigger, and proposal link", async () => {
   let config = {
-    auto_evolve_enabled: false,
-    min_trajectories: 30,
-    min_interval_hours: 24,
-    max_idle_days: 7,
-    max_rounds: 3,
-    max_eval_cases: 20,
+    project_id: "default",
+    enabled: false,
+    trace_source_plugin: "langfuse" as string | null,
+    trace_source_parameters: {
+      base_url: "https://langfuse.example.com",
+      public_key: "pk-lf-1",
+    },
+    trace_source_secrets: {
+      secret_key: "***",
+    },
+    configured_secrets: ["secret_key"],
+    secret_configured: true,
+    schedule_cron: "02:30" as string | null,
+    timezone: "Asia/Shanghai",
     evolution_provider_id: null as string | null,
     evolution_model: null as string | null,
-    judge_provider_id: null as string | null,
-    judge_model: null as string | null,
-    checkpoint_trajectory_id: 12,
-    checkpoint_at: "2026-01-01T00:00:00Z",
-    pending_trajectories: 8,
+    max_traces_per_run: 200,
+    last_trace_timestamp: "2026-06-01T02:00:00Z",
+    last_triggered_at: "2026-06-01T02:30:00Z",
+    next_run_at: "2026-06-02T02:30:00Z",
+    global_langfuse_configured: false,
   };
   const runs = [
     {
       id: "run-1",
       project_id: "default",
-      status: "accepted" as const,
       trigger_type: "manual",
-      created_by: "admin",
-      checkpoint_before_trajectory_id: 1,
-      checkpoint_after_trajectory_id: 12,
-      frozen_max_trajectory_id: 12,
-      diagnosis_trajectory_ids: [2, 3, 4],
-      reserve_trajectory_ids: [5, 6],
-      max_rounds: 3,
-      max_eval_cases: 20,
-      rounds_completed: 2,
-      proposal_id: "prop-88",
-      stop_reason: "accepted",
+      status: "succeeded" as const,
+      trace_source_plugin: "langfuse",
+      traces_fetched: 12,
+      proposals_created: 1,
+      duplicates_skipped: 2,
+      l1_rejected: 0,
+      proposal_ids: ["prop-88"] as string[],
+      proposal_id: "prop-88" as string | null,
+      window_since: "2026-06-01T00:00:00Z",
+      window_until: "2026-06-01T02:00:00Z",
+      summary:
+        "已分析 12 条对话追踪记录，生成 1 条待审批纠错提案，跳过 2 条重复提案。",
       error: null,
-      signal_summary: {
-        clusters: { search_detour: 2, sql_self_repair: 1 },
-      },
-      created_at: "2026-01-01T01:00:00Z",
-      started_at: "2026-01-01T01:00:00Z",
-      finished_at: "2026-01-01T01:02:00Z",
-      rounds: [
-        {
-          id: "round-1",
-          run_id: "run-1",
-          project_id: "default",
-          round_number: 1,
-          signal_kind: "search_detour",
-          target_kind: "override",
-          target: "orders.gmv",
-          hypothesis: "补充 GMV 别名映射减少检索绕路",
-          candidate_change: {},
-          evidence_trajectory_ids: [2, 3],
-          l1_gate_report: {
-            passed: false,
-            checks: [{ name: "yaml_lint", passed: false, details: ["syntax"] }],
-            errors: ["L1 静态校验失败"],
-          },
-          l2_gate_report: null,
-          decision: "reject",
-          reject_reason: "L1 failed",
-          proposal_id: null,
-          started_at: "2026-01-01T01:00:05Z",
-          finished_at: "2026-01-01T01:00:20Z",
-        },
-        {
-          id: "round-2",
-          run_id: "run-1",
-          project_id: "default",
-          round_number: 2,
-          signal_kind: "sql_self_repair",
-          target_kind: "override",
-          target: "orders.status",
-          hypothesis: "明确已支付订单状态编码",
-          candidate_change: {},
-          evidence_trajectory_ids: [4],
-          l1_gate_report: {
-            passed: true,
-            checks: [{ name: "yaml_lint", passed: true, details: [] }],
-            errors: [],
-          },
-          l2_gate_report: {
-            passed: true,
-            mode: "cold_start_ab",
-            evaluated_cases: 5,
-            W_c: 4,
-            W_p: 0,
-            E_c: 0,
-            new_validate_errors: 0,
-          },
-          decision: "accept",
-          reject_reason: null,
-          proposal_id: "prop-88",
-          started_at: "2026-01-01T01:00:30Z",
-          finished_at: "2026-01-01T01:01:55Z",
-        },
-      ],
+      created_by: "admin",
+      started_at: "2026-06-01T02:01:00Z",
+      finished_at: "2026-06-01T02:02:00Z",
+      created_at: "2026-06-01T02:01:00Z",
     },
   ];
 
@@ -181,45 +160,55 @@ test("renders config, saves updates, triggers manual run, shows rounds/L1/L2 and
 
       if (input === "/api/v1/projects") return Response.json(projects);
       if (input === "/api/v1/providers") return Response.json(providers);
+      if (input === "/api/v1/trace-source-plugins") {
+        return Response.json(traceSourcePlugins);
+      }
       if (
-        input === "/api/v1/projects/default/evolution-config" &&
+        input === "/api/v1/projects/default/evolution/config" &&
         method === "GET"
       ) {
         return Response.json(config);
       }
       if (
-        input === "/api/v1/projects/default/evolution-config" &&
+        input === "/api/v1/projects/default/evolution/config" &&
         method === "PUT"
       ) {
-        config = { ...config, ...(body as Partial<typeof config>) };
+        config = {
+          ...config,
+          ...(body as Partial<typeof config>),
+          trace_source_secrets: { secret_key: "***" },
+          configured_secrets: ["secret_key"],
+        };
         return Response.json(config);
       }
       if (
-        input === "/api/v1/evolution/runs?project=default" &&
+        input === "/api/v1/projects/default/evolution/runs" &&
         method === "GET"
       ) {
         return Response.json(runs);
       }
       if (
-        input === "/api/v1/evolution/runs?project=default" &&
+        input === "/api/v1/projects/default/evolution/runs" &&
         method === "POST"
       ) {
         if (failNextTrigger) {
           return Response.json(
-            { detail: "An evolution run is already running" },
+            { detail: "该项目已有正在进行的演化运行" },
             { status: 409 },
           );
         }
         const created = {
           ...runs[0],
           id: "run-2",
-          status: "incomplete" as const,
+          status: "succeeded" as const,
+          traces_fetched: 0,
+          proposals_created: 0,
+          duplicates_skipped: 0,
+          proposal_ids: [],
           proposal_id: null,
-          stop_reason: "no_signals",
-          rounds_completed: 0,
-          rounds: [],
+          summary: "时间窗内未获取到新对话追踪记录，无需生成纠错提案。",
         };
-        runs.unshift(created as unknown as (typeof runs)[number]);
+        runs.unshift(created);
         return Response.json(created, { status: 202 });
       }
       return Response.json({});
@@ -235,26 +224,32 @@ test("renders config, saves updates, triggers manual run, shows rounds/L1/L2 and
     />,
   );
 
-  // Config form shows defaults & run round details
-  expect(await screen.findByText("明确已支付订单状态编码")).toBeTruthy();
-  expect(screen.getByText(/W_c=4/)).toBeTruthy();
-  expect(screen.getByText(/L1 静态校验失败/)).toBeTruthy();
-  expect(screen.getByText("通过")).toBeTruthy();
-  expect(screen.getByText("未通过")).toBeTruthy();
-  expect(screen.queryByText("异常")).toBeNull();
+  expect(await screen.findByText(/已分析 12 条对话追踪记录/)).toBeTruthy();
+  expect(screen.getByText(/拉取 Trace: 12/)).toBeTruthy();
+  expect(screen.getAllByText(/生成提案: 1/).length).toBeGreaterThan(0);
+  expect(screen.getByText(/跳过重复: 2/)).toBeTruthy();
+  expect(screen.getByText(/水位线时间:/)).toBeTruthy();
+  expect(screen.getByText(/下次定时运行:/)).toBeTruthy();
+
+  // Masked secret preserves "***"
+  const secretInput = screen.getByLabelText("Secret Key *") as HTMLInputElement;
+  expect(secretInput.value).toBe("***");
 
   // Navigate to generated proposal
   fireEvent.click(screen.getByRole("button", { name: "查看产出纠错提案" }));
   expect(onNavigateCorrections).toHaveBeenCalledWith("prop-88");
 
-  // Update config: enable auto-evolution, adjust min_trajectories, select provider & model
+  // Update schedule, max_traces_per_run, provider/model, and save
   const autoCheckbox = screen.getByLabelText(
-    "启用自动演化",
+    "启用定时演化",
   ) as HTMLInputElement;
   expect(autoCheckbox.checked).toBe(false);
   fireEvent.click(autoCheckbox);
-  fireEvent.change(screen.getByLabelText("最小新增问答轨迹数"), {
-    target: { value: "50" },
+  fireEvent.change(screen.getByLabelText("定时规则"), {
+    target: { value: "03:00" },
+  });
+  fireEvent.change(screen.getByLabelText("单次最大拉取 Trace 数"), {
+    target: { value: "100" },
   });
   fireEvent.change(screen.getByLabelText("演化模型供应方"), {
     target: { value: "prov-1" },
@@ -268,33 +263,54 @@ test("renders config, saves updates, triggers manual run, shows rounds/L1/L2 and
     expect(
       requests.some(
         (r) =>
-          r.url === "/api/v1/projects/default/evolution-config" &&
+          r.url === "/api/v1/projects/default/evolution/config" &&
           r.method === "PUT" &&
-          (r.body as Record<string, unknown>)?.auto_evolve_enabled === true &&
-          (r.body as Record<string, unknown>)?.min_trajectories === 50 &&
+          (r.body as Record<string, unknown>)?.enabled === true &&
+          (r.body as Record<string, unknown>)?.schedule_cron === "03:00" &&
+          (r.body as Record<string, unknown>)?.max_traces_per_run === 100 &&
           (r.body as Record<string, unknown>)?.evolution_provider_id ===
             "prov-1" &&
-          (r.body as Record<string, unknown>)?.evolution_model === "gpt-4.1",
+          (r.body as Record<string, unknown>)?.evolution_model === "gpt-4.1" &&
+          (r.body as Record<string, Record<string, unknown>>)
+            ?.trace_source_secrets?.secret_key === "***",
       ),
     ).toBe(true),
   );
   expect(await screen.findByText("演化配置已保存")).toBeTruthy();
 
-  // Manual trigger works even when auto_evolve_enabled was false / after save
-  const triggerBtn = screen.getByRole("button", { name: /立即演化/ });
-  fireEvent.click(triggerBtn);
+  // Manual trigger with optional time window & max_traces
+  fireEvent.change(screen.getByLabelText("开始时间 (since)"), {
+    target: { value: "2026-06-01T00:00" },
+  });
+  fireEvent.change(screen.getByLabelText("结束时间 (until)"), {
+    target: { value: "2026-06-01T06:00" },
+  });
+  fireEvent.change(screen.getByLabelText("本次最大 Trace 数（可选）"), {
+    target: { value: "50" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: /立即演化/ }));
+
   await waitFor(() =>
     expect(
-      requests.some(
-        (r) =>
-          r.url === "/api/v1/evolution/runs?project=default" &&
-          r.method === "POST",
-      ),
+      requests.some((r) => {
+        if (
+          r.url !== "/api/v1/projects/default/evolution/runs" ||
+          r.method !== "POST"
+        ) {
+          return false;
+        }
+        const b = r.body as Record<string, unknown>;
+        return (
+          typeof b.since === "string" &&
+          typeof b.until === "string" &&
+          b.max_traces === 50
+        );
+      }),
     ).toBe(true),
   );
   expect(await screen.findByText("run-2")).toBeTruthy();
 
-  // Conflict 409 displays error alert (wait for triggering state to finish)
+  // Conflict 409 displays error alert
   failNextTrigger = true;
   await waitFor(() =>
     expect(
@@ -303,9 +319,7 @@ test("renders config, saves updates, triggers manual run, shows rounds/L1/L2 and
     ).toBe(false),
   );
   fireEvent.click(screen.getByRole("button", { name: /立即演化/ }));
-  expect(
-    await screen.findByText("An evolution run is already running"),
-  ).toBeTruthy();
+  expect(await screen.findByText("该项目已有正在进行的演化运行")).toBeTruthy();
 });
 
 test("project switch discards stale delayed fetch response from previous project", async () => {
@@ -319,102 +333,57 @@ test("project switch discards stale delayed fetch response from previous project
     vi.fn(async (input: string) => {
       if (input === "/api/v1/projects") return Response.json(projects);
       if (input === "/api/v1/providers") return Response.json([]);
-      if (input === "/api/v1/projects/default/evolution-config") {
+      if (input === "/api/v1/trace-source-plugins") {
+        return Response.json(traceSourcePlugins);
+      }
+      if (input === "/api/v1/projects/default/evolution/config") {
         return defaultConfigPromise;
       }
-      if (input === "/api/v1/evolution/runs?project=default") {
+      if (input === "/api/v1/projects/default/evolution/runs") {
         return Response.json([]);
       }
-      if (input === "/api/v1/projects/alpha/evolution-config") {
+      if (input === "/api/v1/projects/alpha/evolution/config") {
         return Response.json({
-          auto_evolve_enabled: true,
-          min_trajectories: 42,
-          min_interval_hours: 12,
-          max_idle_days: 3,
-          max_rounds: 2,
-          max_eval_cases: 15,
+          project_id: "alpha",
+          enabled: true,
+          trace_source_plugin: "langfuse",
+          trace_source_parameters: {},
+          trace_source_secrets: {},
+          configured_secrets: [],
+          secret_configured: false,
+          schedule_cron: "04:00",
+          timezone: "UTC",
           evolution_provider_id: null,
           evolution_model: null,
-          judge_provider_id: null,
-          judge_model: null,
-          checkpoint_trajectory_id: null,
-          checkpoint_at: null,
-          pending_trajectories: 5,
+          max_traces_per_run: 42,
+          last_trace_timestamp: null,
+          last_triggered_at: null,
+          next_run_at: null,
+          global_langfuse_configured: false,
         });
       }
-      if (input === "/api/v1/evolution/runs?project=alpha") {
+      if (input === "/api/v1/projects/alpha/evolution/runs") {
         return Response.json([
           {
             id: "alpha-run",
             project_id: "alpha",
-            status: "accepted",
-            trigger_type: "scheduled",
-            created_by: null,
-            checkpoint_before_trajectory_id: null,
-            checkpoint_after_trajectory_id: 5,
-            frozen_max_trajectory_id: 5,
-            diagnosis_trajectory_ids: [1, 2],
-            reserve_trajectory_ids: [3],
-            max_rounds: 2,
-            max_eval_cases: 15,
-            rounds_completed: 1,
+            trigger_type: "scheduler",
+            status: "succeeded",
+            trace_source_plugin: "langfuse",
+            traces_fetched: 5,
+            proposals_created: 1,
+            duplicates_skipped: 0,
+            l1_rejected: 0,
+            proposal_ids: [],
             proposal_id: null,
-            stop_reason: "accepted",
+            window_since: null,
+            window_until: null,
+            summary: "Alpha 专属演化摘要",
             error: null,
-            signal_summary: {},
-            created_at: "2026-01-02T00:00:00Z",
+            created_by: "scheduler",
             started_at: "2026-01-02T00:00:00Z",
             finished_at: "2026-01-02T00:01:00Z",
-            rounds: [
-              {
-                id: "ar-1",
-                run_id: "alpha-run",
-                project_id: "alpha",
-                round_number: 1,
-                signal_kind: "knowledge_gap_or_failure",
-                target_kind: "knowledge",
-                target: "metrics.md",
-                hypothesis: "Alpha 专属口径假设",
-                candidate_change: {},
-                evidence_trajectory_ids: [1],
-                l1_gate_report: { passed: true, checks: [], errors: [] },
-                l2_gate_report: {
-                  passed: true,
-                  mode: "confirmed_regression",
-                  evaluated_cases: 3,
-                  regressions: [],
-                },
-                decision: "accept",
-                reject_reason: null,
-                proposal_id: null,
-                started_at: "2026-01-02T00:00:01Z",
-                finished_at: "2026-01-02T00:00:50Z",
-              },
-              {
-                id: "ar-2",
-                run_id: "alpha-run",
-                project_id: "alpha",
-                round_number: 2,
-                signal_kind: "sql_self_repair",
-                target_kind: "override",
-                target: "orders.dt",
-                hypothesis: "回归列表渲染校验",
-                candidate_change: {},
-                evidence_trajectory_ids: [2],
-                l1_gate_report: { passed: true, checks: [], errors: [] },
-                l2_gate_report: {
-                  passed: false,
-                  mode: "confirmed_regression",
-                  evaluated_cases: 3,
-                  regressions: ["q-3", "q-4"],
-                },
-                decision: "reject",
-                reject_reason: "L2 regressions",
-                proposal_id: null,
-                started_at: "2026-01-02T00:00:51Z",
-                finished_at: "2026-01-02T00:00:59Z",
-              },
-            ],
+            created_at: "2026-01-02T00:00:00Z",
           },
         ]);
       }
@@ -424,42 +393,41 @@ test("project switch discards stale delayed fetch response from previous project
 
   render(<EvolutionPage token="token" messages={getMessages("zh")} />);
 
-  // Switch project to alpha before default config resolves
   const projectSelect = await screen.findByLabelText("项目");
   fireEvent.mouseDown(projectSelect);
   fireEvent.click(await screen.findByTitle("项目 Alpha"));
 
-  expect(await screen.findByText("Alpha 专属口径假设")).toBeTruthy();
-  expect(screen.getByText(/regressions=0/)).toBeTruthy();
-  expect(screen.getByText(/regressions=2 \(q-3, q-4\)/)).toBeTruthy();
-  const minInput = screen.getByLabelText(
-    "最小新增问答轨迹数",
+  expect(await screen.findByText("Alpha 专属演化摘要")).toBeTruthy();
+  const maxInput = screen.getByLabelText(
+    "单次最大拉取 Trace 数",
   ) as HTMLInputElement;
-  expect(minInput.value).toBe("42");
+  expect(maxInput.value).toBe("42");
 
-  // Resolve stale default config response AFTER alpha is loaded
   resolveDefaultConfig(
     Response.json({
-      auto_evolve_enabled: false,
-      min_trajectories: 99,
-      min_interval_hours: 24,
-      max_idle_days: 7,
-      max_rounds: 3,
-      max_eval_cases: 20,
+      project_id: "default",
+      enabled: false,
+      trace_source_plugin: null,
+      trace_source_parameters: {},
+      trace_source_secrets: {},
+      configured_secrets: [],
+      secret_configured: false,
+      schedule_cron: null,
+      timezone: "Asia/Shanghai",
       evolution_provider_id: null,
       evolution_model: null,
-      judge_provider_id: null,
-      judge_model: null,
-      checkpoint_trajectory_id: null,
-      checkpoint_at: null,
-      pending_trajectories: 99,
+      max_traces_per_run: 99,
+      last_trace_timestamp: null,
+      last_triggered_at: null,
+      next_run_at: null,
+      global_langfuse_configured: false,
     }),
   );
 
-  // Give microtasks a chance to settle; stale 99 must NEVER overwrite alpha's 42
   await waitFor(() => {
     expect(
-      (screen.getByLabelText("最小新增问答轨迹数") as HTMLInputElement).value,
+      (screen.getByLabelText("单次最大拉取 Trace 数") as HTMLInputElement)
+        .value,
     ).toBe("42");
   });
 });

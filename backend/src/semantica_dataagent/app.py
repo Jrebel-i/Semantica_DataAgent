@@ -106,7 +106,6 @@ async def lifespan(application):
 
     await asyncio.to_thread(recover_interrupted_builds)
     await asyncio.to_thread(knowledge.cleanup_interrupted_generations)
-    await asyncio.to_thread(knowledge.cleanup_candidate_generations)
     from .corrections import recover_applying, recover_reverting
     from .discovery_runner import (
         discovery_dispatcher,
@@ -718,7 +717,6 @@ def list_generations(
             db.query(KnowledgeGeneration)
             .filter(
                 KnowledgeGeneration.project_id == project.project_id,
-                KnowledgeGeneration.is_candidate.is_(False),
             )
             .order_by(KnowledgeGeneration.created_at.desc())
             .all()
@@ -755,7 +753,7 @@ def switch_generation(
 ):
     with sessions().begin() as db:
         row = db.get(KnowledgeGeneration, name)
-        if row is None or row.project_id != scope.project_id or row.is_candidate:
+        if row is None or row.project_id != scope.project_id:
             raise HTTPException(status_code=404, detail="Generation not found")
         if row.deleting:
             raise HTTPException(status_code=409, detail="Generation is being deleted")
@@ -1328,6 +1326,8 @@ def update_plugin(
 
     from .plugins import discover
 
+    if category == "trace_source":
+        raise HTTPException(404, "Plugin not found")
     plugin = discover().get((category, plugin_id))
     if plugin is None:
         raise HTTPException(404, "Plugin not found")

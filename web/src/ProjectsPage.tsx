@@ -285,7 +285,6 @@ export function ProjectsPage({
   >(null);
   const [policy, setPolicy] = useState<EvolutionPolicy>({
     correction_require_review: true,
-    evolution_require_review: true,
   });
   const [policyBusy, setPolicyBusy] = useState(false);
   const [policyError, setPolicyError] = useState("");
@@ -420,7 +419,6 @@ export function ProjectsPage({
         if (signal?.aborted || projectLoadGen.current !== expectedGen) return;
         setPolicy({
           correction_require_review: data.correction_require_review ?? true,
-          evolution_require_review: data.evolution_require_review ?? true,
         });
         setPolicyError("");
       } catch {
@@ -560,11 +558,6 @@ export function ProjectsPage({
           (field === "correction_require_review"
             ? checked
             : policy.correction_require_review),
-        evolution_require_review:
-          updated.evolution_require_review ??
-          (field === "evolution_require_review"
-            ? checked
-            : policy.evolution_require_review),
       });
       setPolicyNotice(t.evolutionPolicySaved);
     } catch (failure) {
@@ -1295,27 +1288,6 @@ export function ProjectsPage({
                   disabled={policyBusy || selected.status !== "active"}
                   onChange={(checked) =>
                     void togglePolicy("correction_require_review", checked)
-                  }
-                />
-              </div>
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  gap: 12,
-                }}
-              >
-                <span id="policy-evolution-label">
-                  {t.evolutionRequireReview}
-                </span>
-                <Switch
-                  aria-labelledby="policy-evolution-label"
-                  aria-label={t.evolutionRequireReview}
-                  checked={policy.evolution_require_review}
-                  disabled={policyBusy || selected.status !== "active"}
-                  onChange={(checked) =>
-                    void togglePolicy("evolution_require_review", checked)
                   }
                 />
               </div>

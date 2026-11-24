@@ -56,7 +56,6 @@ SCHEDULE_INTERVAL_KEY = "schedule_interval_seconds"
 DIMENSION_VALUE_LIMIT_KEY = "dimension_value_limit"
 GENERATION_PREFIX_KEY = "generation_prefix"
 CORRECTION_REQUIRE_REVIEW_KEY = "correction_require_review"
-EVOLUTION_REQUIRE_REVIEW_KEY = "evolution_require_review"
 
 AUTO_EVOLVE_ENABLED_KEY = "evolution_auto_enabled"
 EVOLUTION_MIN_TRAJECTORIES_KEY = "evolution_min_trajectories"
@@ -68,6 +67,7 @@ EVOLUTION_PROVIDER_ID_KEY = "evolution_provider_id"
 EVOLUTION_MODEL_KEY = "evolution_model"
 EVOLUTION_JUDGE_PROVIDER_ID_KEY = "evolution_judge_provider_id"
 EVOLUTION_JUDGE_MODEL_KEY = "evolution_judge_model"
+EVOLUTION_MAX_TRACES_PER_RUN_KEY = "evolution_max_traces_per_run"
 
 DEFAULT_AUTO_EVOLVE_ENABLED = False
 DEFAULT_EVOLUTION_MIN_TRAJECTORIES = 30
@@ -75,6 +75,7 @@ DEFAULT_EVOLUTION_MIN_INTERVAL_HOURS = 24
 DEFAULT_EVOLUTION_MAX_IDLE_DAYS = 7
 DEFAULT_EVOLUTION_MAX_ROUNDS = 3
 DEFAULT_EVOLUTION_MAX_EVAL_CASES = 20
+DEFAULT_EVOLUTION_MAX_TRACES_PER_RUN = 200
 
 DISCOVERY_PRESET_KEY = "discovery_preset"
 DISCOVERY_SOURCE_TABLE_KEY = "discovery_source_table"
@@ -179,18 +180,14 @@ def parse_bool_setting(raw: str | None, *, default: bool = True) -> bool:
 
 
 def evolution_policy(project_id: str, db=None) -> dict[str, bool]:
-    """Return a project's correction and evolution review switches."""
+    """Return a project's correction review switch."""
     if db is None:
         with sessions()() as own:
             return evolution_policy(project_id, own)
     corr = db.get(ProjectSetting, (project_id, CORRECTION_REQUIRE_REVIEW_KEY))
-    evol = db.get(ProjectSetting, (project_id, EVOLUTION_REQUIRE_REVIEW_KEY))
     return {
         "correction_require_review": parse_bool_setting(
             corr.value if corr is not None else None, default=True
-        ),
-        "evolution_require_review": parse_bool_setting(
-            evol.value if evol is not None else None, default=True
         ),
     }
 
@@ -244,6 +241,7 @@ def evolution_config(project_id: str, db=None) -> dict[str, Any]:
         EVOLUTION_MODEL_KEY,
         EVOLUTION_JUDGE_PROVIDER_ID_KEY,
         EVOLUTION_JUDGE_MODEL_KEY,
+        EVOLUTION_MAX_TRACES_PER_RUN_KEY,
     )
     rows = {
         row.key: row.value
@@ -296,6 +294,12 @@ def evolution_config(project_id: str, db=None) -> dict[str, Any]:
             rows.get(EVOLUTION_JUDGE_PROVIDER_ID_KEY)
         ),
         "judge_model": _optional_str_setting(rows.get(EVOLUTION_JUDGE_MODEL_KEY)),
+        "max_traces_per_run": _parse_int_setting(
+            rows.get(EVOLUTION_MAX_TRACES_PER_RUN_KEY),
+            default=DEFAULT_EVOLUTION_MAX_TRACES_PER_RUN,
+            minimum=1,
+            maximum=2000,
+        ),
     }
 
 

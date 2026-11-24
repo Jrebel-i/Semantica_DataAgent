@@ -140,13 +140,6 @@ def _sandbox_lock():
         pass
 
 
-def _trajectories_lock():
-    from semantica_dataagent import trajectories
-
-    with trajectories._write_lock:
-        pass
-
-
 def _mcp_eval_lock():
     from semantica_dataagent import mcp_context
 
@@ -181,7 +174,6 @@ def _discovery_dispatcher_lock():
         "telemetry",
         "provider_probe",
         "agent_sandbox",
-        "trajectories",
         "mcp_eval",
     ],
 )
@@ -237,10 +229,6 @@ def test_forked_child_resets_other_process_global_locks(name):
         from semantica_dataagent import provider_probe
 
         lock, action = provider_probe._active_lock, _provider_probe_lock
-    elif name == "trajectories":
-        from semantica_dataagent import trajectories
-
-        lock, action = trajectories._write_lock, _trajectories_lock
     elif name == "mcp_eval":
         from semantica_dataagent import mcp_context
 

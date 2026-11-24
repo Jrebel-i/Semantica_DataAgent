@@ -25,6 +25,16 @@ Warehouse projects can mount `0..N` puller instances via `/api/v1/projects/{proj
 
 Query executors implement `ExecutorPlugin` (`bind(parameters, token) -> QueryExecutor`) and are configured independently of pullers via `GET/PUT /api/v1/projects/{project_id}/executors` (at most one enabled per warehouse project; disabled/incompatible on document projects). Online SQL execution and discovery data probing always bind the caller's personal credential rather than unattended puller service secrets.
 
+## TraceSource plugins and project isolation
+
+External dialogue trace sources register a no-argument class in the `semantica_dataagent.trace_sources` entry-point group and implement `TraceSourcePlugin` (`plugins.py`): exposing `id`, `version`, `display_name`, `parameters_schema` (secret parameters marked with `"format": "password"` or `"x-secret": true`), and `fetch_traces(query: TraceQuery) -> list[TraceConversation]`. `TraceQuery` carries `project_id`, `parameters`, decrypted `secrets`, optional UTC `since` / `until` bounds, and `limit`; each returned `TraceConversation` must set `project_id`, `trace_id`, and scrubbed human-AI `TraceMessage` items (`role` in `{"user", "assistant"}` only, excluding tool-call internals, credentials, and query-result rows).
+
+The built-in `langfuse` plugin (`semantica_dataagent.trace_sources:LangfuseTraceSource`) reads `GET /api/public/traces` with HTTP Basic Auth (`public_key`, `secret_key`) and supports `base_url`, `public_key`, `secret_key`, optional `trace_name` / `environment` filters, `page_size` (1–100), and `timeout_seconds` (1–120). Project-level configuration lives at `GET/PUT /api/v1/projects/{project_id}/evolution/config` with encrypted secret storage (falling back to global Langfuse settings only when no project plugin is configured).
+
+Project isolation is enforced on both write and read paths:
+1. **Ingestion tagging**: Langfuse telemetry (`telemetry.py`) attaches `metadata.project_id = <project_id>`, `tags = ["project:<project_id>", ...]`, and scrubbed `user`/`assistant` `messages` when content capture is enabled.
+2. **Server + client filtering**: `LangfuseTraceSource.fetch_traces` queries with `tags=project:<project_id>` and applies strict client-side matching (`metadata.project_id == query.project_id`, or `"project:<project_id>" in tags` when `metadata.project_id` is absent). `evolution_runner` again drops any `TraceConversation` whose `project_id != query.project_id` and scrubs secrets, credentials, headers, and embedded query rows before LLM synthesis.
+
 `GET /api/v1/plugins` includes `project_types` for source adapters. Builds only run source adapters compatible with the project's immutable type, even when a global plugin configuration enables an incompatible adapter; for example, a document project never runs `ossie` or `canonical`. `project_types.ensure_adapter_compatible(project_type, adapter_id)` is the validation entry point for per-project adapter configuration (#187).
 
 Administrators use `/plugins` to configure plugins and database/task include and exclude wildcard patterns. Exclusions take precedence, empty inclusion lists match everything, and `tmp` and `test` are excluded by default. Changes apply to the next build. Build statistics include the number of filtered canonical records.

@@ -857,6 +857,58 @@ def test_conversation_trace_omits_question_and_answer_by_default(client, monkeyp
     assert QUESTION not in encoded
     assert "推荐 shop.orders" not in encoded
     assert any(body["metadata"].get("agent") == "pi" for body in payloads)
+    assert all(body.get("tags") == ["project:default"] for body in payloads)
+    assert all(body["metadata"].get("project_id") == "default" for body in payloads)
+    assert all("messages" not in body["metadata"] for body in payloads)
+
+
+def test_conversation_trace_with_capture_sends_project_tag_and_scrubbed_messages(
+    client, monkeypatch
+):
+    from semantica_dataagent import agent_runner
+
+    monkeypatch.setitem(agent_runner.RUNNERS, "pi", FakeRunner())
+    telemetry._queue.join()
+    test_client, token = client
+    headers = {"Authorization": f"Bearer {token}"}
+    provider = test_client.post(
+        "/api/v1/providers",
+        headers=headers,
+        json={
+            "name": "Local",
+            "base_url": "http://127.0.0.1:3425",
+            "models": ["model"],
+        },
+    ).json()
+    with Receiver() as receiver:
+        configure(client, receiver, "true")
+        response = test_client.post(
+            "/api/v1/conversations/ask",
+            headers=headers,
+            json={
+                "question": f"{QUESTION} Bearer leak-token-123 password=pw-secret",
+                "agent": "pi",
+                "provider_id": provider["id"],
+                "model": "model",
+            },
+        )
+        assert response.status_code == 200
+        receiver.wait(count=2)
+        payloads = receiver.stored_payloads()
+
+    final_trace = payloads[-1]
+    assert final_trace["tags"] == ["project:default"]
+    assert final_trace["metadata"]["project_id"] == "default"
+    assert final_trace["metadata"]["messages"] == [
+        {
+            "role": "user",
+            "content": f"{QUESTION} Bearer [REDACTED] password=[REDACTED]",
+        },
+        {"role": "assistant", "content": "推荐 shop.orders。"},
+    ]
+    encoded = json.dumps(receiver.payloads(), ensure_ascii=False)
+    assert "leak-token-123" not in encoded
+    assert "pw-secret" not in encoded
 
 
 def test_unavailable_receiver_does_not_interrupt_an_answer(client, monkeypatch):

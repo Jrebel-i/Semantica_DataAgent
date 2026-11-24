@@ -38,6 +38,7 @@ from .db import (
     MetadataOverride,
     Project,
     ProjectDeletion,
+    ProjectEvolutionConfig,
     ProjectMember,
     ProjectPendingBuild,
     ProjectPullInstance,
@@ -223,9 +224,6 @@ def _delete_database(project_id: str, settings: dict) -> None:
             db.query(QueryExecution).filter(
                 QueryExecution.conversation_id.in_(conversation_ids)
             ).delete(synchronize_session=False)
-        from . import trajectories
-
-        trajectories.delete_project_trajectories(db, project_id)
         db.query(EvolutionRound).filter(EvolutionRound.project_id == project_id).delete(
             synchronize_session=False
         )
@@ -234,6 +232,9 @@ def _delete_database(project_id: str, settings: dict) -> None:
         )
         db.query(EvolutionCheckpoint).filter(
             EvolutionCheckpoint.project_id == project_id
+        ).delete(synchronize_session=False)
+        db.query(ProjectEvolutionConfig).filter(
+            ProjectEvolutionConfig.project_id == project_id
         ).delete(synchronize_session=False)
         db.query(DiscoveryCandidate).filter(
             DiscoveryCandidate.project_id == project_id

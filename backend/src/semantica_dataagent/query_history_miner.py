@@ -17,7 +17,7 @@ import sqlglot
 from sqlglot import exp
 from sqlglot.optimizer.scope import traverse_scope
 
-from . import evolution_gate, knowledge, provider_probe, table_catalog, trajectories
+from . import evolution_gate, knowledge, provider_probe, table_catalog, telemetry
 from .db import Provider, sessions
 from .discovery_executor import QueryHistoryRecord
 from .provider_api import provider_config
@@ -61,7 +61,7 @@ _SAFE_ALIAS_RE = re.compile(r"^[A-Za-z_\u4e00-\u9fff][A-Za-z0-9_\u4e00-\u9fff]{0
 
 def scrub_sensitive_text(value: str) -> str:
     """Scrub credentials, prompt injections, emails, phones, ID cards, and long numeric PII."""
-    cleaned = trajectories.scrub_text(str(value or ""))
+    cleaned = telemetry.scrub_text(str(value or ""))
     cleaned = _EMAIL_RE.sub("[REDACTED_EMAIL]", cleaned)
     cleaned = _CN_ID_CARD_RE.sub("[REDACTED_ID]", cleaned)
     cleaned = _CN_PHONE_RE.sub("[REDACTED_PHONE]", cleaned)

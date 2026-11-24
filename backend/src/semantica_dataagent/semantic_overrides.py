@@ -10,7 +10,7 @@ import re
 import tempfile
 from dataclasses import dataclass, field
 from functools import lru_cache
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 import sqlglot
@@ -1010,6 +1010,67 @@ def _current_schema_index(project_id: str) -> tuple[_SchemaIndex | None, str | N
     return _SchemaIndex.from_described(described), None
 
 
+def validate_markdown_relpath(
+    raw_path: str,
+    *,
+    markdown_root: str = "knowledge",
+    require_category_subdir: bool = True,
+) -> str:
+    """Validate and normalize a safe relative Markdown path under ``markdown_root``."""
+    value = str(raw_path or "").strip()
+    if not value or "\\" in value or "\x00" in value:
+        raise ValueError("Invalid markdown path")
+    if any(ord(ch) < 32 or 127 <= ord(ch) <= 159 for ch in value):
+        raise ValueError("Invalid markdown path")
+    parts_raw = value.split("/")
+    if any(p in ("", ".", "..", ".git") for p in parts_raw):
+        raise ValueError("Invalid markdown path")
+    rel = PurePosixPath(value)
+    if rel.is_absolute():
+        raise ValueError("Markdown path must be relative")
+    parts = rel.parts
+    if any(p.startswith(".") for p in parts):
+        raise ValueError("Hidden directories or files are not allowed")
+    if rel.suffix.lower() != ".md":
+        raise ValueError("Markdown document target must end with .md")
+
+    if require_category_subdir:
+        root_clean = str(markdown_root or "knowledge").strip().strip("/") or "knowledge"
+        root_parts = tuple(p for p in root_clean.split("/") if p)
+        if len(parts) < len(root_parts) + 2 or parts[: len(root_parts)] != root_parts:
+            raise ValueError(
+                f"Document target must live under {root_clean}/<category>/*.md"
+            )
+        if rel.name.lower() == "index.md":
+            raise ValueError(
+                "Category index.md cannot be created or overwritten by corrections"
+            )
+    return rel.as_posix()
+
+
+def _project_markdown_root(project_id: str) -> str:
+    from . import project_context
+
+    try:
+        cfg = project_context.plugin_config("source", "markdown", project_id)
+    except Exception:  # noqa: BLE001
+        return "knowledge"
+    if cfg and isinstance(cfg[1], dict):
+        raw = str(cfg[1].get("path") or "knowledge").strip().strip("/")
+        if raw:
+            return raw
+    return "knowledge"
+
+
+def _project_type_safe(project_id: str) -> str:
+    from . import project_context
+
+    try:
+        return project_context.project_type(project_id)
+    except Exception:  # noqa: BLE001
+        return project_context.DEFAULT_PROJECT_TYPE
+
+
 def run_l1_gate(
     *,
     target: str,
@@ -1018,6 +1079,8 @@ def run_l1_gate(
     structured_patch: dict[str, Any] | None,
     target_kind: str,
     project_id: str,
+    resolved_path: str | None = None,
+    is_new_file: bool = False,
 ) -> GateReport:
     """Run deterministic L1 static checks on a correction or structured override proposal."""
     checks: list[dict[str, Any]] = []
@@ -1040,9 +1103,59 @@ def run_l1_gate(
     )
     errors.extend(secret_errors)
 
+    if target_kind == "document":
+        path_errors: list[str] = []
+        if not str(target or "").startswith("document:"):
+            path_errors.append("Document correction target must start with 'document:'")
+        else:
+            raw_target_path = target[len("document:") :]
+            md_root = _project_markdown_root(project_id)
+            candidate_path = resolved_path or raw_target_path
+            if is_new_file or raw_target_path.startswith(f"{md_root}/"):
+                try:
+                    validate_markdown_relpath(
+                        candidate_path,
+                        markdown_root=md_root,
+                        require_category_subdir=True,
+                    )
+                except ValueError as exc:
+                    path_errors.append(str(exc))
+            elif (
+                ".." in raw_target_path.split("/")
+                or "\\" in raw_target_path
+                or "\x00" in raw_target_path
+                or raw_target_path.startswith("/")
+            ):
+                path_errors.append("Invalid document target path")
+            elif resolved_path is not None:
+                try:
+                    validate_markdown_relpath(
+                        resolved_path,
+                        markdown_root=md_root,
+                        require_category_subdir=False,
+                    )
+                except ValueError as exc:
+                    path_errors.append(str(exc))
+        checks.append(
+            {
+                "name": "markdown_path",
+                "passed": not path_errors,
+                "details": path_errors,
+            }
+        )
+        errors.extend(path_errors)
+
     effective_patch: dict[str, Any] | None = structured_patch
     if effective_patch is None and target_kind in {"override", "ossie"}:
         effective_patch = legacy_target_to_patch(target, patch)
+
+    if (
+        target_kind in {"override", "ossie"}
+        and _project_type_safe(project_id) == "document"
+    ):
+        pt_err = "Document project does not support warehouse semantic overrides"
+        checks.append({"name": "project_type", "passed": False, "details": [pt_err]})
+        errors.append(pt_err)
 
     schema_errors: list[str] = []
     normalized_patch: dict[str, Any] | None = None
