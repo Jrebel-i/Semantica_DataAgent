@@ -371,6 +371,12 @@ def test_rest_time_fields_have_utc_offset(client, monkeypatch):
     assert evo_triggered.status_code == 202, evo_triggered.text
     disc_triggered = c.post("/api/v1/discovery/runs", headers=headers)
     assert disc_triggered.status_code == 202, disc_triggered.text
+    proj_disc_runs = c.get("/api/v1/projects/default/discovery/runs", headers=headers)
+    assert proj_disc_runs.status_code == 200, proj_disc_runs.text
+    proj_disc_run = c.get(
+        "/api/v1/projects/default/discovery/runs/disc-time-1", headers=headers
+    )
+    assert proj_disc_run.status_code == 200, proj_disc_run.text
     gap_reviewed = c.post(
         "/api/v1/knowledge-gaps/time-gap/review",
         headers=headers,
@@ -416,6 +422,8 @@ def test_rest_time_fields_have_utc_offset(client, monkeypatch):
             "/api/v1/discovery/runs/disc-time-1", headers=headers
         ).json(),
         "discovery_run_triggered": disc_triggered.json(),
+        "project_discovery_runs": proj_disc_runs.json(),
+        "project_discovery_run": proj_disc_run.json(),
         "evolution_runs": c.get(
             "/api/v1/projects/default/evolution/runs", headers=headers
         ).json(),

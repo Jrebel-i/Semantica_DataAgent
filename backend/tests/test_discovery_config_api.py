@@ -385,3 +385,79 @@ def test_discovery_config_permissions_archived_and_document_boundaries(env):
     )
     assert arch_put.status_code == 409, arch_put.text
     assert "项目已归档" in arch_put.json()["detail"]
+
+
+def test_discovery_config_provider_model_used_by_project_discovery_run_trigger(
+    env, monkeypatch: pytest.MonkeyPatch
+):
+    client, admin_token = env
+    from semantica_dataagent import discovery_runner, project_context
+    from semantica_dataagent.crypto import encrypt
+    from semantica_dataagent.db import (
+        PersonalDtbToken,
+        Provider,
+        Token,
+        digest,
+        sessions,
+    )
+
+    with sessions().begin() as db:
+        owner_id = db.get(Token, digest(admin_token)).id
+        db.add(
+            PersonalDtbToken(owner_id=owner_id, encrypted_token=encrypt("tok-cfg-run"))
+        )
+        project_context.upsert_plugin_config(
+            db,
+            "executor",
+            "dtb",
+            True,
+            {"base_url": "http://dtb.local", "timeout_seconds": 30},
+        )
+        db.add(
+            Provider(
+                id="prov-cfg",
+                name="CfgProvider",
+                type="openai-completions",
+                base_url="http://llm-cfg.local/v1",
+                models=json.dumps(["gpt-4o-mini", "gpt-4.1"]),
+            )
+        )
+
+    monkeypatch.setattr(
+        discovery_runner, "execute_discovery_run", lambda run_id, **kwargs: None
+    )
+
+    cfg_resp = client.put(
+        "/api/v1/projects/default/discovery-config",
+        headers=_headers(admin_token),
+        json={"provider_id": "prov-cfg", "model": "gpt-4o-mini"},
+    )
+    assert cfg_resp.status_code == 200, cfg_resp.text
+
+    # Trigger without explicit provider_id/model -> inherits discovery-config
+    r1 = client.post(
+        "/api/v1/projects/default/discovery/runs",
+        headers=_headers(admin_token),
+        json={"top_templates": 10},
+    )
+    assert r1.status_code == 202, r1.text
+    d1 = r1.json()
+    assert d1["config_snapshot"]["provider_id"] == "prov-cfg"
+    assert d1["config_snapshot"]["model"] == "gpt-4o-mini"
+    assert d1["top_templates"] == 10
+    assert d1["enable_fk_probing"] is False
+
+    # Mark first run completed so second run can be triggered with model-only override
+    from semantica_dataagent.db import DiscoveryRun
+
+    with sessions().begin() as db:
+        db.get(DiscoveryRun, d1["id"]).status = "completed"
+
+    r2 = client.post(
+        "/api/v1/projects/default/discovery/runs",
+        headers=_headers(admin_token),
+        json={"model": "gpt-4.1"},
+    )
+    assert r2.status_code == 202, r2.text
+    assert r2.json()["config_snapshot"]["provider_id"] == "prov-cfg"
+    assert r2.json()["config_snapshot"]["model"] == "gpt-4.1"

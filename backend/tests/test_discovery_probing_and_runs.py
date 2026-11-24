@@ -533,17 +533,18 @@ def test_e2e_discovery_run_forced_pending_zero_leak_approve_join_and_revert(
     from semantica_dataagent import (
         canonical,
         knowledge,
+        knowledge_synthesizer,
         semantic_overrides,
         sql_validation,
     )
-    from semantica_dataagent.db import ProjectSetting, QueryAudit, sessions
+    from semantica_dataagent.db import ProjectSetting, Provider, QueryAudit, sessions
     from semantica_dataagent.dtb_executor import DtbExecutor
 
     client, admin_token, owner_id, db_path, source_dir = env
     _save_personal_token(owner_id, "personal-dtb-secret-token-e2e")
     _enable_dtb_executor()
 
-    # Disable BOTH auto-review switches to prove source="discovery" STILL forces status="pending"!
+    # Disable auto-review switch to prove source="discovery" STILL forces status="pending"!
     with sessions().begin() as db:
         db.add(
             ProjectSetting(
@@ -551,19 +552,68 @@ def test_e2e_discovery_run_forced_pending_zero_leak_approve_join_and_revert(
             )
         )
         db.add(
-            ProjectSetting(
-                project_id="default", key="evolution_require_review", value="false"
+            Provider(
+                id="prov-e2e",
+                name="DiscoveryE2E",
+                type="openai-completions",
+                base_url="http://llm-e2e.local/v1",
+                models=json.dumps(["gpt-e2e"]),
             )
         )
 
     tables = _sample_tables()
     monkeypatch.setattr(knowledge, "describe", lambda *args, **kwargs: tables)
     monkeypatch.setattr(knowledge, "dimension_values", lambda *args, **kwargs: [])
+    monkeypatch.setattr(knowledge, "search", lambda *args, **kwargs: [])
 
-    # Synthetic sentinel fact values that MUST NEVER appear in SQLite or source directory!
+    # Synthetic sentinel fact values that MUST NEVER appear in SQLite, LLM prompt, or source directory!
     sentinel_fact = "SENTINEL_FACT_VALUE_8839201"
     sentinel_email = "vip_customer@secret-corp.example"
     sentinel_phone = "13912345678"
+
+    llm_payloads: list[dict] = []
+
+    def fake_llm_post(url, headers=None, json=None, timeout=None, trust_env=False):
+        import json as _json
+
+        llm_payloads.append(json)
+        content = _json.dumps(
+            {
+                "proposals": [
+                    {
+                        "route": "override",
+                        "target": "metric:orders_gmv",
+                        "reason": "汇总历史高频有效订单成交额指标口径",
+                        "structured_patch": {
+                            "version": 1,
+                            "metrics": {
+                                "orders_gmv": {
+                                    "name": "订单成交额",
+                                    "description": "统计历史订单金额汇总",
+                                    "expression": "SUM(amount)",
+                                    "dialect": "doris",
+                                    "tables": ["shop.dwd_orders"],
+                                }
+                            },
+                        },
+                    },
+                    {
+                        "route": "new_document",
+                        "new_doc_path": "knowledge/guides/orders_user_query.md",
+                        "reason": "沉淀订单与用户关联查询指南",
+                        "patch": "# 订单用户查询指南\n\n查询 `shop.dwd_orders` 时可按 `user_id = id` 关联 `shop.dim_user`。\n",
+                    },
+                ]
+            },
+            ensure_ascii=False,
+        )
+        return httpx.Response(
+            200,
+            request=httpx.Request("POST", url),
+            json={"choices": [{"message": {"content": content}}]},
+        )
+
+    monkeypatch.setattr(knowledge_synthesizer.httpx, "post", fake_llm_post)
 
     history_rows = [
         [
@@ -691,14 +741,14 @@ def test_e2e_discovery_run_forced_pending_zero_leak_approve_join_and_revert(
         ),
     )
 
-    # Trigger discovery run via REST
+    # Trigger discovery run via REST with enable_fk_probing=True
     start = client.post(
-        "/api/v1/discovery/runs",
+        "/api/v1/projects/default/discovery/runs",
         headers=_headers(admin_token),
         json={
             "mine_query_history": True,
-            "probe_relationships": True,
-            "seed_eval_drafts": False,
+            "enable_fk_probing": True,
+            "generate_eval_drafts": False,
         },
     )
     assert start.status_code == 202, start.text
@@ -706,12 +756,26 @@ def test_e2e_discovery_run_forced_pending_zero_leak_approve_join_and_revert(
 
     detail = _wait_run_terminal(client, admin_token, run_id)
     assert detail["status"] == "completed", detail
+    assert detail["enable_fk_probing"] is True
     assert detail["queries_fetched"] == 3
     assert detail["templates_clustered"] == 1
+    assert detail["templates_synthesized"] == 1
     assert detail["candidates_recalled"] >= 1
     assert detail["candidates_passed"] >= 1
-    assert detail["proposals_created"] >= 2
+    assert detail["fk_candidates_probed"] >= 1
+    assert detail["fk_candidates_verified"] >= 1
+    assert detail["proposals_created"] >= 3
     assert detail["eval_drafts_created"] == 0
+    assert detail["llm_used"] is True
+    assert detail["llm_error"] is None
+
+    # Verify LLM prompt contained zero raw fact literals/PII/secrets
+    assert len(llm_payloads) == 1
+    llm_blob = json.dumps(llm_payloads[0], ensure_ascii=False)
+    assert sentinel_fact not in llm_blob
+    assert sentinel_email not in llm_blob
+    assert sentinel_phone not in llm_blob
+    assert "personal-dtb-secret-token-e2e" not in llm_blob
 
     # Verify probe SQLs enforced partition pruning on partitioned tables & LIMIT on unpartitioned tables
     assert any("2026-11-18" in sql and "LIMIT" in sql for sql in probe_sqls)
@@ -734,15 +798,19 @@ def test_e2e_discovery_run_forced_pending_zero_leak_approve_join_and_revert(
     assert all(p["source"] == "discovery" and p["status"] == "pending" for p in props)
 
     rel_prop = next(p for p in props if p["target"].startswith("relationship:"))
+    assert rel_prop["evidence"]["source_type"] == "discovery"
     ev = rel_prop["gate_report"]["discovery_evidence"]
     assert ev["overlap_ratio"] == 0.95
+    assert ev["inclusion_rate"] == 0.95
     assert ev["join_matched"] is True
+    assert ev["join_hit"] is True
     assert ev["sample_distinct_count"] == 100
     assert ev["matched_count"] == 95
     assert ev["query_history_frequency"] == 3
     assert ev["distinct_callers"] == 3
     assert ev["probing_status"] == "passed"
     assert ev["probe_partitions"]["shop.dwd_orders"] == {"dt": "2026-11-18"}
+    assert ev["probed_partition"]["shop.dwd_orders"] == {"dt": "2026-11-18"}
 
     # ZERO FACT-ROW LEAKAGE ASSERTION across entire SQLite DB & source directory!
     with sqlite3.connect(db_path) as conn:
@@ -836,16 +904,18 @@ def test_e2e_discovery_run_forced_pending_zero_leak_approve_join_and_revert(
     assert reverted["revert_commit_sha"]
     assert not override_file.exists()
 
-    # Re-running discovery deduplicates still-pending metric & filter_rule proposals
+    # Re-running discovery deduplicates still-pending metric & document proposals
     start2 = client.post(
-        "/api/v1/discovery/runs",
+        "/api/v1/projects/default/discovery/runs",
         headers=_headers(admin_token),
-        json={"mine_query_history": True, "probe_relationships": False},
+        json={"mine_query_history": True, "enable_fk_probing": False},
     )
     assert start2.status_code == 202, start2.text
     detail2 = _wait_run_terminal(client, admin_token, start2.json()["id"])
     assert detail2["status"] == "completed"
+    assert detail2["enable_fk_probing"] is False
     assert detail2["proposals_created"] == 0
+    assert detail2["duplicates_skipped"] >= 2
     assert any(c["decision"] == "deduplicated" for c in detail2["candidates"])
 
 
@@ -1484,3 +1554,544 @@ os._exit(1)
             )
             # Default project's recovered run remains untouched!
             assert db.get(DiscoveryRun, "crashed-run-1") is not None
+
+
+def test_discovery_default_fk_probing_false_skips_probes_and_synthesizes_override_and_docs(
+    env, monkeypatch: pytest.MonkeyPatch
+):
+    from semantica_dataagent import knowledge, knowledge_synthesizer
+    from semantica_dataagent.db import Provider, QueryAudit, sessions
+    from semantica_dataagent.dtb_executor import DtbExecutor
+
+    client, admin_token, owner_id, _, source_dir = env
+    _save_personal_token(owner_id, "tok-default-no-fk")
+    _enable_dtb_executor()
+
+    # Seed existing Markdown doc and LLM provider
+    (source_dir / "knowledge" / "metrics").mkdir(parents=True, exist_ok=True)
+    (source_dir / "knowledge" / "metrics" / "gmv.md").write_text(
+        "# GMV 口径\n\n订单总金额统计规则。\n", encoding="utf-8"
+    )
+    with sessions().begin() as db:
+        db.add(
+            Provider(
+                id="prov-m4",
+                name="M4Provider",
+                type="openai-completions",
+                base_url="http://llm-m4.local/v1",
+                models=json.dumps(["gpt-m4", "gpt-m4-mini"]),
+            )
+        )
+
+    tables = _sample_tables()
+    monkeypatch.setattr(knowledge, "describe", lambda *args, **kwargs: tables)
+    monkeypatch.setattr(knowledge, "dimension_values", lambda *args, **kwargs: [])
+    monkeypatch.setattr(knowledge, "search", lambda *args, **kwargs: [])
+
+    # 3 distinct templates above min_frequency=3 so top_templates=2 cleanly caps synthesis input
+    history_rows = []
+    for i in range(5):
+        history_rows.append(
+            [
+                "SELECT SUM(amount) AS gmv FROM shop.dwd_orders WHERE dt = '2026-11-18' AND status = 'paid'",
+                "EOF",
+                "2026-11-18 10:00:00",
+                "shop",
+                f"u{i % 3}",
+            ]
+        )
+    for i in range(4):
+        history_rows.append(
+            [
+                "SELECT o.city_code, COUNT(o.order_id) AS cnt FROM shop.dwd_orders o JOIN shop.dim_city c ON o.city_code = c.code WHERE o.dt = '2026-11-18' GROUP BY o.city_code",
+                "EOF",
+                "2026-11-18 11:00:00",
+                "shop",
+                f"c{i % 2}",
+            ]
+        )
+    for _ in range(3):
+        history_rows.append(
+            [
+                "SELECT COUNT(DISTINCT user_id) AS uv FROM shop.dwd_orders WHERE dt = '2026-11-18'",
+                "EOF",
+                "2026-11-18 12:00:00",
+                "shop",
+                "u9",
+            ]
+        )
+
+    executed_sqls: list[str] = []
+
+    def dtb_handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/data-query/async-execute":
+            sql = json.loads(request.read().decode("utf-8")).get("sql", "")
+            executed_sqls.append(sql)
+            return httpx.Response(
+                200, json={"status": "200", "data": {"queryKey": "qk-1"}}
+            )
+        return httpx.Response(
+            200,
+            json={
+                "status": "200",
+                "data": {
+                    "progress": 1.0,
+                    "columns": [
+                        {"name": "sql_text", "type": "string"},
+                        {"name": "exec_status", "type": "string"},
+                        {"name": "exec_time", "type": "string"},
+                        {"name": "database_name", "type": "string"},
+                        {"name": "caller", "type": "string"},
+                    ],
+                    "data": history_rows,
+                },
+            },
+        )
+
+    async_client = httpx.AsyncClient(transport=httpx.MockTransport(dtb_handler))
+    monkeypatch.setattr(
+        DtbExecutor,
+        "bind",
+        lambda self, params, tok: DtbExecutor(
+            params["base_url"],
+            tok,
+            client=async_client,
+            retry_delays=(),
+            poll_interval=0,
+        ),
+    )
+
+    llm_calls: list[dict] = []
+
+    def llm_post(url, headers=None, json=None, timeout=None, trust_env=False):
+        import json as _json
+
+        llm_calls.append(json)
+        content = _json.dumps(
+            {
+                "proposals": [
+                    {
+                        "route": "override",
+                        "target": "field:shop.dwd_orders.status",
+                        "reason": "补充订单状态字段业务过滤约束",
+                        "structured_patch": {
+                            "version": 1,
+                            "fields": {
+                                "shop.dwd_orders.status": {
+                                    "database": "shop",
+                                    "table": "dwd_orders",
+                                    "name": "status",
+                                    "instructions": "统计有效 GMV 时默认只取已支付状态",
+                                }
+                            },
+                        },
+                    },
+                    {
+                        "route": "existing_document",
+                        "target": "document:metrics/gmv.md",
+                        "reason": "合并更新已有 GMV 口径文档",
+                        "patch": "# GMV 口径\n\n订单总金额统计规则。\n\n## 常用表\n\n使用 `shop.dwd_orders` 按 `dt` 分区过滤。\n",
+                    },
+                    {
+                        "route": "new_document",
+                        "new_doc_path": "knowledge/guides/city_order_guide.md",
+                        "reason": "新建跨表城市订单查询指南文档",
+                        "patch": "# 城市订单查询指南\n\n通过 `city_code = code` 关联 `shop.dwd_orders` 与 `shop.dim_city`。\n",
+                    },
+                ]
+            },
+            ensure_ascii=False,
+        )
+        return httpx.Response(
+            200,
+            request=httpx.Request("POST", url),
+            json={"choices": [{"message": {"content": content}}]},
+        )
+
+    monkeypatch.setattr(knowledge_synthesizer.httpx, "post", llm_post)
+
+    # Trigger via project-scoped path WITHOUT enable_fk_probing (must default to False!)
+    resp = client.post(
+        "/api/v1/projects/default/discovery/runs",
+        headers=_headers(admin_token),
+        json={
+            "top_templates": 2,
+            "provider_id": "prov-m4",
+            "model": "gpt-m4-mini",
+        },
+    )
+    assert resp.status_code == 202, resp.text
+    created_run = resp.json()
+    assert created_run["enable_fk_probing"] is False
+    assert created_run["top_templates"] == 2
+
+    detail = _wait_run_terminal(client, admin_token, created_run["id"])
+    assert detail["status"] == "completed", detail
+    assert detail["enable_fk_probing"] is False
+    assert detail["templates_clustered"] == 3
+    assert detail["templates_synthesized"] == 2
+    assert detail["fk_candidates_probed"] == 0
+    assert detail["fk_candidates_verified"] == 0
+    assert detail["proposals_created"] == 3
+    assert detail["duplicates_skipped"] == 0
+    assert detail["llm_used"] is True
+    assert detail["llm_error"] is None
+    assert len(detail["proposal_ids"]) == 3
+
+    # Assert ZERO FK probe SQLs or metadata_partition queries executed (only 1 history SQL!)
+    assert len(executed_sqls) == 1
+    assert "audit_log" in executed_sqls[0]
+    assert not any(
+        "metadata_partition" in s or "sample_distinct_count" in s for s in executed_sqls
+    )
+
+    with sessions()() as db:
+        audits = db.query(QueryAudit).filter(QueryAudit.owner_id == owner_id).all()
+        assert [a.kind for a in audits] == ["discovery_history"]
+        assert audits[0].status == "succeeded"
+
+    # Verify LLM context respected top_templates=2 and carried scrubbed templates
+    assert len(llm_calls) == 1
+    assert llm_calls[0]["model"] == "gpt-m4-mini"
+    user_ctx = json.loads(llm_calls[0]["messages"][1]["content"])
+    assert user_ctx["source_type"] == "discovery"
+    assert len(user_ctx["evidence"]["sql_clusters"]) == 2
+    assert user_ctx["evidence"]["sql_clusters"][0]["execution_count"] == 5
+    assert user_ctx["evidence"]["sql_clusters"][1]["execution_count"] == 4
+    assert user_ctx["evidence"]["fk_probe_evidence"] == []
+    assert "paid" not in json.dumps(user_ctx, ensure_ascii=False)
+
+    # Verify list & detail views on project-scoped endpoints expose stats
+    listed = client.get(
+        "/api/v1/projects/default/discovery/runs",
+        headers=_headers(admin_token),
+    )
+    assert listed.status_code == 200, listed.text
+    assert listed.json()[0]["templates_clustered"] == 3
+    assert listed.json()[0]["proposals_created"] == 3
+
+    # Verify all 3 proposals are pending, routed per ADR-0013, and carry unified evidence
+    props = client.get("/api/v1/corrections", headers=_headers(admin_token)).json()
+    assert len(props) == 3
+    assert all(p["source"] == "discovery" and p["status"] == "pending" for p in props)
+    by_target = {p["target"]: p for p in props}
+
+    assert "field:shop.dwd_orders.status" in by_target
+    assert by_target["field:shop.dwd_orders.status"]["target_kind"] == "override"
+    assert (
+        by_target["field:shop.dwd_orders.status"]["evidence"]["source_type"]
+        == "discovery"
+    )
+    assert by_target["field:shop.dwd_orders.status"]["evidence"]["trigger_evidence"][
+        "sql_clusters"
+    ]
+
+    existing_doc_prop = by_target.get("document:metrics/gmv.md") or by_target.get(
+        "document:knowledge/metrics/gmv.md"
+    )
+    assert existing_doc_prop is not None, list(by_target)
+    assert existing_doc_prop["target_kind"] == "document"
+    assert existing_doc_prop["is_new_file"] is False
+    assert "+使用 `shop.dwd_orders`" in existing_doc_prop["diff"]
+
+    new_doc_prop = by_target["document:knowledge/guides/city_order_guide.md"]
+    assert new_doc_prop["target_kind"] == "document"
+    assert new_doc_prop["is_new_file"] is True
+    assert "--- /dev/null" in new_doc_prop["diff"]
+
+    # Re-run deduplicates all 3 still-pending proposals
+    resp2 = client.post(
+        "/api/v1/projects/default/discovery/runs",
+        headers=_headers(admin_token),
+        json={"top_templates": 2, "provider_id": "prov-m4", "model": "gpt-m4-mini"},
+    )
+    assert resp2.status_code == 202
+    detail2 = _wait_run_terminal(client, admin_token, resp2.json()["id"])
+    assert detail2["status"] == "completed"
+    assert detail2["proposals_created"] == 0
+    assert detail2["duplicates_skipped"] == 3
+
+
+def test_discovery_llm_unavailable_explicit_error_and_fk_probing_preservation(
+    env, monkeypatch: pytest.MonkeyPatch
+):
+    from semantica_dataagent import knowledge, knowledge_synthesizer
+    from semantica_dataagent.db import Provider, sessions
+    from semantica_dataagent.dtb_executor import DtbExecutor
+
+    client, admin_token, owner_id, _, _ = env
+    _save_personal_token(owner_id, "tok-llm-fail")
+    _enable_dtb_executor()
+
+    tables = _sample_tables()
+    monkeypatch.setattr(knowledge, "describe", lambda *args, **kwargs: tables)
+    monkeypatch.setattr(knowledge, "dimension_values", lambda *args, **kwargs: [])
+    monkeypatch.setattr(knowledge, "search", lambda *args, **kwargs: [])
+
+    history_rows = [
+        [
+            "SELECT SUM(o.amount) AS gmv FROM shop.dwd_orders o JOIN shop.dim_user u ON o.user_id = u.id WHERE o.dt = '2026-11-18' AND o.status = 'paid'",
+            "EOF",
+            "2026-11-18 10:00:00",
+            "shop",
+            f"u{i}",
+        ]
+        for i in range(3)
+    ]
+
+    sql_by_key: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/data-query/async-execute":
+            sql = json.loads(request.read().decode("utf-8")).get("sql", "")
+            qk = f"qk-{len(sql_by_key) + 1}"
+            sql_by_key[qk] = sql
+            return httpx.Response(200, json={"status": "200", "data": {"queryKey": qk}})
+        qk = request.url.path.rsplit("/", 1)[-1]
+        sql = sql_by_key[qk]
+        if "audit_log" in sql:
+            return httpx.Response(
+                200,
+                json={
+                    "status": "200",
+                    "data": {
+                        "progress": 1.0,
+                        "columns": [
+                            {"name": "sql_text", "type": "string"},
+                            {"name": "exec_status", "type": "string"},
+                            {"name": "exec_time", "type": "string"},
+                            {"name": "database_name", "type": "string"},
+                            {"name": "caller", "type": "string"},
+                        ],
+                        "data": history_rows,
+                    },
+                },
+            )
+        if "metadata_partition" in sql:
+            return httpx.Response(
+                200,
+                json={
+                    "status": "200",
+                    "data": {
+                        "progress": 1.0,
+                        "columns": [{"name": "partition_name", "type": "string"}],
+                        "data": [["dt=2026-11-18"]],
+                    },
+                },
+            )
+        if "sample_distinct_count" in sql:
+            matched = 92 if "dim_user" in sql else 10
+            return httpx.Response(
+                200,
+                json={
+                    "status": "200",
+                    "data": {
+                        "progress": 1.0,
+                        "columns": [
+                            {"name": "sample_distinct_count", "type": "bigint"},
+                            {"name": "matched_count", "type": "bigint"},
+                        ],
+                        "data": [[100, matched]],
+                    },
+                },
+            )
+        return httpx.Response(
+            200,
+            json={
+                "status": "200",
+                "data": {
+                    "progress": 1.0,
+                    "columns": [{"name": "matched", "type": "int"}],
+                    "data": [[1]],
+                },
+            },
+        )
+
+    async_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    monkeypatch.setattr(
+        DtbExecutor,
+        "bind",
+        lambda self, params, tok: DtbExecutor(
+            params["base_url"],
+            tok,
+            client=async_client,
+            retry_delays=(),
+            poll_interval=0,
+        ),
+    )
+
+    # Case A: enable_fk_probing=False and NO LLM provider configured -> explicit failure, 0 fake proposals
+    r_no_llm = client.post(
+        "/api/v1/projects/default/discovery/runs",
+        headers=_headers(admin_token),
+        json={"enable_fk_probing": False},
+    )
+    assert r_no_llm.status_code == 202
+    d_no_llm = _wait_run_terminal(client, admin_token, r_no_llm.json()["id"])
+    assert d_no_llm["status"] == "failed", d_no_llm
+    assert d_no_llm["llm_used"] is False
+    assert d_no_llm["llm_error"]
+    assert d_no_llm["error"]
+    assert d_no_llm["proposals_created"] == 0
+    assert client.get("/api/v1/corrections", headers=_headers(admin_token)).json() == []
+
+    # Case B: Provider configured, LLM returns HTTP 500, enable_fk_probing=True ->
+    # records explicit LLM error/warning while preserving verified FK probe proposal!
+    with sessions().begin() as db:
+        db.add(
+            Provider(
+                id="prov-fail",
+                name="FailingLLM",
+                type="openai-completions",
+                base_url="http://llm-fail.local/v1",
+                models=json.dumps(["gpt-fail"]),
+            )
+        )
+
+    monkeypatch.setattr(
+        knowledge_synthesizer.httpx,
+        "post",
+        lambda url, **kwargs: httpx.Response(
+            500, request=httpx.Request("POST", url), json={"error": "upstream down"}
+        ),
+    )
+
+    r_fk_llm_fail = client.post(
+        "/api/v1/projects/default/discovery/runs",
+        headers=_headers(admin_token),
+        json={
+            "enable_fk_probing": True,
+            "provider_id": "prov-fail",
+            "model": "gpt-fail",
+        },
+    )
+    assert r_fk_llm_fail.status_code == 202
+    d_fk = _wait_run_terminal(client, admin_token, r_fk_llm_fail.json()["id"])
+    assert d_fk["status"] == "partial", d_fk
+    assert d_fk["llm_used"] is False
+    assert d_fk["llm_error"]
+    assert d_fk["error"]
+    assert d_fk["fk_candidates_verified"] == 1
+    assert d_fk["proposals_created"] == 1
+
+    props = client.get("/api/v1/corrections", headers=_headers(admin_token)).json()
+    assert len(props) == 1
+    assert props[0]["source"] == "discovery"
+    assert props[0]["status"] == "pending"
+    assert props[0]["target"].startswith("relationship:")
+    assert props[0]["evidence"]["source_type"] == "discovery"
+    assert props[0]["evidence"]["trigger_evidence"]["inclusion_rate"] == 0.92
+    assert props[0]["evidence"]["trigger_evidence"]["join_hit"] is True
+    assert props[0]["evidence"]["trigger_evidence"]["probed_partition"][
+        "shop.dwd_orders"
+    ] == {"dt": "2026-11-18"}
+
+
+def test_project_path_discovery_runs_guards_and_trigger_validation(env, monkeypatch):
+    from semantica_dataagent import discovery_runner, knowledge
+    from semantica_dataagent.db import DiscoveryRun, Provider, sessions
+
+    client, admin_token, owner_id, _, _ = env
+    monkeypatch.setattr(knowledge, "describe", lambda *args, **kwargs: _sample_tables())
+    monkeypatch.setattr(
+        discovery_runner, "execute_discovery_run", lambda run_id, **kwargs: None
+    )
+
+    with sessions().begin() as db:
+        db.add(
+            Provider(
+                id="prov-val",
+                name="ValProvider",
+                type="openai-completions",
+                base_url="http://llm-val.local/v1",
+                models=json.dumps(["gpt-val"]),
+            )
+        )
+
+    # Missing personal DTB token -> 400
+    assert (
+        client.post(
+            "/api/v1/projects/default/discovery/runs",
+            headers=_headers(admin_token),
+        ).status_code
+        == 400
+    )
+
+    _save_personal_token(owner_id, "tok-path-guard")
+    _enable_dtb_executor()
+
+    # Document project -> 422
+    doc_proj = client.post(
+        "/api/v1/projects",
+        headers=_headers(admin_token),
+        json={"name": "Doc Guard", "type": "document"},
+    ).json()["id"]
+    assert (
+        client.post(
+            f"/api/v1/projects/{doc_proj}/discovery/runs",
+            headers=_headers(admin_token),
+        ).status_code
+        == 422
+    )
+
+    # Archived warehouse project -> 409 on POST, 200 on GET
+    wh_proj = client.post(
+        "/api/v1/projects",
+        headers=_headers(admin_token),
+        json={"name": "Arch WH", "type": "warehouse"},
+    ).json()["id"]
+    assert (
+        client.post(
+            f"/api/v1/projects/{wh_proj}/archive", headers=_headers(admin_token)
+        ).status_code
+        == 200
+    )
+    assert (
+        client.post(
+            f"/api/v1/projects/{wh_proj}/discovery/runs",
+            headers=_headers(admin_token),
+        ).status_code
+        == 409
+    )
+    assert (
+        client.get(
+            f"/api/v1/projects/{wh_proj}/discovery/runs",
+            headers=_headers(admin_token),
+        ).status_code
+        == 200
+    )
+
+    # Validation checks on top_templates & provider/model -> 422
+    for bad_body in (
+        {"top_templates": 0},
+        {"top_templates": 101},
+        {"top_templates": True},
+        {"provider_id": "missing-prov"},
+        {"provider_id": "prov-val", "model": "unknown-model"},
+        {"model": "gpt-val"},
+    ):
+        r = client.post(
+            "/api/v1/projects/default/discovery/runs",
+            headers=_headers(admin_token),
+            json=bad_body,
+        )
+        assert r.status_code == 422, (bad_body, r.text)
+
+    # Concurrent run -> 409
+    with sessions().begin() as db:
+        db.add(
+            DiscoveryRun(
+                id="path-running-1",
+                project_id="default",
+                status="running",
+                started_at=datetime.now(UTC),
+                created_at=datetime.now(UTC),
+            )
+        )
+    assert (
+        client.post(
+            "/api/v1/projects/default/discovery/runs",
+            headers=_headers(admin_token),
+        ).status_code
+        == 409
+    )
