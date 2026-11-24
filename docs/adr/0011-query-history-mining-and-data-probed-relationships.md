@@ -1,6 +1,6 @@
 # 基于个人 DTB 令牌的查询历史挖掘与受控数据探活外键发现
 
-Status: accepted
+Status: superseded by [ADR-0013](0013-unified-llm-knowledge-evolution-and-trace-source.md)
 
 现有 [0008](0008-dtb-to-ossie-pipeline.md) 仅从 DTB 产数任务 SQL 抽取表间关系，缺少对数仓真实业务**查询历史**中高频指标表达式、默认过滤规则与跨主题关联模式的挖掘；同时跨分层或未在同个产数任务共现的表之间缺乏经真实数据验证的候选**外键关系**。为在借鉴外部自动化语义挖掘优点的同时坚守 [0009](0009-git-backed-semantic-overrides-and-correction-policy.md) 与 [0010](0010-local-trajectories-and-candidate-generation-gate.md) 确立的源目录唯一权威、数据防泄漏与人工可控边界，第九期确立以下四项核心决策：
 
