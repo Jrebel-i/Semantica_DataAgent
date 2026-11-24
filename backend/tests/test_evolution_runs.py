@@ -526,3 +526,130 @@ def test_trace_evolution_synthesizes_pending_proposals_dedups_isolates_and_advan
     with sessions()() as db:
         cfg = db.get(ProjectEvolutionConfig, "projalpha")
         assert cfg.last_trace_timestamp.replace(tzinfo=UTC) == run_time
+
+
+def test_watermark_truncation_uses_raw_fetch_limit_and_atomic_scheduled_claim(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    _setup_env(tmp_path, monkeypatch)
+    from semantica_dataagent import evolution_runner, plugins
+    from semantica_dataagent.db import EvolutionRun, ProjectEvolutionConfig, sessions
+    from semantica_dataagent.plugins import TraceConversation, TraceMessage
+
+    wm0 = datetime(2026, 11, 24, 1, 0, tzinfo=UTC)
+    created_at = datetime(2026, 11, 24, 0, 30, tzinfo=UTC)
+    run_now = datetime(2026, 11, 24, 5, 0, tzinfo=UTC)
+
+    with sessions().begin() as db:
+        db.add(
+            ProjectEvolutionConfig(
+                project_id="default",
+                enabled=True,
+                trace_source_plugin="trunc-ts",
+                schedule_cron="0 2 * * *",
+                timezone="UTC",
+                last_trace_timestamp=wm0,
+                created_at=created_at,
+                updated_at=created_at,
+            )
+        )
+
+    # 1. Atomic scheduled claim: two claims for the same due slot -> second MUST raise EvolutionConflictError
+    # even after first run finishes!
+    first_sched = evolution_runner.create_evolution_run(
+        "default",
+        trigger_type="scheduler",
+        created_by="scheduler",
+        claim_scheduled_at=run_now,
+    )
+    with sessions().begin() as db:
+        db.get(EvolutionRun, first_sched["id"]).status = "succeeded"
+    with pytest.raises(evolution_runner.EvolutionConflictError):
+        evolution_runner.create_evolution_run(
+            "default",
+            trigger_type="scheduler",
+            created_by="scheduler",
+            claim_scheduled_at=run_now + timedelta(minutes=1),
+        )
+
+    # 2. Truncation: raw fetch hits max_traces=2 because one item belongs to another project;
+    # filtered conversations has len=1 (<2), yet watermark MUST stop at tr-1's timestamp (01:20), NOT run_now (05:00)!
+    t_conv1 = wm0 + timedelta(minutes=20)
+    t_other = wm0 + timedelta(minutes=25)
+
+    class _TruncatingTraceSource:
+        id = "trunc-ts"
+        version = "1.0"
+        display_name = "Truncating TS"
+        parameters_schema: ClassVar[dict] = {"type": "object", "properties": {}}
+
+        def fetch_traces(self, query):
+            if query.since == wm0:
+                return [
+                    TraceConversation(
+                        trace_id="tr-1",
+                        project_id="default",
+                        started_at=t_conv1,
+                        ended_at=t_conv1,
+                        messages=[TraceMessage(role="user", content="Q1")],
+                    ),
+                    TraceConversation(
+                        trace_id="tr-other",
+                        project_id="other_proj",
+                        started_at=t_other,
+                        ended_at=t_other,
+                        messages=[TraceMessage(role="user", content="OTHER")],
+                    ),
+                ]
+            # Second scenario: hit_limit=True with 0 surviving conversations for target project
+            return [
+                TraceConversation(
+                    trace_id="tr-other-1",
+                    project_id="other_proj",
+                    started_at=t_conv1 + timedelta(minutes=10),
+                    messages=[TraceMessage(role="user", content="OTHER1")],
+                ),
+                TraceConversation(
+                    trace_id="tr-other-2",
+                    project_id="other_proj",
+                    started_at=t_other + timedelta(minutes=10),
+                    messages=[TraceMessage(role="user", content="OTHER2")],
+                ),
+            ]
+
+    base = dict(plugins.discover())
+    base[("trace_source", "trunc-ts")] = _TruncatingTraceSource()
+    monkeypatch.setattr(plugins, "discover", lambda: dict(base))
+
+    res1 = evolution_runner.run_evolution(
+        "default",
+        trigger_type="manual",
+        max_traces=2,
+        llm_fn=lambda _ctx: {"proposals": []},
+        now=run_now,
+    )
+    assert res1["status"] == "succeeded"
+    assert res1["traces_fetched"] == 1
+    with sessions()() as db:
+        wm1 = db.get(ProjectEvolutionConfig, "default").last_trace_timestamp.replace(
+            tzinfo=UTC
+        )
+        assert wm1 == t_conv1
+
+    # Scenario 2: raw_conversations hits limit=2 with 0 surviving target conversations ->
+    # advances to max raw timestamp (t_other + 10m), NOT run_now (05:00)!
+    res2 = evolution_runner.run_evolution(
+        "default",
+        trigger_type="manual",
+        max_traces=2,
+        llm_fn=lambda _ctx: {"proposals": []},
+        now=run_now,
+    )
+    assert res2["status"] == "succeeded"
+    assert res2["traces_fetched"] == 0
+    with sessions()() as db:
+        wm2 = db.get(ProjectEvolutionConfig, "default").last_trace_timestamp.replace(
+            tzinfo=UTC
+        )
+        assert wm2 == t_other + timedelta(minutes=10)
+        assert wm2 < run_now

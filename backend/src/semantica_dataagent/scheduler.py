@@ -297,6 +297,7 @@ def next_scheduled_slot(
             or cron_weekday not in weekdays
         ):
             continue
+        day_candidates: list[datetime] = []
         for hour in hours:
             for minute in minutes:
                 for fold in (0, 1):
@@ -314,7 +315,9 @@ def next_scheduled_slot(
                     ) != (day.year, day.month, day.day, hour, minute):
                         continue
                     if utc_dt > after_norm:
-                        return utc_dt
+                        day_candidates.append(utc_dt)
+        if day_candidates:
+            return min(day_candidates)
     return None
 
 

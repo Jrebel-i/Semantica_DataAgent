@@ -438,7 +438,6 @@ def put_project_evolution_config(
             existing_secrets = (
                 {}
                 if plugin_changed
-                and "trace_source_secrets" not in body.model_fields_set
                 else _parse_json_dict(row.trace_source_encrypted_secrets)
             )
             if "trace_source_parameters" in body.model_fields_set:
@@ -483,10 +482,7 @@ def put_project_evolution_config(
             )
             if incoming_secrets or plugin_changed:
                 base_encrypted = (
-                    "{}"
-                    if plugin_changed
-                    and "trace_source_secrets" not in body.model_fields_set
-                    else row.trace_source_encrypted_secrets
+                    "{}" if plugin_changed else row.trace_source_encrypted_secrets
                 )
                 row.trace_source_encrypted_secrets = (
                     pull_instances.merge_encrypted_secrets(

@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 
 from . import evolution_runner, project_context, scheduler
 from .api_time import as_utc
-from .db import EvolutionRun, Project, ProjectEvolutionConfig, sessions
+from .db import Project, ProjectEvolutionConfig, sessions
 
 LOGGER = logging.getLogger(__name__)
 DEFAULT_POLL_INTERVAL_SECONDS = 15.0
@@ -160,26 +160,6 @@ class EvolutionScheduler:
                     continue
             except ValueError:
                 LOGGER.warning("Invalid evolution schedule on project %s", pid)
-                continue
-
-            claimed = False
-            with sessions().begin() as db:
-                fresh = db.get(ProjectEvolutionConfig, pid)
-                active = (
-                    db.query(EvolutionRun.id)
-                    .filter(
-                        EvolutionRun.project_id == pid,
-                        EvolutionRun.status == "running",
-                    )
-                    .first()
-                )
-                if (
-                    fresh is not None
-                    and active is None
-                    and is_project_due(fresh, now_utc)
-                ):
-                    claimed = True
-            if not claimed:
                 continue
 
             try:

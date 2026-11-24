@@ -463,3 +463,119 @@ def test_wall_clock_cron_scheduler_timezone_dst_restart_no_drift_and_frozen(
         assert nxt == datetime(
             2026, 3, 9, 2, 30, tzinfo=ZoneInfo("America/New_York")
         ).astimezone(UTC)
+
+        # DST fall-back check: 2026-11-01 01:00..01:59 occurs twice (EDT -0400, EST -0500).
+        # At 05:10 UTC (01:10 EDT), cron "0,30 1 * * *" MUST pick 05:30 UTC (01:30 EDT), not 06:00 UTC (01:00 EST)!
+        from semantica_dataagent import scheduler as sched_mod
+
+        assert sched_mod.next_scheduled_slot(
+            "0,30 1 * * *", "America/New_York", datetime(2026, 11, 1, 5, 10, tzinfo=UTC)
+        ) == datetime(2026, 11, 1, 5, 30, tzinfo=UTC)
+        assert sched_mod.next_scheduled_slot(
+            "0,30 1 * * *", "America/New_York", datetime(2026, 11, 1, 5, 40, tzinfo=UTC)
+        ) == datetime(2026, 11, 1, 6, 0, tzinfo=UTC)
+
+
+def test_switching_trace_source_plugin_clears_previous_plugin_secrets(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    c, admin_token = _setup_client(tmp_path, monkeypatch)
+    with c:
+        from semantica_dataagent import evolution_runner, plugins
+
+        class _AltTracePlugin:
+            id = "alt-trace"
+            version = "1.0"
+            display_name = "Alt Trace"
+            parameters_schema: ClassVar[dict] = {
+                "type": "object",
+                "properties": {
+                    "endpoint": {"type": "string"},
+                    "api_token": {"type": "string", "format": "password"},
+                },
+                "required": ["endpoint", "api_token"],
+                "additionalProperties": False,
+            }
+
+            def fetch_traces(self, query):
+                return []
+
+        class _SharedKeyTracePlugin:
+            id = "shared-key-trace"
+            version = "1.0"
+            display_name = "Shared Key Trace"
+            parameters_schema: ClassVar[dict] = {
+                "type": "object",
+                "properties": {
+                    "secret_key": {"type": "string", "format": "password"},
+                },
+                "required": ["secret_key"],
+                "additionalProperties": False,
+            }
+
+            def fetch_traces(self, query):
+                return []
+
+        base = dict(plugins.discover())
+        base[("trace_source", "alt-trace")] = _AltTracePlugin()
+        base[("trace_source", "shared-key-trace")] = _SharedKeyTracePlugin()
+        monkeypatch.setattr(plugins, "discover", lambda: dict(base))
+
+        headers = _headers(admin_token)
+        pid = c.post(
+            "/api/v1/projects",
+            headers=headers,
+            json={"name": "Switch Plugin Proj", "type": "warehouse"},
+        ).json()["id"]
+
+        # 1. Configure langfuse with secret_key
+        first = c.put(
+            f"/api/v1/projects/{pid}/evolution/config",
+            headers=headers,
+            json={
+                "enabled": True,
+                "trace_source_plugin": "langfuse",
+                "trace_source_parameters": {
+                    "base_url": "https://lf.example.com",
+                    "public_key": "pk-1",
+                },
+                "trace_source_secrets": {"secret_key": "sk-langfuse-old"},
+            },
+        )
+        assert first.status_code == 200, first.text
+        assert first.json()["configured_secrets"] == ["secret_key"]
+
+        # 2. Switch to shared-key-trace passing "***" -> MUST NOT reuse langfuse's secret_key!
+        reused = c.put(
+            f"/api/v1/projects/{pid}/evolution/config",
+            headers=headers,
+            json={
+                "enabled": True,
+                "trace_source_plugin": "shared-key-trace",
+                "trace_source_parameters": {},
+                "trace_source_secrets": {"secret_key": "***"},
+            },
+        )
+        assert reused.status_code == 422
+
+        # 3. Switch to alt-trace with its own api_token -> old secret_key must be completely gone!
+        switched = c.put(
+            f"/api/v1/projects/{pid}/evolution/config",
+            headers=headers,
+            json={
+                "enabled": True,
+                "trace_source_plugin": "alt-trace",
+                "trace_source_parameters": {"endpoint": "https://alt.example.com"},
+                "trace_source_secrets": {"api_token": "tok-alt-new"},
+            },
+        )
+        assert switched.status_code == 200, switched.text
+        assert switched.json()["trace_source_plugin"] == "alt-trace"
+        assert switched.json()["configured_secrets"] == ["api_token"]
+        assert switched.json()["trace_source_secrets"] == {"api_token": "***"}
+
+        _, plugin_id, params, secrets = evolution_runner.resolve_trace_source(pid)
+        assert plugin_id == "alt-trace"
+        assert params == {"endpoint": "https://alt.example.com"}
+        assert secrets == {"api_token": "tok-alt-new"}
+        assert "secret_key" not in secrets

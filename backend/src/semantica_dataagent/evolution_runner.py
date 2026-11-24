@@ -21,6 +21,7 @@ from . import (
     plugins,
     project_context,
     pull_instances,
+    scheduler,
     trace_sources,
 )
 from .api_time import as_utc as _as_utc
@@ -314,16 +315,29 @@ def _compute_next_watermark(
     window_since: datetime | None,
     window_until: datetime,
     conversations: Sequence[TraceConversation],
+    raw_conversations: Sequence[TraceConversation] = (),
     limit: int,
 ) -> datetime | None:
     """Compute safe watermark advancement without skipping gaps or truncated tail traces."""
-    if len(conversations) >= limit:
+    hit_limit = len(raw_conversations) >= limit or len(conversations) >= limit
+    if hit_limit:
         timestamps = [
             ts
             for ts in (c.ended_at or c.started_at for c in conversations)
             if ts is not None
         ]
-        candidate = max(timestamps) if timestamps else window_until
+        if not timestamps:
+            timestamps = [
+                ts
+                for ts in (
+                    getattr(c, "ended_at", None) or getattr(c, "started_at", None)
+                    for c in raw_conversations
+                )
+                if ts is not None
+            ]
+        if not timestamps:
+            return None
+        candidate = max(timestamps)
     else:
         candidate = window_until
 
@@ -547,10 +561,14 @@ def create_evolution_run(
         if active is not None:
             raise EvolutionConflictError("该项目已有正在进行的演化运行")
         if claim_scheduled_at is not None:
+            claim_utc = _as_utc(claim_scheduled_at)
             evo_cfg = db.get(ProjectEvolutionConfig, project_id)
-            if evo_cfg is not None:
-                evo_cfg.last_triggered_at = _as_utc(claim_scheduled_at)
-                evo_cfg.updated_at = now
+            if evo_cfg is None or not scheduler.is_instance_due(evo_cfg, claim_utc):
+                raise EvolutionConflictError(
+                    "该项目本轮定时演化已触发或不再满足调度条件"
+                )
+            evo_cfg.last_triggered_at = claim_utc
+            evo_cfg.updated_at = now
         run = EvolutionRun(
             id=uuid.uuid4().hex,
             project_id=project_id,
@@ -637,6 +655,7 @@ def execute_evolution_run(
                 window_since=window_since,
                 window_until=window_until,
                 conversations=(),
+                raw_conversations=raw_conversations,
                 limit=effective_limit,
             )
             finished = datetime.now(UTC)
@@ -754,6 +773,7 @@ def execute_evolution_run(
             window_since=window_since,
             window_until=window_until,
             conversations=conversations,
+            raw_conversations=raw_conversations,
             limit=effective_limit,
         )
         summary_parts = [
