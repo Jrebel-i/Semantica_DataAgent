@@ -179,6 +179,58 @@ def upgrade():
     )
 
     _migrate_legacy_pullers(op.get_bind())
+    _migrate_legacy_source_adapters(op.get_bind())
+
+
+def _migrate_legacy_source_adapters(conn) -> None:
+    """Enable ossie + canonical for projects that previously relied on retired source/dtb."""
+    dtb_rows = conn.execute(
+        sa.text(
+            "SELECT project_id, enabled FROM plugin_config "
+            "WHERE category = 'source' AND plugin_id = 'dtb'"
+        )
+    ).fetchall()
+    for project_id, dtb_enabled in dtb_rows:
+        pid = str(project_id)
+        if bool(dtb_enabled):
+            ossie_row = conn.execute(
+                sa.text(
+                    "SELECT enabled FROM plugin_config "
+                    "WHERE project_id = :pid AND category = 'source' AND plugin_id = 'ossie'"
+                ),
+                {"pid": pid},
+            ).fetchone()
+            if ossie_row is None:
+                conn.execute(
+                    sa.text(
+                        "INSERT INTO plugin_config "
+                        "(project_id, category, plugin_id, enabled, parameters) "
+                        "VALUES (:pid, 'source', 'ossie', 1, '{\"path\": \"ossie\"}')"
+                    ),
+                    {"pid": pid},
+                )
+            canonical_row = conn.execute(
+                sa.text(
+                    "SELECT enabled FROM plugin_config "
+                    "WHERE project_id = :pid AND category = 'source' AND plugin_id = 'canonical'"
+                ),
+                {"pid": pid},
+            ).fetchone()
+            if canonical_row is not None and not bool(canonical_row[0]):
+                conn.execute(
+                    sa.text(
+                        "UPDATE plugin_config SET enabled = 1 "
+                        "WHERE project_id = :pid AND category = 'source' AND plugin_id = 'canonical'"
+                    ),
+                    {"pid": pid},
+                )
+        conn.execute(
+            sa.text(
+                "DELETE FROM plugin_config "
+                "WHERE project_id = :pid AND category = 'source' AND plugin_id = 'dtb'"
+            ),
+            {"pid": pid},
+        )
 
 
 def downgrade():

@@ -77,7 +77,9 @@ class CanonicalAdapter:
         excluded = tuple(path.resolve() for path in _EXCLUDED_ROOTS.get())
         for path in sorted(directory.rglob("*")):
             parts = path.relative_to(directory).parts
-            if ".git" in parts or (parts and parts[0] == "overrides"):
+            if ".git" in parts or (
+                parts and parts[0] in {"overrides", "dtb", "dimensions"}
+            ):
                 continue
             if not path.is_file() or path.suffix.lower() not in {
                 ".json",

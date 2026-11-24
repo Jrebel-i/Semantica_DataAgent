@@ -157,7 +157,10 @@ def configured(project_id=None, project_type=None):
         enabled, parameters = saved.get(
             (category, plugin.id),
             (
-                (category == "source" and plugin.id in {"canonical", "markdown"})
+                (
+                    category == "source"
+                    and plugin.id in {"canonical", "markdown", "ossie"}
+                )
                 or (category == "parser" and plugin.id == "sql"),
                 {},
             ),
