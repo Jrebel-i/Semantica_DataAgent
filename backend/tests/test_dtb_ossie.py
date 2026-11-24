@@ -1739,3 +1739,81 @@ def test_convert_dtb_to_ossie_emits_canonical_tasks_and_prefixes(tmp_path):
         convert_dtb_to_ossie(src, catalog_prefix="bad-catalog")
     with pytest.raises(ValueError, match="task_namespace"):
         convert_dtb_to_ossie(src, task_namespace="bad namespace")
+
+
+def test_large_dimension_table_streaming_and_export_cap(tmp_path) -> None:
+    """Tables >2000 rows stream per table and cap >1000-distinct exports without OOM."""
+    from semantica_dataagent.dtb_ossie import convert_dtb_to_ossie
+
+    src = tmp_path / "src"
+    dim_rows = [
+        {
+            "id": f"ID_{i}",
+            "region_code": f"R{i % 25:02d}",
+            "region_name": f"Name_R{i % 25:02d}",
+        }
+        for i in range(2500)
+    ]
+    _write_dtb_snapshot(
+        src,
+        table_rows=[
+            [
+                "t_big",
+                "dim_big",
+                "dimensions",
+                "大维表",
+                None,
+                None,
+                "id",
+                1,
+                "STRING",
+                "主键",
+                "主键",
+            ],
+            [
+                "t_big",
+                "dim_big",
+                "dimensions",
+                "大维表",
+                None,
+                None,
+                "region_code",
+                2,
+                "STRING",
+                "区域码",
+                "区域码",
+            ],
+            [
+                "t_big",
+                "dim_big",
+                "dimensions",
+                "大维表",
+                None,
+                None,
+                "region_name",
+                3,
+                "STRING",
+                "区域名",
+                "区域名",
+            ],
+        ],
+        task_rows=[],
+        dimensions={"dim_big": (["id", "region_code", "region_name"], dim_rows)},
+    )
+
+    res = convert_dtb_to_ossie(src, low_cardinality_limit=20)
+    ds = res.document["datasets"][0]
+    fields_by_name = {f["name"]: f for f in ds["fields"]}
+    assert "共 2500 个去重值" in fields_by_name["id"]["ai_context"]["instructions"]
+    assert (
+        "共 25 个去重值" in fields_by_name["region_code"]["ai_context"]["instructions"]
+    )
+
+    id_vals = [d for d in res.dimension_values if d["field"] == "id"]
+    reg_vals = [d for d in res.dimension_values if d["field"] == "region_code"]
+    reg_names = [d for d in res.dimension_values if d["field"] == "region_name"]
+    # >1000 distinct column is capped at 1001 entries (enough for dimension_too_many=True)
+    assert len(id_vals) == 1001
+    # <=1000 distinct column keeps 1 representative per distinct value + paired *_name alias
+    assert len(reg_vals) == 25
+    assert len(reg_names) == 25

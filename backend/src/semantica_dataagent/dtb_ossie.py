@@ -63,10 +63,6 @@ def _schema_validator(filename: str) -> Draft202012Validator:
     return Draft202012Validator(schema)
 
 
-def _dimension_validator() -> Draft202012Validator:
-    return _schema_validator("dimension_value.schema.json")
-
-
 def _task_validator() -> Draft202012Validator:
     return _schema_validator("task.schema.json")
 
@@ -79,9 +75,27 @@ def _format_dim_literal(value: str) -> str:
     return f"'{escaped}'"
 
 
+_DIMENSION_EXPORT_LIMIT = 1000
+_SMALL_DIM_TABLE_ROW_THRESHOLD = 2000
+_ALIAS_CODE_SUFFIXES = ("_type", "_code", "_id")
+
+
+def _validate_dimension_entry(item: dict[str, Any]) -> None:
+    """Fast structural validation matching schemas/v2/dimension_value.schema.json."""
+    for req in ("database", "table", "field", "value"):
+        val = item.get(req)
+        if not isinstance(val, str) or not val:
+            raise ValueError(f"Invalid dimension_value.{req}")
+    if "row_id" in item:
+        rid = item["row_id"]
+        if not isinstance(rid, str) or not rid:
+            raise ValueError("Invalid dimension_value.row_id")
+
+
 def _apply_hybrid_dimensions(
     datasets: list[dict[str, Any]],
-    records: list[Record],
+    source_dir: Path,
+    adapter_params: dict[str, Any],
     *,
     db_filter: str | None,
     low_cardinality_limit: int,
@@ -89,95 +103,164 @@ def _apply_hybrid_dimensions(
     stats: Counter[str],
     catalog_prefix: str | None = None,
 ) -> list[dict[str, Any]]:
-    counts_by_col: dict[tuple[str, str], dict[str, Counter[str]]] = defaultdict(
-        lambda: defaultdict(Counter)
-    )
-    raw_by_table: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
-
-    for rec in records:
-        if rec.kind != "dimension_value":
-            continue
-        d = rec.data
-        db = str(d.get("database") or "").strip()
-        tbl = str(d.get("table") or "").strip()
-        col = str(d.get("field") or "").strip()
-        val = d.get("value")
-        if not db or not tbl or not col or not isinstance(val, str) or not val.strip():
-            continue
-        if db_filter is not None and db.lower() != db_filter:
-            continue
-        tkey = (db.lower(), tbl.lower())
-        counts_by_col[tkey][col.lower()][val] += 1
-        entry: dict[str, Any] = {
-            "database": db,
-            "table": tbl,
-            "field": col,
-            "value": val,
-        }
-        row_id = d.get("row_id")
-        if isinstance(row_id, str) and row_id.strip():
-            if catalog_prefix and not row_id.startswith(f"{catalog_prefix}."):
-                entry["row_id"] = f"{catalog_prefix}.{row_id}"
-            else:
-                entry["row_id"] = row_id
-        raw_by_table[tkey].append(entry)
-
-    high_card_tables: set[tuple[str, str]] = set()
-    for tkey, col_map in counts_by_col.items():
-        if any(
-            len(val_counts) > low_cardinality_limit for val_counts in col_map.values()
-        ):
-            high_card_tables.add(tkey)
-
+    datasets_by_key: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
     for ds in datasets:
         parts = _parse_qualified_table(ds["source"])
-        if parts is None or parts not in counts_by_col:
-            continue
-        col_map = counts_by_col[parts]
-        for ossie_field in ds.get("fields") or []:
-            fname = str(ossie_field["name"]).lower()
-            val_counts = col_map.get(fname)
-            if not val_counts:
-                continue
-            distinct = sorted(val_counts, key=lambda v: (-val_counts[v], v))
-            total = len(distinct)
-            if total <= low_cardinality_limit:
-                stats["low_cardinality_fields"] += 1
-                literals = ", ".join(_format_dim_literal(v) for v in distinct)
-                note = f"全部取值（共 {total} 个）：{literals}"
-            else:
-                stats["high_cardinality_fields"] += 1
-                high_card_tables.add(parts)
-                samples = distinct[:sample_limit]
-                literals = ", ".join(_format_dim_literal(v) for v in samples)
-                note = f"示例取值（共 {total} 个去重值，抽样前 {len(samples)} 个）：{literals}"
+        if parts is not None:
+            datasets_by_key[parts].append(ds)
 
-            existing = ossie_field.get("ai_context")
-            if isinstance(existing, dict):
-                prev = str(existing.get("instructions") or "").strip()
-                existing["instructions"] = f"{prev}\n{note}" if prev else note
-            elif isinstance(existing, str) and existing.strip():
-                ossie_field["ai_context"] = {
-                    "instructions": f"{existing.strip()}\n{note}"
-                }
-            else:
-                ossie_field["ai_context"] = {"instructions": note}
-
-    validator = _dimension_validator()
+    high_card_tables: set[tuple[str, str]] = set()
     exported: list[dict[str, Any]] = []
     seen_entries: set[tuple[str, str, str, str, str]] = set()
-    for tkey in sorted(high_card_tables):
-        rows = sorted(
-            raw_by_table.get(tkey, ()),
+    reader = DtbSnapshotReader()
+
+    for db, tbl, _rows_src, _meta_src, row_stream in reader.iter_dimension_tables(
+        source_dir, adapter_params
+    ):
+        db_clean = db.strip()
+        tbl_clean = tbl.strip()
+        if not db_clean or not tbl_clean:
+            continue
+        if db_filter is not None and db_clean.lower() != db_filter:
+            continue
+
+        tkey = (db_clean.lower(), tbl_clean.lower())
+        counts_by_col: dict[str, Counter[str]] = defaultdict(Counter)
+        col_orig_names: dict[str, str] = {}
+        table_rows: list[tuple[str, list[tuple[str, str, str]]]] = []
+        row_id_prefix = f"{catalog_prefix}." if catalog_prefix else ""
+
+        for line_number, cells in row_stream:
+            row_id = f"{row_id_prefix}{db_clean}.{tbl_clean}:{line_number}"
+            row_cells: list[tuple[str, str, str]] = []
+            for col, val in cells:
+                col_clean = col.strip()
+                if not col_clean or not val.strip():
+                    continue
+                col_lower = col_clean.lower()
+                col_orig_names.setdefault(col_lower, col_clean)
+                counts_by_col[col_lower][val] += 1
+                row_cells.append((col_clean, col_lower, val))
+            if row_cells:
+                table_rows.append((row_id, row_cells))
+
+        if not counts_by_col:
+            continue
+
+        for ds in datasets_by_key.get(tkey, ()):
+            for ossie_field in ds.get("fields") or []:
+                fname = str(ossie_field["name"]).lower()
+                val_counts = counts_by_col.get(fname)
+                if not val_counts:
+                    continue
+                distinct = sorted(val_counts, key=lambda v: (-val_counts[v], v))
+                total = len(distinct)
+                if total <= low_cardinality_limit:
+                    stats["low_cardinality_fields"] += 1
+                    literals = ", ".join(_format_dim_literal(v) for v in distinct)
+                    note = f"全部取值（共 {total} 个）：{literals}"
+                else:
+                    stats["high_cardinality_fields"] += 1
+                    high_card_tables.add(tkey)
+                    samples = distinct[:sample_limit]
+                    literals = ", ".join(_format_dim_literal(v) for v in samples)
+                    note = f"示例取值（共 {total} 个去重值，抽样前 {len(samples)} 个）：{literals}"
+
+                existing = ossie_field.get("ai_context")
+                if isinstance(existing, dict):
+                    prev = str(existing.get("instructions") or "").strip()
+                    existing["instructions"] = f"{prev}\n{note}" if prev else note
+                elif isinstance(existing, str) and existing.strip():
+                    ossie_field["ai_context"] = {
+                        "instructions": f"{existing.strip()}\n{note}"
+                    }
+                else:
+                    ossie_field["ai_context"] = {"instructions": note}
+
+        is_high_card = any(
+            len(val_counts) > low_cardinality_limit
+            for val_counts in counts_by_col.values()
+        )
+        if not is_high_card:
+            continue
+        high_card_tables.add(tkey)
+
+        table_entries: list[dict[str, Any]] = []
+        if len(table_rows) <= _SMALL_DIM_TABLE_ROW_THRESHOLD:
+            for row_id, row_cells in table_rows:
+                for col_clean, _col_lower, val in row_cells:
+                    table_entries.append(
+                        {
+                            "database": db_clean,
+                            "table": tbl_clean,
+                            "field": col_clean,
+                            "value": val,
+                            "row_id": row_id,
+                        }
+                    )
+        else:
+            # Large dimension tables: keep 1 representative row per distinct value
+            # (up to _DIMENSION_EXPORT_LIMIT + 1 for >limit columns so dimension_stage
+            # marks dimension_too_many=True without exploding memory or disk).
+            seen_col_vals: dict[str, set[str]] = defaultdict(set)
+            for row_id, row_cells in table_rows:
+                row_map = {
+                    col_lower: (col_clean, val)
+                    for col_clean, col_lower, val in row_cells
+                }
+                emitted_cols_in_row: set[str] = set()
+                for col_clean, col_lower, val in row_cells:
+                    col_seen = seen_col_vals[col_lower]
+                    total_distinct = len(counts_by_col[col_lower])
+                    cap = (
+                        _DIMENSION_EXPORT_LIMIT + 1
+                        if total_distinct > _DIMENSION_EXPORT_LIMIT
+                        else total_distinct
+                    )
+                    if val in col_seen or len(col_seen) >= cap:
+                        continue
+                    col_seen.add(val)
+                    emitted_cols_in_row.add(col_lower)
+                    table_entries.append(
+                        {
+                            "database": db_clean,
+                            "table": tbl_clean,
+                            "field": col_clean,
+                            "value": val,
+                            "row_id": row_id,
+                        }
+                    )
+                    # Preserve paired *_name cell on the same row_id for alias extraction
+                    if total_distinct <= _DIMENSION_EXPORT_LIMIT:
+                        for suffix in _ALIAS_CODE_SUFFIXES:
+                            if col_lower.endswith(suffix):
+                                name_key = col_lower[: -len(suffix)] + "_name"
+                                if (
+                                    name_key in row_map
+                                    and name_key not in emitted_cols_in_row
+                                ):
+                                    name_col, name_val = row_map[name_key]
+                                    emitted_cols_in_row.add(name_key)
+                                    table_entries.append(
+                                        {
+                                            "database": db_clean,
+                                            "table": tbl_clean,
+                                            "field": name_col,
+                                            "value": name_val,
+                                            "row_id": row_id,
+                                        }
+                                    )
+
+        table_entries.sort(
             key=lambda r: (
                 r["database"],
                 r["table"],
                 r.get("row_id") or "",
                 r["field"],
                 r["value"],
-            ),
+            )
         )
-        for item in rows:
+        for item in table_entries:
             dedup = (
                 item["database"],
                 item["table"],
@@ -188,7 +271,7 @@ def _apply_hybrid_dimensions(
             if dedup in seen_entries:
                 continue
             seen_entries.add(dedup)
-            validator.validate(item)
+            _validate_dimension_entry(item)
             exported.append(item)
 
     stats["high_cardinality_tables"] = len(high_card_tables)
@@ -904,7 +987,9 @@ def convert_dtb_to_ossie(
     if dimension_tables is not None:
         adapter_params["dimension_tables"] = dimension_tables
 
-    read_result = DtbSnapshotReader().read(Path(source_dir), adapter_params)
+    read_result = DtbSnapshotReader().read(
+        Path(source_dir), adapter_params, include_dimensions=False
+    )
     if (
         read_result.stats.get("table_rows_skipped", 0) > 0
         or read_result.stats.get("task_rows_unreadable", 0) > 0
@@ -1184,7 +1269,8 @@ def convert_dtb_to_ossie(
 
     dimension_values = _apply_hybrid_dimensions(
         datasets,
-        read_result.records,
+        Path(source_dir),
+        adapter_params,
         db_filter=db_filter,
         low_cardinality_limit=low_cardinality_limit,
         sample_limit=sample_limit,
@@ -1395,6 +1481,7 @@ class DtbPluginPuller:
                 dest = root / "dtb" / "snapshot" / name
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 dest.write_bytes(content)
+            raw_files.clear()
             converted = convert_dtb_to_ossie(
                 root,
                 snapshot_path="dtb",
