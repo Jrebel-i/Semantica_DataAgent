@@ -1,29 +1,70 @@
-"""Fork-safe per-project autonomous evolution trigger scheduler and async runner."""
+"""Fork-safe wall-clock / 5-field Cron scheduler for per-project knowledge evolution."""
 
 from __future__ import annotations
 
 import logging
 import os
 import threading
-from datetime import datetime
+from datetime import UTC, datetime
 
-from . import evolution_runner, project_context
-from .db import Project, sessions
+from . import evolution_runner, project_context, scheduler
+from .api_time import as_utc
+from .db import EvolutionRun, Project, ProjectEvolutionConfig, sessions
 
 LOGGER = logging.getLogger(__name__)
-DEFAULT_POLL_INTERVAL_SECONDS = 60.0
+DEFAULT_POLL_INTERVAL_SECONDS = 15.0
+
+
+def is_project_due(config: ProjectEvolutionConfig, now_utc: datetime) -> bool:
+    """Return True iff an enabled project's cron slot lies in (anchor, now_utc]."""
+    return scheduler.is_instance_due(config, now_utc)
+
+
+def next_run_at_for_config(
+    config: ProjectEvolutionConfig | None, *, now: datetime | None = None
+) -> datetime | None:
+    """Compute the next scheduled UTC run timestamp for a project evolution config."""
+    if config is None or not config.enabled:
+        return None
+    cron_expr = (config.schedule_cron or "").strip()
+    if not cron_expr:
+        return None
+    now_utc = as_utc(now if now is not None else datetime.now(UTC))
+    tz_name = (config.timezone or "").strip() or "Asia/Shanghai"
+    try:
+        if is_project_due(config, now_utc):
+            return scheduler.latest_scheduled_slot(cron_expr, tz_name, now_utc)
+        return scheduler.next_scheduled_slot(cron_expr, tz_name, now_utc)
+    except ValueError:
+        return None
 
 
 def should_trigger_project(project_id: str, *, now: datetime | None = None) -> bool:
-    """Evaluate whether a project satisfies auto-evolution trigger thresholds."""
-    return False
+    """Evaluate whether a project is active and due for scheduled evolution."""
+    now_utc = as_utc(now if now is not None else datetime.now(UTC))
+    with sessions()() as db:
+        proj = db.get(Project, project_id)
+        if proj is None or proj.status != project_context.ACTIVE_STATUS:
+            return False
+        cfg = db.get(ProjectEvolutionConfig, project_id)
+        if cfg is None:
+            return False
+        try:
+            return is_project_due(cfg, now_utc)
+        except ValueError:
+            return False
 
 
 class EvolutionScheduler:
-    """Fork-safe background scheduler evaluating per-project evolution triggers."""
+    """Fork-safe background wall-clock/Cron scheduler for ProjectEvolutionConfig."""
 
-    def __init__(self, poll_interval: float = DEFAULT_POLL_INTERVAL_SECONDS):
-        self._poll_interval = max(1.0, float(poll_interval))
+    def __init__(
+        self,
+        poll_interval: float = DEFAULT_POLL_INTERVAL_SECONDS,
+        clock=lambda: datetime.now(UTC),
+    ):
+        self._poll_interval = max(0.05, float(poll_interval))
+        self._clock = clock
         self._condition = threading.Condition()
         self._thread: threading.Thread | None = None
         self._workers: set[threading.Thread] = set()
@@ -87,26 +128,67 @@ class EvolutionScheduler:
                 self._workers.discard(current)
                 self._condition.notify_all()
 
-    def tick_once(self, *, now: datetime | None = None) -> list[str]:
-        """Evaluate every active project once and launch due evolution runs."""
+    def tick_once(
+        self, *, now: datetime | None = None, dispatch: bool = True
+    ) -> list[str]:
+        """Scan enabled projects on wall-clock/Cron schedule and launch due runs."""
+        now_utc = as_utc(now if now is not None else self._clock())
         with sessions()() as db:
-            project_ids = [
-                row.id
-                for row in db.query(Project.id)
-                .filter(Project.status == project_context.ACTIVE_STATUS)
-                .order_by(Project.id.asc())
-                .all()
-            ]
-        started: list[str] = []
-        for pid in project_ids:
-            try:
-                if not should_trigger_project(pid, now=now):
-                    continue
-                run = evolution_runner.create_evolution_run(
-                    pid, trigger_type="scheduler", created_by="scheduler"
+            candidates = (
+                db.query(ProjectEvolutionConfig, Project.status)
+                .join(Project, Project.id == ProjectEvolutionConfig.project_id)
+                .filter(
+                    ProjectEvolutionConfig.enabled.is_(True),
+                    ProjectEvolutionConfig.schedule_cron.is_not(None),
+                    ProjectEvolutionConfig.schedule_cron != "",
                 )
-                self.dispatch_run(run["id"])
-                started.append(run["id"])
+                .order_by(ProjectEvolutionConfig.project_id.asc())
+                .all()
+            )
+
+        started: list[str] = []
+        for cfg, project_status in candidates:
+            pid = cfg.project_id
+            if (
+                project_status != project_context.ACTIVE_STATUS
+                or project_context.project_is_frozen(pid)
+            ):
+                LOGGER.debug("Skipping scheduled evolution for frozen project %s", pid)
+                continue
+            try:
+                if not is_project_due(cfg, now_utc):
+                    continue
+            except ValueError:
+                LOGGER.warning("Invalid evolution schedule on project %s", pid)
+                continue
+
+            claimed = False
+            with sessions().begin() as db:
+                fresh = db.get(ProjectEvolutionConfig, pid)
+                active = (
+                    db.query(EvolutionRun.id)
+                    .filter(
+                        EvolutionRun.project_id == pid,
+                        EvolutionRun.status == "running",
+                    )
+                    .first()
+                )
+                if (
+                    fresh is not None
+                    and active is None
+                    and is_project_due(fresh, now_utc)
+                ):
+                    claimed = True
+            if not claimed:
+                continue
+
+            try:
+                run = evolution_runner.create_evolution_run(
+                    pid,
+                    trigger_type="scheduler",
+                    created_by="scheduler",
+                    claim_scheduled_at=now_utc,
+                )
             except (
                 evolution_runner.EvolutionConflictError,
                 evolution_runner.EvolutionFrozenError,
@@ -114,8 +196,13 @@ class EvolutionScheduler:
                 continue
             except Exception:
                 LOGGER.exception(
-                    "Auto-evolution trigger check failed for project %s", pid
+                    "Auto-evolution run creation failed for project %s", pid
                 )
+                continue
+
+            if dispatch:
+                self.dispatch_run(run["id"])
+            started.append(run["id"])
         return started
 
     def _run(self) -> None:
@@ -123,10 +210,14 @@ class EvolutionScheduler:
             with self._condition:
                 if self._stopping:
                     return
-                self._condition.wait(timeout=self._poll_interval)
+            try:
+                self.tick_once()
+            except Exception:
+                LOGGER.exception("EvolutionScheduler tick failed")
+            with self._condition:
                 if self._stopping:
                     return
-            self.tick_once()
+                self._condition.wait(timeout=self._poll_interval)
 
 
 evolution_scheduler = EvolutionScheduler()

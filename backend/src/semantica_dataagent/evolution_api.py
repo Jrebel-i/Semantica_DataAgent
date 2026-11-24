@@ -1,43 +1,31 @@
-"""REST endpoints for project evolution configuration, manual triggers, and run inspection (#296)."""
+"""REST endpoints for TraceSource plugins, project evolution config, triggers, and runs (ADR-0013)."""
 
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException
+from jsonschema import Draft202012Validator
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from . import evolution_runner, project_context
-from .api_time import UtcDatetime
-from .auth import Requester, current_requester
+from . import evolution_runner, plugins, project_context, pull_instances
+from .api_time import UtcDatetime, as_utc
+from .auth import Requester, current_requester, current_user
 from .db import (
-    EvolutionCheckpoint,
-    EvolutionRound,
     EvolutionRun,
+    ProjectEvolutionConfig,
     ProjectSetting,
     Provider,
     sessions,
 )
-from .evolution_scheduler import evolution_scheduler
-from .project_api import (
-    _require_project_admin,
-    actor_name,
-    admin_project_path_scope,
-    admin_project_scope,
-    resolve_project_scope,
-)
-from .project_audit import record_project_audit
+from .evolution_scheduler import evolution_scheduler, next_run_at_for_config
+from .project_api import admin_project_path_scope
+from .project_audit import actor_name, record_project_audit
 from .project_context import (
     ARCHIVED_DETAIL,
-    AUTO_EVOLVE_ENABLED_KEY,
-    EVOLUTION_JUDGE_MODEL_KEY,
-    EVOLUTION_JUDGE_PROVIDER_ID_KEY,
-    EVOLUTION_MAX_EVAL_CASES_KEY,
-    EVOLUTION_MAX_IDLE_DAYS_KEY,
-    EVOLUTION_MAX_ROUNDS_KEY,
-    EVOLUTION_MIN_INTERVAL_HOURS_KEY,
-    EVOLUTION_MIN_TRAJECTORIES_KEY,
+    EVOLUTION_MAX_TRACES_PER_RUN_KEY,
     EVOLUTION_MODEL_KEY,
     EVOLUTION_PROVIDER_ID_KEY,
     FROZEN_STATUSES,
@@ -47,115 +35,132 @@ from .project_context import (
 router = APIRouter()
 
 
+class TraceSourcePluginView(BaseModel):
+    id: str
+    version: str
+    display_name: str
+    parameters_schema: dict[str, Any]
+    secret_parameter_keys: list[str]
+
+
 class EvolutionConfigView(BaseModel):
-    auto_evolve_enabled: bool
-    min_trajectories: int
-    min_interval_hours: float
-    max_idle_days: float
-    max_rounds: int
-    max_eval_cases: int
+    project_id: str
+    enabled: bool
+    trace_source_plugin: str | None = None
+    trace_source_parameters: dict[str, Any] = Field(default_factory=dict)
+    trace_source_secrets: dict[str, str] = Field(default_factory=dict)
+    configured_secrets: list[str] = Field(default_factory=list)
+    secret_configured: bool = False
+    schedule_cron: str | None = None
+    timezone: str = "Asia/Shanghai"
     evolution_provider_id: str | None = None
     evolution_model: str | None = None
-    judge_provider_id: str | None = None
-    judge_model: str | None = None
-    checkpoint_trajectory_id: int | None = None
-    checkpoint_at: UtcDatetime | None = None
-    pending_trajectories: int = 0
+    max_traces_per_run: int = 200
+    last_trace_timestamp: UtcDatetime | None = None
+    last_triggered_at: UtcDatetime | None = None
+    next_run_at: UtcDatetime | None = None
+    global_langfuse_configured: bool = False
 
 
 class EvolutionConfigUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    auto_evolve_enabled: bool | None = None
-    min_trajectories: int | None = Field(default=None, ge=1, le=10000)
-    min_interval_hours: float | None = Field(default=None, ge=0, le=8760)
-    max_idle_days: float | None = Field(default=None, ge=1, le=365)
-    max_rounds: int | None = Field(default=None, ge=1, le=20)
-    max_eval_cases: int | None = Field(default=None, ge=1, le=200)
+    enabled: bool | None = None
+    trace_source_plugin: str | None = None
+    trace_source_parameters: dict[str, Any] | None = None
+    trace_source_secrets: dict[str, str | None] | None = None
+    schedule_cron: str | None = None
+    timezone: str | None = None
     evolution_provider_id: str | None = None
     evolution_model: str | None = None
-    judge_provider_id: str | None = None
-    judge_model: str | None = None
+    max_traces_per_run: int | None = Field(default=None, ge=1, le=2000)
+
+    @field_validator("max_traces_per_run", mode="before")
+    @classmethod
+    def _reject_bool_int(cls, value: Any) -> Any:
+        if isinstance(value, bool):
+            raise ValueError("整数参数不接受布尔值")  # noqa: TRY004 - Pydantic requires ValueError for 422
+        return value
 
     @field_validator(
+        "trace_source_plugin",
         "evolution_provider_id",
         "evolution_model",
-        "judge_provider_id",
-        "judge_model",
         mode="before",
     )
     @classmethod
-    def _normalize_optional_str(cls, value):
+    def _normalize_optional_str(cls, value: Any) -> Any:
         if isinstance(value, str):
             stripped = value.strip()
             return stripped or None
         return value
 
 
-class EvolutionRoundView(BaseModel):
-    id: str
-    run_id: str
-    project_id: str
-    round_number: int
-    signal_kind: str
-    hypothesis: str
-    evidence_trajectory_ids: list[int] = Field(default_factory=list)
-    target: str = ""
-    target_kind: str = "override"
-    candidate_change: dict[str, Any] = Field(default_factory=dict)
-    l1_gate_report: dict[str, Any] | None = None
-    l2_gate_report: dict[str, Any] | None = None
-    decision: Literal["running", "accept", "reject", "incomplete"]
-    reject_reason: str | None = None
-    proposal_id: str | None = None
-    started_at: UtcDatetime
-    finished_at: UtcDatetime | None = None
+class EvolutionRunTrigger(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    since: datetime | None = None
+    until: datetime | None = None
+    max_traces: int | None = Field(default=None, ge=1, le=2000)
+    provider_id: str | None = None
+    model: str | None = None
+
+    @field_validator("max_traces", mode="before")
+    @classmethod
+    def _reject_bool_int(cls, value: Any) -> Any:
+        if isinstance(value, bool):
+            raise ValueError("整数参数不接受布尔值")  # noqa: TRY004 - Pydantic requires ValueError for 422
+        return value
+
+    @field_validator("provider_id", "model", mode="before")
+    @classmethod
+    def _normalize_optional_str(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            stripped = value.strip()
+            return stripped or None
+        return value
 
 
 class EvolutionRunView(BaseModel):
     id: str
     project_id: str
     trigger_type: str
-    status: Literal["running", "accepted", "incomplete"]
-    checkpoint_before_trajectory_id: int | None = None
-    checkpoint_after_trajectory_id: int | None = None
-    frozen_max_trajectory_id: int | None = None
-    diagnosis_trajectory_ids: list[int] = Field(default_factory=list)
-    reserve_trajectory_ids: list[int] = Field(default_factory=list)
-    signal_summary: dict[str, Any] = Field(default_factory=dict)
-    max_rounds: int
-    max_eval_cases: int
-    rounds_completed: int
-    stop_reason: str | None = None
-    error: str | None = None
+    status: Literal["running", "succeeded", "failed", "incomplete", "accepted"]
+    trace_source_plugin: str | None = None
+    traces_fetched: int = 0
+    proposals_created: int = 0
+    duplicates_skipped: int = 0
+    l1_rejected: int = 0
+    proposal_ids: list[str] = Field(default_factory=list)
     proposal_id: str | None = None
+    window_since: UtcDatetime | None = None
+    window_until: UtcDatetime | None = None
+    summary: str = ""
+    error: str | None = None
     created_by: str | None = None
     started_at: UtcDatetime
     finished_at: UtcDatetime | None = None
     created_at: UtcDatetime
-    rounds: list[EvolutionRoundView] = Field(default_factory=list)
 
 
-class EvolutionRunTrigger(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+def _parse_json_dict(raw: str | None) -> dict[str, Any]:
+    try:
+        parsed = json.loads(raw or "{}")
+    except (TypeError, ValueError):
+        return {}
+    return dict(parsed) if isinstance(parsed, dict) else {}
 
-    max_rounds: int | None = Field(default=None, ge=1, le=20)
-    max_eval_cases: int | None = Field(default=None, ge=1, le=200)
 
-
-def _build_config_view(project_id: str) -> EvolutionConfigView:
-    cfg = project_context.evolution_config(project_id)
-    with sessions()() as db:
-        ckpt = db.get(EvolutionCheckpoint, project_id)
-        ckpt_id = ckpt.checkpoint_trajectory_id if ckpt is not None else None
-        ckpt_at = ckpt.checkpoint_at if ckpt is not None else None
-    pending_count = 0
-    return EvolutionConfigView(
-        **cfg,
-        checkpoint_trajectory_id=ckpt_id,
-        checkpoint_at=ckpt_at,
-        pending_trajectories=pending_count,
-    )
+def _upsert_project_setting(db, project_id: str, key: str, value: str | None) -> None:
+    row = db.get(ProjectSetting, (project_id, key))
+    if value is None:
+        if row is not None:
+            db.delete(row)
+        return
+    if row is None:
+        db.add(ProjectSetting(project_id=project_id, key=key, value=value))
+    else:
+        row.value = value
 
 
 def _validate_provider_model(
@@ -185,20 +190,131 @@ def _validate_provider_model(
             )
 
 
-def _upsert_project_setting(db, project_id: str, key: str, value: str | None) -> None:
-    row = db.get(ProjectSetting, (project_id, key))
-    if value is None:
-        if row is not None:
-            db.delete(row)
-        return
-    if row is None:
-        db.add(ProjectSetting(project_id=project_id, key=key, value=value))
-    else:
-        row.value = value
+def _build_config_view(project_id: str, db=None) -> EvolutionConfigView:
+    if db is None:
+        with sessions()() as own:
+            return _build_config_view(project_id, own)
+    row = db.get(ProjectEvolutionConfig, project_id)
+    cfg = project_context.evolution_config(project_id, db)
+    discovered = plugins.discover()
+    plugin_id = (
+        (row.trace_source_plugin or "").strip() if row is not None else ""
+    ) or None
+    plugin = discovered.get(("trace_source", plugin_id)) if plugin_id else None
+    secret_keys = (
+        plugins.secret_parameter_keys(plugin.parameters_schema)
+        if plugin is not None
+        else set()
+    )
+    stored_secrets = _parse_json_dict(
+        row.trace_source_encrypted_secrets if row is not None else "{}"
+    )
+    configured_secrets = sorted(
+        k for k, v in stored_secrets.items() if isinstance(v, str) and v
+    )
+    raw_params = _parse_json_dict(
+        row.trace_source_parameters if row is not None else "{}"
+    )
+    public_params = {
+        k: v
+        for k, v in raw_params.items()
+        if k not in secret_keys and k not in stored_secrets
+    }
+    evo_prov = (
+        (row.provider_id or "").strip()
+        if row is not None and row.provider_id
+        else cfg.get("evolution_provider_id")
+    )
+    evo_model = (
+        (row.model or "").strip()
+        if row is not None and row.model
+        else cfg.get("evolution_model")
+    )
+    return EvolutionConfigView(
+        project_id=project_id,
+        enabled=bool(row.enabled) if row is not None else False,
+        trace_source_plugin=plugin_id,
+        trace_source_parameters=public_params,
+        trace_source_secrets={k: "***" for k in configured_secrets},
+        configured_secrets=configured_secrets,
+        secret_configured=bool(configured_secrets),
+        schedule_cron=row.schedule_cron if row is not None else None,
+        timezone=(row.timezone or "Asia/Shanghai")
+        if row is not None
+        else "Asia/Shanghai",
+        evolution_provider_id=evo_prov or None,
+        evolution_model=evo_model or None,
+        max_traces_per_run=int(cfg["max_traces_per_run"]),
+        last_trace_timestamp=row.last_trace_timestamp if row is not None else None,
+        last_triggered_at=row.last_triggered_at if row is not None else None,
+        next_run_at=next_run_at_for_config(row),
+        global_langfuse_configured=evolution_runner.has_global_langfuse_fallback(db),
+    )
+
+
+def _validate_trace_source_params(
+    plugin: Any,
+    public_params: dict[str, Any],
+    incoming_secrets: dict[str, Any],
+    existing_secrets: dict[str, Any],
+) -> None:
+    schema = plugin.parameters_schema
+    secret_keys = plugins.secret_parameter_keys(schema)
+    unknown_secrets = sorted(set(incoming_secrets) - secret_keys)
+    if unknown_secrets:
+        raise HTTPException(
+            status_code=422,
+            detail=f"未知对话追踪源密钥字段：{', '.join(unknown_secrets)}",
+        )
+    for_validation = dict(public_params)
+    for key in secret_keys:
+        has_existing = bool(existing_secrets.get(key))
+        if key in incoming_secrets:
+            val = incoming_secrets[key]
+            if val == "***":
+                if has_existing:
+                    for_validation[key] = "placeholder"
+            elif val not in (None, ""):
+                for_validation[key] = val
+        elif has_existing:
+            for_validation[key] = "placeholder"
+
+    errors = sorted(
+        Draft202012Validator(schema).iter_errors(for_validation),
+        key=lambda err: list(map(str, err.absolute_path)),
+    )
+    if errors:
+        raise HTTPException(
+            status_code=422,
+            detail=[
+                {"path": list(err.absolute_path), "message": err.message}
+                for err in errors
+            ],
+        )
+
+
+@router.get("/api/v1/trace-source-plugins", response_model=list[TraceSourcePluginView])
+def list_trace_source_plugins(_: Annotated[str, Depends(current_user)]):
+    discovered = plugins.discover()
+    return [
+        TraceSourcePluginView(
+            id=plugin.id,
+            version=plugin.version,
+            display_name=plugin.display_name,
+            parameters_schema=plugin.parameters_schema,
+            secret_parameter_keys=sorted(
+                plugins.secret_parameter_keys(plugin.parameters_schema)
+            ),
+        )
+        for (category, _), plugin in sorted(
+            discovered.items(), key=lambda item: item[1].id
+        )
+        if category == "trace_source"
+    ]
 
 
 @router.get(
-    "/api/v1/projects/{project_id}/evolution-config",
+    "/api/v1/projects/{project_id}/evolution/config",
     response_model=EvolutionConfigView,
 )
 def get_project_evolution_config(
@@ -208,37 +324,8 @@ def get_project_evolution_config(
     return _build_config_view(scope.project_id)
 
 
-def _resolve_provider_pair_update(
-    db,
-    body: EvolutionConfigUpdate,
-    current: dict[str, Any],
-    *,
-    prefix: str,
-) -> tuple[str | None, str | None]:
-    prov_field = f"{prefix}_provider_id"
-    model_field = f"{prefix}_model"
-    next_prov = (
-        getattr(body, prov_field)
-        if prov_field in body.model_fields_set
-        else current[prov_field]
-    )
-    next_model = (
-        getattr(body, model_field)
-        if model_field in body.model_fields_set
-        else current[model_field]
-    )
-    if (
-        prov_field in body.model_fields_set
-        and getattr(body, prov_field) is None
-        and model_field not in body.model_fields_set
-    ):
-        next_model = None
-    _validate_provider_model(db, next_prov, next_model, prefix)
-    return next_prov, next_model
-
-
 @router.put(
-    "/api/v1/projects/{project_id}/evolution-config",
+    "/api/v1/projects/{project_id}/evolution/config",
     response_model=EvolutionConfigView,
 )
 def put_project_evolution_config(
@@ -250,113 +337,245 @@ def put_project_evolution_config(
     if scope.status in FROZEN_STATUSES:
         raise HTTPException(status_code=409, detail=ARCHIVED_DETAIL)
 
-    with sessions().begin() as db:
-        current = project_context.evolution_config(scope.project_id, db)
-        next_evo_prov, next_evo_model = _resolve_provider_pair_update(
-            db, body, current, prefix="evolution"
-        )
-        next_jdg_prov, next_jdg_model = _resolve_provider_pair_update(
-            db, body, current, prefix="judge"
-        )
+    discovered = plugins.discover()
+    now = datetime.now(UTC)
 
-        updates: list[tuple[str, str | None]] = []
-        if "auto_evolve_enabled" in body.model_fields_set:
-            updates.append(
-                (
-                    AUTO_EVOLVE_ENABLED_KEY,
-                    None
-                    if body.auto_evolve_enabled is None
-                    else ("true" if body.auto_evolve_enabled else "false"),
-                )
+    with sessions().begin() as db:
+        row = db.get(ProjectEvolutionConfig, scope.project_id)
+        if row is None:
+            row = ProjectEvolutionConfig(
+                project_id=scope.project_id,
+                enabled=False,
+                trace_source_parameters="{}",
+                trace_source_encrypted_secrets="{}",
+                timezone="Asia/Shanghai",
+                created_at=now,
+                updated_at=now,
             )
-        if "min_trajectories" in body.model_fields_set:
-            updates.append(
-                (
-                    EVOLUTION_MIN_TRAJECTORIES_KEY,
-                    None
-                    if body.min_trajectories is None
-                    else str(body.min_trajectories),
+            db.add(row)
+
+        current_cfg = project_context.evolution_config(scope.project_id, db)
+        cur_prov = (row.provider_id or "").strip() or current_cfg.get(
+            "evolution_provider_id"
+        )
+        cur_model = (row.model or "").strip() or current_cfg.get("evolution_model")
+
+        next_prov = (
+            body.evolution_provider_id
+            if "evolution_provider_id" in body.model_fields_set
+            else cur_prov
+        )
+        next_model = (
+            body.evolution_model
+            if "evolution_model" in body.model_fields_set
+            else cur_model
+        )
+        if (
+            "evolution_provider_id" in body.model_fields_set
+            and body.evolution_provider_id is None
+            and "evolution_model" not in body.model_fields_set
+        ):
+            next_model = None
+        _validate_provider_model(db, next_prov, next_model, "evolution")
+
+        if "schedule_cron" in body.model_fields_set:
+            try:
+                row.schedule_cron = pull_instances.normalize_schedule_cron(
+                    body.schedule_cron
                 )
-            )
-        if "min_interval_hours" in body.model_fields_set:
-            updates.append(
-                (
-                    EVOLUTION_MIN_INTERVAL_HOURS_KEY,
-                    None
-                    if body.min_interval_hours is None
-                    else str(body.min_interval_hours),
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+        if "timezone" in body.model_fields_set:
+            try:
+                row.timezone = pull_instances.validate_timezone(body.timezone)
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+        if "enabled" in body.model_fields_set:
+            if body.enabled is None:
+                raise HTTPException(status_code=422, detail="enabled 不能为空")
+            row.enabled = body.enabled
+
+        prev_plugin_id = (row.trace_source_plugin or "").strip() or None
+        next_plugin_id = (
+            body.trace_source_plugin
+            if "trace_source_plugin" in body.model_fields_set
+            else prev_plugin_id
+        )
+        plugin = None
+        if next_plugin_id is not None:
+            plugin = discovered.get(("trace_source", next_plugin_id))
+            if plugin is None:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"未知对话追踪源插件：{next_plugin_id}",
                 )
+
+        plugin_changed = (
+            "trace_source_plugin" in body.model_fields_set
+            and next_plugin_id != prev_plugin_id
+        )
+        if plugin_changed:
+            row.trace_source_plugin = next_plugin_id
+            if next_plugin_id is None:
+                row.trace_source_parameters = "{}"
+                row.trace_source_encrypted_secrets = "{}"
+            elif "trace_source_parameters" not in body.model_fields_set:
+                row.trace_source_parameters = "{}"
+                if "trace_source_secrets" not in body.model_fields_set:
+                    row.trace_source_encrypted_secrets = "{}"
+
+        if plugin is None and (
+            body.trace_source_parameters or body.trace_source_secrets
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail="配置追踪源参数或密钥前必须先选择 trace_source_plugin",
             )
-        if "max_idle_days" in body.model_fields_set:
-            updates.append(
-                (
-                    EVOLUTION_MAX_IDLE_DAYS_KEY,
-                    None if body.max_idle_days is None else str(body.max_idle_days),
+
+        if plugin is not None:
+            secret_keys = plugins.secret_parameter_keys(plugin.parameters_schema)
+            existing_secrets = (
+                {}
+                if plugin_changed
+                and "trace_source_secrets" not in body.model_fields_set
+                else _parse_json_dict(row.trace_source_encrypted_secrets)
+            )
+            if "trace_source_parameters" in body.model_fields_set:
+                if body.trace_source_parameters is None:
+                    raise HTTPException(
+                        status_code=422, detail="trace_source_parameters 不能为空"
+                    )
+                raw_incoming = dict(body.trace_source_parameters)
+            else:
+                raw_incoming = (
+                    {}
+                    if plugin_changed
+                    else _parse_json_dict(row.trace_source_parameters)
                 )
+
+            public_params = {
+                k: v for k, v in raw_incoming.items() if k not in secret_keys
+            }
+            incoming_secrets = {
+                k: raw_incoming[k] for k in secret_keys if k in raw_incoming
+            }
+            if (
+                "trace_source_secrets" in body.model_fields_set
+                and body.trace_source_secrets is not None
+            ):
+                for k, v in body.trace_source_secrets.items():
+                    incoming_secrets[k] = v
+
+            should_validate_schema = (
+                row.enabled
+                or "trace_source_parameters" in body.model_fields_set
+                or "trace_source_secrets" in body.model_fields_set
+                or "trace_source_plugin" in body.model_fields_set
             )
-        if "max_rounds" in body.model_fields_set:
-            updates.append(
-                (
-                    EVOLUTION_MAX_ROUNDS_KEY,
-                    None if body.max_rounds is None else str(body.max_rounds),
+            if should_validate_schema:
+                _validate_trace_source_params(
+                    plugin, public_params, incoming_secrets, existing_secrets
                 )
+
+            row.trace_source_parameters = json.dumps(
+                public_params, sort_keys=True, ensure_ascii=False
             )
-        if "max_eval_cases" in body.model_fields_set:
-            updates.append(
-                (
-                    EVOLUTION_MAX_EVAL_CASES_KEY,
-                    None if body.max_eval_cases is None else str(body.max_eval_cases),
+            if incoming_secrets or plugin_changed:
+                base_encrypted = (
+                    "{}"
+                    if plugin_changed
+                    and "trace_source_secrets" not in body.model_fields_set
+                    else row.trace_source_encrypted_secrets
                 )
-            )
+                row.trace_source_encrypted_secrets = (
+                    pull_instances.merge_encrypted_secrets(
+                        base_encrypted, incoming_secrets, secret_keys
+                    )
+                )
+
         if "evolution_provider_id" in body.model_fields_set:
-            updates.append((EVOLUTION_PROVIDER_ID_KEY, next_evo_prov))
+            row.provider_id = next_prov
+            _upsert_project_setting(
+                db, scope.project_id, EVOLUTION_PROVIDER_ID_KEY, next_prov
+            )
         if (
             "evolution_model" in body.model_fields_set
             or "evolution_provider_id" in body.model_fields_set
         ):
-            updates.append((EVOLUTION_MODEL_KEY, next_evo_model))
-        if "judge_provider_id" in body.model_fields_set:
-            updates.append((EVOLUTION_JUDGE_PROVIDER_ID_KEY, next_jdg_prov))
-        if (
-            "judge_model" in body.model_fields_set
-            or "judge_provider_id" in body.model_fields_set
-        ):
-            updates.append((EVOLUTION_JUDGE_MODEL_KEY, next_jdg_model))
+            row.model = next_model
+            _upsert_project_setting(
+                db, scope.project_id, EVOLUTION_MODEL_KEY, next_model
+            )
+        if "max_traces_per_run" in body.model_fields_set:
+            _upsert_project_setting(
+                db,
+                scope.project_id,
+                EVOLUTION_MAX_TRACES_PER_RUN_KEY,
+                None
+                if body.max_traces_per_run is None
+                else str(body.max_traces_per_run),
+            )
 
-        for setting_key, val in updates:
-            _upsert_project_setting(db, scope.project_id, setting_key, val)
+        row.updated_at = now
         db.flush()
-        saved = project_context.evolution_config(scope.project_id, db)
+        view = _build_config_view(scope.project_id, db)
         record_project_audit(
             db,
             project_id=scope.project_id,
             actor_id=requester.id,
             actor_name=actor_name(db, requester),
             action="project.evolution_config",
-            detail=saved,
+            detail={
+                "enabled": view.enabled,
+                "trace_source_plugin": view.trace_source_plugin,
+                "trace_source_parameters": view.trace_source_parameters,
+                "configured_secrets": view.configured_secrets,
+                "schedule_cron": view.schedule_cron,
+                "timezone": view.timezone,
+                "evolution_provider_id": view.evolution_provider_id,
+                "evolution_model": view.evolution_model,
+                "max_traces_per_run": view.max_traces_per_run,
+            },
         )
 
     evolution_scheduler.wake()
-    return _build_config_view(scope.project_id)
+    return view
 
 
 @router.post(
-    "/api/v1/evolution/runs",
+    "/api/v1/projects/{project_id}/evolution/runs",
     status_code=202,
     response_model=EvolutionRunView,
 )
 def trigger_evolution_run(
-    scope: Annotated[ProjectContext, Depends(admin_project_scope)],
+    project_id: str,
+    scope: Annotated[ProjectContext, Depends(admin_project_path_scope)],
     requester: Annotated[Requester, Depends(current_requester)],
     body: EvolutionRunTrigger | None = None,
 ):
+    if scope.status in FROZEN_STATUSES:
+        raise HTTPException(status_code=409, detail=ARCHIVED_DETAIL)
+
+    since_utc = as_utc(body.since) if body and body.since is not None else None
+    until_utc = as_utc(body.until) if body and body.until is not None else None
+    if since_utc is not None and until_utc is not None and since_utc >= until_utc:
+        raise HTTPException(status_code=422, detail="since 必须早于 until")
+
+    if body and (body.provider_id is not None or body.model is not None):
+        with sessions()() as db:
+            _validate_provider_model(db, body.provider_id, body.model, "evolution")
+
     try:
         created = evolution_runner.create_evolution_run(
             scope.project_id,
             trigger_type="manual",
             created_by=requester.id,
-            max_rounds=body.max_rounds if body else None,
-            max_eval_cases=body.max_eval_cases if body else None,
+            since=since_utc,
+            until=until_utc,
+            max_traces=body.max_traces if body else None,
+            provider_id=body.provider_id if body else None,
+            model=body.model if body else None,
         )
     except evolution_runner.EvolutionFrozenError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from None
@@ -367,17 +586,13 @@ def trigger_evolution_run(
     return EvolutionRunView.model_validate(created)
 
 
-def _admin_read_project_scope(
-    requester: Annotated[Requester, Depends(current_requester)],
-    project: Annotated[str | None, Query()] = None,
-) -> ProjectContext:
-    scope = resolve_project_scope(project, requester, allow_frozen=True)
-    return _require_project_admin(scope, requester)
-
-
-@router.get("/api/v1/evolution/runs", response_model=list[EvolutionRunView])
+@router.get(
+    "/api/v1/projects/{project_id}/evolution/runs",
+    response_model=list[EvolutionRunView],
+)
 def list_evolution_runs(
-    scope: Annotated[ProjectContext, Depends(_admin_read_project_scope)],
+    project_id: str,
+    scope: Annotated[ProjectContext, Depends(admin_project_path_scope)],
 ):
     with sessions()() as db:
         runs = (
@@ -386,39 +601,23 @@ def list_evolution_runs(
             .order_by(EvolutionRun.created_at.desc(), EvolutionRun.id.desc())
             .all()
         )
-        run_ids = [r.id for r in runs]
-        rounds_by_run: dict[str, list[EvolutionRound]] = {}
-        if run_ids:
-            for rnd in (
-                db.query(EvolutionRound)
-                .filter(EvolutionRound.run_id.in_(run_ids))
-                .order_by(EvolutionRound.round_number.asc())
-                .all()
-            ):
-                rounds_by_run.setdefault(rnd.run_id, []).append(rnd)
         return [
-            EvolutionRunView.model_validate(
-                evolution_runner.serialize_run(r, rounds_by_run.get(r.id, ()))
-            )
+            EvolutionRunView.model_validate(evolution_runner.serialize_run(r))
             for r in runs
         ]
 
 
-@router.get("/api/v1/evolution/runs/{run_id}", response_model=EvolutionRunView)
+@router.get(
+    "/api/v1/projects/{project_id}/evolution/runs/{run_id}",
+    response_model=EvolutionRunView,
+)
 def get_evolution_run(
+    project_id: str,
     run_id: str,
-    scope: Annotated[ProjectContext, Depends(_admin_read_project_scope)],
+    scope: Annotated[ProjectContext, Depends(admin_project_path_scope)],
 ):
     with sessions()() as db:
         run = db.get(EvolutionRun, run_id)
         if run is None or run.project_id != scope.project_id:
             raise HTTPException(status_code=404, detail="Evolution run not found")
-        rounds = (
-            db.query(EvolutionRound)
-            .filter(EvolutionRound.run_id == run_id)
-            .order_by(EvolutionRound.round_number.asc())
-            .all()
-        )
-        return EvolutionRunView.model_validate(
-            evolution_runner.serialize_run(run, rounds)
-        )
+        return EvolutionRunView.model_validate(evolution_runner.serialize_run(run))

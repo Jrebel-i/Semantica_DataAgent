@@ -67,6 +67,7 @@ EVOLUTION_PROVIDER_ID_KEY = "evolution_provider_id"
 EVOLUTION_MODEL_KEY = "evolution_model"
 EVOLUTION_JUDGE_PROVIDER_ID_KEY = "evolution_judge_provider_id"
 EVOLUTION_JUDGE_MODEL_KEY = "evolution_judge_model"
+EVOLUTION_MAX_TRACES_PER_RUN_KEY = "evolution_max_traces_per_run"
 
 DEFAULT_AUTO_EVOLVE_ENABLED = False
 DEFAULT_EVOLUTION_MIN_TRAJECTORIES = 30
@@ -74,6 +75,7 @@ DEFAULT_EVOLUTION_MIN_INTERVAL_HOURS = 24
 DEFAULT_EVOLUTION_MAX_IDLE_DAYS = 7
 DEFAULT_EVOLUTION_MAX_ROUNDS = 3
 DEFAULT_EVOLUTION_MAX_EVAL_CASES = 20
+DEFAULT_EVOLUTION_MAX_TRACES_PER_RUN = 200
 
 DISCOVERY_PRESET_KEY = "discovery_preset"
 DISCOVERY_SOURCE_TABLE_KEY = "discovery_source_table"
@@ -239,6 +241,7 @@ def evolution_config(project_id: str, db=None) -> dict[str, Any]:
         EVOLUTION_MODEL_KEY,
         EVOLUTION_JUDGE_PROVIDER_ID_KEY,
         EVOLUTION_JUDGE_MODEL_KEY,
+        EVOLUTION_MAX_TRACES_PER_RUN_KEY,
     )
     rows = {
         row.key: row.value
@@ -291,6 +294,12 @@ def evolution_config(project_id: str, db=None) -> dict[str, Any]:
             rows.get(EVOLUTION_JUDGE_PROVIDER_ID_KEY)
         ),
         "judge_model": _optional_str_setting(rows.get(EVOLUTION_JUDGE_MODEL_KEY)),
+        "max_traces_per_run": _parse_int_setting(
+            rows.get(EVOLUTION_MAX_TRACES_PER_RUN_KEY),
+            default=DEFAULT_EVOLUTION_MAX_TRACES_PER_RUN,
+            minimum=1,
+            maximum=2000,
+        ),
     }
 
 

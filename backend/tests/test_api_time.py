@@ -84,6 +84,7 @@ def test_rest_time_fields_have_utc_offset(client, monkeypatch):
         KnowledgeGeneration,
         PersonalDtbToken,
         ProjectAudit,
+        ProjectEvolutionConfig,
         ProjectPullInstance,
         Provider,
         PullRecord,
@@ -204,6 +205,17 @@ def test_rest_time_fields_have_utc_offset(client, monkeypatch):
                     created_at=datetime(2026, 1, 1),
                     updated_at=datetime(2026, 1, 1, 1, 0),
                 ),
+                ProjectEvolutionConfig(
+                    project_id="default",
+                    enabled=True,
+                    trace_source_plugin="langfuse",
+                    schedule_cron="0 2 * * *",
+                    timezone="Asia/Shanghai",
+                    last_trace_timestamp=datetime(2026, 1, 1, 1, 0),
+                    last_triggered_at=datetime(2026, 1, 1, 2, 0),
+                    created_at=datetime(2026, 1, 1),
+                    updated_at=datetime(2026, 1, 1),
+                ),
                 EvolutionCheckpoint(
                     project_id="default",
                     checkpoint_trajectory_id=1,
@@ -215,7 +227,18 @@ def test_rest_time_fields_have_utc_offset(client, monkeypatch):
                     id="evo-time-1",
                     project_id="default",
                     trigger_type="manual",
-                    status="accepted",
+                    status="succeeded",
+                    signal_summary=json.dumps(
+                        {
+                            "trace_source_plugin": "langfuse",
+                            "traces_fetched": 2,
+                            "proposals_created": 1,
+                            "duplicates_skipped": 0,
+                            "window_since": "2026-01-01T00:00:00",
+                            "window_until": "2026-01-01T00:02:00",
+                            "summary": "ok",
+                        }
+                    ),
                     started_at=datetime(2026, 1, 1),
                     finished_at=datetime(2026, 1, 1, 0, 2),
                     created_at=datetime(2026, 1, 1),
@@ -344,7 +367,7 @@ def test_rest_time_fields_have_utc_offset(client, monkeypatch):
         json={"notes": "updated"},
     )
     assert eval_patched.status_code == 200, eval_patched.text
-    evo_triggered = c.post("/api/v1/evolution/runs", headers=headers)
+    evo_triggered = c.post("/api/v1/projects/default/evolution/runs", headers=headers)
     assert evo_triggered.status_code == 202, evo_triggered.text
     disc_triggered = c.post("/api/v1/discovery/runs", headers=headers)
     assert disc_triggered.status_code == 202, disc_triggered.text
@@ -383,7 +406,7 @@ def test_rest_time_fields_have_utc_offset(client, monkeypatch):
             "/api/v1/projects/default/audit", headers=headers
         ).json(),
         "evolution_config": c.get(
-            "/api/v1/projects/default/evolution-config", headers=headers
+            "/api/v1/projects/default/evolution/config", headers=headers
         ).json(),
         "discovery_config": c.get(
             "/api/v1/projects/default/discovery-config", headers=headers
@@ -393,9 +416,11 @@ def test_rest_time_fields_have_utc_offset(client, monkeypatch):
             "/api/v1/discovery/runs/disc-time-1", headers=headers
         ).json(),
         "discovery_run_triggered": disc_triggered.json(),
-        "evolution_runs": c.get("/api/v1/evolution/runs", headers=headers).json(),
+        "evolution_runs": c.get(
+            "/api/v1/projects/default/evolution/runs", headers=headers
+        ).json(),
         "evolution_run": c.get(
-            "/api/v1/evolution/runs/evo-time-1", headers=headers
+            "/api/v1/projects/default/evolution/runs/evo-time-1", headers=headers
         ).json(),
         "evolution_run_triggered": evo_triggered.json(),
         "turn_feedback": feedback_resp.json(),
