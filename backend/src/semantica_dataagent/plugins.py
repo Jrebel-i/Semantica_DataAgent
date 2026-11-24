@@ -185,6 +185,8 @@ def configured(project_id=None, project_type=None):
     )
     result = []
     for (category, _), plugin in plugins.items():
+        if category == "trace_source":
+            continue
         if project_id not in (None, project_context.DEFAULT_PROJECT_ID) and (
             category not in {"source", "parser", "executor"}
         ):

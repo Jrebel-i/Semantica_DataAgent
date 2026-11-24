@@ -148,3 +148,35 @@ def test_filter_always_attaches_project_tag_and_metadata_and_scrubs_messages():
     assert "raw tool output" not in encoded
     assert "secret-tok" not in encoded
     assert "hunter2" not in encoded
+
+
+def test_filter_scrubs_metadata_messages_on_non_conversation_events():
+    module = telemetry()
+    event = {
+        "name": "validate_sql",
+        "metadata": {
+            "project_id": "sales",
+            "messages": [
+                {"role": "tool", "content": "secret tool payload"},
+                {"role": "user", "content": {"rows": [["LEAK_ROW"]]}},
+                {"role": "assistant", "content": "ok Bearer secret-tok"},
+            ],
+        },
+    }
+    payload = module._filtered(event, ("secret-tok",), capture_content=True)
+    assert payload["metadata"]["messages"] == [
+        {"role": "assistant", "content": "ok Bearer [REDACTED]"}
+    ]
+    assert "secret tool payload" not in str(payload)
+    assert "LEAK_ROW" not in str(payload)
+
+    # When all metadata.messages are disallowed/empty, metadata["messages"] is dropped completely
+    bad_only = {
+        "name": "validate_sql",
+        "metadata": {
+            "project_id": "sales",
+            "messages": [{"role": "tool", "content": "only-tool"}],
+        },
+    }
+    cleaned = module._filtered(bad_only, capture_content=True)
+    assert "messages" not in cleaned["metadata"]

@@ -400,6 +400,17 @@ def _scrub(value, secrets=()):
 _RAW_TRACE_ROW_KEYS = frozenset(
     {"rows", "row_data", "sample_rows", "preview_rows", "data_rows", "result_rows"}
 )
+_TOOL_INTERNAL_KEYS = frozenset(
+    {
+        "tool_calls",
+        "tool_use",
+        "tool_result",
+        "function_call",
+        "observations",
+        "spans",
+        "arguments",
+    }
+)
 _QUERY_RESULT_PREAMBLE = "查询已执行，请根据以下结果信息给出结论："
 
 
@@ -409,6 +420,16 @@ def scrub_text(value: str, secrets: tuple[str, ...] = ()) -> str:
     return semantic_overrides.scrub_untrusted_text(cleaned)
 
 
+def _contains_raw_row_key(value):
+    if isinstance(value, dict):
+        for k, v in value.items():
+            if str(k).lower() in _RAW_TRACE_ROW_KEYS or _contains_raw_row_key(v):
+                return True
+    elif isinstance(value, list):
+        return any(_contains_raw_row_key(item) for item in value)
+    return False
+
+
 def _strip_trace_query_rows(value, secrets=()):
     """Strip raw query result rows from conversation trace payloads."""
     if isinstance(value, dict):
@@ -416,6 +437,7 @@ def _strip_trace_query_rows(value, secrets=()):
             key: _strip_trace_query_rows(item, secrets)
             for key, item in value.items()
             if str(key).lower() not in _RAW_TRACE_ROW_KEYS
+            and str(key).lower() not in _TOOL_INTERNAL_KEYS
         }
     if isinstance(value, list):
         return [_strip_trace_query_rows(item, secrets) for item in value]
@@ -474,9 +496,35 @@ def _scrub_trace_messages(raw_messages, secrets=()):
         raw_content = item.get("content")
         if isinstance(raw_content, str):
             text = _strip_trace_query_rows(raw_content, secrets)
-        elif isinstance(raw_content, (dict, list)):
-            stripped = _strip_trace_query_rows(raw_content, secrets)
-            text = _scrub(str(stripped), secrets) if stripped else ""
+        elif isinstance(raw_content, dict):
+            if _contains_raw_row_key(raw_content):
+                text = ""
+            else:
+                stripped = _strip_trace_query_rows(raw_content, secrets)
+                text = _scrub(str(stripped), secrets) if stripped else ""
+        elif isinstance(raw_content, list):
+            parts = []
+            for block in raw_content:
+                if isinstance(block, str):
+                    cleaned_block = _strip_trace_query_rows(block, secrets)
+                    if isinstance(cleaned_block, str) and cleaned_block.strip():
+                        parts.append(cleaned_block.strip())
+                elif isinstance(block, dict):
+                    btype = str(block.get("type") or "").lower()
+                    if btype in {
+                        "tool_use",
+                        "tool_result",
+                        "thinking",
+                        "function_call",
+                    }:
+                        continue
+                    if not _contains_raw_row_key(block) and isinstance(
+                        block.get("text"), str
+                    ):
+                        cleaned_block = _strip_trace_query_rows(block["text"], secrets)
+                        if isinstance(cleaned_block, str) and cleaned_block.strip():
+                            parts.append(cleaned_block.strip())
+            text = "\n".join(parts)
         else:
             text = ""
         text = text.strip() if isinstance(text, str) else ""
@@ -571,6 +619,16 @@ def _filtered(value, secrets=(), capture_content=False, _top_level=True):
             if tags:
                 payload["tags"] = tags
             raw_messages = payload.pop("messages", None)
+            meta = payload.get("metadata")
+            if isinstance(meta, dict) and "messages" in meta:
+                meta = dict(meta)
+                meta_messages = meta.pop("messages")
+                if raw_messages is None:
+                    raw_messages = meta_messages
+                if meta:
+                    payload["metadata"] = meta
+                else:
+                    payload.pop("metadata", None)
             if value.get("name") == "online-conversation":
                 if "input" in payload:
                     payload["input"] = _strip_trace_query_rows(

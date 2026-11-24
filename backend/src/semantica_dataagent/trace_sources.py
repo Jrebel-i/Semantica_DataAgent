@@ -86,8 +86,31 @@ def scrub_trace_text(value: str, secrets: tuple[str, ...] = ()) -> str:
     return cleaned.strip()[:12000]
 
 
+def _strip_row_keys_recursive(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {
+            k: _strip_row_keys_recursive(v)
+            for k, v in value.items()
+            if str(k).lower() not in _RAW_ROW_KEYS
+            and str(k).lower() not in _TOOL_INTERNAL_KEYS
+        }
+    if isinstance(value, list):
+        return [_strip_row_keys_recursive(item) for item in value]
+    return value
+
+
+def _contains_raw_row_key(value: Any) -> bool:
+    if isinstance(value, Mapping):
+        for k, v in value.items():
+            if str(k).lower() in _RAW_ROW_KEYS or _contains_raw_row_key(v):
+                return True
+    elif isinstance(value, list):
+        return any(_contains_raw_row_key(item) for item in value)
+    return False
+
+
 def _strip_embedded_query_rows(text: str) -> str:
-    """Strip inline query-execution result row payloads from conversation prompts."""
+    """Strip inline query-execution result row payloads fail-closed."""
     if _QUERY_RESULT_PREAMBLE in text:
         prefix, _, rest = text.partition(_QUERY_RESULT_PREAMBLE)
         stripped_rest = rest.strip()
@@ -96,16 +119,21 @@ def _strip_embedded_query_rows(text: str) -> str:
                 parsed = json.loads(stripped_rest)
             except ValueError:
                 parsed = None
-            if isinstance(parsed, dict) and any(k in parsed for k in _RAW_ROW_KEYS):
-                safe_summary = {
-                    k: v
-                    for k, v in parsed.items()
-                    if k not in _RAW_ROW_KEYS and k not in _TOOL_INTERNAL_KEYS
-                }
-                note = f"{_QUERY_RESULT_PREAMBLE} {json.dumps(safe_summary, ensure_ascii=False)}"
+            if isinstance(parsed, dict):
+                safe_summary = _strip_row_keys_recursive(parsed)
+                note = (
+                    f"{_QUERY_RESULT_PREAMBLE} "
+                    f"{json.dumps(safe_summary, ensure_ascii=False)}"
+                )
                 return (
                     (prefix.strip() + "\n" + note).strip() if prefix.strip() else note
                 )
+        # Fail closed when JSON is truncated, non-dict, or has trailing text.
+        return (
+            (prefix.strip() + "\n" + _QUERY_RESULT_PREAMBLE).strip()
+            if prefix.strip()
+            else "查询结果解读"
+        )
     return text
 
 
@@ -150,13 +178,13 @@ def _extract_content_text(raw: Any, secrets: tuple[str, ...]) -> str:
                     text = scrub_trace_text(str(item.get("text") or ""), secrets)
                     if text:
                         parts.append(text)
-                elif "content" in item and not any(k in item for k in _RAW_ROW_KEYS):
+                elif "content" in item and not _contains_raw_row_key(item):
                     text = _extract_content_text(item.get("content"), secrets)
                     if text:
                         parts.append(text)
         return "\n".join(parts).strip()
     if isinstance(raw, Mapping):
-        if any(k in raw for k in _RAW_ROW_KEYS):
+        if _contains_raw_row_key(raw):
             return ""
         for key in ("content", "text", "question", "prompt", "answer", "message"):
             val = raw.get(key)
@@ -406,7 +434,7 @@ class LangfuseTraceSource:
         ) as client:
             while len(conversations) < limit:
                 req_params: dict[str, Any] = {
-                    "limit": min(page_size, limit - len(conversations)),
+                    "limit": page_size,
                     "tags": f"project:{query.project_id}",
                 }
                 if cursor is not None:

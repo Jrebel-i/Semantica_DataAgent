@@ -1326,6 +1326,8 @@ def update_plugin(
 
     from .plugins import discover
 
+    if category == "trace_source":
+        raise HTTPException(404, "Plugin not found")
     plugin = discover().get((category, plugin_id))
     if plugin is None:
         raise HTTPException(404, "Plugin not found")

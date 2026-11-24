@@ -403,6 +403,174 @@ def test_langfuse_supports_cursor_and_page_pagination_and_time_window():
     assert len(page_calls) == 2
 
 
+def test_langfuse_page_limit_stays_fixed_when_earlier_page_filters_traces():
+    page_calls: list[dict[str, list[str]]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        qs = parse_qs(urlsplit(str(request.url)).query)
+        page_calls.append(qs)
+        page = int(qs.get("page", ["1"])[0])
+        if page == 1:
+            return httpx.Response(
+                200,
+                json={
+                    "data": [
+                        {
+                            "id": "p1-wrong-proj",
+                            "timestamp": "2026-11-24T01:00:00Z",
+                            "tags": ["project:other"],
+                            "metadata": {"project_id": "other"},
+                            "input": "Q0",
+                            "output": "A0",
+                        },
+                        {
+                            "id": "p1-ok",
+                            "timestamp": "2026-11-24T02:00:00Z",
+                            "tags": ["project:default"],
+                            "metadata": {"project_id": "default"},
+                            "input": "Q1",
+                            "output": "A1",
+                        },
+                    ],
+                    "meta": {"page": 1, "totalPages": 2},
+                },
+            )
+        return httpx.Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "id": "p2-ok-1",
+                        "timestamp": "2026-11-24T03:00:00Z",
+                        "tags": ["project:default"],
+                        "metadata": {"project_id": "default"},
+                        "input": "Q2",
+                        "output": "A2",
+                    },
+                    {
+                        "id": "p2-ok-2",
+                        "timestamp": "2026-11-24T04:00:00Z",
+                        "tags": ["project:default"],
+                        "metadata": {"project_id": "default"},
+                        "input": "Q3",
+                        "output": "A3",
+                    },
+                ],
+                "meta": {"page": 2, "totalPages": 2},
+            },
+        )
+
+    source = _make_source(handler)
+    results = source.fetch_traces(
+        TraceQuery(
+            project_id="default",
+            parameters={
+                "base_url": "https://langfuse.example.com",
+                "public_key": "pk",
+                "page_size": 2,
+            },
+            secrets={"secret_key": "sk"},
+            limit=3,
+        )
+    )
+    assert [c.trace_id for c in results] == ["p1-ok", "p2-ok-1", "p2-ok-2"]
+    assert page_calls[0]["limit"] == ["2"]
+    assert page_calls[1]["limit"] == ["2"]
+
+
+def test_langfuse_strips_nested_and_truncated_query_rows_fail_closed():
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "id": "trace-nested-and-truncated",
+                        "timestamp": "2026-11-24T01:00:00Z",
+                        "tags": ["project:default"],
+                        "metadata": {
+                            "project_id": "default",
+                            "messages": [
+                                {
+                                    "role": "user",
+                                    "content": (
+                                        "查询已执行，请根据以下结果信息给出结论：\n"
+                                        + json.dumps(
+                                            {
+                                                "status": "executed",
+                                                "result": {
+                                                    "rows": [["NESTED_ROW_LEAK"]],
+                                                    "summary": "ok",
+                                                },
+                                            },
+                                            ensure_ascii=False,
+                                        )
+                                    ),
+                                },
+                                {
+                                    "role": "user",
+                                    "content": (
+                                        '问题前缀\n查询已执行，请根据以下结果信息给出结论：\n{"rows":[["TRUNCATED_ROW_LEAK"'
+                                    ),
+                                },
+                            ],
+                        },
+                    }
+                ],
+                "meta": {"page": 1, "totalPages": 1},
+            },
+        )
+
+    source = _make_source(handler)
+    results = source.fetch_traces(
+        TraceQuery(
+            project_id="default",
+            parameters={"base_url": "https://langfuse.example.com", "public_key": "pk"},
+            secrets={"secret_key": "sk"},
+        )
+    )
+    assert len(results) == 1
+    rendered = "\n".join(m.content for m in results[0].messages)
+    assert "NESTED_ROW_LEAK" not in rendered
+    assert "TRUNCATED_ROW_LEAK" not in rendered
+    assert "问题前缀" in rendered
+
+
+def test_plugins_api_excludes_trace_source_and_rejects_plaintext_update(
+    tmp_path, monkeypatch
+):
+    from cryptography.fernet import Fernet
+    from fastapi.testclient import TestClient
+
+    from semantica_dataagent.app import app
+    from semantica_dataagent.cli import initialize
+
+    monkeypatch.setenv("DATAAGENT_DB_PATH", str(tmp_path / "app.db"))
+    monkeypatch.setenv("DATAAGENT_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    token = initialize()
+    headers = {"Authorization": f"Bearer {token}"}
+
+    assert not any(cat == "trace_source" for cat, *_ in plugins.configured())
+    with TestClient(app) as client:
+        listed = client.get("/api/v1/plugins", headers=headers)
+        assert listed.status_code == 200
+        assert not any(row["category"] == "trace_source" for row in listed.json())
+
+        put_resp = client.put(
+            "/api/v1/plugins/trace_source/langfuse",
+            headers=headers,
+            json={
+                "enabled": True,
+                "parameters": {
+                    "base_url": "https://langfuse.example.com",
+                    "public_key": "pk",
+                    "secret_key": "sk-plaintext",
+                },
+            },
+        )
+        assert put_resp.status_code == 404
+
+
 def test_langfuse_validates_config_and_propagates_http_errors():
     source = _make_source(
         lambda _req: httpx.Response(401, json={"error": "unauthorized"})
