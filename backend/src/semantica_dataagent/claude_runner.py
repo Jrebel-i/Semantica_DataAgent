@@ -16,10 +16,12 @@ from .agent_plugin import (
     agent_process,
     attachment_path,
     available_in_runtime,
+    build_skill_prompt,
     clarification_event,
     default_sandbox_class,
     error_event,
     has_session_file,
+    inject_skill_secrets,
     is_sandboxed,
     mcp_server_config,
     passthrough_environment,
@@ -106,6 +108,7 @@ class ClaudeEventParser(EventParser):
 class ClaudeRunner:
     agent_id = "claude"
     effort_levels = tuple(EFFORT_BY_LEVEL)
+    supports_skills = True
 
     def __init__(self, binary=None):
         self.binary = binary
@@ -193,22 +196,35 @@ class ClaudeRunner:
         effort = EFFORT_BY_LEVEL.get(request.effort or "")
         if effort:
             command += ["--effort", effort]
-        if content is None:
-            command.append(request.prompt)
-        else:
-            command += ["--input-format", "stream-json"]
         async with turn:
+            stage_root: str | None = None
+            if request.skill is not None and request.skill.source == "upload":
+                stage_root = await turn.stage_ephemeral_files(request.skill.files)
+                command += ["--add-dir", stage_root]
+            effective_prompt = build_skill_prompt(
+                request.prompt, request.skill, stage_root
+            )
+            if content is None:
+                command.append(effective_prompt)
+            else:
+                command += ["--input-format", "stream-json"]
+                content = [{"type": "text", "text": effective_prompt}, *content[1:]]
+            keys = inject_skill_secrets(
+                env,
+                (
+                    "HOME",
+                    "CLAUDE_CONFIG_DIR",
+                    "ANTHROPIC_BASE_URL",
+                    "ANTHROPIC_API_KEY",
+                    TOKEN_ENV,
+                ),
+                request,
+            )
             if sandboxed:
                 command, exec_header = turn.wrap_command(
                     command,
                     env,
-                    (
-                        "HOME",
-                        "CLAUDE_CONFIG_DIR",
-                        "ANTHROPIC_BASE_URL",
-                        "ANTHROPIC_API_KEY",
-                        TOKEN_ENV,
-                    ),
+                    keys,
                 )
             else:
                 exec_header = None

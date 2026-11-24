@@ -1662,6 +1662,11 @@ export interface components {
             id: string;
             /** Name */
             name: string;
+            /**
+             * Supports Skills
+             * @default false
+             */
+            supports_skills: boolean;
         };
         /** Approval */
         Approval: {
@@ -1704,6 +1709,8 @@ export interface components {
             provider_id?: string | null;
             /** Question */
             question: string;
+            /** Skill Name */
+            skill_name?: string | null;
         };
         /** AutoBuildUpdate */
         AutoBuildUpdate: {
@@ -1714,6 +1721,47 @@ export interface components {
         AutoBuildView: {
             /** Enabled */
             enabled: boolean;
+        };
+        /** AvailableSkillView */
+        AvailableSkillView: {
+            /**
+             * Configured Secrets
+             * @default []
+             */
+            configured_secrets: string[];
+            /** Dependencies */
+            dependencies: string[];
+            /** Description */
+            description: string;
+            /** Enabled */
+            enabled: boolean;
+            /**
+             * Missing Secrets
+             * @default []
+             */
+            missing_secrets: string[];
+            /** Name */
+            name: string;
+            /** Project Types */
+            project_types: ("warehouse" | "document")[];
+            /** Projects */
+            projects: string[];
+            /** Protected */
+            protected: boolean;
+            /**
+             * Ready
+             * @default true
+             */
+            ready: boolean;
+            /** Secrets */
+            secrets: string[];
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "builtin" | "upload";
+            /** Trust Warning */
+            trust_warning: string | null;
         };
         /** Body_ask_with_attachments_api_v1_conversations_ask_with_attachments_post */
         Body_ask_with_attachments_api_v1_conversations_ask_with_attachments_post: {
@@ -1733,6 +1781,8 @@ export interface components {
             provider_id?: string | null;
             /** Question */
             question: string;
+            /** Skill Name */
+            skill_name?: string | null;
         };
         /** BuildLog */
         BuildLog: {
@@ -4045,6 +4095,8 @@ export interface components {
             question: string;
             /** Sequence */
             sequence: number;
+            /** Skill Name */
+            skill_name?: string | null;
             /** Sql */
             sql: {
                 [key: string]: unknown;
@@ -7331,7 +7383,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["SkillView"][];
+                    "application/json": components["schemas"]["AvailableSkillView"][];
                 };
             };
             /** @description Validation Error */

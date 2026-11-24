@@ -80,6 +80,7 @@ def list_agents() -> list[dict]:
             "name": agent_id,
             "available": runner.available(),
             "effort_levels": list(getattr(runner, "effort_levels", ())),
+            "supports_skills": bool(getattr(runner, "supports_skills", False)),
         }
         for agent_id, runner in sorted(RUNNERS.items())
     ]

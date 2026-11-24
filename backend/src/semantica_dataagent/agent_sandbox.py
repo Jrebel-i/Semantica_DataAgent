@@ -11,6 +11,8 @@ import uuid
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
+from .agent_types import ephemeral_tar_bytes, validated_ephemeral_files
+
 IMAGE = "semantica-dataagent-agent-runner:1.2.0"
 LABEL = "com.semantica-dataagent.agent=1"
 OWNER = "com.semantica-dataagent.owner"
@@ -232,6 +234,28 @@ class SessionSandbox:
             if key in env:
                 docker.extend(["--env", key])
         return [*docker, self.name, *command], None
+
+    def stage_ephemeral_files(self, files: tuple[tuple[str, bytes], ...]) -> str:
+        payload = ephemeral_tar_bytes(validated_ephemeral_files(files))
+        stage_dir = f"/tmp/sda-skill-{uuid.uuid4().hex}"
+        subprocess.run(
+            [
+                "docker",
+                "exec",
+                "-i",
+                self.name,
+                "sh",
+                "-ec",
+                'mkdir -p "$1" && tar --no-overwrite-dir --no-same-owner -xf - -C "$1"',
+                "--",
+                stage_dir,
+            ],
+            input=payload,
+            capture_output=True,
+            check=True,
+            timeout=150,
+        )
+        return stage_dir
 
     def exec(self, command):
         return self._run(

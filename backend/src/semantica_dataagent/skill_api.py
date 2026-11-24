@@ -59,6 +59,12 @@ class SkillView(SkillMetadata):
     enabled: bool
 
 
+class AvailableSkillView(SkillView):
+    configured_secrets: list[str] = []
+    missing_secrets: list[str] = []
+    ready: bool = True
+
+
 class SkillAuditView(BaseModel):
     actor_id: str
     action: str
@@ -188,7 +194,7 @@ def _persist_skill(data: bytes, metadata: dict, actor: Requester):
     return result
 
 
-@router.get("/api/v1/skills/available", response_model=list[SkillView])
+@router.get("/api/v1/skills/available", response_model=list[AvailableSkillView])
 def available_skills(
     scope: Annotated[ProjectContext, Depends(project_scope)],
     actor: Annotated[Requester, Depends(current_requester)],
@@ -219,12 +225,32 @@ def available_skills(
             )
         )
         items = builtins() + [view(row) for row in rows]
+        stored_by_skill: dict[str, set[str]] = {}
+        for secret_row in db.query(
+            SkillSecret.skill_name, SkillSecret.secret_name
+        ).filter_by(owner_id=actor.id, project_id=scope.project_id):
+            stored_by_skill.setdefault(secret_row.skill_name, set()).add(
+                secret_row.secret_name
+            )
         require_skill_project(db, actor, scope.project_id)
-        return [
-            {**item, "projects": [scope.project_id] if item["projects"] else []}
-            for item in items
-            if project_type in item["project_types"]
-        ]
+        result = []
+        for item in items:
+            if project_type not in item["project_types"]:
+                continue
+            declared = item["secrets"]
+            configured_set = stored_by_skill.get(item["name"], set())
+            configured_secrets = [s for s in declared if s in configured_set]
+            missing_secrets = [s for s in declared if s not in configured_set]
+            result.append(
+                {
+                    **item,
+                    "projects": [scope.project_id] if item["projects"] else [],
+                    "configured_secrets": configured_secrets,
+                    "missing_secrets": missing_secrets,
+                    "ready": not missing_secrets,
+                }
+            )
+        return result
 
 
 def _protect_builtin(name: str) -> None:

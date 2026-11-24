@@ -62,6 +62,7 @@ class AgentView(BaseModel):
     name: str
     available: bool
     effort_levels: list[EffortLevel]
+    supports_skills: bool = False
 
 
 class ProviderView(BaseModel):

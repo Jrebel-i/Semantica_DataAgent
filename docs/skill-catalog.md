@@ -22,7 +22,7 @@ ZIP 压缩前请求体最多 20 MiB，展开后合计最多 20 MiB，最多 1000
 - 系统管理员：`POST /api/v1/skills/preview` 预览验证后的名称、说明、项目类型、项目、依赖、密钥声明及信任提示，不写入；`POST /api/v1/skills` 上传，成功 201，默认停用，同名返回 409。
 - 系统管理员：`GET /api/v1/skills` 列出所有内置和上传的 Skill；`PUT /api/v1/skills/{name}/enabled` 接收 `{"enabled": true}` 或 `false`；`DELETE /api/v1/skills/{name}` 删除上传的 Skill。内置 Skill 永久启用且不可删除，操作返回 409。
 - 系统管理员：`GET /api/v1/skills/audit?limit=100&offset=0` 按最新记录先返回操作者 ID、动作、Skill 名称和 UTC 时间，不含包内容或密钥值。
-- 认证项目成员：`GET /api/v1/skills/available?project=<id>` 只返回该项目可用的已启用 Skill，适用项目成员、项目归档和类型规则。未指定项目按现有项目选择规则处理。
+- 认证项目成员：`GET /api/v1/skills/available?project=<id>` 只返回该项目可用的已启用 Skill，适用项目成员、项目归档和类型规则，并附加当前用户在该项目下的密钥就绪状态（`configured_secrets`、`missing_secrets`、`ready`）。未指定项目按现有项目选择规则处理。
 
 ## 服务端调用契约
 
@@ -38,4 +38,11 @@ ZIP 压缩前请求体最多 20 MiB，展开后合计最多 20 MiB，最多 1000
 
 #323 在每次实际启动前，以个人 Bearer 令牌认证得到的 `Requester` 和实际项目调用 `skill_secrets.skill_run_secrets(requester, project_id, name)`，在 `with` 块中使用返回的 Skill 快照及仅包含声明项的密钥字典；缺钥返回 409，授权失败拒绝运行。此接口在锁外读取和校验包，在短写事务内核对令牌与用户 ID、重新验证权限、比对上传代次并取密钥；不接受 Agent 派生凭据，退出块（包括异常）清空字典；Python 字符串和调用者复制的内容无法保证物理擦除。运行启动时取得的快照适用于该次运行，之后的撤权、停用或删除阻止新运行。
 
-Runner 必须在块内完成运行和清理，不能缓存、复制或序列化密钥到会话、提示词、命令行、持久快照或持久工作目录；必须在事件、工具输入输出、异常、日志、审计和遥测进入任何持久化或对外路径之前遮盖密钥，并在成功、异常、取消和进程终止时清理临时材料。适配器必须验证实际注入方式及其沙箱和网络限制；不能满足这些条件的 Runner 必须拒绝调用，不能宣称支持。本票不接入任何 Runner；该上下文管理器本身不能约束调用者，也不能保证恶意 Skill 或它调用的工具不复制或外传密钥。Skill 内容仍是不可信输入，禁止提升网络、工具、项目或宿主权限。
+Runner 必须在块内完成运行和清理，不能缓存、复制或序列化密钥到会话、提示词、命令行、持久快照或持久工作目录；必须在事件、工具输入输出、异常、日志、审计和遥测进入任何持久化或对外路径之前遮盖密钥，并在成功、异常、取消和进程终止时清理临时材料。适配器必须验证实际注入方式及其沙箱和网络限制；不能满足这些条件的 Runner 必须拒绝调用，不能宣称支持。该上下文管理器本身不能约束调用者，也不能保证恶意 Skill 或它调用的工具不复制或外传密钥。Skill 内容仍是不可信输入，禁止提升网络、工具、项目或宿主权限。
+
+## 对话调用与多 Runner 映射（#323）
+
+- `GET /api/v1/agents` 返回 `supports_skills` 布尔字段，标明 Runner 是否声明支持 Skill 显式调用（`pi`、`claude`、`codex` 均返回 `true`）。
+- `POST /api/v1/conversations/ask` 与 `POST /api/v1/conversations/ask-with-attachments` 接受可选结构化字段 `skill_name`。在创建运行轮次前重新校验 Runner 能力、项目权限与归档状态、Skill 启用与类型/项目匹配，以及当前用户在该项目下的个人密钥；不支持的 Runner 返回 422，缺少个人密钥返回 409，无权或已停用返回 404，均不会创建遗留轮次。
+- 扩展 Skill 文件包仅单轮解包至不会回传持久工作区的临时隔离目录（容器内 `/tmp/sda-skill-*`，本地为 `0o700` 临时目录并在结束时删除），禁止写入 `/workspace` 或 `/sessions`。
+- 扩展 Skill 正文与路径仅在用户消息层按**不可信输入**提示注入，严禁写入系统指令（`--append-system-prompt`、`developer_instructions`）；`PiRunner` 通过 `--skill <stage_root>/<name>` 显式加载，`ClaudeRunner` 通过 `--add-dir <stage_root>` 开放单轮只读目录访问，`CodexRunner` 通过临时路径读取；个人密钥仅通过进程环境变量注入，全部纳入 `request_secrets`、Runner `stderr` 清洗及 Langfuse 遥测脱敏，SQL 确认执行后的结果解读轮不重复注入个人密钥。

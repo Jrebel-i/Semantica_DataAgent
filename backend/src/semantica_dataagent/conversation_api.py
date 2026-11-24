@@ -1,6 +1,7 @@
 """Conversation REST + SSE endpoints for the online agent."""
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
@@ -49,6 +50,8 @@ from .failure_diagnostics import failure_details, failure_label
 from .project_api import accessible_projects, resolve_project_scope
 from .provider_api import EFFORT_LEVELS, EffortLevel, provider_config
 from .query_api import query_requester
+from .skill_catalog import NAME as SKILL_NAME_RE
+from .skill_secrets import skill_run_secrets
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -62,6 +65,21 @@ class AskRequest(BaseModel):
     effort: EffortLevel | None = None
     conversation_id: str | None = None
     project: str | None = None
+    skill_name: str | None = None
+
+    @field_validator("skill_name", mode="before")
+    @classmethod
+    def validate_skill_name(cls, value):
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            return value
+        cleaned = value.strip()
+        if not cleaned:
+            return None
+        if SKILL_NAME_RE.fullmatch(cleaned) is None:
+            raise ValueError("Skill 名称格式不合法")
+        return cleaned
 
 
 class EventView(BaseModel):
@@ -77,6 +95,7 @@ class TurnView(BaseModel):
     model: str | None
     effort: str | None
     question: str
+    skill_name: str | None = None
     status: str
     answer: str
     sql: list[dict]
@@ -295,6 +314,7 @@ def _turn(
         model=row.model or model,
         effort=row.effort,
         question=row.question,
+        skill_name=row.skill_name,
         status=row.status,
         answer=row.answer,
         sql=sql_blocks,
@@ -719,130 +739,163 @@ async def _start_turn(
             if body.agent is not None and body.agent != existing.agent:
                 raise HTTPException(409, "Start a new conversation to change agent")
             bound_project = existing.project_id
+            expected_agent_id = existing.agent
         if body.project is not None and body.project != bound_project:
             raise HTTPException(409, "对话已绑定其它项目，请新建对话")
-        project_id = resolve_project_scope(bound_project, requester).project_id
+        scope = resolve_project_scope(bound_project, requester)
     else:
-        project_id = resolve_project_scope(body.project, requester).project_id
-    with sessions().begin() as db:
-        db.execute(text("BEGIN IMMEDIATE"))
-        if body.conversation_id:
-            conversation = db.get(Conversation, body.conversation_id)
-            if conversation is None or conversation.owner_id != requester.id:
-                raise HTTPException(404, "Conversation not found")
-            if not conversation.resumable:
-                raise HTTPException(
-                    409, "Conversation session expired and cannot be resumed"
+        expected_agent_id = body.agent or "pi"
+        scope = resolve_project_scope(body.project, requester)
+    project_id = scope.project_id
+    project_type = getattr(scope, "project_type", "warehouse") or "warehouse"
+
+    expected_runner = get_runner(expected_agent_id)
+    if expected_runner is None:
+        raise HTTPException(422, "Unknown agent")
+    if body.skill_name is not None and not bool(
+        getattr(expected_runner, "supports_skills", False)
+    ):
+        raise HTTPException(422, "当前 Agent Runner 不支持调用 Skill")
+
+    secret_stack = contextlib.ExitStack()
+    skill_snapshot = None
+    skill_secrets: dict[str, str] = {}
+    try:
+        if body.skill_name is not None:
+            skill_snapshot, skill_secrets = secret_stack.enter_context(
+                skill_run_secrets(requester, project_id, body.skill_name)
+            )
+        with sessions().begin() as db:
+            db.execute(text("BEGIN IMMEDIATE"))
+            if body.conversation_id:
+                conversation = db.get(Conversation, body.conversation_id)
+                if conversation is None or conversation.owner_id != requester.id:
+                    raise HTTPException(404, "Conversation not found")
+                if not conversation.resumable:
+                    raise HTTPException(
+                        409, "Conversation session expired and cannot be resumed"
+                    )
+                if conversation.project_id != project_id:
+                    raise HTTPException(409, "对话已绑定其它项目，请新建对话")
+                if body.agent is not None and body.agent != conversation.agent:
+                    raise HTTPException(409, "Start a new conversation to change agent")
+                agent_id = conversation.agent
+                provider_id = body.provider_id or conversation.provider_id
+                model = body.model or conversation.model
+                sequence = (
+                    db.query(func.max(Turn.sequence))
+                    .filter(Turn.conversation_id == conversation.id)
+                    .scalar()
+                    or 0
+                ) + 1
+            else:
+                if not body.provider_id or not body.model:
+                    raise HTTPException(422, "provider_id and model are required")
+                agent_id = body.agent or "pi"
+                provider_id = body.provider_id
+                model = body.model
+                conversation = Conversation(
+                    id=uuid.uuid4().hex,
+                    owner_id=requester.id,
+                    project_id=project_id,
+                    title=body.question.strip()[:100],
+                    agent=agent_id,
+                    provider_id=provider_id,
+                    model=model,
+                    created_at=now,
+                    updated_at=now,
                 )
-            if conversation.project_id != project_id:
-                raise HTTPException(409, "对话已绑定其它项目，请新建对话")
-            if body.agent is not None and body.agent != conversation.agent:
-                raise HTTPException(409, "Start a new conversation to change agent")
-            agent_id = conversation.agent
-            provider_id = body.provider_id or conversation.provider_id
-            model = body.model or conversation.model
-            sequence = (
-                db.query(func.max(Turn.sequence))
-                .filter(Turn.conversation_id == conversation.id)
-                .scalar()
-                or 0
-            ) + 1
-        else:
-            if not body.provider_id or not body.model:
-                raise HTTPException(422, "provider_id and model are required")
-            agent_id = body.agent or "pi"
-            provider_id = body.provider_id
-            model = body.model
-            conversation = Conversation(
-                id=uuid.uuid4().hex,
-                owner_id=requester.id,
-                project_id=project_id,
-                title=body.question.strip()[:100],
-                agent=agent_id,
+                db.add(conversation)
+                db.flush()
+                sequence = 1
+            provider = _validate_agent_provider(db, agent_id, provider_id, model)
+            runner = get_runner(agent_id)
+            if runner is None:
+                raise HTTPException(422, "Unknown agent")
+            if body.skill_name is not None and not bool(
+                getattr(runner, "supports_skills", False)
+            ):
+                raise HTTPException(422, "当前 Agent Runner 不支持调用 Skill")
+            _validate_effort(provider, model, runner, body.effort)
+            _reject_images_for_text_model(provider, model, staged)
+            if not runner.available():
+                raise HTTPException(503, "Agent runtime is not installed")
+            conversation.agent = agent_id
+            conversation.provider_id = provider_id
+            conversation.model = model
+            conversation.updated_at = now
+            turn = Turn(
+                conversation_id=conversation.id,
                 provider_id=provider_id,
                 model=model,
-                created_at=now,
-                updated_at=now,
+                effort=body.effort,
+                sequence=sequence,
+                question=body.question.strip(),
+                skill_name=skill_snapshot.name if skill_snapshot is not None else None,
+                status="running",
+                answer="",
+                sql="[]",
+                citations="[]",
+                started_at=now,
             )
-            db.add(conversation)
+            db.add(turn)
             db.flush()
-            sequence = 1
-        provider = _validate_agent_provider(db, agent_id, provider_id, model)
-        runner = get_runner(agent_id)
-        if runner is None:
-            raise HTTPException(422, "Unknown agent")
-        _validate_effort(provider, model, runner, body.effort)
-        _reject_images_for_text_model(provider, model, staged)
-        if not runner.available():
-            raise HTTPException(503, "Agent runtime is not installed")
-        conversation.agent = agent_id
-        conversation.provider_id = provider_id
-        conversation.model = model
-        conversation.updated_at = now
-        turn = Turn(
-            conversation_id=conversation.id,
-            provider_id=provider_id,
-            model=model,
-            effort=body.effort,
-            sequence=sequence,
-            question=body.question.strip(),
-            status="running",
-            answer="",
-            sql="[]",
-            citations="[]",
-            started_at=now,
-        )
-        db.add(turn)
-        db.flush()
-        turn_id = turn.id
-        conversation_id = conversation.id
-        provider_settings = provider_config(provider)
+            turn_id = turn.id
+            conversation_id = conversation.id
+            provider_settings = provider_config(provider)
 
-    workspace = agent_root() / conversation_id
-    prompt = body.question.strip()
-    if staged:
-        try:
-            attachments = store_uploads(agent_root(), conversation_id, staged)
-        except (AttachmentLimitError, AttachmentStorageError, OSError):
-            message = "附件保存失败，请重试"
-            _finish_turn(
-                turn_id, "failed", AgentEvent(ERROR, {"message": message}), message
-            )
-            raise HTTPException(500, message) from None
-        prompt = build_attachment_prompt(prompt, attachments)
-    else:
-        attachments = []
-    run_request = AgentTurnRequest(
-        conversation_id=conversation_id,
-        prompt=prompt,
-        session_id=conversation_id,
-        workspace=workspace,
-        provider=provider_settings,
-        model=model,
-        mcp_url=public_base_url() + "/mcp/",
-        mcp_token=issue_agent_credential(
-            requester.id, conversation_id, turn_id, project_id=project_id
-        ),
-        turn_id=turn_id,
-        effort=body.effort,
-        attachments=tuple(attachments),
-    )
-    return StreamingResponse(
-        _stream(
-            run_request,
-            runner,
-            turn_id,
-            conversation_id,
-            request,
-            project_id=project_id,
-        ),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
-    )
+        workspace = agent_root() / conversation_id
+        prompt = body.question.strip()
+        if staged:
+            try:
+                attachments = store_uploads(agent_root(), conversation_id, staged)
+            except (AttachmentLimitError, AttachmentStorageError, OSError):
+                message = "附件保存失败，请重试"
+                _finish_turn(
+                    turn_id, "failed", AgentEvent(ERROR, {"message": message}), message
+                )
+                raise HTTPException(500, message) from None
+            prompt = build_attachment_prompt(prompt, attachments)
+        else:
+            attachments = []
+        run_request = AgentTurnRequest(
+            conversation_id=conversation_id,
+            prompt=prompt,
+            session_id=conversation_id,
+            workspace=workspace,
+            provider=provider_settings,
+            model=model,
+            mcp_url=public_base_url() + "/mcp/",
+            mcp_token=issue_agent_credential(
+                requester.id, conversation_id, turn_id, project_id=project_id
+            ),
+            turn_id=turn_id,
+            effort=body.effort,
+            project_type=project_type,
+            attachments=tuple(attachments),
+            skill=skill_snapshot,
+            skill_secrets=skill_secrets,
+        )
+        return StreamingResponse(
+            _stream(
+                run_request,
+                runner,
+                turn_id,
+                conversation_id,
+                request,
+                project_id=project_id,
+                cleanup_stack=secret_stack,
+            ),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
+    except BaseException:
+        secret_stack.close()
+        raise
 
 
 @router.post("/api/v1/conversations/ask")
@@ -866,6 +919,7 @@ async def ask_with_attachments(
     effort: Annotated[str | None, Form()] = None,
     conversation_id: Annotated[str | None, Form()] = None,
     project: Annotated[str | None, Form()] = None,
+    skill_name: Annotated[str | None, Form()] = None,
 ):
     try:
         body = AskRequest(
@@ -876,6 +930,7 @@ async def ask_with_attachments(
             effort=effort,
             conversation_id=conversation_id,
             project=project,
+            skill_name=skill_name,
         )
     except ValueError:
         raise HTTPException(422, "请求参数不合法") from None
@@ -926,6 +981,10 @@ async def confirm_query(
         model = turn.model or conversation.model
         effort = turn.effort
         conversation_project_id = conversation.project_id
+        project_row = db.get(Project, conversation_project_id)
+        conversation_project_type = (
+            project_row.type if project_row is not None else "warehouse"
+        )
         seq = (
             db.query(func.max(TurnEvent.seq)).filter_by(turn_id=turn_id).scalar() or 0
         ) + 1
@@ -975,6 +1034,7 @@ async def confirm_query(
         ),
         turn_id=turn_id,
         effort=effort,
+        project_type=conversation_project_type,
     )
 
     async def resumed():
@@ -1006,6 +1066,7 @@ async def _stream(
     start_seq: int = 0,
     include_conversation: bool = True,
     project_id: str | None = None,
+    cleanup_stack: contextlib.ExitStack | None = None,
 ) -> AsyncIterator[str]:
     if include_conversation:
         yield _sse(
@@ -1020,25 +1081,32 @@ async def _stream(
             conv = db.get(Conversation, conversation_id)
             project_id = conv.project_id if conv is not None else DEFAULT_PROJECT_ID
     observation_id = trace_id(conversation_id, turn_id)
-    secrets = (run_request.mcp_token, run_request.provider.api_key or "")
+    secrets = (
+        run_request.mcp_token,
+        run_request.provider.api_key or "",
+        *(v for v in (run_request.skill_secrets or {}).values() if v),
+    )
     trace_messages = (
         [{"role": "user", "content": run_request.prompt}]
         if include_conversation
         else []
     )
+    trace_metadata = {
+        "agent": runner.agent_id,
+        "provider": run_request.provider.name,
+        "model": run_request.model,
+        "source": "online",
+        "project_id": project_id,
+        "traceId": observation_id,
+    }
+    if run_request.skill is not None:
+        trace_metadata["skill_name"] = run_request.skill.name
     trace = {
         "id": observation_id,
         "name": "online-conversation",
         "input": run_request.prompt if include_conversation else "查询结果解读",
         "messages": trace_messages,
-        "metadata": {
-            "agent": runner.agent_id,
-            "provider": run_request.provider.name,
-            "model": run_request.model,
-            "source": "online",
-            "project_id": project_id,
-            "traceId": observation_id,
-        },
+        "metadata": trace_metadata,
     }
     submit("trace-create", trace, secrets)
     seq = start_seq
@@ -1144,5 +1212,7 @@ async def _stream(
             },
         )
     finally:
+        if cleanup_stack is not None:
+            cleanup_stack.close()
         if not terminal:
             _finish_turn(turn_id, "failed", None, "Client disconnected")

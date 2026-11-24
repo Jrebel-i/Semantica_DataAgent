@@ -1,9 +1,11 @@
 """Shared online agent protocol and event types."""
 
-from collections.abc import AsyncIterator
+import io
+import tarfile
+from collections.abc import AsyncIterator, Iterable
 from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Protocol
+from pathlib import Path, PurePosixPath
+from typing import Any, Protocol
 
 TEXT_DELTA = "text_delta"
 TOOL_START = "tool_start"
@@ -73,12 +75,74 @@ class AgentTurnRequest:
     effort: str | None = None
     project_type: str = "warehouse"
     attachments: tuple[AttachmentInput, ...] = ()
+    skill: Any | None = None
+    skill_secrets: dict[str, str] = field(default_factory=dict)
 
 
 class AgentRunner(Protocol):
     agent_id: str
     effort_levels: tuple[str, ...]
+    supports_skills: bool
 
     def available(self) -> bool: ...
 
     def run(self, request: AgentTurnRequest) -> AsyncIterator[AgentEvent]: ...
+
+
+def validated_ephemeral_files(
+    files: Iterable[tuple[str, bytes]],
+) -> tuple[tuple[PurePosixPath, bytes], ...]:
+    """Validate and sort (relpath, bytes) pairs before ephemeral staging."""
+    entries: list[tuple[PurePosixPath, bytes]] = []
+    seen: set[str] = set()
+    dir_prefixes: set[str] = set()
+    for raw_path, content in files:
+        if (
+            not isinstance(raw_path, str)
+            or not raw_path
+            or "\\" in raw_path
+            or any(ord(c) < 32 or 127 <= ord(c) <= 159 or c == ":" for c in raw_path)
+        ):
+            raise ValueError("Invalid ephemeral file path")
+        rel = PurePosixPath(raw_path)
+        if (
+            rel.is_absolute()
+            or not rel.parts
+            or any(
+                part in {"", ".", ".."} or part.startswith(".") for part in rel.parts
+            )
+        ):
+            raise ValueError("Invalid ephemeral file path")
+        folded = rel.as_posix().casefold()
+        if folded in seen:
+            raise ValueError("Duplicate ephemeral file path")
+        seen.add(folded)
+        for index in range(1, len(rel.parts)):
+            dir_prefixes.add("/".join(rel.parts[:index]).casefold())
+        entries.append((rel, bytes(content)))
+    if seen & dir_prefixes:
+        raise ValueError("Ephemeral file conflicts with directory")
+    return tuple(sorted(entries, key=lambda item: item[0].as_posix()))
+
+
+def ephemeral_tar_bytes(entries: tuple[tuple[PurePosixPath, bytes], ...]) -> bytes:
+    """Build a deterministic regular-file-only POSIX tar archive in memory."""
+    buf = io.BytesIO()
+    dirs_emitted: set[str] = set()
+    with tarfile.open(fileobj=buf, mode="w", format=tarfile.USTAR_FORMAT) as archive:
+        for rel, content in entries:
+            for index in range(1, len(rel.parts)):
+                parent = "/".join(rel.parts[:index])
+                if parent in dirs_emitted:
+                    continue
+                dirs_emitted.add(parent)
+                dir_info = tarfile.TarInfo(name=parent)
+                dir_info.type = tarfile.DIRTYPE
+                dir_info.mode = 0o755
+                archive.addfile(dir_info)
+            info = tarfile.TarInfo(name=rel.as_posix())
+            info.type = tarfile.REGTYPE
+            info.mode = 0o444
+            info.size = len(content)
+            archive.addfile(info, io.BytesIO(content))
+    return buf.getvalue()

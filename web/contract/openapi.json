@@ -28,6 +28,11 @@
           "name": {
             "title": "Name",
             "type": "string"
+          },
+          "supports_skills": {
+            "default": false,
+            "title": "Supports Skills",
+            "type": "boolean"
           }
         },
         "required": [
@@ -256,6 +261,17 @@
             "pattern": "\\S",
             "title": "Question",
             "type": "string"
+          },
+          "skill_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Skill Name"
           }
         },
         "required": [
@@ -289,6 +305,112 @@
           "enabled"
         ],
         "title": "AutoBuildView",
+        "type": "object"
+      },
+      "AvailableSkillView": {
+        "properties": {
+          "configured_secrets": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Configured Secrets",
+            "type": "array"
+          },
+          "dependencies": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Dependencies",
+            "type": "array"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "missing_secrets": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Missing Secrets",
+            "type": "array"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "project_types": {
+            "items": {
+              "enum": [
+                "warehouse",
+                "document"
+              ],
+              "type": "string"
+            },
+            "title": "Project Types",
+            "type": "array"
+          },
+          "projects": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Projects",
+            "type": "array"
+          },
+          "protected": {
+            "title": "Protected",
+            "type": "boolean"
+          },
+          "ready": {
+            "default": true,
+            "title": "Ready",
+            "type": "boolean"
+          },
+          "secrets": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Secrets",
+            "type": "array"
+          },
+          "source": {
+            "enum": [
+              "builtin",
+              "upload"
+            ],
+            "title": "Source",
+            "type": "string"
+          },
+          "trust_warning": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trust Warning"
+          }
+        },
+        "required": [
+          "name",
+          "description",
+          "project_types",
+          "projects",
+          "secrets",
+          "dependencies",
+          "trust_warning",
+          "source",
+          "protected",
+          "enabled"
+        ],
+        "title": "AvailableSkillView",
         "type": "object"
       },
       "Body_ask_with_attachments_api_v1_conversations_ask_with_attachments_post": {
@@ -380,6 +502,17 @@
             "pattern": "\\S",
             "title": "Question",
             "type": "string"
+          },
+          "skill_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Skill Name"
           }
         },
         "required": [
@@ -6915,6 +7048,17 @@
             "title": "Sequence",
             "type": "integer"
           },
+          "skill_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Skill Name"
+          },
           "sql": {
             "items": {
               "additionalProperties": true,
@@ -12319,7 +12463,7 @@
               "application/json": {
                 "schema": {
                   "items": {
-                    "$ref": "#/components/schemas/SkillView"
+                    "$ref": "#/components/schemas/AvailableSkillView"
                   },
                   "title": "Response Available Skills Api V1 Skills Available Get",
                   "type": "array"

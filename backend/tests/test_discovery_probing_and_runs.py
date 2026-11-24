@@ -239,7 +239,7 @@ def test_alembic_0041_single_head_upgrade_downgrade_and_partial_unique_index(
 
     cfg = _alembic_config(db_path)
     heads = ScriptDirectory.from_config(cfg).get_heads()
-    assert heads == ["0047"]
+    assert heads == ["0048"]
 
     command.upgrade(cfg, "0040")
     command.upgrade(cfg, "0041")

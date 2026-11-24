@@ -260,6 +260,7 @@ class Turn(Base):
     effort: Mapped[str | None]
     sequence: Mapped[int]
     question: Mapped[str]
+    skill_name: Mapped[str | None] = mapped_column(default=None)
     status: Mapped[str]
     answer: Mapped[str]
     sql: Mapped[str]

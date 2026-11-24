@@ -246,7 +246,7 @@ def test_upgrade_preserves_historical_gaps_as_pending(tmp_path, monkeypatch):
             for table in tables
         }
     assert cli.main(["migrate"]) == 0
-    assert ScriptDirectory.from_config(config).get_heads() == ["0047"]
+    assert ScriptDirectory.from_config(config).get_heads() == ["0048"]
     backups = list(tmp_path.glob("old.sqlite.bak-*"))
     assert len(backups) == 1
     with sqlite3.connect(backups[0]) as backup:
