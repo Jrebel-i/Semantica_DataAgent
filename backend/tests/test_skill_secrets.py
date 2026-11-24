@@ -43,6 +43,7 @@ def test_personal_secret_is_write_only_and_can_be_replaced_and_deleted(client):
 def test_runtime_requires_personal_secrets_and_clears_scope(client):
     import pytest
     from fastapi import HTTPException
+
     from semantica_dataagent.auth import Requester
     from semantica_dataagent.db import Token, digest, sessions
     from semantica_dataagent.skill_secrets import skill_run_secrets
@@ -99,6 +100,7 @@ def test_runtime_requires_personal_secrets_and_clears_scope(client):
 def test_secrets_are_isolated_by_user_and_project(client):
     import pytest
     from fastapi import HTTPException
+
     from semantica_dataagent.auth import Requester
     from semantica_dataagent.skill_secrets import skill_run_secrets
 
@@ -302,6 +304,7 @@ TestClient(app).delete("/api/v1/skills/sample", headers={"Authorization": "Beare
 def test_revocation_blocks_new_runtime_and_context_clears_on_error(client):
     import pytest
     from fastapi import HTTPException
+
     from semantica_dataagent.auth import Requester
     from semantica_dataagent.skill_secrets import skill_run_secrets
 
@@ -591,8 +594,9 @@ def test_prepared_skill_rechecks_changes_before_secret_access(
     import threading
     from concurrent.futures import ThreadPoolExecutor
 
-    import semantica_dataagent.skill_catalog as catalog
     from fastapi import HTTPException
+
+    import semantica_dataagent.skill_catalog as catalog
     from semantica_dataagent.auth import Requester
     from semantica_dataagent.skill_secrets import skill_run_secrets
 

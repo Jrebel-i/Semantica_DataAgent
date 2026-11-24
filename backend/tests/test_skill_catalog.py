@@ -459,6 +459,7 @@ def test_deep_archive_path_is_rejected(client):
 @pytest.mark.parametrize("operation", ["validate_package", "_persist_skill"])
 def test_slow_upload_does_not_block_other_requests(client, monkeypatch, operation):
     import httpx
+
     from semantica_dataagent import skill_api
 
     c, token = client
@@ -715,6 +716,7 @@ def test_preview_and_audit_do_not_publish_the_package(client):
 
 def test_runtime_lookup_rechecks_skill_and_project_authority(client):
     from fastapi import HTTPException
+
     from semantica_dataagent.auth import Requester
     from semantica_dataagent.db import Token, digest, sessions
     from semantica_dataagent.skill_catalog import resolve_skill
@@ -754,6 +756,7 @@ def test_runtime_lookup_rechecks_skill_and_project_authority(client):
 
 def test_runtime_lookup_fails_closed_for_corrupt_stored_archive(client):
     from fastapi import HTTPException
+
     from semantica_dataagent.auth import Requester
     from semantica_dataagent.db import CatalogSkill, Token, digest, sessions
     from semantica_dataagent.skill_catalog import resolve_skill
@@ -780,6 +783,7 @@ def test_runtime_lookup_fails_closed_for_corrupt_stored_archive(client):
 
 def test_runtime_does_not_reveal_corrupt_skill_to_other_project(client):
     from fastapi import HTTPException
+
     from semantica_dataagent.auth import Requester
     from semantica_dataagent.db import CatalogSkill, Token, digest, sessions
     from semantica_dataagent.skill_catalog import resolve_skill
@@ -812,10 +816,11 @@ def test_runtime_does_not_reveal_corrupt_skill_to_other_project(client):
 
 def test_runtime_rejects_same_name_replacement_that_is_disabled(client):
     from fastapi import HTTPException
+    from sqlalchemy import event
+
     from semantica_dataagent.auth import Requester
     from semantica_dataagent.db import Token, digest, sessions
     from semantica_dataagent.skill_catalog import resolve_skill
-    from sqlalchemy import event
 
     c, token = client
     headers = {"Authorization": f"Bearer {token}"}
@@ -883,10 +888,11 @@ def test_runtime_rejects_same_name_replacement_that_is_disabled(client):
 @pytest.mark.parametrize("change, expected", [("revoke", 404), ("archive", 409)])
 def test_runtime_rechecks_project_access_at_snapshot(client, change, expected):
     from fastapi import HTTPException
+    from sqlalchemy import event
+
     from semantica_dataagent.auth import Requester
     from semantica_dataagent.db import sessions
     from semantica_dataagent.skill_catalog import resolve_skill
-    from sqlalchemy import event
 
     c, token = client
     headers = {"Authorization": f"Bearer {token}"}
@@ -959,8 +965,9 @@ def test_runtime_rechecks_project_access_at_snapshot(client, change, expected):
 
 
 def test_available_list_rechecks_revoked_membership_at_query(client):
-    from semantica_dataagent.db import sessions
     from sqlalchemy import event
+
+    from semantica_dataagent.db import sessions
 
     c, token = client
     headers = {"Authorization": f"Bearer {token}"}
@@ -1024,6 +1031,7 @@ def test_available_list_rechecks_revoked_membership_at_query(client):
 
 def test_runtime_lookup_reflects_revocation_and_project_membership(client):
     from fastapi import HTTPException
+
     from semantica_dataagent.auth import Requester
     from semantica_dataagent.db import sessions
     from semantica_dataagent.skill_catalog import resolve_skill
@@ -1119,10 +1127,11 @@ def test_builtin_snapshot_uses_authority_at_lookup(client, monkeypatch, change):
 
 def test_explicit_sqlite_read_transaction_keeps_its_prior_snapshot(client):
     from fastapi import HTTPException
+    from sqlalchemy import text
+
     from semantica_dataagent.auth import Requester
     from semantica_dataagent.db import sessions
     from semantica_dataagent.skill_catalog import resolve_skill
-    from sqlalchemy import text
 
     c, admin = client
     headers = {"Authorization": f"Bearer {admin}"}
@@ -1153,10 +1162,11 @@ def test_explicit_sqlite_read_transaction_keeps_its_prior_snapshot(client):
 
 
 def test_builtin_lookup_accepts_current_immediate_transaction(client):
+    from sqlalchemy import text
+
     from semantica_dataagent.auth import Requester
     from semantica_dataagent.db import Token, digest, sessions
     from semantica_dataagent.skill_catalog import resolve_skill
-    from sqlalchemy import text
 
     _, token = client
     with sessions()() as db:
@@ -1270,3 +1280,67 @@ else:
         event["action"]
         for event in c.get("/api/v1/skills/audit", headers=headers).json()
     ] == ["upload"]
+
+
+@pytest.mark.parametrize(
+    "secret_name",
+    [
+        "PATH",
+        "HOME",
+        "HTTP_PROXY",
+        "DATAAGENT_TOKEN",
+        "ANTHROPIC_BASE_URL",
+        "OPENAI_API_KEY",
+        "CLAUDE_CONFIG_DIR",
+        "CODEX_HOME",
+        "PI_CODING_AGENT_DIR",
+        "KUBERNETES_SERVICE_HOST",
+        "LD_PRELOAD",
+        "NODE_OPTIONS",
+        "PYTHONPATH",
+        "SSL_CERT_FILE",
+    ],
+)
+def test_upload_and_preview_reject_reserved_secret_names(client, secret_name):
+    c, token = client
+    headers = {"Authorization": f"Bearer {token}"}
+    package = archive(
+        {
+            "sample/SKILL.md": (
+                "---\n"
+                "name: sample\n"
+                "description: Sample\n"
+                f"secrets: [{secret_name}]\n"
+                "---\nBody\n"
+            )
+        }
+    )
+    assert (
+        c.post("/api/v1/skills/preview", headers=headers, content=package).status_code
+        == 422
+    )
+    assert c.post("/api/v1/skills", headers=headers, content=package).status_code == 422
+
+
+def test_upload_allows_ordinary_secret_names(client):
+    c, token = client
+    headers = {"Authorization": f"Bearer {token}"}
+    package = archive(
+        {
+            "sample/SKILL.md": (
+                "---\n"
+                "name: sample\n"
+                "description: Sample\n"
+                "secrets: [API_KEY, JIRA_API_TOKEN, FEISHU_APP_SECRET]\n"
+                "---\nBody\n"
+            )
+        }
+    )
+    preview = c.post("/api/v1/skills/preview", headers=headers, content=package)
+    assert preview.status_code == 200
+    assert preview.json()["secrets"] == [
+        "API_KEY",
+        "JIRA_API_TOKEN",
+        "FEISHU_APP_SECRET",
+    ]
+    assert c.post("/api/v1/skills", headers=headers, content=package).status_code == 201

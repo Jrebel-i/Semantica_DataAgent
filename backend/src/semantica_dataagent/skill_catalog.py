@@ -24,9 +24,74 @@ from .source_directory import relative, unpack_archive
 
 NAME = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*\Z")
 SECRET = re.compile(r"[A-Z][A-Z0-9_]{0,63}\Z")
+RESERVED_SECRET_NAMES = frozenset(
+    {
+        "PATH",
+        "HOME",
+        "USER",
+        "LOGNAME",
+        "SHELL",
+        "TMPDIR",
+        "TEMP",
+        "TMP",
+        "PWD",
+        "OLDPWD",
+        "IFS",
+        "ENV",
+        "BASH_ENV",
+        "CDPATH",
+        "LANG",
+        "LANGUAGE",
+        "TZ",
+        "TERM",
+        "SYSTEMROOT",
+        "COMSPEC",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "NO_PROXY",
+        "FTP_PROXY",
+        "REQUESTS_CA_BUNDLE",
+        "CURL_CA_BUNDLE",
+        "NODE_EXTRA_CA_CERTS",
+        "SSL_CERT_FILE",
+        "SSL_CERT_DIR",
+        "GIT_SSH_COMMAND",
+        "GIT_EXEC_PATH",
+        "GIT_ASKPASS",
+        "SSH_ASKPASS",
+        "EDITOR",
+        "VISUAL",
+        "PAGER",
+    }
+)
+RESERVED_SECRET_PREFIXES = (
+    "DATAAGENT_",
+    "ANTHROPIC_",
+    "OPENAI_",
+    "CLAUDE_",
+    "CODEX_",
+    "PI_",
+    "KUBERNETES_",
+    "LD_",
+    "DYLD_",
+    "NODE_",
+    "PYTHON",
+    "LC_",
+    "BASH_FUNC_",
+    "SSL_",
+    "TLS_",
+    "CURL_",
+    "GIT_",
+)
 MAX_PACKAGE_BYTES = 20 * 1024 * 1024
 MAX_SKILL_BYTES = 64 * 1024
 TRUST_WARNING = "上传的 Skill 及其调用的工具可能接触调用时提供的密钥，请仅启用和使用可信任的 Skill。"
+
+
+def is_reserved_secret_name(name: str) -> bool:
+    """Return True if a secret declaration could shadow system or runner env vars."""
+    return name in RESERVED_SECRET_NAMES or name.startswith(RESERVED_SECRET_PREFIXES)
 
 
 class _UniqueLoader(yaml.SafeLoader):
@@ -275,7 +340,8 @@ def validate_package(raw: bytes) -> dict:
     ):
         raise ValueError("Invalid projects")
     if not isinstance(secrets, list) or any(
-        not isinstance(s, str) or not SECRET.fullmatch(s) for s in secrets
+        not isinstance(s, str) or not SECRET.fullmatch(s) or is_reserved_secret_name(s)
+        for s in secrets
     ):
         raise ValueError("Invalid secrets")
     if not isinstance(dependencies, list) or any(
