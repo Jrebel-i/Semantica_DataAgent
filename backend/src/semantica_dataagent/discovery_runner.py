@@ -1365,7 +1365,9 @@ async def _execute_discovery_run_async(
                         decision="deduplicated",
                         reason=cand.duplicate_reason or "already_exists_or_pending",
                     )
-                    covered_fk_pairs.update(matched_fk_pairs)
+                    covered_fk_pairs.update(
+                        p for p in matched_fk_pairs if p in dedup["relationships"]
+                    )
                     continue
 
                 if not cand.gate_report.get("passed", False):
@@ -1409,7 +1411,9 @@ async def _execute_discovery_run_async(
                     msg = str(exc)
                     if "does not change" in msg:
                         duplicates_skipped += 1
-                        covered_fk_pairs.update(matched_fk_pairs)
+                        covered_fk_pairs.update(
+                            p for p in matched_fk_pairs if p in dedup["relationships"]
+                        )
                         _record_candidate(
                             run_id=run_id,
                             project_id=project_id,

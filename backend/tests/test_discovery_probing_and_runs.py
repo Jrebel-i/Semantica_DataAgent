@@ -2095,3 +2095,223 @@ def test_project_path_discovery_runs_guards_and_trigger_validation(env, monkeypa
         ).status_code
         == 409
     )
+
+
+def test_verified_fk_not_dropped_when_llm_bundles_with_duplicate_override(
+    env, monkeypatch: pytest.MonkeyPatch
+):
+    from semantica_dataagent import knowledge, knowledge_synthesizer
+    from semantica_dataagent.db import CorrectionProposal, Provider, sessions
+    from semantica_dataagent.dtb_executor import DtbExecutor
+
+    client, admin_token, owner_id, _, _ = env
+    _save_personal_token(owner_id, "tok-fk-bundle")
+    _enable_dtb_executor()
+
+    tables = _sample_tables()
+    monkeypatch.setattr(knowledge, "describe", lambda *args, **kwargs: tables)
+    monkeypatch.setattr(knowledge, "dimension_values", lambda *args, **kwargs: [])
+    monkeypatch.setattr(knowledge, "search", lambda *args, **kwargs: [])
+
+    # Seed an existing pending table override on shop.dwd_orders and an LLM provider
+    with sessions().begin() as db:
+        db.add(
+            CorrectionProposal(
+                id="pend-tbl-orders",
+                project_id="default",
+                owner_id=owner_id,
+                target="table:shop.dwd_orders",
+                patch="version: 1\n",
+                original="",
+                diff="diff",
+                reason="订单明细表说明",
+                status="pending",
+                source="manual",
+                target_kind="override",
+                structured_patch=json.dumps(
+                    {
+                        "version": 1,
+                        "tables": {
+                            "shop.dwd_orders": {
+                                "database": "shop",
+                                "name": "dwd_orders",
+                                "comment": "订单明细表说明",
+                            }
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+            )
+        )
+        db.add(
+            Provider(
+                id="prov-bundle",
+                name="BundleProvider",
+                type="openai-completions",
+                base_url="http://llm-bundle.local/v1",
+                models=json.dumps(["gpt-bundle"]),
+            )
+        )
+
+    history_rows = [
+        [
+            "SELECT SUM(o.amount) AS gmv FROM shop.dwd_orders o JOIN shop.dim_user u ON o.user_id = u.id WHERE o.dt = '2026-11-18'",
+            "EOF",
+            "2026-11-18 10:00:00",
+            "shop",
+            f"u{i}",
+        ]
+        for i in range(3)
+    ]
+
+    sql_by_key: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/data-query/async-execute":
+            sql = json.loads(request.read().decode("utf-8")).get("sql", "")
+            qk = f"qk-{len(sql_by_key) + 1}"
+            sql_by_key[qk] = sql
+            return httpx.Response(200, json={"status": "200", "data": {"queryKey": qk}})
+        qk = request.url.path.rsplit("/", 1)[-1]
+        sql = sql_by_key[qk]
+        if "audit_log" in sql:
+            return httpx.Response(
+                200,
+                json={
+                    "status": "200",
+                    "data": {
+                        "progress": 1.0,
+                        "columns": [
+                            {"name": "sql_text", "type": "string"},
+                            {"name": "exec_status", "type": "string"},
+                            {"name": "exec_time", "type": "string"},
+                            {"name": "database_name", "type": "string"},
+                            {"name": "caller", "type": "string"},
+                        ],
+                        "data": history_rows,
+                    },
+                },
+            )
+        if "metadata_partition" in sql:
+            return httpx.Response(
+                200,
+                json={
+                    "status": "200",
+                    "data": {
+                        "progress": 1.0,
+                        "columns": [{"name": "partition_name", "type": "string"}],
+                        "data": [["dt=2026-11-18"]],
+                    },
+                },
+            )
+        if "sample_distinct_count" in sql:
+            matched = 95 if "dim_user" in sql else 10
+            return httpx.Response(
+                200,
+                json={
+                    "status": "200",
+                    "data": {
+                        "progress": 1.0,
+                        "columns": [
+                            {"name": "sample_distinct_count", "type": "bigint"},
+                            {"name": "matched_count", "type": "bigint"},
+                        ],
+                        "data": [[100, matched]],
+                    },
+                },
+            )
+        return httpx.Response(
+            200,
+            json={
+                "status": "200",
+                "data": {
+                    "progress": 1.0,
+                    "columns": [{"name": "matched", "type": "int"}],
+                    "data": [[1]],
+                },
+            },
+        )
+
+    async_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    monkeypatch.setattr(
+        DtbExecutor,
+        "bind",
+        lambda self, params, tok: DtbExecutor(
+            params["base_url"],
+            tok,
+            client=async_client,
+            retry_delays=(),
+            poll_interval=0,
+        ),
+    )
+
+    # LLM returns a combined patch bundling the duplicate table override with the new verified FK
+    def llm_post(url, headers=None, json=None, timeout=None, trust_env=False):
+        import json as _json
+
+        content = _json.dumps(
+            {
+                "proposals": [
+                    {
+                        "route": "override",
+                        "target": "table:shop.dwd_orders",
+                        "reason": "补充订单表说明与关联外键",
+                        "structured_patch": {
+                            "version": 1,
+                            "tables": {
+                                "shop.dwd_orders": {
+                                    "database": "shop",
+                                    "name": "dwd_orders",
+                                    "comment": "订单明细表说明",
+                                }
+                            },
+                            "relationships": {
+                                "fk_shop_dwd_orders__shop_dim_user__user_id": {
+                                    "name": "fk_shop_dwd_orders__shop_dim_user__user_id",
+                                    "from_database": "shop",
+                                    "from_table": "dwd_orders",
+                                    "from_columns": ["user_id"],
+                                    "to_database": "shop",
+                                    "to_table": "dim_user",
+                                    "to_columns": ["id"],
+                                }
+                            },
+                        },
+                    }
+                ]
+            },
+            ensure_ascii=False,
+        )
+        return httpx.Response(
+            200,
+            request=httpx.Request("POST", url),
+            json={"choices": [{"message": {"content": content}}]},
+        )
+
+    monkeypatch.setattr(knowledge_synthesizer.httpx, "post", llm_post)
+
+    resp = client.post(
+        "/api/v1/projects/default/discovery/runs",
+        headers=_headers(admin_token),
+        json={
+            "enable_fk_probing": True,
+            "provider_id": "prov-bundle",
+            "model": "gpt-bundle",
+        },
+    )
+    assert resp.status_code == 202, resp.text
+    detail = _wait_run_terminal(client, admin_token, resp.json()["id"])
+    assert detail["status"] == "completed", detail
+    assert detail["fk_candidates_verified"] == 1
+    assert detail["duplicates_skipped"] == 1
+    assert detail["proposals_created"] == 1
+
+    props = client.get("/api/v1/corrections", headers=_headers(admin_token)).json()
+    rel_props = [
+        p
+        for p in props
+        if p["source"] == "discovery" and p["target"].startswith("relationship:")
+    ]
+    assert len(rel_props) == 1
+    assert rel_props[0]["status"] == "pending"
+    assert rel_props[0]["evidence"]["trigger_evidence"]["inclusion_rate"] == 0.95
