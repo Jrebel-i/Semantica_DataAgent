@@ -8,16 +8,18 @@ import io
 import json
 import re
 import stat
+import struct
 import zipfile
 from dataclasses import dataclass
 
 import yaml
 from fastapi import HTTPException
+from sqlalchemy import exists, func, or_, select
 
 from .db import CatalogSkill, CatalogSkillProject
-from .project_api import require_query_project_access
+from .project_api import active_skill_project, require_skill_project
 from .skill import SKILLS, read_skill, skill_description, skill_name
-from .source_directory import unpack_archive
+from .source_directory import relative, unpack_archive
 
 NAME = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*\Z")
 SECRET = re.compile(r"[A-Z][A-Z0-9_]{0,63}\Z")
@@ -27,6 +29,21 @@ TRUST_WARNING = "上传的 Skill 及其调用的工具可能接触调用时提�
 
 
 class _UniqueLoader(yaml.SafeLoader):
+    def __init__(self, stream):
+        super().__init__(stream)
+        self.depth = 0
+        self.nodes = 0
+
+    def compose_node(self, parent, index):
+        self.depth += 1
+        self.nodes += 1
+        try:
+            if self.depth > 20 or self.nodes > 5000:
+                raise ValueError("Skill metadata too complex")
+            return super().compose_node(parent, index)
+        finally:
+            self.depth -= 1
+
     def construct_mapping(self, node, deep=False):
         result = {}
         for key_node, value_node in node.value:
@@ -35,6 +52,62 @@ class _UniqueLoader(yaml.SafeLoader):
                 raise ValueError("Invalid or duplicate metadata key")
             result[key] = self.construct_object(value_node, deep=deep)
         return result
+
+
+def _preflight_zip(raw: bytes) -> None:
+    """Bound central-directory work before ZipFile allocates ZipInfo objects."""
+    start = max(0, len(raw) - 65557)
+    end = raw.rfind(b"PK\x05\x06", start)
+    if end < 0 or end + 22 > len(raw):
+        raise ValueError("Missing ZIP directory")
+    record = struct.unpack_from("<4s4H2IH", raw, end)
+    if end + 22 + record[7] != len(raw) or (
+        end >= 20 and raw[end - 20 : end - 16] == b"PK\x06\x07"
+    ):
+        raise ValueError("Ambiguous ZIP directory")
+    _, disk, directory_disk, disk_count, count, size, offset, _ = record
+    if (
+        disk
+        or directory_disk
+        or disk_count != count
+        or count > 1000
+        or size > 2 * 1024 * 1024
+        or offset + size != end
+    ):
+        raise ValueError("Unsupported ZIP directory")
+    pos = offset
+    actual = 0
+    while pos < end:
+        if pos + 46 > end:
+            raise ValueError("Invalid ZIP directory")
+        entry = struct.unpack_from("<4s6H3I5H2I", raw, pos)
+        if (
+            entry[0] != b"PK\x01\x02"
+            or entry[8] == 0xFFFFFFFF
+            or entry[9] == 0xFFFFFFFF
+            or entry[13] != 0
+            or entry[16] == 0xFFFFFFFF
+        ):
+            raise ValueError("Unsupported ZIP entry")
+        name_size, extra_size, comment_size = entry[10:13]
+        next_pos = pos + 46 + name_size + extra_size + comment_size
+        if next_pos > end:
+            raise ValueError("Invalid ZIP entry length")
+        extra_pos = pos + 46 + name_size
+        extra_end = extra_pos + extra_size
+        while extra_pos < extra_end:
+            if extra_pos + 4 > extra_end:
+                raise ValueError("Invalid ZIP extra field")
+            kind, length = struct.unpack_from("<HH", raw, extra_pos)
+            extra_pos += 4 + length
+            if kind == 1 or extra_pos > extra_end:
+                raise ValueError("Unsupported ZIP extra field")
+        actual += 1
+        if actual > 1000:
+            raise ValueError("Too many archive entries")
+        pos = next_pos
+    if actual != count:
+        raise ValueError("Invalid ZIP entry count")
 
 
 def builtins():
@@ -56,18 +129,26 @@ def builtins():
 
 
 def validate_package(raw: bytes) -> dict:
-    files = unpack_archive(raw)
+    if len(raw) > MAX_PACKAGE_BYTES:
+        raise ValueError("Upload too large")
+    _preflight_zip(raw)
     try:
         with zipfile.ZipFile(io.BytesIO(raw)) as archive:
+            entries = archive.infolist()
+            if len(entries) > 1000:
+                raise ValueError("Too many archive entries")
             seen = set()
-            file_paths = {path.casefold() for path in files}
+            file_paths = {
+                entry.filename.casefold() for entry in entries if not entry.is_dir()
+            }
             entry_roots = set()
-            for entry in archive.infolist():
+            for entry in entries:
                 original = entry.orig_filename
                 path = original.rstrip("/") if entry.is_dir() else original
                 mode = stat.S_IFMT(entry.external_attr >> 16)
                 if (
                     original != entry.filename
+                    or len(path) > 1024
                     or path.casefold() in seen
                     or entry.flag_bits & 1
                     or any(ord(c) < 32 or ord(c) == 127 or c == ":" for c in path)
@@ -75,8 +156,11 @@ def validate_package(raw: bytes) -> dict:
                     or (not entry.is_dir() and mode not in (0, stat.S_IFREG))
                 ):
                     raise ValueError("Invalid archive entry")
+                relative(path)
                 seen.add(path.casefold())
                 parts = path.split("/")
+                if len(parts) > 32:
+                    raise ValueError("Archive path too deep")
                 entry_roots.add(parts[0])
                 if any(part.startswith(".") or len(part) > 255 for part in parts):
                     raise ValueError("Invalid archive path")
@@ -85,8 +169,16 @@ def validate_package(raw: bytes) -> dict:
                     for i in range(1, len(parts))
                 ):
                     raise ValueError("File conflicts with directory")
-    except (zipfile.BadZipFile, OSError) as exc:
+    except (
+        zipfile.BadZipFile,
+        OSError,
+        EOFError,
+        NotImplementedError,
+        struct.error,
+        OverflowError,
+    ) as exc:
         raise ValueError("Invalid archive") from exc
+    files = unpack_archive(raw)
     paths = [path.split("/") for path in files]
     if not paths or any(len(path) < 2 for path in paths):
         raise ValueError("Package must contain one directory")
@@ -110,7 +202,7 @@ def validate_package(raw: bytes) -> dict:
         if match is None:
             raise ValueError("Missing Skill metadata")
         meta = yaml.load(match.group(1), Loader=_UniqueLoader)
-    except (UnicodeDecodeError, yaml.YAMLError) as exc:
+    except (UnicodeDecodeError, yaml.YAMLError, RecursionError) as exc:
         raise ValueError("Invalid Skill metadata") from exc
     if not isinstance(meta, dict) or meta.get("name") != root:
         raise ValueError("Invalid Skill name")
@@ -146,6 +238,10 @@ def validate_package(raw: bytes) -> dict:
     for values in (types, projects, secrets, dependencies):
         if len(values) > 100 or len(values) != len(set(values)):
             raise ValueError("Invalid metadata list")
+    for value in (description, *types, *projects, *secrets, *dependencies):
+        value.encode("utf-8", errors="strict")
+        if any(ord(char) < 32 and char not in "\n\r\t" for char in value):
+            raise ValueError("Invalid metadata text")
     return {
         "name": root,
         "description": description.strip(),
@@ -153,13 +249,13 @@ def validate_package(raw: bytes) -> dict:
         "projects": projects,
         "secrets": secrets,
         "dependencies": dependencies,
-        "trust_warning": TRUST_WARNING,
     }
 
 
 def view(row):
     return {
         **json.loads(row.metadata_json),
+        "trust_warning": TRUST_WARNING,
         "source": "upload",
         "protected": False,
         "enabled": row.enabled,
@@ -181,16 +277,37 @@ def resolve_skill(db, requester, project_id, name):
     Call within the transaction that authorizes a new invocation; do not cache
     this result for later requests. Uploaded archives remain untrusted input.
     """
-    if requester.project_id is not None and requester.project_id != project_id:
-        raise HTTPException(404, "Skill not available")
-    project = require_query_project_access(
-        db, project_id, requester, not_found_detail="Skill not available"
-    )
+    project_type = require_skill_project(db, requester, project_id)
     for item in builtins():
-        if item["name"] == name and project.type in item["project_types"]:
-            return SkillSnapshot(name, "builtin", (), (), read_skill(project.type))
-    row = db.get(CatalogSkill, name)
-    if row is None or not row.enabled:
+        if item["name"] == name and project_type in item["project_types"]:
+            return SkillSnapshot(name, "builtin", (), (), read_skill(project_type))
+    types = func.json_each(CatalogSkill.metadata_json, "$.project_types").table_valued(
+        "value"
+    )
+    type_allowed = exists(
+        select(1).select_from(types).where(types.c.value == project_type)
+    )
+    project_allowed = exists().where(
+        CatalogSkillProject.skill_name == CatalogSkill.name,
+        CatalogSkillProject.project_id == project_id,
+    )
+    row = db.execute(
+        select(CatalogSkill.metadata_json, CatalogSkill.archive).where(
+            CatalogSkill.name == name,
+            CatalogSkill.enabled.is_(True),
+            active_skill_project(requester, project_id, project_type),
+            type_allowed,
+            or_(
+                func.json_array_length(
+                    func.json_extract(CatalogSkill.metadata_json, "$.projects")
+                )
+                == 0,
+                project_allowed,
+            ),
+        )
+    ).one_or_none()
+    if row is None:
+        require_skill_project(db, requester, project_id)
         raise HTTPException(404, "Skill not available")
     try:
         metadata = json.loads(row.metadata_json)
@@ -200,8 +317,6 @@ def resolve_skill(db, requester, project_id, name):
         files = tuple(sorted(unpack_archive(package).items()))
     except (ValueError, TypeError) as exc:
         raise HTTPException(409, "Skill package unavailable") from exc
-    if project.type not in metadata["project_types"] or (
-        metadata["projects"] and db.get(CatalogSkillProject, (name, project_id)) is None
-    ):
+    if metadata["name"] != name:
         raise HTTPException(404, "Skill not available")
     return SkillSnapshot(name, "upload", tuple(metadata["secrets"]), files, None)

@@ -6,16 +6,24 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict, StrictBool
-from sqlalchemy import delete, text, update
+from sqlalchemy import delete, exists, func, or_, text, update
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import load_only
+from starlette.concurrency import run_in_threadpool
 
 from .api_time import UtcDatetime
 from .auth import Requester, admin, current_requester
 from .db import CatalogSkill, CatalogSkillProject, Project, SkillAudit, Token, sessions
-from .project_api import project_scope, require_query_project_access
+from .project_api import active_skill_project, project_scope, require_skill_project
 from .project_context import ProjectContext
 from .skill import read_skill, skill_filename
-from .skill_catalog import MAX_PACKAGE_BYTES, builtins, validate_package, view
+from .skill_catalog import (
+    MAX_PACKAGE_BYTES,
+    TRUST_WARNING,
+    builtins,
+    validate_package,
+    view,
+)
 
 router = APIRouter()
 
@@ -63,7 +71,14 @@ def _begin_admin_write(db, actor: Requester):
 def list_skills(_admin: Annotated[str, Depends(admin)]):
     with sessions()() as db:
         return builtins() + [
-            view(row) for row in db.query(CatalogSkill).order_by(CatalogSkill.name)
+            view(row)
+            for row in db.query(CatalogSkill)
+            .options(
+                load_only(
+                    CatalogSkill.name, CatalogSkill.metadata_json, CatalogSkill.enabled
+                )
+            )
+            .order_by(CatalogSkill.name)
         ]
 
 
@@ -74,7 +89,7 @@ async def _read_package(request: Request):
             raise HTTPException(413, "Skill package too large")
         data.extend(chunk)
     try:
-        metadata = validate_package(bytes(data))
+        metadata = await run_in_threadpool(validate_package, bytes(data))
     except ValueError as exc:
         raise HTTPException(422, "Invalid Skill package") from exc
     return bytes(data), metadata
@@ -95,7 +110,7 @@ _ZIP_BODY = {
 )
 async def preview_skill(request: Request, _admin: Annotated[str, Depends(admin)]):
     _, metadata = await _read_package(request)
-    return metadata
+    return {**metadata, "trust_warning": TRUST_WARNING}
 
 
 @router.get("/api/v1/skills/audit", response_model=list[SkillAuditView])
@@ -132,6 +147,10 @@ async def upload_skill(
     actor: Annotated[Requester, Depends(current_requester)],
 ):
     data, metadata = await _read_package(request)
+    return await run_in_threadpool(_persist_skill, data, metadata, actor)
+
+
+def _persist_skill(data: bytes, metadata: dict, actor: Requester):
     if metadata["name"] in {item["name"] for item in builtins()}:
         raise HTTPException(409, "Skill name already exists")
     row = CatalogSkill(
@@ -165,23 +184,36 @@ def available_skills(
     actor: Annotated[Requester, Depends(current_requester)],
 ):
     with sessions()() as db:
-        project = require_query_project_access(
-            db, scope.project_id, actor, not_found_detail="Project not found"
+        project_type = require_skill_project(db, actor, scope.project_id)
+        allowed = exists().where(
+            CatalogSkillProject.skill_name == CatalogSkill.name,
+            CatalogSkillProject.project_id == scope.project_id,
         )
-        items = builtins() + [
-            view(row) for row in db.query(CatalogSkill).filter_by(enabled=True)
-        ]
-        allowed = {
-            row.skill_name
-            for row in db.query(CatalogSkillProject).filter_by(
-                project_id=scope.project_id
+        rows = (
+            db.query(CatalogSkill)
+            .options(
+                load_only(
+                    CatalogSkill.name, CatalogSkill.metadata_json, CatalogSkill.enabled
+                )
             )
-        }
+            .filter(CatalogSkill.enabled.is_(True))
+            .filter(active_skill_project(actor, scope.project_id, project_type))
+            .filter(
+                or_(
+                    func.json_array_length(
+                        func.json_extract(CatalogSkill.metadata_json, "$.projects")
+                    )
+                    == 0,
+                    allowed,
+                )
+            )
+        )
+        items = builtins() + [view(row) for row in rows]
+        require_skill_project(db, actor, scope.project_id)
         return [
-            item
+            {**item, "projects": [scope.project_id] if item["projects"] else []}
             for item in items
-            if project.type in item["project_types"]
-            and (not item["projects"] or item["name"] in allowed)
+            if project_type in item["project_types"]
         ]
 
 

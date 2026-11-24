@@ -897,7 +897,16 @@ def test_migrate_0045_preserves_existing_records_and_exposes_catalog(database):
 
     from fastapi.testclient import TestClient
     from semantica_dataagent.app import app
-    from semantica_dataagent.db import digest
+    from semantica_dataagent.db import (
+        Build,
+        Conversation,
+        CorrectionProposal,
+        GenerationPointer,
+        KnowledgeGeneration,
+        ProjectMember,
+        digest,
+        sessions,
+    )
 
     token = "synthetic-migration-token"
     command.upgrade(_config(database), "0044")
@@ -907,17 +916,58 @@ def test_migrate_0045_preserves_existing_records_and_exposes_catalog(database):
             (digest(token), "kept", "admin", "kept-id", "2026-01-01"),
         )
         db.execute("INSERT INTO settings (key, value) VALUES (?, ?)", ("kept", "value"))
-        before = db.execute("SELECT * FROM tokens WHERE id = 'kept-id'").fetchone()
+    with sessions().begin() as db:
+        db.add_all(
+            [
+                Build(
+                    status="succeeded", started_at="2026-01-01T00:00:00Z", counts="{}"
+                ),
+                Conversation(
+                    id="kept-conversation",
+                    owner_id="kept-id",
+                    title="question",
+                    agent="pi",
+                    provider_id="local",
+                    model="test",
+                ),
+                CorrectionProposal(
+                    id="kept-proposal",
+                    owner_id="kept-id",
+                    target="document:sample",
+                    patch="new",
+                    original="old",
+                    diff="diff",
+                    reason="reason",
+                ),
+                KnowledgeGeneration(name="kept-generation"),
+                GenerationPointer(id=42, generation="kept-generation"),
+                ProjectMember(project_id="default", token_id="kept-id", role="admin"),
+            ]
+        )
+    tables = (
+        "tokens",
+        "settings",
+        "projects",
+        "project_members",
+        "conversations",
+        "correction_proposals",
+        "builds",
+        "knowledge_generations",
+        "generation_pointer",
+    )
+    with sqlite3.connect(database) as db:
+        before = {
+            table: db.execute(f"SELECT * FROM {table} ORDER BY rowid").fetchall()
+            for table in tables
+        }
     assert cli.main(["migrate"]) == 0
     assert _schema_version(database) == "0045"
     assert _schema_version(_backups(database)[0]) == "0044"
     with sqlite3.connect(database) as db:
-        assert (
-            db.execute("SELECT * FROM tokens WHERE id = 'kept-id'").fetchone() == before
-        )
-        assert db.execute(
-            "SELECT value FROM settings WHERE key = 'kept'"
-        ).fetchone() == ("value",)
+        assert {
+            table: db.execute(f"SELECT * FROM {table} ORDER BY rowid").fetchall()
+            for table in tables
+        } == before
     package = io.BytesIO()
     with zipfile.ZipFile(package, "w") as archive:
         archive.writestr(
