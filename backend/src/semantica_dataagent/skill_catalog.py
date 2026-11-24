@@ -14,7 +14,8 @@ from dataclasses import dataclass
 
 import yaml
 from fastapi import HTTPException
-from sqlalchemy import exists, func, or_, select
+from sqlalchemy import exists, func, or_, select, text
+from sqlalchemy.exc import OperationalError
 
 from .db import CatalogSkill, CatalogSkillProject
 from .project_api import active_skill_project, require_skill_project
@@ -128,6 +129,48 @@ def builtins():
     ]
 
 
+def _validate_directory_entry(raw: bytes, archive, entry) -> None:
+    if entry.file_size != 0:
+        raise ValueError("Directory entry contains data")
+    if entry.header_offset + 30 > len(raw):
+        raise ValueError("Invalid directory header")
+    header = struct.unpack_from("<4s5H3I2H", raw, entry.header_offset)
+    (
+        _,
+        _,
+        flags,
+        method,
+        _,
+        _,
+        crc,
+        compressed,
+        size,
+        name_len,
+        extra_len,
+    ) = header
+    if flags != entry.flag_bits or method != entry.compress_type:
+        raise ValueError("Directory header differs from archive")
+    expected = (entry.CRC, entry.compress_size, entry.file_size)
+    actual = (crc, compressed, size)
+    if (
+        flags & 8
+        and any(a not in (0, b) for a, b in zip(actual, expected, strict=True))
+    ) or (not flags & 8 and actual != expected):
+        raise ValueError("Directory header differs from archive")
+    if flags & 8:
+        offset = entry.header_offset + 30 + name_len + extra_len + entry.compress_size
+        if raw[offset : offset + 4] == b"PK\x07\x08":
+            offset += 4
+        if (
+            offset + 12 > len(raw)
+            or struct.unpack_from("<III", raw, offset) != expected
+        ):
+            raise ValueError("Invalid directory data descriptor")
+    with archive.open(entry) as stream:
+        if stream.read(1):
+            raise ValueError("Directory entry contains data")
+
+
 def validate_package(raw: bytes) -> dict:
     if len(raw) > MAX_PACKAGE_BYTES:
         raise ValueError("Upload too large")
@@ -151,12 +194,16 @@ def validate_package(raw: bytes) -> dict:
                     or len(path) > 1024
                     or path.casefold() in seen
                     or entry.flag_bits & 1
-                    or any(ord(c) < 32 or ord(c) == 127 or c == ":" for c in path)
+                    or any(
+                        ord(c) < 32 or 127 <= ord(c) <= 159 or c == ":" for c in path
+                    )
                     or (entry.is_dir() and mode not in (0, stat.S_IFDIR))
                     or (not entry.is_dir() and mode not in (0, stat.S_IFREG))
                 ):
                     raise ValueError("Invalid archive entry")
                 relative(path)
+                if entry.is_dir():
+                    _validate_directory_entry(raw, archive, entry)
                 seen.add(path.casefold())
                 parts = path.split("/")
                 if len(parts) > 32:
@@ -277,6 +324,14 @@ def resolve_skill(db, requester, project_id, name):
     Call within the transaction that authorizes a new invocation; do not cache
     this result for later requests. Uploaded archives remain untrusted input.
     """
+    connection = db.connection()
+    if connection.connection.driver_connection.in_transaction:
+        try:
+            connection.execute(text("UPDATE projects SET status = status WHERE 0"))
+        except OperationalError as exc:
+            raise HTTPException(
+                409, "Skill lookup requires a current transaction"
+            ) from exc
     project_type = require_skill_project(db, requester, project_id)
     for item in builtins():
         if item["name"] == name and project_type in item["project_types"]:

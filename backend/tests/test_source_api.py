@@ -203,6 +203,25 @@ def test_reject_unsafe_archives(source_client, data):
     assert not (root / "knowledge/cat").exists()
 
 
+def test_source_upload_accepts_zip64_directory(source_client):
+    c, headers, root = source_client
+    data = io.BytesIO()
+    with zipfile.ZipFile(data, "w") as archive_file:
+        with archive_file.open("folder/", "w", force_zip64=True):
+            pass
+        archive_file.writestr("folder/a.md", "hello")
+    response = c.post(
+        "/api/v1/source/upload",
+        headers=headers,
+        json={
+            "target": "knowledge/cat",
+            "archive_base64": base64.b64encode(data.getvalue()).decode(),
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert (root / "knowledge/cat/folder/a.md").read_text() == "hello"
+
+
 def test_concurrent_uploads_commit_once_each(source_client):
     c, h, root = source_client
     barrier = threading.Barrier(2)

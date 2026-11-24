@@ -66,6 +66,135 @@ def archive(files):
     return data.getvalue()
 
 
+@pytest.mark.parametrize(
+    "corruption",
+    [
+        "signature",
+        "filename",
+        "truncated",
+        "flags",
+        "method",
+        "crc",
+        "compressed_size",
+        "size",
+    ],
+)
+def test_directory_local_header_must_be_valid(client, corruption):
+    c, token = client
+    data = bytearray(
+        archive(
+            {
+                "sample/": b"",
+                "sample/SKILL.md": "---\nname: sample\ndescription: Sample\n---\nBody\n",
+            }
+        )
+    )
+    if corruption == "signature":
+        data[0:4] = b"BAD!"
+    elif corruption == "filename":
+        data[30] = ord("X")
+    elif corruption == "truncated":
+        data[26:28] = b"\xff\xff"
+    else:
+        offset = {
+            "flags": 6,
+            "method": 8,
+            "crc": 14,
+            "compressed_size": 18,
+            "size": 22,
+        }[corruption]
+        data[offset] ^= 1
+    response = c.post(
+        "/api/v1/skills",
+        headers={"Authorization": f"Bearer {token}"},
+        content=bytes(data),
+    )
+    assert response.status_code == 422
+    assert "sample" not in {
+        item["name"]
+        for item in c.get(
+            "/api/v1/skills", headers={"Authorization": f"Bearer {token}"}
+        ).json()
+    }
+
+
+@pytest.mark.parametrize("char", ["\u0080", "\u009f"])
+def test_archive_rejects_c1_control_characters(client, char):
+    c, token = client
+    data = archive(
+        {
+            "sample/SKILL.md": "---\nname: sample\ndescription: Sample\n---\nBody\n",
+            f"sample/a{char}b": "bad",
+        }
+    )
+    assert (
+        c.post(
+            "/api/v1/skills", headers={"Authorization": f"Bearer {token}"}, content=data
+        ).status_code
+        == 422
+    )
+
+
+def test_normal_directory_entry_is_accepted(client):
+    c, token = client
+    data = archive(
+        {
+            "sample/": b"",
+            "sample/SKILL.md": "---\nname: sample\ndescription: Sample\n---\nBody\n",
+        }
+    )
+    assert (
+        c.post(
+            "/api/v1/skills", headers={"Authorization": f"Bearer {token}"}, content=data
+        ).status_code
+        == 201
+    )
+
+
+def test_directory_entry_containing_data_is_rejected(client):
+    c, token = client
+    data = archive(
+        {
+            "sample/": b"unexpected",
+            "sample/SKILL.md": "---\nname: sample\ndescription: Sample\n---\nBody\n",
+        }
+    )
+    assert (
+        c.post(
+            "/api/v1/skills", headers={"Authorization": f"Bearer {token}"}, content=data
+        ).status_code
+        == 422
+    )
+
+
+@pytest.mark.parametrize("corrupt", [False, True])
+def test_streamed_directory_descriptor_is_validated(client, corrupt):
+    class StreamingBuffer(io.BytesIO):
+        def seekable(self):
+            return False
+
+        def seek(self, *args):
+            raise io.UnsupportedOperation("streaming")
+
+    output = StreamingBuffer()
+    with zipfile.ZipFile(output, "w") as package:
+        package.writestr("sample/", b"")
+        package.writestr(
+            "sample/SKILL.md", "---\nname: sample\ndescription: Sample\n---\nBody\n"
+        )
+    data = bytearray(output.getvalue())
+    if corrupt:
+        descriptor = data.find(b"PK\x07\x08")
+        assert descriptor >= 0
+        data[descriptor : descriptor + 4] = b"BAD!"
+    c, token = client
+    assert c.post(
+        "/api/v1/skills",
+        headers={"Authorization": f"Bearer {token}"},
+        content=bytes(data),
+    ).status_code == (422 if corrupt else 201)
+
+
 def test_admin_uploads_complete_skill_without_overwriting(client):
     c, token = client
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/zip"}
@@ -923,6 +1052,122 @@ def test_runtime_lookup_reflects_revocation_and_project_membership(client):
     )
     with sessions()() as db, pytest.raises(HTTPException):
         resolve_skill(db, requester, "default", "dataagent-retrieval")
+
+
+@pytest.mark.parametrize("change", ["revoke", "archive"])
+def test_builtin_snapshot_uses_authority_at_lookup(client, monkeypatch, change):
+    from semantica_dataagent import skill_catalog
+    from semantica_dataagent.auth import Requester
+    from semantica_dataagent.db import sessions
+
+    c, admin = client
+    headers = {"Authorization": f"Bearer {admin}"}
+    member = c.post(
+        "/api/v1/tokens",
+        headers=headers,
+        json={
+            "name": "member",
+            "role": "user",
+            "projects": [{"project_id": "default", "role": "member"}],
+        },
+    ).json()
+    requester = Requester(id=member["id"], role="user", token=member["token"])
+    checked, resume = threading.Event(), threading.Event()
+    original = skill_catalog.read_skill
+
+    def paused_read(project_type):
+        checked.set()
+        if not resume.wait(10):
+            raise RuntimeError("Timed out waiting for authority change")
+        return original(project_type)
+
+    monkeypatch.setattr(skill_catalog, "read_skill", paused_read)
+
+    def lookup():
+        with sessions()() as db:
+            return skill_catalog.resolve_skill(
+                db, requester, "default", "dataagent-retrieval"
+            )
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        result = pool.submit(lookup)
+        try:
+            assert checked.wait(5)
+            if change == "revoke":
+                assert (
+                    c.delete(
+                        f"/api/v1/tokens/{member['id']}", headers=headers
+                    ).status_code
+                    == 204
+                )
+            else:
+                assert (
+                    c.post(
+                        "/api/v1/projects/default/archive", headers=headers
+                    ).status_code
+                    == 200
+                )
+        finally:
+            resume.set()
+        assert result.result(timeout=10).source == "builtin"
+    from fastapi import HTTPException
+
+    with sessions()() as db, pytest.raises(HTTPException) as error:
+        skill_catalog.resolve_skill(db, requester, "default", "dataagent-retrieval")
+    assert error.value.status_code == (404 if change == "revoke" else 409)
+
+
+def test_explicit_sqlite_read_transaction_keeps_its_prior_snapshot(client):
+    from fastapi import HTTPException
+    from semantica_dataagent.auth import Requester
+    from semantica_dataagent.db import sessions
+    from semantica_dataagent.skill_catalog import resolve_skill
+    from sqlalchemy import text
+
+    c, admin = client
+    headers = {"Authorization": f"Bearer {admin}"}
+    member = c.post(
+        "/api/v1/tokens",
+        headers=headers,
+        json={
+            "name": "member",
+            "role": "user",
+            "projects": [{"project_id": "default", "role": "member"}],
+        },
+    ).json()
+    requester = Requester(id=member["id"], role="user", token=member["token"])
+    with sessions()() as db:
+        db.execute(text("BEGIN"))
+        db.execute(text("SELECT id FROM projects WHERE id = 'default'")).all()
+        assert (
+            c.delete(f"/api/v1/tokens/{member['id']}", headers=headers).status_code
+            == 204
+        )
+        with pytest.raises(HTTPException) as stale:
+            resolve_skill(db, requester, "default", "dataagent-retrieval")
+        assert stale.value.status_code == 409
+        db.rollback()
+    with sessions()() as db, pytest.raises(HTTPException) as error:
+        resolve_skill(db, requester, "default", "dataagent-retrieval")
+    assert error.value.status_code == 404
+
+
+def test_builtin_lookup_accepts_current_immediate_transaction(client):
+    from semantica_dataagent.auth import Requester
+    from semantica_dataagent.db import Token, digest, sessions
+    from semantica_dataagent.skill_catalog import resolve_skill
+    from sqlalchemy import text
+
+    _, token = client
+    with sessions()() as db:
+        db.execute(text("BEGIN IMMEDIATE"))
+        owner = db.get(Token, digest(token))
+        requester = Requester(id=owner.id, role=owner.role, token=token)
+        assert (
+            resolve_skill(db, requester, "default", "dataagent-retrieval").source
+            == "builtin"
+        )
+        db.rollback()
 
 
 def test_concurrent_upload_has_one_winner_and_one_audit_entry(client):
