@@ -803,6 +803,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{project_id}/executors": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Project Executors */
+        get: operations["list_project_executors_api_v1_projects__project_id__executors_get"];
+        /** Put Project Executors */
+        put: operations["put_project_executors_api_v1_projects__project_id__executors_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{project_id}/export/ossie": {
         parameters: {
             query?: never;
@@ -850,6 +868,59 @@ export interface paths {
         post?: never;
         /** Delete Project Member */
         delete: operations["delete_project_member_api_v1_projects__project_id__members__token_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/pull-instances": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Pull Instances */
+        get: operations["list_pull_instances_api_v1_projects__project_id__pull_instances_get"];
+        put?: never;
+        /** Create Pull Instance */
+        post: operations["create_pull_instance_api_v1_projects__project_id__pull_instances_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/pull-instances/{instance_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Update Pull Instance */
+        put: operations["update_pull_instance_api_v1_projects__project_id__pull_instances__instance_id__put"];
+        post?: never;
+        /** Delete Pull Instance */
+        delete: operations["delete_pull_instance_api_v1_projects__project_id__pull_instances__instance_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{project_id}/pull-instances/{instance_id}/pull": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Trigger Pull Instance */
+        post: operations["trigger_pull_instance_api_v1_projects__project_id__pull_instances__instance_id__pull_post"];
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -960,6 +1031,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/puller-plugins": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Puller Plugins */
+        get: operations["list_puller_plugins_api_v1_puller_plugins_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/pulls": {
         parameters: {
             query?: never;
@@ -971,40 +1059,6 @@ export interface paths {
         get: operations["list_pulls_api_v1_pulls_get"];
         put?: never;
         post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/pulls/dtb": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Trigger Pull */
-        post: operations["trigger_pull_api_v1_pulls_dtb_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/pulls/ossie": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Trigger Ossie Pull */
-        post: operations["trigger_ossie_pull_api_v1_pulls_ossie_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1408,33 +1462,6 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
-        /** AdapterPullUpdate */
-        AdapterPullUpdate: {
-            /**
-             * Enabled
-             * @default true
-             */
-            enabled: boolean;
-            /** Parameters */
-            parameters?: {
-                [key: string]: unknown;
-            };
-        };
-        /** AdapterPullView */
-        AdapterPullView: {
-            /** Enabled */
-            enabled: boolean;
-            /** Parameters */
-            parameters: {
-                [key: string]: unknown;
-            };
-            /** Parameters Schema */
-            parameters_schema: {
-                [key: string]: unknown;
-            };
-            /** Token Configured */
-            token_configured: boolean;
-        };
         /** AgentView */
         AgentView: {
             /** Available */
@@ -1556,6 +1583,8 @@ export interface components {
             };
             /** Error */
             error: string | null;
+            /** Fallback Reason */
+            fallback_reason?: string | null;
             /** Finished At */
             finished_at: string | null;
             /** Id */
@@ -2695,7 +2724,6 @@ export interface components {
             parameters?: {
                 [key: string]: unknown;
             };
-            pull?: components["schemas"]["AdapterPullUpdate"] | null;
         };
         /** ProjectAdapterView */
         ProjectAdapterView: {
@@ -2717,7 +2745,6 @@ export interface components {
             };
             /** Project Types */
             project_types: string[];
-            pull?: components["schemas"]["AdapterPullView"] | null;
             /** Reason */
             reason: string | null;
         };
@@ -2762,6 +2789,43 @@ export interface components {
         ProjectDeleteRequest: {
             /** Name */
             name: string;
+        };
+        /** ProjectExecutorUpdateItem */
+        ProjectExecutorUpdateItem: {
+            /** Enabled */
+            enabled: boolean;
+            /** Id */
+            id: string;
+            /** Parameters */
+            parameters?: {
+                [key: string]: unknown;
+            };
+        };
+        /** ProjectExecutorView */
+        ProjectExecutorView: {
+            /** Compatible */
+            compatible: boolean;
+            /** Enabled */
+            enabled: boolean;
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Parameters */
+            parameters: {
+                [key: string]: unknown;
+            };
+            /** Parameters Schema */
+            parameters_schema: {
+                [key: string]: unknown;
+            };
+            /** Reason */
+            reason: string | null;
+        };
+        /** ProjectExecutorsUpdate */
+        ProjectExecutorsUpdate: {
+            /** Executors */
+            executors: components["schemas"]["ProjectExecutorUpdateItem"][];
         };
         /** ProjectMemberUpdate */
         ProjectMemberUpdate: {
@@ -3037,6 +3101,114 @@ export interface components {
              */
             updated_at: string;
         };
+        /** PullInstanceCreate */
+        PullInstanceCreate: {
+            /** Catalog Prefix */
+            catalog_prefix?: string | null;
+            /** Display Name */
+            display_name: string;
+            /**
+             * Drop Threshold
+             * @default 0.5
+             */
+            drop_threshold: number;
+            /**
+             * Enabled
+             * @default true
+             */
+            enabled: boolean;
+            /** Id */
+            id: string;
+            /** Parameters */
+            parameters?: {
+                [key: string]: unknown;
+            };
+            /** Plugin Id */
+            plugin_id: string;
+            /** Schedule Cron */
+            schedule_cron?: string | null;
+            /** Task Namespace */
+            task_namespace?: string | null;
+            /**
+             * Timezone
+             * @default Asia/Shanghai
+             */
+            timezone: string;
+        };
+        /** PullInstanceUpdate */
+        PullInstanceUpdate: {
+            /** Catalog Prefix */
+            catalog_prefix?: string | null;
+            /** Display Name */
+            display_name?: string | null;
+            /** Drop Threshold */
+            drop_threshold?: number | null;
+            /** Enabled */
+            enabled?: boolean | null;
+            /** Parameters */
+            parameters?: {
+                [key: string]: unknown;
+            } | null;
+            /** Schedule Cron */
+            schedule_cron?: string | null;
+            /** Task Namespace */
+            task_namespace?: string | null;
+            /** Timezone */
+            timezone?: string | null;
+        };
+        /** PullInstanceView */
+        PullInstanceView: {
+            /** Catalog Prefix */
+            catalog_prefix: string | null;
+            /** Configured Secrets */
+            configured_secrets: string[];
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Display Name */
+            display_name: string;
+            /** Drop Threshold */
+            drop_threshold: number;
+            /** Enabled */
+            enabled: boolean;
+            /** Id */
+            id: string;
+            /** Last Table Count */
+            last_table_count: number | null;
+            /** Last Triggered At */
+            last_triggered_at: string | null;
+            /** Parameters */
+            parameters: {
+                [key: string]: unknown;
+            };
+            /** Plugin Id */
+            plugin_id: string;
+            /** Project Id */
+            project_id: string;
+            /** Schedule Cron */
+            schedule_cron: string | null;
+            /** Secret Configured */
+            secret_configured: boolean;
+            /** Task Namespace */
+            task_namespace: string | null;
+            /** Timezone */
+            timezone: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /** PullTriggerRequest */
+        PullTriggerRequest: {
+            /**
+             * Force
+             * @default false
+             */
+            force: boolean;
+        };
         /** PullView */
         PullView: {
             /** Build Id */
@@ -3049,6 +3221,12 @@ export interface components {
             finished_at: string | null;
             /** Id */
             id: number;
+            /** Instance Id */
+            instance_id?: string | null;
+            /** Plugin Id */
+            plugin_id?: string | null;
+            /** Skipped Reason */
+            skipped_reason?: string | null;
             /**
              * Started At
              * Format: date-time
@@ -3060,6 +3238,28 @@ export interface components {
             tables: number;
             /** Tasks */
             tasks: number;
+            /**
+             * Trigger Type
+             * @default manual
+             */
+            trigger_type: string;
+            /** Warnings */
+            warnings?: string[];
+        };
+        /** PullerPluginView */
+        PullerPluginView: {
+            /** Display Name */
+            display_name: string;
+            /** Id */
+            id: string;
+            /** Parameters Schema */
+            parameters_schema: {
+                [key: string]: unknown;
+            };
+            /** Secret Keys */
+            secret_keys: string[];
+            /** Version */
+            version: string;
         };
         /** RelationshipLink */
         RelationshipLink: {
@@ -5487,6 +5687,72 @@ export interface operations {
             };
         };
     };
+    list_project_executors_api_v1_projects__project_id__executors_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectExecutorView"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    put_project_executors_api_v1_projects__project_id__executors_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProjectExecutorsUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectExecutorView"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     export_project_ossie_api_v1_projects__project_id__export_ossie_get: {
         parameters: {
             query?: {
@@ -5635,6 +5901,174 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_pull_instances_api_v1_projects__project_id__pull_instances_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PullInstanceView"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_pull_instance_api_v1_projects__project_id__pull_instances_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PullInstanceCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PullInstanceView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_pull_instance_api_v1_projects__project_id__pull_instances__instance_id__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                instance_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PullInstanceUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PullInstanceView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_pull_instance_api_v1_projects__project_id__pull_instances__instance_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                instance_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    trigger_pull_instance_api_v1_projects__project_id__pull_instances__instance_id__pull_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project_id: string;
+                instance_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["PullTriggerRequest"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PullView"];
+                };
             };
             /** @description Validation Error */
             422: {
@@ -5927,6 +6361,26 @@ export interface operations {
             };
         };
     };
+    list_puller_plugins_api_v1_puller_plugins_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PullerPluginView"][];
+                };
+            };
+        };
+    };
     list_pulls_api_v1_pulls_get: {
         parameters: {
             query?: {
@@ -5945,68 +6399,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PullView"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    trigger_pull_api_v1_pulls_dtb_post: {
-        parameters: {
-            query?: {
-                project?: string | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["PullView"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    trigger_ossie_pull_api_v1_pulls_ossie_post: {
-        parameters: {
-            query?: {
-                project?: string | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["PullView"];
                 };
             };
             /** @description Validation Error */

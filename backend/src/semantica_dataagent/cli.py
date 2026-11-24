@@ -358,6 +358,14 @@ def _parser() -> argparse.ArgumentParser:
         "--database",
         help="optional database name filter",
     )
+    convert_cmd.add_argument(
+        "--catalog-prefix",
+        help="optional catalog prefix for dataset sources",
+    )
+    convert_cmd.add_argument(
+        "--task-namespace",
+        help="optional namespace prefix for emitted canonical task names",
+    )
     return parser
 
 
@@ -552,6 +560,8 @@ def main(argv: list[str] | None = None) -> int:
                 low_cardinality_limit=args.low_cardinality_limit,
                 sample_limit=args.sample_limit,
                 database=args.database,
+                catalog_prefix=args.catalog_prefix,
+                task_namespace=args.task_namespace,
             )
             written = write_dtb_ossie_output(
                 result,
@@ -569,6 +579,7 @@ def main(argv: list[str] | None = None) -> int:
             f"relationships={stats.get('relationships', 0)} "
             f"primary_keys={stats.get('primary_keys', 0)} "
             f"dimension_values={stats.get('dimension_values', 0)} "
+            f"tasks={len(result.tasks)} "
             f"ossie={written['ossie']}"
         )
         return 0

@@ -22,6 +22,7 @@ MAX_BYTES = 20 * 1024 * 1024
 MAX_FILES = 1000
 MAX_PREVIEW_PATHS = 200
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
+INSTANCE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,47}$")
 
 
 def relative(value):
@@ -476,18 +477,6 @@ def diff(root, path, before, after):
     ).decode("utf-8", errors="replace")
 
 
-def _last_commit_author(root, rel_path):
-    try:
-        author = (
-            git(root, "log", "-1", "--format=%an", "--", rel_path)
-            .decode("utf-8", errors="replace")
-            .strip()
-        )
-    except ValueError:
-        return None
-    return author or None
-
-
 def _atomic_write_bytes(target, data, *, temp_prefix):
     target.parent.mkdir(parents=True, exist_ok=True)
     temp_path = None
@@ -612,7 +601,7 @@ def recover_pulls(root):
     version = record["version"]
     if not re.fullmatch(r"[0-9]{8}T[0-9]{12}Z-[0-9a-f]{32}", version):
         raise ValueError("Invalid pull recovery journal")
-    if record.get("mode") == "ossie":
+    if record.get("mode") in {"ossie", "pull_instance"}:
         _recover_ossie_pull(root, record, journal)
         return
     path = f"dtb/{version}"
@@ -630,56 +619,102 @@ def recover_pulls(root):
     journal.unlink()
 
 
-def publish_ossie_pull(root, files, *, ossie_path="ossie", operation_id=None):
-    """Publish DTB-derived Ossie outputs atomically while protecting manual files."""
+def _validate_instance_id(instance_id: str) -> str:
+    if (
+        not isinstance(instance_id, str)
+        or INSTANCE_ID_RE.fullmatch(instance_id) is None
+    ):
+        raise ValueError(f"Invalid pull instance id: {instance_id!r}")
+    return instance_id
+
+
+def _prune_empty_dirs(root: Path, directory: Path) -> None:
+    current = directory
+    while current != root and current.is_dir():
+        if any(current.iterdir()):
+            break
+        current.rmdir()
+        current = current.parent
+
+
+def publish_pull_instance(
+    root,
+    instance_id: str,
+    ossie_models,
+    *,
+    tasks=None,
+    dimension_values=None,
+    operation_id: str | None = None,
+) -> tuple[str | None, bool]:
+    """Atomically publish one puller instance's isolated Ossie and pull artifacts."""
     import uuid
 
+    _validate_instance_id(instance_id)
     recover_pulls(root)
     if git(root, "diff", "--cached", "--name-only"):
         raise ValueError("Source repository has staged changes")
-    if not files:
-        raise ValueError("Empty pull snapshot")
-    rel_ossie = safe_name(ossie_path).as_posix()
-    paths = {relative(name): content for name, content in files.items()}
-    if len(paths) != len(files):
-        raise ValueError("Duplicate pull snapshot path")
-
-    new_paths_str: set[str] = set()
-    for rel_p in paths:
-        p_str = rel_p.as_posix()
-        safe(root, rel_p)
-        if not (p_str == "dimension_values.json" or p_str.startswith(rel_ossie + "/")):
-            raise ValueError(f"Unexpected Ossie pull path: {p_str}")
-        new_paths_str.add(p_str)
-
     if operation_id is not None and not re.fullmatch(
         r"[A-Za-z0-9_-]{1,80}", operation_id
     ):
         raise ValueError("Invalid pull operation identifier")
 
-    stale_delete: list[str] = []
-    ossie_dir = safe(root, relative(rel_ossie))
-    if ossie_dir.is_dir():
-        for existing in sorted(ossie_dir.rglob("*")):
-            if not existing.is_file():
+    ossie_prefix = relative(f"ossie/{instance_id}")
+    pulls_prefix = relative(f"pulls/{instance_id}")
+
+    desired_files: dict[str, bytes] = {}
+    for raw_name, content in (ossie_models or {}).items():
+        rel_model = safe_name(raw_name)
+        target_rel = ossie_prefix / rel_model
+        safe(root, target_rel)
+        p_str = target_rel.as_posix()
+        if p_str in desired_files:
+            raise ValueError(f"Duplicate pull snapshot path: {p_str}")
+        if not isinstance(content, (bytes, bytearray)):
+            raise TypeError(f"Ossie model content must be bytes: {p_str}")
+        desired_files[p_str] = bytes(content)
+
+    if tasks:
+        tasks_rel = pulls_prefix / "tasks.json"
+        safe(root, tasks_rel)
+        desired_files[tasks_rel.as_posix()] = (
+            json.dumps(list(tasks), ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+        ).encode("utf-8")
+
+    if dimension_values:
+        dims_rel = pulls_prefix / "dimension_values.json"
+        safe(root, dims_rel)
+        desired_files[dims_rel.as_posix()] = (
+            json.dumps(
+                list(dimension_values), ensure_ascii=False, indent=2, sort_keys=True
+            )
+            + "\n"
+        ).encode("utf-8")
+
+    existing_files: dict[str, bytes] = {}
+    for rel_dir in (ossie_prefix, pulls_prefix):
+        dir_path = safe(root, rel_dir)
+        if not dir_path.exists():
+            continue
+        if not dir_path.is_dir() or dir_path.is_symlink():
+            raise ValueError(
+                f"Conflicting path in source directory: {rel_dir.as_posix()}"
+            )
+        for entry in sorted(dir_path.rglob("*")):
+            if entry.is_symlink():
+                raise ValueError(f"Symlinks are not supported: {entry}")
+            if entry.is_dir():
                 continue
-            p_str = existing.relative_to(root).as_posix()
-            if (
-                existing.suffix.lower() in {".yaml", ".yml", ".json"}
-                and p_str not in new_paths_str
-                and _last_commit_author(root, p_str) == "定时拉取"
-            ):
-                stale_delete.append(p_str)
+            if entry.is_file():
+                p_str = entry.relative_to(root).as_posix()
+                existing_files[p_str] = entry.read_bytes()
 
-    dim_file = safe(root, relative("dimension_values.json"))
-    if (
-        dim_file.is_file()
-        and "dimension_values.json" not in new_paths_str
-        and _last_commit_author(root, "dimension_values.json") == "定时拉取"
+    if set(existing_files) == set(desired_files) and all(
+        existing_files[path] == desired_files[path] for path in desired_files
     ):
-        stale_delete.append("dimension_values.json")
+        return None, False
 
-    all_paths = sorted(new_paths_str | set(stale_delete))
+    stale_delete = sorted(set(existing_files) - set(desired_files))
+    all_paths = sorted(set(desired_files) | set(stale_delete))
     try:
         head = git(root, "rev-parse", "--verify", "HEAD").decode().strip()
     except ValueError:
@@ -716,7 +751,8 @@ def publish_ossie_pull(root, files, *, ossie_path="ossie", operation_id=None):
         try:
             json.dump(
                 {
-                    "mode": "ossie",
+                    "mode": "pull_instance",
+                    "instance_id": instance_id,
                     "version": version,
                     "head": head,
                     "paths": all_paths,
@@ -732,17 +768,23 @@ def publish_ossie_pull(root, files, *, ossie_path="ossie", operation_id=None):
             Path(temp.name).unlink(missing_ok=True)
 
     try:
-        for rel_p, content in paths.items():
-            target = safe(root, rel_p)
+        for p_str, content in desired_files.items():
+            target = safe(root, relative(p_str))
             _atomic_write_bytes(target, content, temp_prefix=f".pull-{version}-")
         for p_str in stale_delete:
-            safe(root, relative(p_str)).unlink(missing_ok=True)
+            target = safe(root, relative(p_str))
+            target.unlink(missing_ok=True)
+            _prune_empty_dirs(root, target.parent)
         git(root, "add", "-A", "--", *all_paths)
+        if head is not None and not git(root, "diff", "--cached", "--name-only"):
+            if backup_dir.exists():
+                shutil.rmtree(backup_dir)
+            journal.unlink()
+            return None, False
         message = ["-m", f"Pull-Operation: {operation_id}"] if operation_id else []
         git(
             root,
             "commit",
-            "--allow-empty",
             "--quiet",
             "-m",
             f"定时拉取 {version}",
@@ -753,73 +795,49 @@ def publish_ossie_pull(root, files, *, ossie_path="ossie", operation_id=None):
         if backup_dir.exists():
             shutil.rmtree(backup_dir)
         journal.unlink()
-        return commit
+        return commit, True
     except BaseException:
         recover_pulls(root)
         raise
 
 
-def publish_pull(root, files, operation_id=None):
-    """Publish an immutable DTB snapshot while holding the source lock."""
-    import uuid
-
-    recover_pulls(root)
-    if git(root, "diff", "--cached", "--name-only"):
-        raise ValueError("Source repository has staged changes")
-    if not files:
-        raise ValueError("Empty pull snapshot")
-    paths = {relative(name): content for name, content in files.items()}
-    if len(paths) != len(files):
-        raise ValueError("Duplicate pull snapshot path")
-    parent = safe(root, relative("dtb"))
-    try:
-        head = git(root, "rev-parse", "--verify", "HEAD").decode().strip()
-    except ValueError:
-        head = None
-    version = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ-") + uuid.uuid4().hex
-    destination = parent / version
-    staging = parent / (".pull-" + version)
-    if operation_id is not None and not re.fullmatch(
-        r"[A-Za-z0-9_-]{1,80}", operation_id
-    ):
-        raise ValueError("Invalid pull operation identifier")
-    journal = root / ".git" / "dataagent-pull.json"
-    with tempfile.NamedTemporaryFile(
-        mode="w", dir=journal.parent, delete=False
-    ) as temp:
-        try:
-            json.dump({"version": version, "head": head}, temp)
-            temp.flush()
-            os.fsync(temp.fileno())
-            os.replace(temp.name, journal)
-        finally:
-            Path(temp.name).unlink(missing_ok=True)
-    try:
-        parent.mkdir(exist_ok=True)
-        staging.mkdir()
-        (staging / "pull-manifest.json").write_text(
-            json.dumps({"published_at": datetime.now(UTC).isoformat()}),
-            encoding="utf-8",
-        )
-        for path, content in paths.items():
-            target = staging.joinpath(*path.parts)
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(content)
-        os.replace(staging, destination)
-        git(root, "add", "-f", "--", f"dtb/{version}")
-        message = ["-m", f"Pull-Operation: {operation_id}"] if operation_id else []
-        git(
-            root,
-            "commit",
-            "--quiet",
-            "-m",
-            f"定时拉取 {version}",
-            *message,
-            author="定时拉取",
-        )
-        commit = git(root, "rev-parse", "HEAD").decode().strip()
-        journal.unlink()
-        return commit
-    except BaseException:
+def cleanup_pull_instance_files(root, instance_id: str) -> str | None:
+    """Remove only this pull instance's isolated ossie/ and pulls/ subdirectories."""
+    _validate_instance_id(instance_id)
+    has_git = (root / ".git").is_dir()
+    if has_git:
         recover_pulls(root)
-        raise
+        if git(root, "diff", "--cached", "--name-only"):
+            raise ValueError("Source repository has staged changes")
+
+    removed_paths: list[str] = []
+    for rel_str in (f"ossie/{instance_id}", f"pulls/{instance_id}"):
+        target = safe(root, relative(rel_str))
+        if not target.exists() and not target.is_symlink():
+            continue
+        if target.is_symlink():
+            raise ValueError(f"Symlinks are not supported: {rel_str}")
+        if target.is_dir():
+            if any(entry.is_symlink() for entry in target.rglob("*")):
+                raise ValueError(f"Symlinks are not supported in {rel_str}")
+            shutil.rmtree(target)
+        else:
+            target.unlink()
+        _prune_empty_dirs(root, target.parent)
+        removed_paths.append(rel_str)
+
+    if not removed_paths or not has_git:
+        return None
+
+    git(root, "add", "-A", "--", *removed_paths)
+    if not git(root, "diff", "--cached", "--name-only"):
+        return None
+    git(
+        root,
+        "commit",
+        "--quiet",
+        "-m",
+        f"清理拉取实例 {instance_id}",
+        author="定时拉取",
+    )
+    return git(root, "rev-parse", "HEAD").decode().strip()

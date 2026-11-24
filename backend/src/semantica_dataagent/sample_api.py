@@ -1,6 +1,7 @@
 """System-generated table samples through the configured query executor."""
 
 import asyncio
+import inspect
 import re
 import time
 import uuid
@@ -12,6 +13,7 @@ from pydantic import Field
 from sqlglot import exp
 
 from . import knowledge
+from . import query_api as _query_api
 from .auth import Requester
 from .crypto import decrypt
 from .db import PersonalDtbToken, QueryAudit, sessions
@@ -19,8 +21,12 @@ from .dtb_executor import column_names
 from .mcp_context import current_requester
 from .mcp_contract import ToolInvalidInput, ToolUnavailable
 from .plugins import ExecutorAuthenticationError, ExecutorError
+from .project_context import DEFAULT_PROJECT_ID, ProjectNotFound
+from .project_context import project_type as _project_type
 from .query_api import _config, _tables_and_partitions, _validate_sql
 from .table_catalog import match_table, table_lookup
+
+_ORIG_CONFIG = _config
 
 MAX_COLUMNS = 30
 MAX_LIMIT = 20
@@ -374,10 +380,23 @@ def _finish_audit(audit_id, status, row_count, elapsed_ms):
             record.elapsed_ms = elapsed_ms
 
 
-def _runtime(user: Requester):
+def _resolve_executor_config(project_id: str | None = None):
+    if _config is _ORIG_CONFIG:
+        return _query_api._call_config(project_id)
     try:
-        plugin, config = _config()
+        return _config(project_id)
+    except TypeError:
+        if not inspect.signature(_config).parameters:
+            return _config()
+        raise
+
+
+def _runtime(user: Requester, project_id: str | None = None):
+    try:
+        plugin, config = _resolve_executor_config(project_id)
     except HTTPException as exc:
+        if 400 <= exc.status_code < 500:
+            raise ToolInvalidInput(str(exc.detail)) from exc
         raise ToolUnavailable(str(exc.detail)) from exc
     with sessions()() as db:
         secret = db.get(PersonalDtbToken, user.id)
@@ -447,6 +466,12 @@ async def sample_table_data(
         or not 1 <= limit <= MAX_LIMIT
     ):
         raise ToolInvalidInput(f"limit 必须在 1 到 {MAX_LIMIT} 之间")
+    resolved_project_id = project_id or DEFAULT_PROJECT_ID
+    try:
+        if _project_type(resolved_project_id) == "document":
+            raise ToolInvalidInput("文档型项目不支持查询执行器，仅支持知识问答")
+    except ProjectNotFound as exc:
+        raise ToolInvalidInput("项目不存在") from exc
     table = table.strip()
     metadata = _table_metadata(table, project_id=project_id)
     fields = _field_metadata(metadata)
@@ -454,7 +479,7 @@ async def sample_table_data(
     runtime = None
     runtime_error = None
     try:
-        runtime = _runtime(user)
+        runtime = _runtime(user, project_id=project_id)
     except (ToolInvalidInput, ToolUnavailable) as exc:
         runtime_error = exc
     partitions, partition_error = await _latest_partitions(

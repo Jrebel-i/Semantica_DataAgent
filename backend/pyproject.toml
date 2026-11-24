@@ -21,7 +21,6 @@ dependencies = [
 [project.entry-points."semantica_dataagent.source_adapters"]
 canonical = "semantica_dataagent.canonical:CanonicalAdapter"
 markdown = "semantica_dataagent.markdown:MarkdownAdapter"
-dtb = "semantica_dataagent.dtb_source:DtbAdapter"
 ossie = "semantica_dataagent.ossie_source:OssieAdapter"
 
 [project.entry-points."semantica_dataagent.task_parsers"]
@@ -37,8 +36,7 @@ claude = "semantica_dataagent.claude_runner:ClaudeRunner"
 codex = "semantica_dataagent.codex_runner:CodexRunner"
 
 [project.entry-points."semantica_dataagent.pullers"]
-dtb = "semantica_dataagent.dtb_puller:DtbPuller"
-ossie = "semantica_dataagent.dtb_ossie:DtbOssiePuller"
+dtb = "semantica_dataagent.dtb_ossie:DtbPluginPuller"
 
 [project.scripts]
 semantica-dataagent = "semantica_dataagent.cli:main"

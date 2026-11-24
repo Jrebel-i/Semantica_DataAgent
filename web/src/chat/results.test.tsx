@@ -164,6 +164,25 @@ test("查询计划可确认执行，结果和下载显示在对话中", async ()
   streamController?.close();
   expect(await screen.findByText("销售结论")).toBeTruthy();
   expect(screen.queryByRole("tab", { name: "结果" })).toBeNull();
+  expect(container.querySelectorAll(".sql-block")).toHaveLength(1);
+  expect(container.querySelector(".sql-block")?.textContent).toContain(
+    "SELECT sales",
+  );
+  expect(container.querySelector(".sql-block")?.textContent).toContain(
+    "FROM shop.orders",
+  );
+  const sqlEl = container.querySelector(".sql-block");
+  const resultEl = container.querySelector(".query-result-preview");
+  expect(sqlEl).toBeTruthy();
+  expect(resultEl).toBeTruthy();
+  expect(
+    Boolean(
+      sqlEl &&
+      resultEl &&
+      sqlEl.compareDocumentPosition(resultEl) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ),
+  ).toBe(true);
   expect(screen.getByText("共 25 行，已显示前 20 行")).toBeTruthy();
   expect(
     screen.getByText("完整数据请通过下载链接获取（链接 30 分钟内有效）"),

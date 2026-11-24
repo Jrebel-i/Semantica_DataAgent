@@ -85,9 +85,13 @@ test("点击侧栏历史会话才请求详情并打开", async () => {
     ),
   );
   expect(container.querySelector(".session-item.active")).toBeTruthy();
-  expect(fetcher).toHaveBeenCalledWith("/api/v1/conversations/conv-1", {
-    headers: { Authorization: "Bearer token" },
-  });
+  expect(fetcher).toHaveBeenCalledWith(
+    "/api/v1/conversations/conv-1",
+    expect.objectContaining({
+      headers: { Authorization: "Bearer token" },
+      signal: expect.any(AbortSignal),
+    }),
+  );
 });
 
 test("提问后新会话出现在列表顶部并选中", async () => {
@@ -752,4 +756,130 @@ test("轮次底部 🛠️ 纠错抽屉支持生成草稿预览、门禁拦截�
       ),
     ).toBe(true),
   );
+});
+
+test("切换会话或新建对话时中止前一个未完成的加载请求", async () => {
+  const messages = getMessages("zh");
+  const rows = [
+    conversationRow("conv-slow", "慢会话"),
+    conversationRow("conv-fast", "快会话"),
+  ];
+  const signals: AbortSignal[] = [];
+  const fetcher = vi.fn(
+    async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/v1/projects")
+        return json([
+          {
+            id: "default",
+            name: "业务数据",
+            status: "active",
+            my_role: "admin",
+          },
+        ]);
+      if (url === "/api/v1/agents")
+        return json([{ id: "pi", available: true }]);
+      if (url === "/api/v1/providers") return json([provider]);
+      if (url === "/api/v1/conversations") return json(rows);
+      if (url === "/api/v1/conversations?archived=true") return json([]);
+      if (url === "/api/v1/conversations/conv-slow") {
+        if (init?.signal) signals.push(init.signal);
+        return new Promise<Response>(() => {});
+      }
+      if (url === "/api/v1/conversations/conv-fast") {
+        if (init?.signal) signals.push(init.signal);
+        return json({ ...rows[1], turns: [] });
+      }
+      return new Response("", { status: 404 });
+    },
+  );
+  vi.stubGlobal("fetch", fetcher);
+
+  const { container } = render(
+    <ChatPage token="token" role="admin" messages={messages} />,
+  );
+
+  const slowButton = await screen.findByRole("button", { name: "慢会话" });
+  fireEvent.click(slowButton);
+  expect(await screen.findByText(messages.loadingConversation)).toBeTruthy();
+  expect(signals).toHaveLength(1);
+  expect(signals[0].aborted).toBe(false);
+
+  fireEvent.click(screen.getByRole("button", { name: "快会话" }));
+  await waitFor(() =>
+    expect(container.querySelector(".chat-header strong")?.textContent).toBe(
+      "快会话",
+    ),
+  );
+  expect(signals[0].aborted).toBe(true);
+  expect(screen.queryByText(messages.loadingConversation)).toBeNull();
+
+  // Re-open slow conversation then reset to new conversation via sidebar button.
+  fireEvent.click(screen.getByRole("button", { name: "慢会话" }));
+  expect(await screen.findByText(messages.loadingConversation)).toBeTruthy();
+  expect(signals).toHaveLength(3);
+  expect(signals[2].aborted).toBe(false);
+
+  fireEvent.click(
+    screen.getByRole("button", { name: messages.newConversation }),
+  );
+  expect(signals[2].aborted).toBe(true);
+  expect(screen.queryByText(messages.loadingConversation)).toBeNull();
+});
+
+test("加载对话超过超时时间时自动中止并提示重试", async () => {
+  const messages = getMessages("zh");
+  const rows = [conversationRow("conv-timeout", "超时会话")];
+  let requestSignal: AbortSignal | null | undefined;
+  const fetcher = vi.fn(
+    async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/v1/projects")
+        return json([
+          {
+            id: "default",
+            name: "业务数据",
+            status: "active",
+            my_role: "admin",
+          },
+        ]);
+      if (url === "/api/v1/agents")
+        return json([{ id: "pi", available: true }]);
+      if (url === "/api/v1/providers") return json([provider]);
+      if (url === "/api/v1/conversations") return json(rows);
+      if (url === "/api/v1/conversations?archived=true") return json([]);
+      if (url === "/api/v1/conversations/conv-timeout") {
+        requestSignal = init?.signal;
+        return new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener(
+            "abort",
+            () => reject(new DOMException("Aborted", "AbortError")),
+            { once: true },
+          );
+        });
+      }
+      return new Response("", { status: 404 });
+    },
+  );
+  vi.stubGlobal("fetch", fetcher);
+
+  render(<ChatPage token="token" role="admin" messages={messages} />);
+  const convButton = await screen.findByRole("button", { name: "超时会话" });
+
+  vi.useFakeTimers();
+  try {
+    fireEvent.click(convButton);
+    expect(screen.getByText(messages.loadingConversation)).toBeTruthy();
+    expect(requestSignal?.aborted).toBe(false);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+
+    expect(requestSignal?.aborted).toBe(true);
+    expect(screen.queryByText(messages.loadingConversation)).toBeNull();
+    expect(screen.getByText(messages.conversationLoadTimeout)).toBeTruthy();
+  } finally {
+    vi.useRealTimers();
+  }
 });

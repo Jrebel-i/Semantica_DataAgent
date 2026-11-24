@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Alert, Button, Drawer, Input, Select, Space, Tag } from "antd";
 import type { components } from "../api";
+import { DiffViewer } from "../DiffViewer";
 import { readErrorDetail } from "../httpErrors";
 import type { Messages } from "../i18n";
 
@@ -249,7 +250,14 @@ export function CorrectionDraftDrawer({
                 ) : undefined
               }
             />
-            {draft.diff && <pre className="diff-block">{draft.diff}</pre>}
+            {draft.diff && (
+              <DiffViewer
+                diff={draft.diff}
+                messages={t}
+                title={draft.resolved_path}
+                defaultMode="unified"
+              />
+            )}
           </div>
         )}
 

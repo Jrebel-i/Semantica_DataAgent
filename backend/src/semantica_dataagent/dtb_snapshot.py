@@ -1,4 +1,4 @@
-"""DTB export source adapter: task JSON, table-info workbook and dimension rows."""
+"""DTB export snapshot reader: task JSON, table-info workbook and dimension rows."""
 
 import hashlib
 import io
@@ -7,9 +7,7 @@ import re
 import warnings
 from collections import Counter
 from pathlib import Path
-from typing import ClassVar
 
-from jsonschema import validate
 from openpyxl import load_workbook
 
 from .canonical import ReadResult, Record
@@ -92,50 +90,11 @@ def _qualified(value):
     return f"{parts[-2]}.{parts[-1]}"
 
 
-class DtbAdapter:
-    id = "dtb"
-    version = "1.0.0"
-    display_name = "DTB export"
-    project_types = ("warehouse",)
-    parameters_schema: ClassVar[dict] = {
-        "type": "object",
-        "properties": {
-            "snapshot_path": {
-                "type": "string",
-                "default": "dtb",
-                "description": "Directory holding versioned dtb snapshots, relative to the source directory.",
-            },
-            "snapshot": {
-                "type": "string",
-                "description": "Exact snapshot directory name; overrides the latest snapshot.",
-            },
-            "latest": {
-                "type": "boolean",
-                "default": True,
-                "description": "Read the newest snapshot under snapshot_path.",
-            },
-            "dimensions_path": {
-                "type": "string",
-                "default": "dimensions",
-                "description": "Directory holding one subdirectory per dimension table.",
-            },
-            "dimension_tables": {
-                "type": "array",
-                "items": {"type": "string"},
-                "description": "Only read these dimension table directories.",
-            },
-            "dimension_row_limit": {
-                "type": "integer",
-                "minimum": 1,
-                "default": 50000,
-                "description": "Maximum rows read per dimension table.",
-            },
-        },
-        "additionalProperties": False,
-    }
+class DtbSnapshotReader:
+    """Read DTB snapshot directories (任务信息.json, 表信息.xlsx, dimensions) to canonical records."""
 
-    def read(self, directory, parameters):
-        validate(parameters, self.parameters_schema)
+    def read(self, directory, parameters=None, *, include_dimensions=True):
+        parameters = parameters or {}
         base = Path(directory)
         if not base.is_dir():
             raise ValueError(f"Source directory does not exist: {base}")
@@ -168,7 +127,11 @@ class DtbAdapter:
             dimensions_parameters["dimensions_path"] = (
                 (snapshot / "dimensions").relative_to(base).as_posix()
             )
-        dimensions = self._dimensions(base, dimensions_parameters, hashes, stats)
+        dimensions = (
+            self._dimensions(base, dimensions_parameters, hashes, stats)
+            if include_dimensions
+            else []
+        )
 
         records.extend(tasks)
         records.extend(tables)
@@ -469,18 +432,29 @@ class DtbAdapter:
                         )
         return records
 
-    def _dimensions(self, base, parameters, hashes, stats):
+    def iter_dimension_tables(
+        self,
+        directory,
+        parameters=None,
+        *,
+        stats=None,
+        hashes=None,
+    ):
+        """Yield (database, table, rows_source, meta_source, rows_iter) per dimension table."""
+        parameters = parameters or {}
+        base = Path(directory)
+        stats = stats if stats is not None else Counter()
+        hashes = hashes if hashes is not None else {}
         relative = Path(parameters.get("dimensions_path", "dimensions"))
         if relative.is_absolute() or ".." in relative.parts:
             raise ValueError("dimensions_path must be relative to the source directory")
         root = base / relative
         limit = int(parameters.get("dimension_row_limit", 50000))
         wanted = parameters.get("dimension_tables")
-        records = []
         seen = set()
         if not root.is_dir():
             stats["dimensions_directory_missing"] += 1
-            return records
+            return
         for table_dir in sorted(path for path in root.iterdir() if path.is_dir()):
             if wanted is not None and table_dir.name not in wanted:
                 continue
@@ -522,37 +496,76 @@ class DtbAdapter:
                 for column in meta.get("columns") or []
                 if isinstance(column, dict)
             }
-            seen_columns = set()
-            rows_read = 0
             meta_source = meta_path.relative_to(base).as_posix()
             rows_source = rows_path.relative_to(base).as_posix()
-            raw = self._hash(rows_path, base, hashes)
-            for line_number, line in enumerate(raw.splitlines(), start=1):
-                if not line.strip():
-                    continue
-                if rows_read >= limit:
-                    stats["dimension_row_limited_tables"] += 1
-                    break
-                try:
-                    row = json.loads(line)
-                except json.JSONDecodeError:
-                    stats["dimension_rows_unreadable"] += 1
-                    continue
-                if not isinstance(row, dict):
-                    stats["dimension_rows_unreadable"] += 1
-                    continue
-                rows_read += 1
+
+            def _row_stream(
+                _rows_path=rows_path,
+                _base=base,
+                _hashes=hashes,
+                _stats=stats,
+                _columns=columns,
+                _limit=limit,
+                _rows_source=rows_source,
+            ):
+                seen_columns = set()
+                rows_read = 0
+                digest = hashlib.sha256()
+                with _rows_path.open("rb") as fh:
+                    for line_number, raw_line in enumerate(fh, start=1):
+                        digest.update(raw_line)
+                        if not raw_line.strip():
+                            continue
+                        if rows_read >= _limit:
+                            _stats["dimension_row_limited_tables"] += 1
+                            break
+                        try:
+                            row = json.loads(raw_line.decode("utf-8"))
+                        except (UnicodeDecodeError, json.JSONDecodeError):
+                            _stats["dimension_rows_unreadable"] += 1
+                            continue
+                        if not isinstance(row, dict):
+                            _stats["dimension_rows_unreadable"] += 1
+                            continue
+                        rows_read += 1
+                        cells = []
+                        for field, value in row.items():
+                            if not isinstance(field, str) or not field.strip():
+                                _stats["dimension_fields_unnamed"] += 1
+                                continue
+                            if value is None or not isinstance(value, str):
+                                value = _text(value)
+                            if not value.strip():
+                                _stats["dimension_empty_cells"] += 1
+                                continue
+                            seen_columns.add(field)
+                            cells.append((field, value))
+                        yield line_number, cells
+                    # Hash any remaining bytes if limit broke early
+                    for chunk in iter(lambda: fh.read(65536), b""):
+                        digest.update(chunk)
+                _hashes[_rows_source] = digest.hexdigest()
+                _stats["dimension_rows"] += rows_read
+                for column in _columns - seen_columns:
+                    _stats["dimension_columns_without_rows"] += 1
+
+            yield database, table, rows_source, meta_source, _row_stream()
+
+        if wanted is not None:
+            stats["dimension_tables_requested_missing"] += len(set(wanted) - seen)
+
+    def _dimensions(self, base, parameters, hashes, stats):
+        records = []
+        for (
+            database,
+            table,
+            rows_source,
+            meta_source,
+            row_stream,
+        ) in self.iter_dimension_tables(base, parameters, stats=stats, hashes=hashes):
+            for line_number, cells in row_stream:
                 row_id = f"{database}.{table}:{line_number}"
-                for field, value in row.items():
-                    if not isinstance(field, str) or not field.strip():
-                        stats["dimension_fields_unnamed"] += 1
-                        continue
-                    if value is None or not isinstance(value, str):
-                        value = _text(value)
-                    if not value.strip():
-                        stats["dimension_empty_cells"] += 1
-                        continue
-                    seen_columns.add(field)
+                for field, value in cells:
                     records.append(
                         Record(
                             "dimension_value",
@@ -568,9 +581,4 @@ class DtbAdapter:
                             (rows_source, meta_source),
                         )
                     )
-            stats["dimension_rows"] += rows_read
-            for column in columns - seen_columns:
-                stats["dimension_columns_without_rows"] += 1
-        if wanted is not None:
-            stats["dimension_tables_requested_missing"] += len(set(wanted) - seen)
         return records

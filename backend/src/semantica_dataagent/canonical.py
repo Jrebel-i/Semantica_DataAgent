@@ -7,10 +7,11 @@ import json
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
+from functools import cache
 from pathlib import Path
 from typing import ClassVar
 
-from jsonschema import ValidationError, validate
+from jsonschema import Draft202012Validator, ValidationError, validate
 from openpyxl import load_workbook
 
 KINDS = {
@@ -57,6 +58,12 @@ class ReadResult:
     stats: dict[str, int] = field(default_factory=dict)
 
 
+@cache
+def _load_schema_and_validator(kind: str) -> tuple[dict, Draft202012Validator]:
+    schema = json.loads((SCHEMAS / f"{kind}.schema.json").read_text())
+    return schema, Draft202012Validator(schema)
+
+
 class CanonicalAdapter:
     id = "canonical"
     version = "1.0.0"
@@ -77,7 +84,9 @@ class CanonicalAdapter:
         excluded = tuple(path.resolve() for path in _EXCLUDED_ROOTS.get())
         for path in sorted(directory.rglob("*")):
             parts = path.relative_to(directory).parts
-            if ".git" in parts or (parts and parts[0] == "overrides"):
+            if ".git" in parts or (
+                parts and parts[0] in {"overrides", "dtb", "dimensions"}
+            ):
                 continue
             if not path.is_file() or path.suffix.lower() not in {
                 ".json",
@@ -114,7 +123,7 @@ class CanonicalAdapter:
                         rows = [dict(zip(headers, row, strict=True)) for row in data]
                     finally:
                         book.close()
-                schema = json.loads((SCHEMAS / f"{kind}.schema.json").read_text())
+                schema, validator = _load_schema_and_validator(kind)
                 is_tabular = path.suffix.lower() in {".csv", ".xlsx"}
                 optional_props = set(schema.get("properties", ())) - set(
                     schema.get("required", ())
@@ -132,7 +141,7 @@ class CanonicalAdapter:
                         for col_key in ("from_columns", "to_columns"):
                             if isinstance(row.get(col_key), str):
                                 row[col_key] = json.loads(row[col_key])
-                    validate(row, schema)
+                    validator.validate(row)
                     records.append(
                         Record(kind, row, path.relative_to(directory).as_posix())
                     )

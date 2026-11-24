@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -274,4 +275,145 @@ test("renders stale_overrides warning badge and detail list on build cards", asy
   expect(
     screen.getByText(/Field shop\.orders\.legacy_col not found/),
   ).toBeTruthy();
+});
+
+test("skips overlapping build poll ticks while an earlier builds request is pending", async () => {
+  let buildsFetchCount = 0;
+  let resolveBuilds: ((response: Response) => void) | null = null;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((url: string) => {
+      if (url === "/api/v1/projects")
+        return Promise.resolve(
+          Response.json([
+            {
+              id: "default",
+              name: "业务数据",
+              type: "warehouse",
+              status: "active",
+              created_at: "2026-01-01T00:00:00Z",
+              my_role: "admin",
+            },
+          ]),
+        );
+      if (url === "/api/v1/projects/default/schedule")
+        return Promise.resolve(Response.json({ interval_seconds: 0 }));
+      if (url === "/api/v1/generations?project=default")
+        return Promise.resolve(
+          Response.json({
+            generations: [],
+            behind: false,
+            source_head: null,
+          }),
+        );
+      if (url === "/api/v1/builds?project=default") {
+        buildsFetchCount += 1;
+        if (buildsFetchCount === 1) {
+          return new Promise<Response>((resolve) => {
+            resolveBuilds = resolve;
+          });
+        }
+        return Promise.resolve(Response.json([]));
+      }
+      return Promise.resolve(Response.json([]));
+    }),
+  );
+
+  vi.useFakeTimers();
+  try {
+    render(<BuildPage token="token" messages={getMessages("zh")} />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(buildsFetchCount).toBe(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(6_000);
+    });
+    expect(buildsFetchCount).toBe(1);
+
+    await act(async () => {
+      resolveBuilds?.(Response.json([]));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+    expect(buildsFetchCount).toBe(2);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("displays fallback_reason labels, entity-level counts and stale_overrides together", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) => {
+      if (url === "/api/v1/projects")
+        return Response.json([
+          {
+            id: "default",
+            name: "业务数据",
+            type: "warehouse",
+            status: "active",
+            created_at: "2026-01-01T00:00:00Z",
+            my_role: "admin",
+          },
+        ]);
+      if (url === "/api/v1/projects/default/schedule")
+        return Response.json({ interval_seconds: 0 });
+      if (url === "/api/v1/generations?project=default")
+        return Response.json({
+          generations: [],
+          behind: false,
+          source_head: null,
+        });
+      if (url === "/api/v1/builds?project=default")
+        return Response.json([
+          {
+            id: 9,
+            project_id: "default",
+            status: "succeeded",
+            started_at: "2026-01-03T00:00:00Z",
+            finished_at: "2026-01-03T00:01:00Z",
+            counts: {
+              table: 4,
+              field: 18,
+              column_lineage: 6,
+              relationship: 2,
+              embedding_cache_hits: 15,
+            },
+            error: null,
+            build_type: "full",
+            fallback_reason: "threshold_exceeded",
+            triggered_by: "定时拉取",
+            source_commit: "c".repeat(40),
+            logs: [],
+            stale_overrides: [
+              {
+                kind: "table",
+                key: "shop.deprecated",
+                reason: "Table shop.deprecated not found",
+              },
+            ],
+          },
+        ]);
+      return Response.json([]);
+    }),
+  );
+
+  render(<BuildPage token="token" messages={getMessages("zh")} />);
+  const badge = await screen.findByText("回退全量：实体变更比例超过增量阈值");
+  expect(badge).toBeTruthy();
+  fireEvent.click(badge.closest("tr")!);
+  expect(
+    await screen.findByText("已自动回退为全量构建（新建知识代兜底）"),
+  ).toBeTruthy();
+  expect(screen.getByText("表: 4")).toBeTruthy();
+  expect(screen.getByText("字段血缘: 6")).toBeTruthy();
+  expect(screen.getByText("外键关系: 2")).toBeTruthy();
+  expect(screen.getByText("向量缓存命中")).toBeTruthy();
+  expect(screen.getByText("部分语义覆盖条目在本次构建中已失效")).toBeTruthy();
 });

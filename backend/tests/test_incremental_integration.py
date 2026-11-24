@@ -387,11 +387,14 @@ def test_incremental_build_preserves_other_documents_and_removes_deleted(
                 ).status_code
                 == 200
             )
-            rejected = client.post("/api/v1/builds", json={"build_type": "incremental"})
-            rejected = wait_build(rejected.json()["id"])
+            fallback_full = client.post(
+                "/api/v1/builds", json={"build_type": "incremental"}
+            )
+            fallback_full = wait_build(fallback_full.json()["id"])
             assert (
-                rejected["status"] == "failed"
-                and "configuration changed" in rejected["error"]
+                fallback_full["status"] == "succeeded"
+                and fallback_full["build_type"] == "full"
+                and fallback_full["fallback_reason"] == "config_changed"
             )
 
     finally:
@@ -644,25 +647,34 @@ def test_incremental_build_refreshes_fulltext_and_vector_search(tmp_path, monkey
 
 
 def test_dtb_incremental_rebuilds_tasks_from_the_task_file_only(tmp_path, monkeypatch):
-    import shutil
-
     from semantica_dataagent.app import app
     from semantica_dataagent.cli import initialize
+    from semantica_dataagent.dtb_ossie import convert_dtb_to_ossie
 
     monkeypatch.setenv("DATAAGENT_DB_PATH", str(tmp_path / "app.db"))
     monkeypatch.setenv("DATAAGENT_ENCRYPTION_KEY", Fernet.generate_key().decode())
     generation = "test_" + uuid.uuid4().hex
     source = tmp_path / "source"
-    shutil.copytree(Path(__file__).parent / "fixtures/dtb_source", source)
-    task_file = source / "dtb/20260202T000000Z-bbbb/任务信息.json"
-    payload = json.loads(task_file.read_text())
-    names = [column["name"] for column in payload["columns"]]
-    row = next(
-        item
-        for item in payload["data"]
-        if dict(zip(names, item, strict=False))["task_name"] == "air_orders_spark"
+    converted = convert_dtb_to_ossie(
+        Path(__file__).parent / "fixtures/dtb_source",
+        snapshot_path="dtb",
+        dimensions_path="dimensions",
+        model_name="air_model",
     )
-    row[names.index("task_src")] = (
+    (source / "ossie" / "dtb_inst").mkdir(parents=True)
+    (source / "ossie" / "dtb_inst" / "air_model.yaml").write_text(
+        converted.ossie_content, encoding="utf-8"
+    )
+    (source / "pulls" / "dtb_inst").mkdir(parents=True)
+    task_file = source / "pulls" / "dtb_inst" / "tasks.json"
+    tasks_payload = list(converted.tasks)
+    task_file.write_text(
+        json.dumps(tasks_payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    target_task = next(
+        item for item in tasks_payload if item["name"] == "air_orders_spark"
+    )
+    target_task["sql"] = (
         "INSERT OVERWRITE TABLE dwd.air_orders_d SELECT * FROM ods.air_orders_raw_v2"
     )
     token = initialize()
@@ -690,14 +702,7 @@ def test_dtb_incremental_rebuilds_tasks_from_the_task_file_only(tmp_path, monkey
             )
             assert (
                 client.put(
-                    "/api/v1/plugins/source/canonical",
-                    json={"enabled": False, "parameters": {}},
-                ).status_code
-                == 200
-            )
-            assert (
-                client.put(
-                    "/api/v1/plugins/source/dtb",
+                    "/api/v1/plugins/source/ossie",
                     json={"enabled": True, "parameters": {}},
                 ).status_code
                 == 200
@@ -742,7 +747,10 @@ def test_dtb_incremental_rebuilds_tasks_from_the_task_file_only(tmp_path, monkey
             assert "air_orders_d" in tables_before
             assert tables_before["air_orders_d"] == first["id"]
 
-            task_file.write_text(json.dumps(payload, ensure_ascii=False))
+            task_file.write_text(
+                json.dumps(tasks_payload, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
             second = build("incremental")
             assert second["counts"]["changed"] == 1
             assert second["counts"]["table"] == 0

@@ -187,22 +187,25 @@ class _FakeDtb:
         return httpx.Response(404)
 
 
-def test_dtb_ossie_puller_is_registered_and_transforms_fake_dtb_response():
-    from semantica_dataagent.plugins import discover
+def test_dtb_puller_plugin_is_registered_and_transforms_fake_dtb_response(monkeypatch):
+    from semantica_dataagent.plugins import PullContext, discover
 
     found = discover()
-    assert ("puller", "ossie") in found
-    puller = found[("puller", "ossie")]
-    assert puller.display_name == "DTB 拉取为 Ossie"
+    assert ("puller", "dtb") in found
+    assert ("puller", "ossie") not in found
+    puller = found[("puller", "dtb")]
+    assert puller.id == "dtb"
+    assert puller.display_name == "DTB"
+    assert "interval_seconds" not in puller.parameters_schema["properties"]
     assert {
         "url",
         "token",
-        "interval_seconds",
         "layer",
         "max_tables",
         "model_name",
         "low_cardinality_limit",
         "sample_limit",
+        "dimension_row_limit",
     } <= set(puller.parameters_schema["properties"])
 
     dim_city_rows = [
@@ -258,33 +261,40 @@ def test_dtb_ossie_puller_is_registered_and_transforms_fake_dtb_response():
             ]
         ],
     )
-    client = httpx.Client(transport=httpx.MockTransport(fake))
-    files, counts = puller.fetch(
-        client,
-        "https://dtb.example",
-        "secret-token",
-        {
-            "layer": "dimensions",
-            "model_name": "dims_pulled",
-            "low_cardinality_limit": 5,
-            "sample_limit": 3,
-        },
-        ossie_path="semantic",
+    real_client = httpx.Client
+    monkeypatch.setattr(
+        "semantica_dataagent.dtb_ossie.httpx.Client",
+        lambda *args, **kwargs: real_client(
+            transport=httpx.MockTransport(fake), timeout=30
+        ),
     )
-    assert "semantic/dims_pulled.yaml" in files
-    assert "dimension_values.json" in files
-    yaml_text = files["semantic/dims_pulled.yaml"].decode("utf-8")
+    artifact = puller.pull(
+        PullContext(
+            project_id="p1",
+            instance_id="inst1",
+            parameters={
+                "url": "https://dtb.example",
+                "layer": "dimensions",
+                "model_name": "dims_pulled",
+                "low_cardinality_limit": 5,
+                "sample_limit": 3,
+            },
+            secrets={"token": "secret-token"},
+        )
+    )
+    assert "dims_pulled.yaml" in artifact.ossie_models
+    yaml_text = artifact.ossie_models["dims_pulled.yaml"].decode("utf-8")
     assert "name: dims_pulled" in yaml_text
     assert "示例取值（共 7 个去重值，抽样前 3 个）" in yaml_text
     assert "全部取值（共 2 个）" in yaml_text
-    dim_rows = json.loads(files["dimension_values.json"].decode("utf-8"))
-    assert len(dim_rows) == 14
-    assert {r["table"] for r in dim_rows} == {"dim_city"}
-    assert counts["datasets"] == 2
-    assert counts["dimension_values"] == 14
+    assert len(artifact.dimension_values) == 14
+    assert {r["table"] for r in artifact.dimension_values} == {"dim_city"}
+    assert artifact.table_count == 2
+    assert artifact.task_count == 1
+    assert artifact.stats["dimension_values"] == 14
 
 
-def test_publish_ossie_pull_protects_user_files_and_cleans_stale_pull_artifacts(
+def test_publish_pull_instance_protects_user_files_and_cleans_stale_pull_artifacts(
     tmp_path,
 ):
     from semantica_dataagent import source_directory
@@ -303,19 +313,17 @@ def test_publish_ossie_pull_protects_user_files_and_cleans_stale_pull_artifacts(
         )
         source_directory.git(root, "commit", "-m", "user upload", author="Alice")
 
-        # Pull 1 writes dtb_semantic_model.yaml (does not overwrite manual_model.yaml)
-        c1 = source_directory.publish_ossie_pull(
+        # Pull 1 writes ossie/inst-1/dtb_semantic_model.yaml
+        c1, changed1 = source_directory.publish_pull_instance(
             root,
-            {
-                "ossie/dtb_semantic_model.yaml": b"name: auto_v1\n",
-            },
-            ossie_path="ossie",
+            "inst-1",
+            {"dtb_semantic_model.yaml": b"name: auto_v1\n"},
             operation_id="op-1",
         )
+        assert changed1 is True
         assert (root / "ossie" / "manual_model.yaml").read_text(
             encoding="utf-8"
         ) == "name: manual\n"
-        # User-authored dimension_values.json must NOT be deleted!
         assert (root / "dimension_values.json").read_text(
             encoding="utf-8"
         ) == '[{"custom": true}]'
@@ -324,31 +332,31 @@ def test_publish_ossie_pull_protects_user_files_and_cleans_stale_pull_artifacts(
             == "定时拉取".encode()
         )
 
-        # Pull 2 switches model_name from dtb_semantic_model -> domain_v2 and emits pulled dimension_values.json
-        source_directory.publish_ossie_pull(
+        # Pull 2 switches model_name and emits dimension_values.json
+        source_directory.publish_pull_instance(
             root,
-            {
-                "ossie/domain_v2.yaml": b"name: domain_v2\n",
-                "dimension_values.json": b'[{"pulled": 1}]',
-            },
-            ossie_path="ossie",
+            "inst-1",
+            {"domain_v2.yaml": b"name: domain_v2\n"},
+            dimension_values=[
+                {"database": "dimensions", "table": "t", "field": "f", "value": "1"}
+            ],
             operation_id="op-2",
         )
-        # Old pull-authored dtb_semantic_model.yaml must be cleaned; manual_model.yaml preserved!
-        assert not (root / "ossie" / "dtb_semantic_model.yaml").exists()
+        assert not (root / "ossie" / "inst-1" / "dtb_semantic_model.yaml").exists()
         assert (root / "ossie" / "manual_model.yaml").exists()
-        assert (root / "ossie" / "domain_v2.yaml").read_text(
+        assert (root / "ossie" / "inst-1" / "domain_v2.yaml").read_text(
             encoding="utf-8"
         ) == "name: domain_v2\n"
+        assert (root / "pulls" / "inst-1" / "dimension_values.json").is_file()
 
-        # Pull 3 omits dimension_values.json -> now last author was "定时拉取", so stale pulled file IS cleaned
-        source_directory.publish_ossie_pull(
+        # Pull 3 omits dimension_values -> stale pulls/inst-1/dimension_values.json IS cleaned
+        source_directory.publish_pull_instance(
             root,
-            {"ossie/domain_v2.yaml": b"name: domain_v3\n"},
-            ossie_path="ossie",
+            "inst-1",
+            {"domain_v2.yaml": b"name: domain_v3\n"},
             operation_id="op-3",
         )
-        assert not (root / "dimension_values.json").exists()
+        assert not (root / "pulls" / "inst-1" / "dimension_values.json").exists()
         assert (root / "ossie" / "manual_model.yaml").exists()
 
         # Staged changes must abort cleanly
@@ -357,17 +365,17 @@ def test_publish_ossie_pull_protects_user_files_and_cleans_stale_pull_artifacts(
         import pytest
 
         with pytest.raises(ValueError, match="staged"):
-            source_directory.publish_ossie_pull(
+            source_directory.publish_pull_instance(
                 root,
-                {"ossie/domain_v2.yaml": b"name: rejected\n"},
-                ossie_path="ossie",
+                "inst-1",
+                {"domain_v2.yaml": b"name: rejected\n"},
             )
-        assert (root / "ossie" / "domain_v2.yaml").read_text(
+        assert (root / "ossie" / "inst-1" / "domain_v2.yaml").read_text(
             encoding="utf-8"
         ) == "name: domain_v3\n"
 
 
-def test_interrupted_ossie_pull_recovers_overwrite_without_loss_or_duplicate_commit(
+def test_interrupted_pull_instance_recovers_overwrite_without_loss_or_duplicate_commit(
     tmp_path,
 ):
     import os
@@ -379,11 +387,11 @@ def test_interrupted_ossie_pull_recovers_overwrite_without_loss_or_duplicate_com
     for point in ("replace", "add", "commit"):
         repo_path = tmp_path / f"source-{point}"
         with source_directory.repository(repo_path) as root:
-            (root / "ossie").mkdir()
-            (root / "ossie" / "dtb_semantic_model.yaml").write_text(
+            (root / "ossie" / "inst-1").mkdir(parents=True)
+            (root / "ossie" / "inst-1" / "dtb_semantic_model.yaml").write_text(
                 "name: prior_model\n", encoding="utf-8"
             )
-            source_directory.git(root, "add", "ossie/dtb_semantic_model.yaml")
+            source_directory.git(root, "add", "ossie/inst-1/dtb_semantic_model.yaml")
             source_directory.git(root, "commit", "-m", "initial", author="tester")
             before = source_directory.git(root, "rev-parse", "HEAD").decode().strip()
 
@@ -408,13 +416,11 @@ def replace(src, dst):
 source.git = git
 source.os.replace = replace
 with source.repository(sys.argv[1]) as root:
-    source.publish_ossie_pull(
+    source.publish_pull_instance(
         root,
-        {
-            "ossie/dtb_semantic_model.yaml": b"name: next_model\\n",
-            "dimension_values.json": b'[{"k": "v"}]',
-        },
-        ossie_path="ossie",
+        "inst-1",
+        {"dtb_semantic_model.yaml": b"name: next_model\\n"},
+        dimension_values=[{"database": "d", "table": "t", "field": "f", "value": "v"}],
         operation_id="crash-op",
     )
 """
@@ -429,9 +435,9 @@ with source.repository(sys.argv[1]) as root:
 
         with source_directory.repository(repo_path) as root:
             head = source_directory.git(root, "rev-parse", "HEAD").decode().strip()
-            yaml_now = (root / "ossie" / "dtb_semantic_model.yaml").read_text(
-                encoding="utf-8"
-            )
+            yaml_now = (
+                root / "ossie" / "inst-1" / "dtb_semantic_model.yaml"
+            ).read_text(encoding="utf-8")
             if point == "commit":
                 assert head != before
                 assert (
@@ -439,19 +445,19 @@ with source.repository(sys.argv[1]) as root:
                     == b"2"
                 )
                 assert yaml_now == "name: next_model\n"
-                assert (root / "dimension_values.json").read_text(
-                    encoding="utf-8"
-                ) == '[{"k": "v"}]'
+                assert (root / "pulls" / "inst-1" / "dimension_values.json").is_file()
             else:
                 assert head == before
                 assert yaml_now == "name: prior_model\n"
-                assert not (root / "dimension_values.json").exists()
+                assert not (
+                    root / "pulls" / "inst-1" / "dimension_values.json"
+                ).exists()
             assert not source_directory.git(root, "diff", "--cached", "--name-only")
             assert not (root / ".git" / "dataagent-pull.json").exists()
             assert not (root / ".git" / "dataagent-pull-backup").exists()
 
 
-def test_project_ossie_pull_config_exclusion_lifecycle_and_end_to_end_build(
+def test_project_dtb_pull_instance_lifecycle_and_end_to_end_build(
     tmp_path, monkeypatch
 ):
     from contextlib import contextmanager
@@ -623,7 +629,7 @@ def test_project_ossie_pull_config_exclusion_lifecycle_and_end_to_end_build(
 
     real_client_cls = _httpx.Client
     monkeypatch.setattr(
-        "semantica_dataagent.pull_service.httpx.Client",
+        "semantica_dataagent.dtb_ossie.httpx.Client",
         lambda *args, **kwargs: real_client_cls(
             transport=_httpx.MockTransport(fake_dtb), timeout=30
         ),
@@ -650,28 +656,21 @@ def test_project_ossie_pull_config_exclusion_lifecycle_and_end_to_end_build(
             == 200
         )
 
-        # Create document project -> ossie pull rejected with 422
+        # Create document project -> pull-instances rejected with 422
         doc_proj = c.post(
             "/api/v1/projects",
             headers=headers,
             json={"name": "Docs", "type": "document"},
         ).json()
         assert (
-            c.put(
-                f"/api/v1/projects/{doc_proj['id']}/adapters",
+            c.post(
+                f"/api/v1/projects/{doc_proj['id']}/pull-instances",
                 headers=headers,
                 json={
-                    "adapters": [
-                        {
-                            "id": "ossie",
-                            "enabled": False,
-                            "parameters": {},
-                            "pull": {
-                                "enabled": True,
-                                "parameters": {"url": "https://dtb.example"},
-                            },
-                        }
-                    ]
+                    "id": "dtb-doc",
+                    "plugin_id": "dtb",
+                    "display_name": "DTB",
+                    "parameters": {"url": "https://dtb.example", "token": "t"},
                 },
             ).status_code
             == 422
@@ -684,121 +683,9 @@ def test_project_ossie_pull_config_exclusion_lifecycle_and_end_to_end_build(
             json={"name": "TopicDomain", "type": "warehouse"},
         ).json()
         pid = proj["id"]
-        adapters_url = f"/api/v1/projects/{pid}/adapters"
-
-        # Enable dtb pull first, then trying to enable ossie pull without disabling dtb -> 422 mutual exclusion
         assert (
             c.put(
-                adapters_url,
-                headers=headers,
-                json={
-                    "adapters": [
-                        {
-                            "id": "dtb",
-                            "enabled": True,
-                            "parameters": {},
-                            "pull": {
-                                "enabled": True,
-                                "parameters": {"url": "https://dtb.example"},
-                            },
-                        }
-                    ]
-                },
-            ).status_code
-            == 200
-        )
-        conflict = c.put(
-            adapters_url,
-            headers=headers,
-            json={
-                "adapters": [
-                    {
-                        "id": "ossie",
-                        "enabled": True,
-                        "parameters": {},
-                        "pull": {
-                            "enabled": True,
-                            "parameters": {"url": "https://dtb.example"},
-                        },
-                    }
-                ]
-            },
-        )
-        assert conflict.status_code == 422, conflict.text
-        assert "同时启用" in conflict.text
-
-        # Global /api/v1/plugins/puller/ossie also enforces mutual exclusion with puller/dtb
-        assert (
-            c.put(
-                "/api/v1/plugins/puller/dtb",
-                headers=headers,
-                json={
-                    "enabled": True,
-                    "parameters": {"url": "https://d.example", "token": "t1"},
-                },
-            ).status_code
-            == 200
-        )
-        assert (
-            c.put(
-                "/api/v1/plugins/puller/ossie",
-                headers=headers,
-                json={
-                    "enabled": True,
-                    "parameters": {"url": "https://d.example", "token": "t2"},
-                },
-            ).status_code
-            == 422
-        )
-
-        # Atomically disable dtb pull and enable ossie pull + save encrypted token
-        enabled = c.put(
-            adapters_url,
-            headers=headers,
-            json={
-                "adapters": [
-                    {
-                        "id": "dtb",
-                        "enabled": False,
-                        "parameters": {},
-                        "pull": {
-                            "enabled": False,
-                            "parameters": {"url": "https://dtb.example"},
-                        },
-                    },
-                    {
-                        "id": "ossie",
-                        "enabled": True,
-                        "parameters": {
-                            "path": "semantic_models",
-                            "category": "topic_ossie",
-                        },
-                        "pull": {
-                            "enabled": True,
-                            "parameters": {
-                                "url": "https://dtb.example",
-                                "interval_seconds": 120,
-                                "layer": "dimensions",
-                                "model_name": "city_domain",
-                                "low_cardinality_limit": 5,
-                                "sample_limit": 3,
-                                "token": OSSIE_SECRET,
-                            },
-                        },
-                    },
-                ]
-            },
-        )
-        assert enabled.status_code == 200, enabled.text
-        rows_by_id = {row["id"]: row for row in enabled.json()}
-        assert rows_by_id["ossie"]["pull"]["enabled"] is True
-        assert rows_by_id["ossie"]["pull"]["token_configured"] is True
-        assert OSSIE_SECRET not in enabled.text
-
-        # Sending masked "***" must preserve stored token
-        assert (
-            c.put(
-                adapters_url,
+                f"/api/v1/projects/{pid}/adapters",
                 headers=headers,
                 json={
                     "adapters": [
@@ -806,20 +693,8 @@ def test_project_ossie_pull_config_exclusion_lifecycle_and_end_to_end_build(
                             "id": "ossie",
                             "enabled": True,
                             "parameters": {
-                                "path": "semantic_models",
+                                "path": "ossie",
                                 "category": "topic_ossie",
-                            },
-                            "pull": {
-                                "enabled": True,
-                                "parameters": {
-                                    "url": "https://dtb.example",
-                                    "interval_seconds": 120,
-                                    "layer": "dimensions",
-                                    "model_name": "city_domain",
-                                    "low_cardinality_limit": 5,
-                                    "sample_limit": 3,
-                                    "token": "***",
-                                },
                             },
                         }
                     ]
@@ -827,7 +702,43 @@ def test_project_ossie_pull_config_exclusion_lifecycle_and_end_to_end_build(
             ).status_code
             == 200
         )
-        assert c.get(adapters_url, headers=headers).json()
+
+        created = c.post(
+            f"/api/v1/projects/{pid}/pull-instances",
+            headers=headers,
+            json={
+                "id": "dims-main",
+                "plugin_id": "dtb",
+                "display_name": "Dims Main",
+                "parameters": {
+                    "url": "https://dtb.example",
+                    "layer": "dimensions",
+                    "model_name": "city_domain",
+                    "low_cardinality_limit": 5,
+                    "sample_limit": 3,
+                    "token": OSSIE_SECRET,
+                },
+            },
+        )
+        assert created.status_code == 201, created.text
+        assert OSSIE_SECRET not in created.text
+
+        # Sending masked "***" preserves stored token
+        updated = c.put(
+            f"/api/v1/projects/{pid}/pull-instances/dims-main",
+            headers=headers,
+            json={
+                "parameters": {
+                    "url": "https://dtb.example",
+                    "layer": "dimensions",
+                    "model_name": "city_domain",
+                    "low_cardinality_limit": 5,
+                    "sample_limit": 3,
+                    "token": "***",
+                }
+            },
+        )
+        assert updated.status_code == 200, updated.text
         import os
         from pathlib import Path
 
@@ -836,8 +747,11 @@ def test_project_ossie_pull_config_exclusion_lifecycle_and_end_to_end_build(
             not in Path(os.environ["DATAAGENT_DB_PATH"]).read_bytes()
         )
 
-        # First pull on empty project -> writes semantic_models/city_domain.yaml + dimension_values.json and enqueues FULL build!
-        p1 = c.post("/api/v1/pulls/ossie", headers=headers, params={"project": pid})
+        # First pull on empty project -> writes ossie/dims-main/city_domain.yaml + pulls/dims-main/{tasks,dimension_values}.json and enqueues FULL build!
+        p1 = c.post(
+            f"/api/v1/projects/{pid}/pull-instances/dims-main/pull",
+            headers=headers,
+        )
         assert p1.status_code == 200, p1.text
         p1_json = p1.json()
         assert p1_json["status"] == "succeeded", p1_json
@@ -848,8 +762,9 @@ def test_project_ossie_pull_config_exclusion_lifecycle_and_end_to_end_build(
             assert b1.triggered_by == "定时拉取"
 
         proj_src = Path(project_context.source_directory_value(pid))
-        assert (proj_src / "semantic_models" / "city_domain.yaml").is_file()
-        assert (proj_src / "dimension_values.json").is_file()
+        assert (proj_src / "ossie" / "dims-main" / "city_domain.yaml").is_file()
+        assert (proj_src / "pulls" / "dims-main" / "tasks.json").is_file()
+        assert (proj_src / "pulls" / "dims-main" / "dimension_values.json").is_file()
 
         # Execute the queued full build -> succeeds, writes tables/rels/high-cardinality dim values
         knowledge.run_build(p1_json["build_id"])
@@ -865,14 +780,34 @@ def test_project_ossie_pull_config_exclusion_lifecycle_and_end_to_end_build(
         )
         assert val_res["status"] == "pass", val_res
 
-        # Second pull after successful full build -> enqueues INCREMENTAL build!
-        p2 = c.post("/api/v1/pulls/ossie", headers=headers, params={"project": pid})
+        # Second pull with changed model after successful full build -> enqueues INCREMENTAL build!
+        fake_dtb.task = json.dumps(
+            {
+                "columns": [
+                    {"name": "task_name"},
+                    {"name": "task_type"},
+                    {"name": "task_src"},
+                ],
+                "data": [
+                    [
+                        "t_city",
+                        "spark sql",
+                        "SELECT c.city_code FROM dimensions.dim_city c",
+                    ]
+                ],
+            },
+            ensure_ascii=False,
+        ).encode("utf-8")
+        p2 = c.post(
+            f"/api/v1/projects/{pid}/pull-instances/dims-main/pull",
+            headers=headers,
+        )
         assert p2.status_code == 200, p2.text
         with sessions()() as db:
             b2 = db.get(Build, p2.json()["build_id"])
             assert b2.build_type == "incremental"
 
-        # Archived project rejects POST /api/v1/pulls/ossie with 409
+        # Archived project rejects pull with 409
         assert (
             c.post(f"/api/v1/projects/{pid}/archive", headers=headers).status_code
             == 200
@@ -880,9 +815,255 @@ def test_project_ossie_pull_config_exclusion_lifecycle_and_end_to_end_build(
         with sessions()() as db:
             before_cnt = db.query(PullRecord).count()
         arch_resp = c.post(
-            "/api/v1/pulls/ossie", headers=headers, params={"project": pid}
+            f"/api/v1/projects/{pid}/pull-instances/dims-main/pull",
+            headers=headers,
         )
         assert arch_resp.status_code == 409
         assert "项目已归档" in arch_resp.text
         with sessions()() as db:
             assert db.query(PullRecord).count() == before_cnt
+
+
+def test_puller_plugin_pull_returns_validated_artifact_with_prefixes(monkeypatch):
+    from pathlib import Path
+
+    import yaml
+    from jsonschema import validate
+
+    from semantica_dataagent.dtb_ossie import DtbPluginPuller
+    from semantica_dataagent.ossie_export import validate_ossie_document
+    from semantica_dataagent.plugins import PullArtifact, PullContext
+
+    task_schema = json.loads(
+        (
+            Path(__file__).resolve().parents[2] / "schemas" / "v2" / "task.schema.json"
+        ).read_text(encoding="utf-8")
+    )
+    dim_schema = json.loads(
+        (
+            Path(__file__).resolve().parents[2]
+            / "schemas"
+            / "v2"
+            / "dimension_value.schema.json"
+        ).read_text(encoding="utf-8")
+    )
+
+    dim_city_rows = [
+        {"city_code": f"C{i:02d}", "city_name": f"城市_{i:02d}"} for i in range(1, 8)
+    ]
+    fake = _FakeDtb(
+        metadata_rows=[
+            _metadata_row(1, "dim_city", "city_code", 1, "string", "城市编码"),
+            _metadata_row(1, "dim_city", "city_name", 2, "string", "城市名称"),
+            _metadata_row(2, "dim_flag", "flag_code", 1, "string", "标记编码"),
+        ],
+        table_rows=[
+            _table_row(
+                1,
+                "dimensions",
+                "dim_city",
+                "city_code",
+                "string",
+                1,
+                "城市维表",
+                "城市编码",
+            ),
+            _table_row(
+                1,
+                "dimensions",
+                "dim_city",
+                "city_name",
+                "string",
+                2,
+                "城市维表",
+                "城市名称",
+            ),
+            _table_row(
+                2,
+                "dimensions",
+                "dim_flag",
+                "flag_code",
+                "string",
+                1,
+                "标记维表",
+                "标记编码",
+            ),
+        ],
+        dimension_rows={
+            "dim_city": dim_city_rows,
+            "dim_flag": [{"flag_code": "Y"}, {"flag_code": "N"}],
+        },
+        task_rows=[
+            [
+                "t_city",
+                "spark sql",
+                "INSERT OVERWRITE TABLE dimensions.dim_city SELECT city_code, city_name FROM dimensions.dim_city",
+            ]
+        ],
+    )
+    real_client = httpx.Client
+    monkeypatch.setattr(
+        "semantica_dataagent.dtb_ossie.httpx.Client",
+        lambda *args, **kwargs: real_client(
+            transport=httpx.MockTransport(fake), timeout=30
+        ),
+    )
+
+    ctx = PullContext(
+        project_id="proj_1",
+        instance_id="inst_a",
+        parameters={
+            "url": "https://dtb.example",
+            "layer": "dimensions",
+            "model_name": "city_model",
+            "low_cardinality_limit": 5,
+            "sample_limit": 2,
+            "dimension_row_limit": 250,
+        },
+        secrets={"token": "secret-token"},
+        catalog_prefix="lake_a",
+        task_namespace="ns_a",
+    )
+
+    plugin = DtbPluginPuller()
+    artifact = plugin.pull(ctx)
+    assert isinstance(artifact, PullArtifact)
+    assert set(artifact.ossie_models) == {"city_model.yaml"}
+    parsed_model = yaml.safe_load(
+        artifact.ossie_models["city_model.yaml"].decode("utf-8")
+    )
+    validate_ossie_document(parsed_model)
+    sources = {ds["source"] for ds in parsed_model["datasets"]}
+    assert sources == {"lake_a.dimensions.dim_city", "lake_a.dimensions.dim_flag"}
+    city_ds = next(
+        ds
+        for ds in parsed_model["datasets"]
+        if ds["source"] == "lake_a.dimensions.dim_city"
+    )
+    code_field = next(f for f in city_ds["fields"] if f["name"] == "city_code")
+    assert "抽样前 2 个" in code_field["ai_context"]["instructions"]
+
+    assert artifact.task_count == 1
+    assert len(artifact.tasks) == 1
+    validate(artifact.tasks[0], task_schema)
+    assert artifact.tasks[0]["name"] == "ns_a:t_city"
+
+    assert artifact.table_count == 2
+    assert len(artifact.dimension_values) == 14
+    for item in artifact.dimension_values:
+        validate(item, dim_schema)
+        assert item["row_id"].startswith("lake_a.dimensions.dim_city:")
+    assert artifact.failures == []
+    assert all(isinstance(v, int) for v in artifact.stats.values())
+
+
+def test_puller_plugin_validates_credentials_limits_and_partial_failures(monkeypatch):
+    import pytest
+
+    from semantica_dataagent.dtb_ossie import DtbPluginPuller
+    from semantica_dataagent.dtb_puller import DtbPuller
+    from semantica_dataagent.plugins import PullContext, PullItemFailure
+
+    plugin = DtbPluginPuller()
+    with pytest.raises(ValueError, match="token"):
+        plugin.pull(
+            PullContext(
+                project_id="p1",
+                instance_id="i1",
+                parameters={"url": "https://dtb.example"},
+                secrets={},
+            )
+        )
+    with pytest.raises(ValueError, match="URL"):
+        plugin.pull(
+            PullContext(
+                project_id="p1",
+                instance_id="i1",
+                parameters={"url": "ftp://dtb.example"},
+                secrets={"token": "tok"},
+            )
+        )
+    with pytest.raises(ValueError):
+        plugin.pull(
+            PullContext(
+                project_id="p1",
+                instance_id="i1",
+                parameters={
+                    "url": "https://dtb.example",
+                    "dimension_row_limit": 500001,
+                },
+                secrets={"token": "tok"},
+            )
+        )
+
+    observed_sqls: list[str] = []
+    fake = _FakeDtb(
+        metadata_rows=[
+            # dim_bad has 2 partition columns -> triggers multiple_partition_fields failure
+            _metadata_row(1, "dim_bad", "day_num", 10001, "string"),
+            _metadata_row(1, "dim_bad", "hour_num", 10002, "string"),
+            _metadata_row(2, "dim_good", "code", 1, "string"),
+        ],
+        table_rows=[
+            _table_row(1, "dimensions", "dim_bad", "day_num", "string", 10001),
+            _table_row(1, "dimensions", "dim_bad", "hour_num", "string", 10002),
+            _table_row(2, "dimensions", "dim_good", "code", "string", 1),
+        ],
+        dimension_rows={"dim_good": [{"code": "A"}, {"code": "B"}]},
+        stats=(
+            PARTITION_HEADER
+            + "\n1,dim_bad,dimensions,,,bad,,day_num=20261105,1,,1\n"
+            + "2,dim_good,dimensions,,,good,,,0,,1\n"
+        ),
+        task_rows=[["t_good", "spark sql", "SELECT code FROM dimensions.dim_good"]],
+    )
+
+    def capturing_transport(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/data-query/async-execute":
+            observed_sqls.append(json.loads(request.content)["sql"])
+        return fake(request)
+
+    real_client = httpx.Client
+    monkeypatch.setattr(
+        "semantica_dataagent.dtb_ossie.httpx.Client",
+        lambda *args, **kwargs: real_client(
+            transport=httpx.MockTransport(capturing_transport), timeout=30
+        ),
+    )
+
+    # Configurable dimension_row_limit overrides legacy 100 cap even when max_tables is set
+    with real_client(transport=httpx.MockTransport(capturing_transport)) as client:
+        _, dtb_counts = DtbPuller().fetch(
+            client,
+            "https://dtb.example",
+            "tok",
+            {"layer": "dimensions", "max_tables": 2, "dimension_row_limit": 250},
+        )
+        assert dtb_counts["failures"] == [
+            {"table": "dim_bad", "reason": "multiple_partition_fields"}
+        ]
+    assert any("LIMIT 250" in sql for sql in observed_sqls)
+
+    observed_sqls.clear()
+    artifact = plugin.pull(
+        PullContext(
+            project_id="p1",
+            instance_id="i1",
+            parameters={
+                "url": "https://dtb.example",
+                "max_tables": 2,
+                "dimension_row_limit": 321,
+            },
+            secrets={"token": "tok"},
+        )
+    )
+    assert any("LIMIT 321" in sql for sql in observed_sqls)
+    assert artifact.failures == [
+        PullItemFailure(
+            kind="dimension_table",
+            target="dim_bad",
+            reason="multiple_partition_fields",
+        )
+    ]
+    assert artifact.task_count == 1
+    assert artifact.table_count == 2

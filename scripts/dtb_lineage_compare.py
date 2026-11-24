@@ -11,7 +11,7 @@ from pathlib import Path
 
 from dtb_common import normalize_table, read_jsonl, write_json
 
-from semantica_dataagent.dtb_source import DtbAdapter
+from semantica_dataagent.dtb_snapshot import DtbSnapshotReader
 from semantica_dataagent.dtb_tasks import DtbTaskParser
 from semantica_dataagent.sql_tasks import SQLTaskParser
 
@@ -43,7 +43,7 @@ def _clean_edges(edges):
 
 def parse_snapshot(raw_root):
     raw_root = Path(raw_root)
-    adapter = DtbAdapter()
+    adapter = DtbSnapshotReader()
     result = adapter.read(
         raw_root / "warehouse/raw",
         {

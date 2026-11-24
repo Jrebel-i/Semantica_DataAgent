@@ -5,6 +5,7 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from cryptography.fernet import Fernet
+
 from semantica_dataagent import cli
 
 
@@ -66,8 +67,8 @@ def test_migrate_upgrades_from_0016_and_keeps_data(database, capsys):
     assert cli.main(["migrate"]) == 0
 
     output = capsys.readouterr().out
-    assert "0016" in output and "0042" in output
-    assert _schema_version(database) == "0042"
+    assert "0016" in output and "0043" in output
+    assert _schema_version(database) == "0043"
     assert _kept_rows(database) == (("kept token", "admin"), ("kept value",))
 
 
@@ -161,7 +162,7 @@ def test_migrate_backs_up_before_upgrade_and_is_repeatable(database, capsys):
 
     capsys.readouterr()
     assert cli.main(["migrate"]) == 0
-    assert "0042" in capsys.readouterr().out
+    assert "0043" in capsys.readouterr().out
     assert len(_backups(database)) == 1
 
 
@@ -186,14 +187,14 @@ def test_serve_migrates_before_starting(database, capsys, monkeypatch):
 
     assert cli.main(["serve"]) == 0
     assert started == [True]
-    assert _schema_version(database) == "0042"
+    assert _schema_version(database) == "0043"
     assert _kept_rows(database) == (("kept token", "admin"), ("kept value",))
     assert len(_backups(database)) == 1
 
     assert cli.main(["serve"]) == 0
     assert started == [True, True]
     assert len(_backups(database)) == 1
-    assert "0042" in capsys.readouterr().out
+    assert "0043" in capsys.readouterr().out
 
 
 def test_serve_does_not_start_when_migration_fails(database, capsys, monkeypatch):
@@ -214,7 +215,7 @@ def test_init_still_initializes_an_empty_database(database):
     token = cli.initialize()
 
     assert token
-    assert _schema_version(database) == "0042"
+    assert _schema_version(database) == "0043"
     with sqlite3.connect(database) as db:
         row = db.execute("SELECT name, role FROM tokens").fetchone()
     assert row == ("initial admin", "admin")
@@ -239,7 +240,7 @@ def test_serve_upgrades_0023_conversations_and_backs_up(database, monkeypatch):
         )
     monkeypatch.setattr(cli, "_serve", lambda: None)
     assert cli.main(["serve"]) == 0
-    assert _schema_version(database) == "0042"
+    assert _schema_version(database) == "0043"
     with sqlite3.connect(database) as db:
         assert db.execute(
             "SELECT title, pinned_at, archived_at FROM conversations WHERE id='old'"
@@ -309,7 +310,7 @@ def test_migrate_adds_empty_model_capabilities_for_existing_providers(database):
 
     assert cli.main(["migrate"]) == 0
 
-    assert _schema_version(database) == "0042"
+    assert _schema_version(database) == "0043"
     with sqlite3.connect(database) as db:
         columns = {
             row[1] for row in db.execute("PRAGMA table_info(providers)").fetchall()
@@ -431,7 +432,7 @@ def test_master_project_database_upgrades_to_audit_table(database):
 
     assert cli.main(["migrate"]) == 0
 
-    assert _schema_version(database) == "0042"
+    assert _schema_version(database) == "0043"
     with sqlite3.connect(database) as db:
         assert db.execute("SELECT count(*) FROM project_audit").fetchone() == (0,)
         assert (
@@ -460,7 +461,7 @@ def test_project_migration_preserves_existing_data(database):
 
     assert cli.main(["migrate"]) == 0
 
-    assert _schema_version(database) == "0042"
+    assert _schema_version(database) == "0043"
     assert {
         table: _table_rows(database, table, old_columns[table]) for table in OLD_TABLES
     } == before
@@ -508,9 +509,9 @@ def test_empty_database_has_a_single_migration_head(database):
     from alembic.script import ScriptDirectory
 
     config = _config(database)
-    assert ScriptDirectory.from_config(config).get_heads() == ["0042"]
+    assert ScriptDirectory.from_config(config).get_heads() == ["0043"]
     command.upgrade(config, "head")
-    assert _schema_version(database) == "0042"
+    assert _schema_version(database) == "0043"
     with sqlite3.connect(database) as db:
         assert db.execute("SELECT count(*) FROM projects").fetchone() == (1,)
         assert db.execute("SELECT count(*) FROM project_members").fetchone() == (0,)
@@ -552,7 +553,7 @@ def test_migrate_adds_null_effort_for_existing_turns(database):
 
     assert cli.main(["migrate"]) == 0
 
-    assert _schema_version(database) == "0042"
+    assert _schema_version(database) == "0043"
     with sqlite3.connect(database) as db:
         columns = {row[1] for row in db.execute("PRAGMA table_info(turns)").fetchall()}
         assert "effort" in columns
@@ -578,7 +579,7 @@ def test_migrate_backfills_agent_credential_project(database):
             ("credential-digest",),
         ).fetchone()
     assert project == ("default",)
-    assert _schema_version(database) == "0042"
+    assert _schema_version(database) == "0043"
 
 
 def test_migrated_builds_index_is_unique_per_project_and_status(database):
@@ -631,7 +632,7 @@ def test_conversations_gain_the_default_project_when_upgrading(database):
             "FROM conversations WHERE id='old'"
         ).fetchone()
         assert db.execute("SELECT version_num FROM alembic_version").fetchone() == (
-            "0042",
+            "0043",
         )
     assert after == before + ("default",)
 
@@ -688,3 +689,113 @@ def test_migrate_0038_extends_correction_proposals_and_builds(database):
             & cp_cols
         )
         assert "stale_overrides" not in build_cols
+
+
+def test_migrate_0043_pull_instances_and_idempotency(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    import json
+
+    from alembic.script import ScriptDirectory
+
+    db_path = tmp_path / "migrate_0043.db"
+    monkeypatch.setenv("DATAAGENT_DB_PATH", str(db_path))
+    monkeypatch.delenv("DATAAGENT_ENCRYPTION_KEY", raising=False)
+
+    cfg = _config(db_path)
+    assert ScriptDirectory.from_config(cfg).get_heads() == ["0043"]
+    command.upgrade(cfg, "0042")
+
+    legacy_cipher_default = "fernet-ciphertext-default-do-not-decrypt"
+    legacy_cipher_wh = "fernet-ciphertext-wh-do-not-decrypt"
+    with sqlite3.connect(db_path) as db:
+        db.execute(
+            "INSERT INTO projects (id, name, type, status, created_at) "
+            "VALUES ('wh2', 'Warehouse 2', 'warehouse', 'active', '2026-01-01')"
+        )
+        # Default project: both ossie (enabled) and dtb (disabled); should pick ossie
+        db.execute(
+            "INSERT INTO plugin_config (project_id, category, plugin_id, enabled, parameters) "
+            "VALUES ('default', 'puller', 'dtb', 0, ?)",
+            (json.dumps({"url": "https://old.example", "interval_seconds": 0}),),
+        )
+        db.execute(
+            "INSERT INTO plugin_config (project_id, category, plugin_id, enabled, parameters) "
+            "VALUES ('default', 'puller', 'ossie', 1, ?)",
+            (
+                json.dumps(
+                    {
+                        "url": "https://ossie.example",
+                        "interval_seconds": 3600,
+                        "layer": "dimensions",
+                        "model_name": "m1",
+                    }
+                ),
+            ),
+        )
+        db.execute(
+            "INSERT INTO settings (key, value) VALUES ('puller.ossie.token', ?)",
+            (legacy_cipher_default,),
+        )
+        # Second warehouse project: dtb enabled without interval -> manual only
+        db.execute(
+            "INSERT INTO plugin_config (project_id, category, plugin_id, enabled, parameters) "
+            "VALUES ('wh2', 'puller', 'dtb', 1, ?)",
+            (json.dumps({"url": "https://wh2.example", "interval_seconds": 0}),),
+        )
+        db.execute(
+            "INSERT INTO project_settings (project_id, key, value) "
+            "VALUES ('wh2', 'puller.dtb.token', ?)",
+            (legacy_cipher_wh,),
+        )
+
+    # Run upgrade to 0043 WITHOUT DATAAGENT_ENCRYPTION_KEY set
+    command.upgrade(cfg, "0043")
+
+    with sqlite3.connect(db_path) as db:
+        rows = db.execute(
+            "SELECT project_id, id, plugin_id, enabled, parameters, encrypted_secrets, "
+            "schedule_cron, timezone, drop_threshold "
+            "FROM project_pull_instances ORDER BY project_id, id"
+        ).fetchall()
+    assert len(rows) == 2
+
+    def_row, wh_row = rows
+    assert def_row[0:4] == ("default", "dtb", "dtb", 1)
+    assert json.loads(def_row[4]) == {
+        "url": "https://ossie.example",
+        "layer": "dimensions",
+        "model_name": "m1",
+    }
+    assert json.loads(def_row[5]) == {"token": legacy_cipher_default}
+    assert def_row[6:9] == ("0 2 * * *", "Asia/Shanghai", 0.5)
+
+    assert wh_row[0:4] == ("wh2", "dtb", "dtb", 1)
+    assert json.loads(wh_row[4]) == {"url": "https://wh2.example"}
+    assert json.loads(wh_row[5]) == {"token": legacy_cipher_wh}
+    assert wh_row[6:9] == (None, "Asia/Shanghai", 0.5)
+
+    # Downgrade to 0042 and re-upgrade to 0043 succeeds cleanly
+    command.downgrade(cfg, "0042")
+    with sqlite3.connect(db_path) as db:
+        tables = {
+            row[0]
+            for row in db.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+        assert "project_pull_instances" not in tables
+        pull_cols = {
+            row[1] for row in db.execute("PRAGMA table_info(pull_records)").fetchall()
+        }
+        build_cols = {
+            row[1] for row in db.execute("PRAGMA table_info(builds)").fetchall()
+        }
+        assert not (
+            {"instance_id", "plugin_id", "trigger_type", "skipped_reason", "warnings"}
+            & pull_cols
+        )
+        assert not ({"entity_hashes", "fallback_reason"} & build_cols)
+
+    command.upgrade(cfg, "0043")
+    assert _schema_version(db_path) == "0043"

@@ -1,11 +1,74 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Alert, Button, Space, Table, Tag } from "antd";
+import { Alert, Button, Modal, Space, Table, Tag } from "antd";
 import type { components } from "./api";
 import type { Messages } from "./i18n";
 import { TableScroll } from "./TableScroll";
 
 type Pull = components["schemas"]["PullView"];
-type ProjectAdapter = components["schemas"]["ProjectAdapterView"];
+type PullInstance = components["schemas"]["PullInstanceView"];
+
+const STATUS_COLORS: Record<string, string> = {
+  succeeded: "green",
+  running: "blue",
+  failed: "red",
+  blocked: "orange",
+};
+
+function pullStatusLabel(status: string, t: Messages): string {
+  switch (status) {
+    case "succeeded":
+      return t.pullStatusSucceeded;
+    case "failed":
+      return t.pullStatusFailed;
+    case "running":
+      return t.pullStatusRunning;
+    case "blocked":
+      return t.pullStatusBlocked;
+    default:
+      return status;
+  }
+}
+
+function triggerTypeLabel(triggerType: string, t: Messages): string {
+  switch (triggerType) {
+    case "scheduled":
+      return t.pullTriggerScheduled;
+    case "forced":
+      return t.pullTriggerForced;
+    case "manual":
+      return t.pullTriggerManual;
+    default:
+      return triggerType;
+  }
+}
+
+function localTime(value: string | null | undefined): string {
+  return value ? new Date(value).toLocaleString() : "—";
+}
+
+function latestBlockedPulls(pulls: Pull[]): Pull[] {
+  const seenInstances = new Set<string>();
+  const blocked: Pull[] = [];
+  for (const row of pulls) {
+    const key = row.instance_id ?? `__legacy_${row.id}`;
+    if (seenInstances.has(key)) continue;
+    seenInstances.add(key);
+    if (row.status === "blocked") {
+      blocked.push(row);
+    }
+  }
+  return blocked;
+}
+
+async function errorMessage(response: Response, fallback: string) {
+  try {
+    const body = (await response.json()) as { detail?: unknown };
+    if (typeof body.detail === "string" && body.detail) return body.detail;
+  } catch {
+    // Ignore non-JSON error bodies
+  }
+  return fallback;
+}
 
 export function PullsPanel({
   token,
@@ -16,161 +79,263 @@ export function PullsPanel({
   project?: string;
   messages: Messages;
 }) {
-  const [available, setAvailable] = useState(false);
-  const [pullerId, setPullerId] = useState<"dtb" | "ossie">("dtb");
+  const effectiveProject = project || "default";
+  const [instances, setInstances] = useState<PullInstance[]>([]);
   const [pulls, setPulls] = useState<Pull[]>([]);
-  const [error, setError] = useState(false);
-  const [running, setRunning] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+  const [error, setError] = useState("");
+  const [runningInstanceId, setRunningInstanceId] = useState<string | null>(
+    null,
+  );
+  const [forceTarget, setForceTarget] = useState<Pull | null>(null);
   const generation = useRef(0);
 
-  const pullsUrl = project
-    ? `/api/v1/pulls?project=${encodeURIComponent(project)}`
-    : "/api/v1/pulls";
+  const instancesUrl = `/api/v1/projects/${encodeURIComponent(effectiveProject)}/pull-instances`;
+  const pullsUrl = `/api/v1/pulls?project=${encodeURIComponent(effectiveProject)}`;
 
-  const refresh = useCallback(
+  const loadAll = useCallback(
     async (signal?: AbortSignal, expectedGen = generation.current) => {
-      const response = await fetch(pullsUrl, {
-        headers: { Authorization: `Bearer ${token}` },
-        signal,
-      });
-      if (!response.ok) throw new Error();
-      const rows = (await response.json()) as Pull[];
+      const headers = { Authorization: `Bearer ${token}` };
+      const [instRes, pullsRes] = await Promise.all([
+        fetch(instancesUrl, { headers, signal }),
+        fetch(pullsUrl, { headers, signal }),
+      ]);
+      if (!instRes.ok || !pullsRes.ok) throw new Error();
+      const [nextInstances, nextPulls] = (await Promise.all([
+        instRes.json(),
+        pullsRes.json(),
+      ])) as [PullInstance[], Pull[]];
       if (signal?.aborted || generation.current !== expectedGen) return;
-      setPulls(rows);
+      setInstances(Array.isArray(nextInstances) ? nextInstances : []);
+      setPulls(Array.isArray(nextPulls) ? nextPulls : []);
+      setLoaded(true);
     },
-    [pullsUrl, token],
+    [instancesUrl, pullsUrl, token],
   );
 
   useEffect(() => {
     const controller = new AbortController();
     const expectedGen = generation.current + 1;
     generation.current = expectedGen;
-    setAvailable(false);
+    setInstances([]);
     setPulls([]);
-    setError(false);
-    setRunning(false);
+    setLoaded(false);
+    setError("");
+    setRunningInstanceId(null);
+    setForceTarget(null);
 
-    if (project) {
-      void fetch(`/api/v1/projects/${encodeURIComponent(project)}/adapters`, {
-        headers: { Authorization: `Bearer ${token}` },
-        signal: controller.signal,
-      })
-        .then(async (response) => {
-          if (!response.ok) throw new Error();
-          const adapters: unknown = await response.json();
-          if (controller.signal.aborted || generation.current !== expectedGen)
-            return;
-          const pullAdapters = Array.isArray(adapters)
-            ? (adapters as ProjectAdapter[]).filter(
-                (row) =>
-                  row.compatible &&
-                  row.pull &&
-                  (row.id === "dtb" || row.id === "ossie"),
-              )
-            : [];
-          if (!pullAdapters.length) return;
-          const ossieRow = pullAdapters.find((row) => row.id === "ossie");
-          const dtbRow = pullAdapters.find((row) => row.id === "dtb");
-          const useOssie = Boolean(
-            ossieRow?.pull?.enabled ||
-            (!dtbRow?.pull?.enabled && ossieRow?.enabled),
-          );
-          setPullerId(useOssie ? "ossie" : "dtb");
-          setAvailable(true);
-          await refresh(controller.signal, expectedGen);
-        })
-        .catch(() => {
-          if (!controller.signal.aborted && generation.current === expectedGen)
-            setError(true);
-        });
-    } else {
-      void fetch("/api/v1/plugins", {
-        headers: { Authorization: `Bearer ${token}` },
-        signal: controller.signal,
-      })
-        .then(async (response) => {
-          if (!response.ok) throw new Error();
-          const plugins: unknown = await response.json();
-          if (controller.signal.aborted || generation.current !== expectedGen)
-            return;
-          if (
-            Array.isArray(plugins) &&
-            plugins.some(
-              (plugin) =>
-                plugin.category === "puller" &&
-                (plugin.id === "dtb" || plugin.id === "ossie"),
-            )
-          ) {
-            const ossieEnabled = plugins.some(
-              (plugin) =>
-                plugin.category === "puller" &&
-                plugin.id === "ossie" &&
-                plugin.enabled === true,
-            );
-            setPullerId(ossieEnabled ? "ossie" : "dtb");
-            setAvailable(true);
-            await refresh(controller.signal, expectedGen);
-          }
-        })
-        .catch(() => {
-          if (!controller.signal.aborted && generation.current === expectedGen)
-            setError(true);
-        });
-    }
+    void loadAll(controller.signal, expectedGen).catch(() => {
+      if (!controller.signal.aborted && generation.current === expectedGen) {
+        setError(t.error);
+      }
+    });
     return () => controller.abort();
-  }, [project, token, refresh]);
+  }, [effectiveProject, loadAll, t.error]);
 
-  async function pull() {
+  async function triggerPull(instanceId: string, force: boolean) {
     const expectedGen = generation.current;
-    setRunning(true);
+    setRunningInstanceId(instanceId);
     try {
-      const targetUrl = project
-        ? `/api/v1/pulls/${pullerId}?project=${encodeURIComponent(project)}`
-        : `/api/v1/pulls/${pullerId}`;
+      const targetUrl = `/api/v1/projects/${encodeURIComponent(effectiveProject)}/pull-instances/${encodeURIComponent(instanceId)}/pull`;
       const response = await fetch(targetUrl, {
         method: "POST",
-        headers: { Authorization: `Bearer ${token}` },
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ force }),
       });
-      if (!response.ok) throw new Error();
+      if (!response.ok) {
+        throw new Error(await errorMessage(response, t.error));
+      }
       if (generation.current !== expectedGen) return;
-      await refresh(undefined, expectedGen);
-      if (generation.current === expectedGen) setError(false);
-    } catch {
-      if (generation.current === expectedGen) setError(true);
+      setForceTarget(null);
+      await loadAll(undefined, expectedGen);
+      if (generation.current === expectedGen) setError("");
+    } catch (failure) {
+      if (generation.current === expectedGen) {
+        setError(failure instanceof Error ? failure.message : t.error);
+      }
     } finally {
-      if (generation.current === expectedGen) setRunning(false);
+      if (generation.current === expectedGen) setRunningInstanceId(null);
     }
   }
-  if (!available) return error ? <Alert type="error" title={t.error} /> : null;
+
+  if (!loaded || (instances.length === 0 && pulls.length === 0)) {
+    return error ? <Alert type="error" title={error} /> : null;
+  }
+
+  const blockedAlerts = latestBlockedPulls(pulls);
+
   return (
     <section className="stack">
       <div className="page-header">
-        <Space align="center" wrap>
-          <h2 className="page-title">{t.pullRecords}</h2>
-          <Tag>{pullerId === "ossie" ? t.adapterPullOssie : t.adapterPull}</Tag>
-        </Space>
-        <div className="page-actions">
-          <Button disabled={running} onClick={() => void pull()}>
-            {t.pullNow}
-          </Button>
-        </div>
+        <h2 className="page-title">{t.pullRecords}</h2>
       </div>
-      {error && <Alert type="error" title={t.error} />}
+      {error && <Alert type="error" title={error} />}
+      {blockedAlerts.map((row) => (
+        <Alert
+          key={`blocked-${row.id}`}
+          type="warning"
+          showIcon
+          title={
+            row.instance_id
+              ? `${t.pullCircuitBreakerTitle} (${row.instance_id})`
+              : t.pullCircuitBreakerTitle
+          }
+          description={row.error || row.warnings?.join("；") || undefined}
+          action={
+            row.instance_id ? (
+              <Button
+                danger
+                type="primary"
+                disabled={runningInstanceId !== null}
+                onClick={() => setForceTarget(row)}
+              >
+                {t.pullForceButton}
+              </Button>
+            ) : undefined
+          }
+        />
+      ))}
+      {instances.length > 0 && (
+        <div className="card section-card">
+          <div className="stack">
+            {instances.map((inst) => (
+              <div
+                key={inst.id}
+                data-testid={`pull-instance-${inst.id}`}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: 12,
+                  flexWrap: "wrap",
+                }}
+              >
+                <Space wrap>
+                  <strong>{inst.display_name}</strong>
+                  <Tag>{inst.id}</Tag>
+                  <Tag color="blue">{inst.plugin_id}</Tag>
+                  <Tag color={inst.enabled ? "green" : "default"}>
+                    {inst.enabled ? t.enabled : t.disabled}
+                  </Tag>
+                  <span className="muted">
+                    {inst.schedule_cron
+                      ? `${inst.schedule_cron} (${inst.timezone})`
+                      : t.pullManualOnly}
+                  </span>
+                  {inst.last_table_count !== null && (
+                    <span className="muted">
+                      {`${t.pullLastTableCount}: ${inst.last_table_count}`}
+                    </span>
+                  )}
+                </Space>
+                <Button
+                  disabled={runningInstanceId !== null}
+                  loading={runningInstanceId === inst.id}
+                  onClick={() => void triggerPull(inst.id, false)}
+                >
+                  {t.pullNow}
+                </Button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
       <div className="card token-table-card">
         <TableScroll label={t.pullRecords}>
           <Table
             rowKey="id"
             dataSource={pulls}
+            pagination={false}
+            locale={{ emptyText: t.pullHistoryEmpty }}
             columns={[
-              { title: t.buildStartedAt, dataIndex: "started_at" },
-              { title: t.buildStatus, dataIndex: "status" },
+              {
+                title: t.pullInstance,
+                render: (_, row) => (
+                  <Space wrap>
+                    <span>{row.instance_id || "—"}</span>
+                    {row.plugin_id && <Tag>{row.plugin_id}</Tag>}
+                  </Space>
+                ),
+              },
+              {
+                title: t.pullTriggerType,
+                render: (_, row) => (
+                  <Tag>{triggerTypeLabel(row.trigger_type, t)}</Tag>
+                ),
+              },
+              {
+                title: t.buildStartedAt,
+                render: (_, row) => localTime(row.started_at),
+              },
+              {
+                title: t.buildStatus,
+                render: (_, row) => (
+                  <Space wrap>
+                    <Tag color={STATUS_COLORS[row.status] ?? "default"}>
+                      {pullStatusLabel(row.status, t)}
+                    </Tag>
+                    {row.skipped_reason === "no_changes" && (
+                      <Tag>{t.pullSkippedNoChanges}</Tag>
+                    )}
+                  </Space>
+                ),
+              },
               { title: t.entityTable, dataIndex: "tables" },
               { title: t.entityTask, dataIndex: "tasks" },
-              { title: t.pullFailure, dataIndex: "error" },
+              {
+                title: t.pullWarnings,
+                render: (_, row) =>
+                  row.warnings && row.warnings.length > 0 ? (
+                    <Alert
+                      type="warning"
+                      showIcon
+                      title={row.warnings.join("；")}
+                    />
+                  ) : (
+                    "—"
+                  ),
+              },
+              {
+                title: t.pullFailure,
+                render: (_, row) => row.error || "—",
+              },
             ]}
           />
         </TableScroll>
       </div>
+      {forceTarget !== null && (
+        <Modal
+          open
+          title={t.pullForceConfirmTitle}
+          okText={t.pullForceButton}
+          cancelText={t.cancel}
+          okButtonProps={{
+            danger: true,
+            loading: runningInstanceId !== null,
+          }}
+          onOk={() => {
+            if (forceTarget.instance_id) {
+              void triggerPull(forceTarget.instance_id, true);
+            }
+          }}
+          onCancel={() => setForceTarget(null)}
+        >
+          <div className="stack">
+            <p>
+              {t.pullForceConfirmDesc.replace(
+                "{instance}",
+                forceTarget.instance_id ?? "",
+              )}
+            </p>
+            {forceTarget.error && (
+              <Alert type="warning" showIcon title={forceTarget.error} />
+            )}
+          </div>
+        </Modal>
+      )}
     </section>
   );
 }

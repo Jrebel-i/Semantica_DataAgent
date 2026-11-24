@@ -40,6 +40,7 @@ from .db import (
     ProjectDeletion,
     ProjectMember,
     ProjectPendingBuild,
+    ProjectPullInstance,
     ProjectSetting,
     PullRecord,
     QueryExecution,
@@ -262,6 +263,9 @@ def _delete_database(project_id: str, settings: dict) -> None:
             synchronize_session=False
         )
         project_context.delete_plugin_configs(db, project_id)
+        db.query(ProjectPullInstance).filter(
+            ProjectPullInstance.project_id == project_id
+        ).delete(synchronize_session=False)
         db.query(PullRecord).filter(PullRecord.project_id == project_id).delete(
             synchronize_session=False
         )
@@ -417,13 +421,16 @@ def archive_project(project_id: str, actor_id: str, actor_name: str) -> Project:
         )
         db.flush()
     scheduler.configure(0, project_id=project_id)
+    from .scheduler import instance_pull_scheduler
+
+    instance_pull_scheduler.wake()
     return project
 
 
 def restore_project(project_id: str, actor_id: str, actor_name: str) -> Project:
     from .project_api import _schedule_interval
     from .project_audit import record_project_audit
-    from .scheduler import scheduler
+    from .scheduler import instance_pull_scheduler, scheduler
 
     with sessions().begin() as db:
         project = db.get(Project, project_id)
@@ -445,6 +452,7 @@ def restore_project(project_id: str, actor_id: str, actor_name: str) -> Project:
         db.flush()
         interval = _schedule_interval(db, project_id)
     scheduler.configure(interval, project_id=project_id)
+    instance_pull_scheduler.wake()
     return project
 
 

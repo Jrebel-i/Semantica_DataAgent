@@ -186,8 +186,9 @@ def test_upgrade_preserves_historical_gaps_as_pending(tmp_path, monkeypatch):
     from alembic import command
     from alembic.script import ScriptDirectory
     from cryptography.fernet import Fernet
-    from semantica_dataagent import cli
     from test_cli_migrate import _config
+
+    from semantica_dataagent import cli
 
     path = tmp_path / "old.sqlite"
     config = _config(path)
@@ -241,7 +242,7 @@ def test_upgrade_preserves_historical_gaps_as_pending(tmp_path, monkeypatch):
             for table in tables
         }
     assert cli.main(["migrate"]) == 0
-    assert ScriptDirectory.from_config(config).get_heads() == ["0042"]
+    assert ScriptDirectory.from_config(config).get_heads() == ["0043"]
     backups = list(tmp_path.glob("old.sqlite.bak-*"))
     assert len(backups) == 1
     with sqlite3.connect(backups[0]) as backup:

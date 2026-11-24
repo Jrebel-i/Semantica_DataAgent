@@ -590,6 +590,11 @@ def _collect_model_files(base: Path, rel_root: Path) -> list[Path]:
     return files
 
 
+def _ossie_instance_id(file_path: Path, root: Path) -> str | None:
+    parts = file_path.relative_to(root).parts
+    return parts[0] if len(parts) >= 2 else None
+
+
 def _merge_dataset(
     ds: dict[str, Any],
     rel_file: str,
@@ -597,12 +602,28 @@ def _merge_dataset(
     merged_tables: dict[tuple[str, str, str], _MergedTable],
     merged_fields: dict[tuple[tuple[str, str, str], str], _MergedField],
     stats: Counter[str],
+    *,
+    instance_id: str | None = None,
+    table_instances: dict[tuple[str, str, str], tuple[str | None, str]] | None = None,
 ) -> tuple[_DatasetMeta, list[dict[str, Any]], list[str]]:
     ds_name = ds["name"]
     catalog, database, table_name, raw_source_parts = _parse_dataset_source(
         ds["source"], strip_catalog=strip_catalog
     )
     table_key = (catalog or "", database, table_name)
+    if table_instances is not None:
+        existing_origin = table_instances.get(table_key)
+        if existing_origin is not None:
+            prev_instance, prev_file = existing_origin
+            if (
+                prev_instance is not None or instance_id is not None
+            ) and prev_instance != instance_id:
+                raise ValueError(
+                    f"Duplicate physical table {_full_table_name(table_key)!r} across puller instances: "
+                    f"{prev_instance or 'root'} ({prev_file}) vs {instance_id or 'root'} ({rel_file})"
+                )
+        else:
+            table_instances[table_key] = (instance_id, rel_file)
     table_entry = merged_tables.setdefault(
         table_key, _MergedTable(catalog=catalog, database=database, name=table_name)
     )
@@ -889,6 +910,7 @@ class OssieAdapter:
             raise ValueError(f"Source directory does not exist: {base}")
 
         rel_root = safe_name(parameters.get("path", "ossie"))
+        root = safe(base, rel_root)
         category = category_path(parameters.get("category", "ossie")).as_posix()
         strip_catalog = bool(parameters.get("strip_catalog", False))
 
@@ -900,15 +922,17 @@ class OssieAdapter:
         stats: Counter[str] = Counter()
         merged_tables: dict[tuple[str, str, str], _MergedTable] = {}
         merged_fields: dict[tuple[tuple[str, str, str], str], _MergedField] = {}
+        table_instances: dict[tuple[str, str, str], tuple[str | None, str]] = {}
         relationships: list[tuple[dict[str, Any], str]] = []
         doc_records: list[Record] = []
         index_entries: list[dict[str, str]] = []
-        seen_models: set[str] = set()
+        seen_models: dict[str, tuple[str | None, str]] = {}
         used_doc_stems: set[str] = set()
         model_source_files: list[str] = []
 
         for file_path in model_files:
             rel_file = file_path.relative_to(base).as_posix()
+            instance_id = _ossie_instance_id(file_path, root)
             raw = file_path.read_bytes()
             hashes[rel_file] = hashlib.sha256(raw).hexdigest()
             try:
@@ -922,8 +946,14 @@ class OssieAdapter:
 
             model_name = model["name"]
             if model_name in seen_models:
+                prev_inst, prev_file = seen_models[model_name]
+                if prev_inst is not None or instance_id is not None:
+                    raise ValueError(
+                        f"Duplicate Ossie model name: {model_name!r} "
+                        f"({prev_inst or 'root'}: {prev_file} vs {instance_id or 'root'}: {rel_file})"
+                    )
                 raise ValueError(f"Duplicate Ossie model name: {model_name!r}")
-            seen_models.add(model_name)
+            seen_models[model_name] = (instance_id, rel_file)
             model_source_files.append(rel_file)
             stats["models"] += 1
 
@@ -937,7 +967,14 @@ class OssieAdapter:
                         f"{rel_file}: Duplicate dataset name {ds_name!r} in model {model_name!r}"
                     )
                 meta, computed, syns = _merge_dataset(
-                    ds, rel_file, strip_catalog, merged_tables, merged_fields, stats
+                    ds,
+                    rel_file,
+                    strip_catalog,
+                    merged_tables,
+                    merged_fields,
+                    stats,
+                    instance_id=instance_id,
+                    table_instances=table_instances,
                 )
                 dataset_meta[ds_name] = meta
                 if computed:

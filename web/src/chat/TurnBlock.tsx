@@ -27,11 +27,16 @@ import type { Clarification, QueryPlan, QueryResult, Turn } from "./types";
 function hasLocalValidatedSql(turn: Turn, sqlCount: number): boolean {
   if (sqlCount === 0) return false;
   return (turn.events ?? []).some((event) => {
+    if (event.type === "query_plan" && event.data) {
+      const sql = (event.data as Record<string, unknown>).sql;
+      return typeof sql === "string" && sql.trim().length > 0;
+    }
     if (event.type !== "tool_end" || !event.data) return false;
     const data = event.data as Record<string, unknown>;
     const name = String(data.name ?? "")
       .split("__")
       .pop();
+    if (name === "propose_query" && !data.is_error) return true;
     return (
       name === "validate_sql" &&
       !data.is_error &&
@@ -80,9 +85,11 @@ export function TurnBlock({
   const result = queryEvent<QueryResult>(turn.events ?? [], "query_result");
   const awaitingPlan =
     plan !== undefined && turn.status === "awaiting_confirmation";
+  const planSqlText = plan?.sql?.trim() ? plan.sql : "";
+  const planSql = planSqlText ? normalizeSql(planSqlText) : "";
   const strippedAnswer = stripCitationRefs(turn.answer ?? "");
-  const answer = awaitingPlan
-    ? stripMatchingSql(strippedAnswer.text, plan?.sql)
+  const answer = planSqlText
+    ? stripMatchingSql(strippedAnswer.text, planSqlText)
     : strippedAnswer.text;
   const citations = [
     ...citationsOf(turn.citations),
@@ -90,10 +97,13 @@ export function TurnBlock({
   ];
   const tools = toolsOfTurn(turn.events ?? []);
   const clarifications = clarificationsOfTurn(turn.events ?? []);
-  const planSql = plan ? normalizeSql(plan.sql) : "";
-  const sql = sqlBlocks(turn.sql).filter(
-    (block) => !awaitingPlan || normalizeSql(block.sql) !== planSql,
-  );
+  const rawSql = sqlBlocks(turn.sql);
+  const matchingPlanSql = planSql
+    ? rawSql.find((block) => normalizeSql(block.sql) === planSql)
+    : undefined;
+  const sql = planSql
+    ? rawSql.filter((block) => normalizeSql(block.sql) !== planSql)
+    : rawSql;
   const planExpired = plan ? expiredPlans.includes(plan.id) : false;
   return (
     <article className="turn">
@@ -115,10 +125,10 @@ export function TurnBlock({
             messages={messages}
             failed={turnFailed(turn)}
           />
-          {awaitingPlan && plan && (
+          {awaitingPlan && plan ? (
             <section className="card query-confirmation">
               <SqlList
-                blocks={[{ sql: plan.sql }]}
+                blocks={[{ sql: plan.sql, dialect: matchingPlanSql?.dialect }]}
                 messages={messages}
                 copied={copied}
                 onCopy={onCopy}
@@ -138,6 +148,17 @@ export function TurnBlock({
                     : messages.confirmExecute}
               </Button>
             </section>
+          ) : (
+            planSqlText && (
+              <SqlList
+                blocks={[
+                  { sql: planSqlText, dialect: matchingPlanSql?.dialect },
+                ]}
+                messages={messages}
+                copied={copied}
+                onCopy={onCopy}
+              />
+            )
           )}
           {result && (
             <div className="card query-result-preview">
@@ -198,7 +219,7 @@ export function TurnBlock({
             (() => {
               const hasValidatedSql = Boolean(
                 turn.has_validated_sql ||
-                hasLocalValidatedSql(turn, sql.length),
+                hasLocalValidatedSql(turn, sql.length + (planSqlText ? 1 : 0)),
               );
               return (
                 <div className="turn-actions">

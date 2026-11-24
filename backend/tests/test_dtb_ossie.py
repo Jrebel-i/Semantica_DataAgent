@@ -970,6 +970,163 @@ def _make_fake_stores():
                         rows.append({"item": dict(p)})
                 return {"success": True, "records": rows}
 
+            if "CREATE (t:SDAEntity:SDATask) SET t = row" in q:
+                for row in params["rows"]:
+                    self.nodes.append(
+                        {
+                            "id": self._next_id,
+                            "labels": {"SDAEntity", "SDATask"},
+                            "props": {**row, "generation": gen},
+                        }
+                    )
+                    self._next_id += 1
+                return {"success": True, "records": []}
+
+            if "CREATE (a)-[r:DEPENDS_ON]->(b) SET r = row" in q:
+                for row in params["rows"]:
+                    if "SDALineageTable" in q:
+                        a = next(
+                            (
+                                n
+                                for n in self.nodes
+                                if "SDALineageTable" in n["labels"]
+                                and n["props"].get("generation") == gen
+                                and n["props"].get("name") == row["upstream"]
+                            ),
+                            None,
+                        )
+                        if a is None:
+                            a = {
+                                "id": self._next_id,
+                                "labels": {"SDAEntity", "SDALineageTable"},
+                                "props": {"generation": gen, "name": row["upstream"]},
+                            }
+                            self._next_id += 1
+                            self.nodes.append(a)
+                        b = next(
+                            (
+                                n
+                                for n in self.nodes
+                                if "SDALineageTable" in n["labels"]
+                                and n["props"].get("generation") == gen
+                                and n["props"].get("name") == row["downstream"]
+                            ),
+                            None,
+                        )
+                        if b is None:
+                            b = {
+                                "id": self._next_id,
+                                "labels": {"SDAEntity", "SDALineageTable"},
+                                "props": {
+                                    "generation": gen,
+                                    "name": row["downstream"],
+                                },
+                            }
+                            self._next_id += 1
+                            self.nodes.append(b)
+                        self.rels.append(
+                            {
+                                "type": "DEPENDS_ON",
+                                "start": a["id"],
+                                "end": b["id"],
+                                "props": dict(row),
+                            }
+                        )
+                return {"success": True, "records": []}
+
+            if "CREATE (a)-[r:FIELD_DEPENDS_ON]->(b) SET r = row" in q:
+                for row in params["rows"]:
+                    up_db, up_tbl = row["upstream_table"].split(".", 1)
+                    dn_db, dn_tbl = row["downstream_table"].split(".", 1)
+                    a = next(
+                        (
+                            n
+                            for n in self.nodes
+                            if "SDAField" in n["labels"]
+                            and n["props"].get("generation") == gen
+                            and n["props"].get("database") == up_db
+                            and n["props"].get("table") == up_tbl
+                            and n["props"].get("name") == row["upstream_field"]
+                        ),
+                        None,
+                    )
+                    b = next(
+                        (
+                            n
+                            for n in self.nodes
+                            if "SDAField" in n["labels"]
+                            and n["props"].get("generation") == gen
+                            and n["props"].get("database") == dn_db
+                            and n["props"].get("table") == dn_tbl
+                            and n["props"].get("name") == row["downstream_field"]
+                        ),
+                        None,
+                    )
+                    if a is not None and b is not None:
+                        self.rels.append(
+                            {
+                                "type": "FIELD_DEPENDS_ON",
+                                "start": a["id"],
+                                "end": b["id"],
+                                "props": dict(row),
+                            }
+                        )
+                return {"success": True, "records": []}
+
+            if (
+                "MATCH (t:SDATask {generation:$generation, name:$name}) RETURN properties(t) AS task"
+                in q
+            ):
+                return {
+                    "success": True,
+                    "records": [
+                        {"task": dict(n["props"])}
+                        for n in self.nodes
+                        if "SDATask" in n["labels"]
+                        and n["props"].get("generation") == gen
+                        and n["props"].get("name") == params["name"]
+                    ],
+                }
+
+            if (
+                "MATCH (start:SDALineageTable {generation:$generation, name:$table})"
+                in q
+            ):
+                start = next(
+                    (
+                        n
+                        for n in self.nodes
+                        if "SDALineageTable" in n["labels"]
+                        and n["props"].get("generation") == gen
+                        and n["props"].get("name") == params["table"]
+                    ),
+                    None,
+                )
+                if start is None:
+                    return {"success": True, "records": []}
+                is_up = "<-[:DEPENDS_ON" in q
+                visited = {start["id"]}
+                frontier = [start["id"]]
+                edges = []
+                for _ in range(3):
+                    next_frontier = []
+                    for nid in frontier:
+                        for rel in self.rels:
+                            if rel["type"] != "DEPENDS_ON":
+                                continue
+                            if is_up and rel["end"] == nid:
+                                edges.append({"edge": dict(rel["props"])})
+                                if rel["start"] not in visited:
+                                    visited.add(rel["start"])
+                                    next_frontier.append(rel["start"])
+                            elif not is_up and rel["start"] == nid:
+                                edges.append({"edge": dict(rel["props"])})
+                                if rel["end"] not in visited:
+                                    visited.add(rel["end"])
+                                    next_frontier.append(rel["end"])
+                    frontier = next_frontier
+                return {"success": True, "records": edges}
+
             if "MATCH (c:SDAChunk {generation:$generation})" in q:
                 pairs = params.get("pairs") or []
                 return {
@@ -1181,6 +1338,7 @@ def test_convert_dtb_ossie_cli_and_full_build_round_trip(tmp_path, monkeypatch, 
     assert exit_code == 0, capsys.readouterr()
     assert (project_src / "ossie" / "sales_domain.yaml").is_file()
     assert (project_src / "dimension_values.json").is_file()
+    assert (project_src / "tasks.json").is_file()
 
     # Build the converted directory with ossie + canonical + markdown (dtb disabled)
     monkeypatch.setenv("DATAAGENT_AGENT_MODE", "local")
@@ -1242,7 +1400,6 @@ def test_convert_dtb_ossie_cli_and_full_build_round_trip(tmp_path, monkeypatch, 
                         {"id": "ossie", "enabled": True, "parameters": {}},
                         {"id": "canonical", "enabled": True, "parameters": {}},
                         {"id": "markdown", "enabled": True, "parameters": {}},
-                        {"id": "dtb", "enabled": False, "parameters": {}},
                     ]
                 },
             ).status_code
@@ -1263,9 +1420,22 @@ def test_convert_dtb_ossie_cli_and_full_build_round_trip(tmp_path, monkeypatch, 
         knowledge.run_build(bid)
         sql_validation._snapshot_cache = None
 
+    from semantica_dataagent.task_api import get_lineage, read_task_sql
+
     with sessions()() as db:
         build_row = db.get(Build, bid)
         assert build_row.status == "succeeded", build_row.error
+
+    # Verify SDATask, read_task_sql, and table lineage survive convert-dtb-ossie round-trip
+    sales_task = read_task_sql("t_sales")
+    assert "dwd.fact_sales" in sales_task["sql"]
+    assert sales_task["type"] == "spark"
+    up_lineage = get_lineage("dwd.fact_sales", "up", depth=1)
+    assert {edge["upstream"] for edge in up_lineage} >= {
+        "ods.raw_sales",
+        "dimensions.dim_city",
+        "dimensions.dim_region",
+    }
 
     # Verify describe_tables shows partition mark + verbatim 'HK ' enum note
     described = {f"{t['database']}.{t['name']}": t for t in knowledge.describe()}
@@ -1386,16 +1556,19 @@ submit_sql_and_wait "${sql_q}"
     assert len(res.document["relationships"]) == 1
     assert res.dimension_values == []
 
-    # Low-cardinality only output must NOT create dimension_values.json
+    # Low-cardinality only output must NOT create dimension_values.json, while writing tasks.json
     out_dir = tmp_path / "low_only_out"
     written = write_dtb_ossie_output(res, out_dir, model_name="qualify_model")
-    assert set(written) == {"ossie"}
+    assert set(written) == {"ossie", "tasks"}
     assert not (out_dir / "dimension_values.json").exists()
+    assert (out_dir / "tasks.json").is_file()
 
     with pytest.raises(ValueError):
         write_dtb_ossie_output(res, out_dir, ossie_path="../escape")
     with pytest.raises(ValueError):
         write_dtb_ossie_output(res, out_dir, dimension_filename=".hidden.json")
+    with pytest.raises(ValueError):
+        write_dtb_ossie_output(res, out_dir, tasks_filename=".hidden_tasks.json")
 
     from pathlib import Path
 
@@ -1416,3 +1589,231 @@ submit_sql_and_wait "${sql_q}"
         check=False,
     )
     assert unknown_proc.returncode != 0
+
+
+def test_convert_dtb_to_ossie_emits_canonical_tasks_and_prefixes(tmp_path):
+    import json
+    from pathlib import Path
+
+    import pytest
+    from jsonschema import validate
+
+    from semantica_dataagent.dtb_ossie import (
+        convert_dtb_to_ossie,
+        write_dtb_ossie_output,
+    )
+    from semantica_dataagent.ossie_export import validate_ossie_document
+    from semantica_dataagent.ossie_source import OssieAdapter
+
+    task_schema = json.loads(
+        (
+            Path(__file__).resolve().parents[2] / "schemas" / "v2" / "task.schema.json"
+        ).read_text(encoding="utf-8")
+    )
+    dim_schema = json.loads(
+        (
+            Path(__file__).resolve().parents[2]
+            / "schemas"
+            / "v2"
+            / "dimension_value.schema.json"
+        ).read_text(encoding="utf-8")
+    )
+
+    table_rows = [
+        _table_row(
+            1, "ods", "raw_orders", "order_id", "bigint", 1, "原始订单", "订单ID"
+        ),
+        _table_row(
+            1, "ods", "raw_orders", "city_id", "string", 2, "原始订单", "城市ID"
+        ),
+        _table_row(
+            2,
+            "dwd",
+            "fact_orders",
+            "order_id",
+            "bigint",
+            1,
+            "事实订单",
+            "订单ID",
+            output_task_id="1",
+        ),
+        _table_row(
+            2, "dwd", "fact_orders", "city_id", "string", 2, "事实订单", "城市ID"
+        ),
+        _table_row(
+            3, "dimensions", "dim_city", "city_id", "string", 1, "城市维表", "城市ID"
+        ),
+        _table_row(
+            3,
+            "dimensions",
+            "dim_city",
+            "city_name",
+            "string",
+            2,
+            "城市维表",
+            "城市名称",
+        ),
+    ]
+    task_rows = [
+        [
+            "1",
+            "load_fact_orders",
+            "spark sql",
+            "INSERT OVERWRITE TABLE dwd.fact_orders SELECT r.order_id, r.city_id FROM ods.raw_orders r JOIN dimensions.dim_city c ON r.city_id = c.city_id",
+            None,
+            "订单域",
+            "",
+            "dwd.fact_orders",
+        ],
+        [
+            "2",
+            "merge_dim_city",
+            "merge onself",
+            "",
+            '{"params": {"table": "dimensions.dim_city"}}',
+            "维度域",
+            "",
+            "dimensions.dim_city",
+        ],
+    ]
+    city_rows = [{"city_id": f"C{i}", "city_name": f"City_{i}"} for i in range(1, 7)]
+
+    src = tmp_path / "src"
+    _write_dtb_snapshot(
+        src,
+        table_rows=table_rows,
+        task_rows=task_rows,
+        dimensions={"dim_city": (["city_id", "city_name"], city_rows)},
+    )
+
+    res = convert_dtb_to_ossie(
+        src,
+        model_name="prefixed_model",
+        low_cardinality_limit=3,
+        sample_limit=2,
+        catalog_prefix="lake_prod",
+        task_namespace="team.orders",
+    )
+    validate_ossie_document(res.document)
+
+    by_ds = {ds["source"]: ds for ds in res.document["datasets"]}
+    assert {
+        "lake_prod.ods.raw_orders",
+        "lake_prod.dwd.fact_orders",
+        "lake_prod.dimensions.dim_city",
+    } == set(by_ds)
+    assert (
+        "lake_prod.ods.raw_orders"
+        in by_ds["lake_prod.dwd.fact_orders"]["ai_context"]["instructions"]
+    )
+
+    assert len(res.tasks) == 2
+    for task in res.tasks:
+        validate(task, task_schema)
+    by_task = {t["name"]: t for t in res.tasks}
+    assert set(by_task) == {
+        "team.orders:load_fact_orders",
+        "team.orders:merge_dim_city",
+    }
+    assert by_task["team.orders:load_fact_orders"]["type"] == "spark"
+    assert by_task["team.orders:load_fact_orders"]["description"] == "订单域"
+    assert by_task["team.orders:merge_dim_city"]["parameters"] == {
+        "params": {"table": "dimensions.dim_city"}
+    }
+
+    assert res.dimension_values
+    for item in res.dimension_values:
+        validate(item, dim_schema)
+        assert item["row_id"].startswith("lake_prod.dimensions.dim_city:")
+
+    out_dir = tmp_path / "out"
+    written = write_dtb_ossie_output(res, out_dir, model_name="prefixed_model")
+    assert set(written) == {"ossie", "dimension_values", "tasks"}
+    read_back = OssieAdapter().read(out_dir, {"path": "ossie"})
+    table_catalogs = {
+        r.data.get("catalog") for r in read_back.records if r.kind == "table"
+    }
+    assert table_catalogs == {"lake_prod"}
+
+    with pytest.raises(ValueError, match="catalog_prefix"):
+        convert_dtb_to_ossie(src, catalog_prefix="bad-catalog")
+    with pytest.raises(ValueError, match="task_namespace"):
+        convert_dtb_to_ossie(src, task_namespace="bad namespace")
+
+
+def test_large_dimension_table_streaming_and_export_cap(tmp_path) -> None:
+    """Tables >2000 rows stream per table and cap >1000-distinct exports without OOM."""
+    from semantica_dataagent.dtb_ossie import convert_dtb_to_ossie
+
+    src = tmp_path / "src"
+    dim_rows = [
+        {
+            "id": f"ID_{i}",
+            "region_code": f"R{i % 25:02d}",
+            "region_name": f"Name_R{i % 25:02d}",
+        }
+        for i in range(2500)
+    ]
+    _write_dtb_snapshot(
+        src,
+        table_rows=[
+            [
+                "t_big",
+                "dim_big",
+                "dimensions",
+                "大维表",
+                None,
+                None,
+                "id",
+                1,
+                "STRING",
+                "主键",
+                "主键",
+            ],
+            [
+                "t_big",
+                "dim_big",
+                "dimensions",
+                "大维表",
+                None,
+                None,
+                "region_code",
+                2,
+                "STRING",
+                "区域码",
+                "区域码",
+            ],
+            [
+                "t_big",
+                "dim_big",
+                "dimensions",
+                "大维表",
+                None,
+                None,
+                "region_name",
+                3,
+                "STRING",
+                "区域名",
+                "区域名",
+            ],
+        ],
+        task_rows=[],
+        dimensions={"dim_big": (["id", "region_code", "region_name"], dim_rows)},
+    )
+
+    res = convert_dtb_to_ossie(src, low_cardinality_limit=20)
+    ds = res.document["datasets"][0]
+    fields_by_name = {f["name"]: f for f in ds["fields"]}
+    assert "共 2500 个去重值" in fields_by_name["id"]["ai_context"]["instructions"]
+    assert (
+        "共 25 个去重值" in fields_by_name["region_code"]["ai_context"]["instructions"]
+    )
+
+    id_vals = [d for d in res.dimension_values if d["field"] == "id"]
+    reg_vals = [d for d in res.dimension_values if d["field"] == "region_code"]
+    reg_names = [d for d in res.dimension_values if d["field"] == "region_name"]
+    # >1000 distinct column is capped at 1001 entries (enough for dimension_too_many=True)
+    assert len(id_vals) == 1001
+    # <=1000 distinct column keeps 1 representative per distinct value + paired *_name alias
+    assert len(reg_vals) == 25
+    assert len(reg_names) == 25

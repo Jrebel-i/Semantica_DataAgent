@@ -430,30 +430,93 @@ function adapterRows() {
       },
       compatible: true,
       reason: null,
-      pull: null,
     },
     {
-      id: "dtb",
-      name: "DTB export",
+      id: "ossie",
+      name: "Apache Ossie",
       project_types: ["warehouse"],
       enabled: false,
       parameters: {},
-      parameters_schema: { type: "object", properties: {} },
+      parameters_schema: {
+        type: "object",
+        properties: { path: { type: "string", default: "ossie" } },
+      },
       compatible: true,
       reason: null,
-      pull: {
-        enabled: false,
-        parameters: {},
-        parameters_schema: {
-          type: "object",
-          properties: {
-            url: { type: "string" },
-            token: { type: "string", format: "password" },
-            interval_seconds: { type: "integer" },
-          },
-        },
-        token_configured: false,
+    },
+  ];
+}
+
+function dtbPullerPlugin() {
+  return {
+    id: "dtb",
+    version: "1",
+    display_name: "DTB",
+    secret_keys: ["token"],
+    parameters_schema: {
+      type: "object",
+      properties: {
+        url: { type: "string", format: "uri", title: "DTB 服务地址" },
+        token: { type: "string", format: "password", title: "DTB 访问凭据" },
+        max_tables: { type: "integer", title: "最大拉取表数" },
       },
+    },
+  };
+}
+
+function samplePullInstance(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "dtb-main",
+    project_id: "default",
+    plugin_id: "dtb",
+    display_name: "主数仓 DTB",
+    enabled: true,
+    parameters: { url: "https://dtb.example" },
+    configured_secrets: ["token"],
+    secret_configured: true,
+    schedule_cron: "30 2 * * *",
+    timezone: "Asia/Shanghai",
+    catalog_prefix: "hive_prod",
+    task_namespace: "prod_etl",
+    drop_threshold: 0.5,
+    last_table_count: 120,
+    last_triggered_at: created,
+    created_at: created,
+    updated_at: created,
+    ...overrides,
+  };
+}
+
+function sampleExecutors() {
+  return [
+    {
+      id: "dtb",
+      name: "DTB",
+      enabled: false,
+      parameters: {},
+      parameters_schema: {
+        type: "object",
+        properties: {
+          base_url: { type: "string", format: "uri", title: "DTB 地址" },
+          row_limit: { type: "integer", default: 1000, title: "返回行数上限" },
+        },
+      },
+      compatible: true,
+      reason: null,
+    },
+    {
+      id: "doris",
+      name: "Doris",
+      enabled: false,
+      parameters: {},
+      parameters_schema: {
+        type: "object",
+        properties: {
+          endpoint: { type: "string", title: "Doris 地址" },
+        },
+      },
+      compatible: true,
+      reason: null,
     },
   ];
 }
@@ -491,15 +554,15 @@ test("shows incompatible adapters disabled with a reason", async () => {
   expect(
     await screen.findByText("该适配器仅支持数仓型项目，不能用于文档型项目"),
   ).toBeTruthy();
-  const dtb = screen.getByRole("checkbox", { name: "DTB export" });
-  expect((dtb as HTMLInputElement).disabled).toBe(true);
+  const ossie = screen.getByRole("checkbox", { name: "Apache Ossie" });
+  expect((ossie as HTMLInputElement).disabled).toBe(true);
   expect(
     (screen.getByRole("checkbox", { name: "Markdown" }) as HTMLInputElement)
       .disabled,
   ).toBe(false);
 });
 
-test("saves enabled adapters and DTB pull configuration", async () => {
+test("saves enabled source adapters without legacy pull payloads", async () => {
   let rows = adapterRows();
   const calls: Array<{ url: string; method?: string; body?: string }> = [];
   vi.stubGlobal(
@@ -525,6 +588,11 @@ test("saves enabled adapters and DTB pull configuration", async () => {
         }
         return Response.json(rows);
       }
+      if (url === "/api/v1/puller-plugins") return Response.json([]);
+      if (url === "/api/v1/projects/default/pull-instances")
+        return Response.json([]);
+      if (url === "/api/v1/projects/default/executors")
+        return Response.json([]);
       if (url === "/api/v1/projects/default/members") return Response.json([]);
       if (url === "/api/v1/users") return Response.json([]);
       return Response.json({});
@@ -533,10 +601,9 @@ test("saves enabled adapters and DTB pull configuration", async () => {
   render(<ProjectsPage token="admin" messages={getMessages("zh")} />);
   fireEvent.click(await screen.findByRole("button", { name: "项目成员" }));
 
-  fireEvent.click(await screen.findByRole("checkbox", { name: "DTB export" }));
-  fireEvent.change(await screen.findByLabelText("url"), {
-    target: { value: "https://dtb.example" },
-  });
+  fireEvent.click(
+    await screen.findByRole("checkbox", { name: "Apache Ossie" }),
+  );
   fireEvent.click(screen.getByRole("button", { name: "保存适配器配置" }));
 
   await waitFor(() => {
@@ -549,16 +616,13 @@ test("saves enabled adapters and DTB pull configuration", async () => {
     const body = JSON.parse(put?.body ?? "{}") as {
       adapters: Array<Record<string, unknown>>;
     };
-    const dtb = body.adapters.find((row) => row.id === "dtb");
-    expect(dtb?.enabled).toBe(true);
-    expect(dtb?.pull).toEqual({
-      enabled: false,
-      parameters: { url: "https://dtb.example" },
-    });
+    const ossie = body.adapters.find((row) => row.id === "ossie");
+    expect(ossie?.enabled).toBe(true);
+    expect(ossie).not.toHaveProperty("pull");
   });
 });
 
-test("renders adapters read-only for project members", async () => {
+test("renders adapters, puller instances and executors read-only for project members", async () => {
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url: string) => {
@@ -568,6 +632,12 @@ test("renders adapters read-only for project members", async () => {
         ]);
       if (url === "/api/v1/projects/default/adapters")
         return Response.json(adapterRows());
+      if (url === "/api/v1/puller-plugins")
+        return Response.json([dtbPullerPlugin()]);
+      if (url === "/api/v1/projects/default/pull-instances")
+        return Response.json([samplePullInstance()]);
+      if (url === "/api/v1/projects/default/executors")
+        return Response.json(sampleExecutors());
       if (url === "/api/v1/projects/default/members") return Response.json([]);
       if (url === "/api/v1/users") return Response.json([]);
       return Response.json({});
@@ -586,130 +656,667 @@ test("renders adapters read-only for project members", async () => {
   const markdown = await screen.findByRole("checkbox", { name: "Markdown" });
   expect((markdown as HTMLInputElement).disabled).toBe(true);
   expect(screen.queryByRole("button", { name: "保存适配器配置" })).toBeNull();
+  expect(await screen.findByText("主数仓 DTB")).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "新增拉取器实例" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "保存查询执行器" })).toBeNull();
+  const dtbExec = screen.getByRole("checkbox", { name: "DTB" });
+  expect((dtbExec as HTMLInputElement).disabled).toBe(true);
 });
 
-test("renders DTB 拉取为 Ossie configuration and keeps puller enablement mutually exclusive", async () => {
-  const rows = [
-    ...adapterRows().map((row) =>
-      row.id === "dtb"
-        ? {
-            ...row,
-            enabled: true,
-            pull: {
-              ...row.pull!,
-              enabled: true,
-              parameters: { url: "https://dtb-legacy.example" },
-            },
-          }
-        : row,
-    ),
-    {
-      id: "ossie",
-      name: "Apache Ossie",
-      project_types: ["warehouse"],
-      enabled: false,
-      parameters: {},
-      parameters_schema: {
-        type: "object",
-        properties: {
-          path: { type: "string", default: "ossie" },
-          category: { type: "string", default: "ossie" },
-        },
-      },
-      compatible: true,
-      reason: null,
-      pull: {
-        enabled: false,
-        parameters: {},
-        parameters_schema: {
-          type: "object",
-          properties: {
-            url: { type: "string" },
-            token: { type: "string", format: "password" },
-            interval_seconds: { type: "integer" },
-          },
-        },
-        token_configured: true,
-      },
-    },
-  ];
-  const calls: Array<{ url: string; method?: string; body?: string }> = [];
+test("manages puller instances CRUD with JSON Schema form and *** secret masking", async () => {
+  let instances = [samplePullInstance()];
+  const calls: Array<{ url: string; method?: string; body?: unknown }> = [];
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url: string, options?: RequestInit) => {
-      calls.push({
-        url,
-        method: options?.method,
-        body: options?.body as string | undefined,
-      });
+      const parsedBody = options?.body
+        ? JSON.parse(String(options.body))
+        : undefined;
+      calls.push({ url, method: options?.method, body: parsedBody });
       if (url === "/api/v1/projects") return Response.json([projectRow()]);
-      if (url === "/api/v1/projects/default/adapters") {
-        return Response.json(rows);
-      }
+      if (url === "/api/v1/projects/default/adapters")
+        return Response.json(adapterRows());
       if (url === "/api/v1/projects/default/members") return Response.json([]);
       if (url === "/api/v1/users") return Response.json([]);
+      if (url === "/api/v1/puller-plugins")
+        return Response.json([dtbPullerPlugin()]);
+      if (url === "/api/v1/projects/default/executors")
+        return Response.json(sampleExecutors());
+      if (url === "/api/v1/projects/default/pull-instances") {
+        if (options?.method === "POST") {
+          const createdInst = samplePullInstance({
+            id: parsedBody.id,
+            display_name: parsedBody.display_name,
+            schedule_cron: "30 2 * * *",
+            catalog_prefix: parsedBody.catalog_prefix,
+            task_namespace: parsedBody.task_namespace,
+            drop_threshold: parsedBody.drop_threshold,
+            parameters: { url: parsedBody.parameters.url },
+          });
+          instances = [...instances, createdInst];
+          return Response.json(createdInst, { status: 201 });
+        }
+        return Response.json(instances);
+      }
+      if (url === "/api/v1/projects/default/pull-instances/dtb-main") {
+        if (options?.method === "PUT") {
+          instances = instances.map((item) =>
+            item.id === "dtb-main"
+              ? {
+                  ...item,
+                  display_name: parsedBody.display_name,
+                  secret_configured:
+                    parsedBody.parameters?.token === ""
+                      ? false
+                      : item.secret_configured,
+                  configured_secrets:
+                    parsedBody.parameters?.token === ""
+                      ? []
+                      : item.configured_secrets,
+                }
+              : item,
+          );
+          return Response.json(instances[0]);
+        }
+        if (options?.method === "DELETE") {
+          instances = instances.filter((item) => item.id !== "dtb-main");
+          return new Response(null, { status: 204 });
+        }
+      }
       return Response.json({});
     }),
   );
+
   render(<ProjectsPage token="admin" messages={getMessages("zh")} />);
   fireEvent.click(await screen.findByRole("button", { name: "项目成员" }));
 
-  const ossieCard = await screen.findByTestId("adapter-ossie");
-  const dtbCard = screen.getByTestId("adapter-dtb");
+  const section = await screen.findByTestId("puller-instances-section");
+  expect(within(section).getByText("dtb-main")).toBeTruthy();
+  expect(within(section).getByText("主数仓 DTB")).toBeTruthy();
+  expect(within(section).getByText("hive_prod / prod_etl")).toBeTruthy();
+  expect(within(section).getByText("已配置")).toBeTruthy();
+
+  // Create new puller instance
   fireEvent.click(
-    within(ossieCard).getByRole("checkbox", { name: "Apache Ossie" }),
+    within(section).getByRole("button", { name: "新增拉取器实例" }),
+  );
+  const createModal = await screen.findByRole("dialog");
+  fireEvent.change(within(createModal).getByLabelText("实例标识"), {
+    target: { value: "dtb-dim" },
+  });
+  fireEvent.change(within(createModal).getByLabelText("显示名称"), {
+    target: { value: "维度拉取" },
+  });
+  fireEvent.change(within(createModal).getByLabelText("定时规则"), {
+    target: { value: "02:30" },
+  });
+  fireEvent.change(within(createModal).getByLabelText("Catalog 前缀"), {
+    target: { value: "hive_dim" },
+  });
+  fireEvent.change(within(createModal).getByLabelText("任务命名空间"), {
+    target: { value: "dim_ns" },
+  });
+  fireEvent.change(within(createModal).getByLabelText("url"), {
+    target: { value: "https://dtb-dim.example" },
+  });
+  fireEvent.change(within(createModal).getByLabelText("token"), {
+    target: { value: "secret-123" },
+  });
+  fireEvent.click(
+    within(createModal).getByRole("button", { name: /^保\s*存$/ }),
   );
 
-  expect(await within(ossieCard).findByText("DTB 拉取为 Ossie")).toBeTruthy();
+  await waitFor(() =>
+    expect(
+      calls.some(
+        (call) =>
+          call.url === "/api/v1/projects/default/pull-instances" &&
+          call.method === "POST",
+      ),
+    ).toBe(true),
+  );
+  const createCall = calls.find(
+    (call) =>
+      call.url === "/api/v1/projects/default/pull-instances" &&
+      call.method === "POST",
+  );
+  expect(createCall?.body).toMatchObject({
+    id: "dtb-dim",
+    plugin_id: "dtb",
+    display_name: "维度拉取",
+    schedule_cron: "02:30",
+    timezone: "Asia/Shanghai",
+    catalog_prefix: "hive_dim",
+    task_namespace: "dim_ns",
+    drop_threshold: 0.5,
+    parameters: {
+      url: "https://dtb-dim.example",
+      token: "secret-123",
+    },
+  });
+  expect(await within(section).findByText("dtb-dim")).toBeTruthy();
+
+  // Edit dtb-main preserving *** secret first
+  const mainRow = within(section)
+    .getByText("dtb-main")
+    .closest("tr") as HTMLElement;
+  fireEvent.click(within(mainRow).getByRole("button", { name: "编辑" }));
+  const editModal = await screen.findByRole("dialog");
+  const tokenInput = within(editModal).getByLabelText(
+    "token",
+  ) as HTMLInputElement;
+  expect(tokenInput.value).toBe("***");
+  fireEvent.change(within(editModal).getByLabelText("显示名称"), {
+    target: { value: "主数仓 DTB v2" },
+  });
+  fireEvent.click(within(editModal).getByRole("button", { name: /^保\s*存$/ }));
+  await waitFor(() =>
+    expect(
+      calls.some(
+        (call) =>
+          call.url === "/api/v1/projects/default/pull-instances/dtb-main" &&
+          call.method === "PUT",
+      ),
+    ).toBe(true),
+  );
   expect(
-    within(ossieCard).getByText("凭据已保存；留空表示不修改"),
+    calls.find(
+      (call) =>
+        call.url === "/api/v1/projects/default/pull-instances/dtb-main" &&
+        call.method === "PUT",
+    )?.body,
+  ).toMatchObject({
+    display_name: "主数仓 DTB v2",
+    parameters: { url: "https://dtb.example", token: "***" },
+  });
+
+  // Edit dtb-main and explicitly clear token -> sends ""
+  const updatedMainRow = (
+    await within(section).findByText("主数仓 DTB v2")
+  ).closest("tr") as HTMLElement;
+  fireEvent.click(within(updatedMainRow).getByRole("button", { name: "编辑" }));
+  const clearModal = await screen.findByRole("dialog");
+  fireEvent.change(within(clearModal).getByLabelText("token"), {
+    target: { value: "" },
+  });
+  fireEvent.click(
+    within(clearModal).getByRole("button", { name: /^保\s*存$/ }),
+  );
+  await waitFor(() =>
+    expect(
+      calls.filter(
+        (call) =>
+          call.url === "/api/v1/projects/default/pull-instances/dtb-main" &&
+          call.method === "PUT",
+      ),
+    ).toHaveLength(2),
+  );
+  const clearCall = calls
+    .filter(
+      (call) =>
+        call.url === "/api/v1/projects/default/pull-instances/dtb-main" &&
+        call.method === "PUT",
+    )
+    .at(-1);
+  expect(clearCall?.body).toMatchObject({
+    parameters: { url: "https://dtb.example", token: "" },
+  });
+
+  // Delete dtb-main with confirmation modal
+  fireEvent.click(within(updatedMainRow).getByRole("button", { name: "删除" }));
+  const delModal = await screen.findByRole("dialog");
+  fireEvent.click(within(delModal).getByRole("button", { name: /^删\s*除$/ }));
+  await waitFor(() =>
+    expect(
+      calls.some(
+        (call) =>
+          call.url === "/api/v1/projects/default/pull-instances/dtb-main" &&
+          call.method === "DELETE",
+      ),
+    ).toBe(true),
+  );
+});
+
+test("configures project-level query executors with mutual exclusion and disabled hint", async () => {
+  const calls: Array<{ url: string; method?: string; body?: unknown }> = [];
+  let executors = sampleExecutors();
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string, options?: RequestInit) => {
+      const parsedBody = options?.body
+        ? JSON.parse(String(options.body))
+        : undefined;
+      calls.push({ url, method: options?.method, body: parsedBody });
+      if (url === "/api/v1/projects") return Response.json([projectRow()]);
+      if (url === "/api/v1/projects/default/adapters")
+        return Response.json(adapterRows());
+      if (url === "/api/v1/projects/default/members") return Response.json([]);
+      if (url === "/api/v1/users") return Response.json([]);
+      if (url === "/api/v1/puller-plugins") return Response.json([]);
+      if (url === "/api/v1/projects/default/pull-instances")
+        return Response.json([]);
+      if (url === "/api/v1/projects/default/executors") {
+        if (options?.method === "PUT") {
+          executors = executors.map((item) => {
+            const next = (
+              parsedBody.executors as Array<{
+                id: string;
+                enabled: boolean;
+                parameters: Record<string, unknown>;
+              }>
+            ).find((e) => e.id === item.id);
+            return next
+              ? { ...item, enabled: next.enabled, parameters: next.parameters }
+              : item;
+          });
+        }
+        return Response.json(executors);
+      }
+      return Response.json({});
+    }),
+  );
+
+  render(<ProjectsPage token="admin" messages={getMessages("zh")} />);
+  fireEvent.click(await screen.findByRole("button", { name: "项目成员" }));
+
+  const execSection = await screen.findByTestId("executors-section");
+  expect(
+    within(execSection).getByText(
+      "未启用查询执行器时仅支持知识问答，不开放取数",
+    ),
   ).toBeTruthy();
 
-  const dtbPullCheckbox = within(dtbCard).getByRole("checkbox", {
-    name: "启用",
+  const dtbBox = within(execSection).getByRole("checkbox", {
+    name: "DTB",
   }) as HTMLInputElement;
-  const ossiePullCheckbox = within(ossieCard).getByRole("checkbox", {
-    name: "启用",
+  const dorisBox = within(execSection).getByRole("checkbox", {
+    name: "Doris",
   }) as HTMLInputElement;
-  expect(dtbPullCheckbox.checked).toBe(true);
-  expect(ossiePullCheckbox.checked).toBe(false);
-
-  // Enabling ossie pull automatically unchecks dtb pull
-  fireEvent.click(ossiePullCheckbox);
-  expect(ossiePullCheckbox.checked).toBe(true);
-  expect(dtbPullCheckbox.checked).toBe(false);
-
-  // Re-enabling dtb pull automatically unchecks ossie pull, then switch back to ossie
-  fireEvent.click(dtbPullCheckbox);
-  expect(dtbPullCheckbox.checked).toBe(true);
-  expect(ossiePullCheckbox.checked).toBe(false);
-  fireEvent.click(ossiePullCheckbox);
-  expect(ossiePullCheckbox.checked).toBe(true);
-  expect(dtbPullCheckbox.checked).toBe(false);
-
-  fireEvent.change(within(ossieCard).getByLabelText("url"), {
-    target: { value: "https://dtb.ossie.example" },
+  fireEvent.click(dtbBox);
+  expect(dtbBox.checked).toBe(true);
+  expect(
+    within(execSection).queryByText(
+      "未启用查询执行器时仅支持知识问答，不开放取数",
+    ),
+  ).toBeNull();
+  fireEvent.change(within(execSection).getByLabelText("base_url"), {
+    target: { value: "https://dtb-exec.example" },
   });
-  fireEvent.click(screen.getByRole("button", { name: "保存适配器配置" }));
 
+  // Toggling Doris turns off DTB automatically (at most 1 enabled)
+  fireEvent.click(dorisBox);
+  expect(dorisBox.checked).toBe(true);
+  expect(dtbBox.checked).toBe(false);
+  fireEvent.click(dtbBox);
+  expect(dtbBox.checked).toBe(true);
+  expect(dorisBox.checked).toBe(false);
+
+  fireEvent.click(
+    within(execSection).getByRole("button", { name: "保存查询执行器" }),
+  );
+  await waitFor(() =>
+    expect(
+      calls.some(
+        (call) =>
+          call.url === "/api/v1/projects/default/executors" &&
+          call.method === "PUT",
+      ),
+    ).toBe(true),
+  );
+  const put = calls.find(
+    (call) =>
+      call.url === "/api/v1/projects/default/executors" &&
+      call.method === "PUT",
+  );
+  expect(put?.body).toEqual({
+    executors: [
+      {
+        id: "dtb",
+        enabled: true,
+        parameters: { base_url: "https://dtb-exec.example" },
+      },
+    ],
+  });
+});
+
+test("omits unconfigured disabled executors while sending previously-enabled executors on switch and disable", async () => {
+  const puts: Array<{
+    executors: Array<{
+      id: string;
+      enabled: boolean;
+      parameters: Record<string, unknown>;
+    }>;
+  }> = [];
+  const [dtbExec, dorisExec] = sampleExecutors();
+  let executors: Array<{
+    id: string;
+    name: string;
+    enabled: boolean;
+    parameters: Record<string, unknown>;
+    parameters_schema: Record<string, unknown>;
+    compatible: boolean;
+    reason: string | null;
+  }> = [
+    {
+      ...dtbExec,
+      parameters_schema: {
+        ...dtbExec.parameters_schema,
+        required: ["base_url"],
+      },
+    },
+    dorisExec,
+  ];
+
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string, options?: RequestInit) => {
+      const parsedBody = options?.body
+        ? JSON.parse(String(options.body))
+        : undefined;
+      if (url === "/api/v1/projects") return Response.json([projectRow()]);
+      if (url === "/api/v1/projects/default/adapters")
+        return Response.json(adapterRows());
+      if (url === "/api/v1/projects/default/members") return Response.json([]);
+      if (url === "/api/v1/users") return Response.json([]);
+      if (url === "/api/v1/puller-plugins") return Response.json([]);
+      if (url === "/api/v1/projects/default/pull-instances")
+        return Response.json([]);
+      if (url === "/api/v1/projects/default/executors") {
+        if (options?.method === "PUT") {
+          puts.push(parsedBody);
+          executors = executors.map((item) => {
+            const next = (
+              parsedBody.executors as Array<{
+                id: string;
+                enabled: boolean;
+                parameters: Record<string, unknown>;
+              }>
+            ).find((e) => e.id === item.id);
+            return next
+              ? { ...item, enabled: next.enabled, parameters: next.parameters }
+              : item;
+          });
+        }
+        return Response.json(executors);
+      }
+      return Response.json({});
+    }),
+  );
+
+  render(<ProjectsPage token="admin" messages={getMessages("zh")} />);
+  fireEvent.click(await screen.findByRole("button", { name: "项目成员" }));
+
+  const execSection = await screen.findByTestId("executors-section");
+  const dtbBox = within(execSection).getByRole("checkbox", {
+    name: "DTB",
+  }) as HTMLInputElement;
+  const dorisBox = within(execSection).getByRole("checkbox", {
+    name: "Doris",
+  }) as HTMLInputElement;
+  const saveBtn = within(execSection).getByRole("button", {
+    name: "保存查询执行器",
+  });
+
+  // 1. Saving with all unconfigured executors disabled sends empty array (omits unconfigured DTB & Doris)
+  fireEvent.click(saveBtn);
+  await waitFor(() => expect(puts).toHaveLength(1));
+  expect(puts[0]).toEqual({ executors: [] });
+
+  // 2. Enabling only Doris while DTB is unconfigured & disabled omits DTB
+  fireEvent.click(dorisBox);
+  fireEvent.change(within(execSection).getByLabelText("endpoint"), {
+    target: { value: "https://doris.example" },
+  });
+  fireEvent.click(saveBtn);
+  await waitFor(() => expect(puts).toHaveLength(2));
+  expect(puts[1]).toEqual({
+    executors: [
+      {
+        id: "doris",
+        enabled: true,
+        parameters: { endpoint: "https://doris.example" },
+      },
+    ],
+  });
+
+  // 3. Switching from server-saved Doris to DTB sends previously-enabled Doris as enabled: false
+  fireEvent.click(dtbBox);
+  fireEvent.change(within(execSection).getByLabelText("base_url"), {
+    target: { value: "https://dtb-exec.example" },
+  });
+  fireEvent.click(saveBtn);
+  await waitFor(() => expect(puts).toHaveLength(3));
+  expect(puts[2]).toEqual({
+    executors: [
+      {
+        id: "dtb",
+        enabled: true,
+        parameters: { base_url: "https://dtb-exec.example" },
+      },
+      {
+        id: "doris",
+        enabled: false,
+        parameters: { endpoint: "https://doris.example" },
+      },
+    ],
+  });
+
+  // 4. Disabling DTB sends DTB with enabled: false and omits Doris (no longer server-saved enabled)
+  fireEvent.click(dtbBox);
+  fireEvent.click(saveBtn);
+  await waitFor(() => expect(puts).toHaveLength(4));
+  expect(puts[3]).toEqual({
+    executors: [
+      {
+        id: "dtb",
+        enabled: false,
+        parameters: { base_url: "https://dtb-exec.example" },
+      },
+    ],
+  });
+});
+
+test("displays FastAPI { loc, msg } 422 validation errors in puller instance modal alert", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string, options?: RequestInit) => {
+      if (url === "/api/v1/projects") return Response.json([projectRow()]);
+      if (url === "/api/v1/projects/default/adapters")
+        return Response.json(adapterRows());
+      if (url === "/api/v1/projects/default/members") return Response.json([]);
+      if (url === "/api/v1/users") return Response.json([]);
+      if (url === "/api/v1/puller-plugins")
+        return Response.json([dtbPullerPlugin()]);
+      if (url === "/api/v1/projects/default/executors")
+        return Response.json(sampleExecutors());
+      if (url === "/api/v1/projects/default/pull-instances") {
+        if (options?.method === "POST") {
+          return Response.json(
+            {
+              detail: [
+                {
+                  loc: ["body", "display_name"],
+                  msg: "String should have at least 1 character",
+                },
+              ],
+            },
+            { status: 422 },
+          );
+        }
+        return Response.json([]);
+      }
+      return Response.json({});
+    }),
+  );
+
+  render(<ProjectsPage token="admin" messages={getMessages("zh")} />);
+  fireEvent.click(await screen.findByRole("button", { name: "项目成员" }));
+
+  const section = await screen.findByTestId("puller-instances-section");
+  fireEvent.click(
+    within(section).getByRole("button", { name: "新增拉取器实例" }),
+  );
+  const modal = await screen.findByRole("dialog");
+  fireEvent.click(within(modal).getByRole("button", { name: /^保\s*存$/ }));
+
+  const alert = await within(modal).findByRole("alert");
+  expect(alert.textContent).toContain(
+    "body.display_name: String should have at least 1 character",
+  );
+});
+
+test("hides puller instances and executors on document projects and enforces archived read-only", async () => {
+  const fetchedUrls: string[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) => {
+      fetchedUrls.push(url);
+      if (url === "/api/v1/projects")
+        return Response.json([
+          projectRow({ id: "docs", name: "Platform Docs", type: "document" }),
+          projectRow({
+            id: "arch",
+            name: "归档数仓",
+            type: "warehouse",
+            status: "archived",
+          }),
+        ]);
+      if (url.endsWith("/adapters")) return Response.json(adapterRows());
+      if (url.endsWith("/members")) return Response.json([]);
+      if (url === "/api/v1/users") return Response.json([]);
+      if (url === "/api/v1/puller-plugins")
+        return Response.json([dtbPullerPlugin()]);
+      if (url === "/api/v1/projects/arch/pull-instances")
+        return Response.json([samplePullInstance({ project_id: "arch" })]);
+      if (url === "/api/v1/projects/arch/executors")
+        return Response.json(sampleExecutors());
+      return Response.json({});
+    }),
+  );
+
+  render(<ProjectsPage token="admin" messages={getMessages("zh")} />);
+  const docsRow = (await screen.findByText("Platform Docs")).closest(
+    "tr",
+  ) as HTMLElement;
+  fireEvent.click(within(docsRow).getByRole("button", { name: "项目成员" }));
+
+  await screen.findByText("来源适配器");
+  expect(screen.queryByTestId("puller-instances-section")).toBeNull();
+  expect(screen.queryByTestId("executors-section")).toBeNull();
+  expect(
+    fetchedUrls.some(
+      (url) => url.includes("/pull-instances") || url.includes("/executors"),
+    ),
+  ).toBe(false);
+
+  // Return to project list and open archived warehouse project
+  fireEvent.click(screen.getByRole("button", { name: "返回项目列表" }));
+  const archRow = (await screen.findByText("归档数仓")).closest(
+    "tr",
+  ) as HTMLElement;
+  fireEvent.click(within(archRow).getByRole("button", { name: "项目成员" }));
+
+  expect(await screen.findByText("项目已归档")).toBeTruthy();
+  const archPullSection = await screen.findByTestId("puller-instances-section");
+  expect(
+    (
+      within(archPullSection).getByRole("button", {
+        name: "新增拉取器实例",
+      }) as HTMLButtonElement
+    ).disabled,
+  ).toBe(true);
+  expect(
+    (
+      within(archPullSection).getByRole("button", {
+        name: "编辑",
+      }) as HTMLButtonElement
+    ).disabled,
+  ).toBe(true);
+  const archExecSection = screen.getByTestId("executors-section");
+  expect(
+    (
+      within(archExecSection).getByRole("checkbox", {
+        name: "DTB",
+      }) as HTMLInputElement
+    ).disabled,
+  ).toBe(true);
+  expect(
+    (
+      within(archExecSection).getByRole("button", {
+        name: "保存查询执行器",
+      }) as HTMLButtonElement
+    ).disabled,
+  ).toBe(true);
+});
+
+test("drops stale pull-instances and executors responses on rapid project switch", async () => {
+  let resolveAlphaPull: ((res: Response) => void) | undefined;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((url: string) => {
+      if (url === "/api/v1/projects") {
+        return Promise.resolve(
+          Response.json([
+            projectRow({ id: "alpha", name: "Alpha Warehouse" }),
+            projectRow({ id: "beta", name: "Beta Warehouse" }),
+          ]),
+        );
+      }
+      if (url.endsWith("/adapters")) return Promise.resolve(Response.json([]));
+      if (url.endsWith("/members")) return Promise.resolve(Response.json([]));
+      if (url === "/api/v1/users") return Promise.resolve(Response.json([]));
+      if (url === "/api/v1/puller-plugins")
+        return Promise.resolve(Response.json([dtbPullerPlugin()]));
+      if (url === "/api/v1/projects/alpha/pull-instances") {
+        return new Promise<Response>((resolve) => {
+          resolveAlphaPull = resolve;
+        });
+      }
+      if (url === "/api/v1/projects/beta/pull-instances") {
+        return Promise.resolve(
+          Response.json([
+            samplePullInstance({
+              id: "beta-inst",
+              project_id: "beta",
+              display_name: "Beta 实例",
+            }),
+          ]),
+        );
+      }
+      if (url.endsWith("/executors")) {
+        return Promise.resolve(Response.json(sampleExecutors()));
+      }
+      return Promise.resolve(Response.json({}));
+    }),
+  );
+
+  render(<ProjectsPage token="admin" messages={getMessages("zh")} />);
+  const alphaRow = (await screen.findByText("Alpha Warehouse")).closest(
+    "tr",
+  ) as HTMLElement;
+  fireEvent.click(within(alphaRow).getByRole("button", { name: "项目成员" }));
+  await waitFor(() => expect(resolveAlphaPull).toBeTruthy());
+
+  fireEvent.click(screen.getByRole("button", { name: "返回项目列表" }));
+  const betaRow = (await screen.findByText("Beta Warehouse")).closest(
+    "tr",
+  ) as HTMLElement;
+  fireEvent.click(within(betaRow).getByRole("button", { name: "项目成员" }));
+
+  expect(await screen.findByText("Beta 实例")).toBeTruthy();
+
+  resolveAlphaPull?.(
+    Response.json([
+      samplePullInstance({
+        id: "alpha-stale",
+        project_id: "alpha",
+        display_name: "Alpha 迟到实例",
+      }),
+    ]),
+  );
   await waitFor(() => {
-    const put = calls.find(
-      (call) =>
-        call.url === "/api/v1/projects/default/adapters" &&
-        call.method === "PUT",
-    );
-    expect(put).toBeTruthy();
-    const body = JSON.parse(put?.body ?? "{}") as {
-      adapters: Array<Record<string, unknown>>;
-    };
-    const dtb = body.adapters.find((row) => row.id === "dtb");
-    const ossie = body.adapters.find((row) => row.id === "ossie");
-    expect((dtb?.pull as { enabled: boolean })?.enabled).toBe(false);
-    expect(ossie?.enabled).toBe(true);
-    expect(ossie?.pull).toEqual({
-      enabled: true,
-      parameters: { url: "https://dtb.ossie.example", token: "***" },
-    });
+    expect(screen.queryByText("Alpha 迟到实例")).toBeNull();
+    expect(screen.getByText("Beta 实例")).toBeTruthy();
   });
 });
 

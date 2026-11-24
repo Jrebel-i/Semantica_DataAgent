@@ -171,3 +171,60 @@ test("loads and saves the explicit content capture switch", async () => {
     }),
   );
 });
+
+test("hides puller and executor plugins in global PluginsPage with project-scope hint", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) => {
+      if (url === "/api/v1/settings") return Response.json({});
+      if (url === "/api/v1/filters")
+        return Response.json({
+          database_include: [],
+          database_exclude: [],
+          task_include: [],
+          task_exclude: [],
+        });
+      if (url === "/api/v1/plugins")
+        return Response.json([
+          {
+            category: "source",
+            id: "canonical",
+            version: "1.0.0",
+            display_name: "Canonical",
+            enabled: true,
+            parameters: {},
+            parameters_schema: { type: "object", properties: {} },
+          },
+          {
+            category: "puller",
+            id: "dtb",
+            version: "1",
+            display_name: "DTB Puller",
+            enabled: false,
+            parameters: {},
+            parameters_schema: { type: "object", properties: {} },
+          },
+          {
+            category: "executor",
+            id: "dtb",
+            version: "1.0",
+            display_name: "DTB Executor",
+            enabled: false,
+            parameters: {},
+            parameters_schema: { type: "object", properties: {} },
+          },
+        ]);
+      return Response.json({});
+    }),
+  );
+
+  render(<PluginsPage token="token" messages={getMessages("zh")} />);
+  expect(await screen.findByText(/Canonical/)).toBeTruthy();
+  expect(
+    screen.getByText(
+      "数据源拉取器与查询执行器已下沉至「项目列表 → 项目管理」按项目配置。",
+    ),
+  ).toBeTruthy();
+  expect(screen.queryByText(/DTB Puller/)).toBeNull();
+  expect(screen.queryByText(/DTB Executor/)).toBeNull();
+});

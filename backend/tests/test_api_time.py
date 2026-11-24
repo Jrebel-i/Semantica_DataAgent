@@ -84,6 +84,7 @@ def test_rest_time_fields_have_utc_offset(client, monkeypatch):
         KnowledgeGeneration,
         PersonalDtbToken,
         ProjectAudit,
+        ProjectPullInstance,
         Provider,
         PullRecord,
         Token,
@@ -194,6 +195,15 @@ def test_rest_time_fields_have_utc_offset(client, monkeypatch):
                     tables=1,
                     tasks=0,
                 ),
+                ProjectPullInstance(
+                    project_id="default",
+                    id="time-inst",
+                    plugin_id="dtb",
+                    display_name="Time Instance",
+                    last_triggered_at=datetime(2026, 1, 1, 2, 0),
+                    created_at=datetime(2026, 1, 1),
+                    updated_at=datetime(2026, 1, 1, 1, 0),
+                ),
                 EvolutionCheckpoint(
                     project_id="default",
                     checkpoint_trajectory_id=1,
@@ -288,15 +298,21 @@ def test_rest_time_fields_have_utc_offset(client, monkeypatch):
     )
     monkeypatch.setattr(
         pull_service,
-        "run_pull",
-        lambda project_id, *, puller_id="dtb": PullRecord(
-            id=999,
-            project_id=project_id,
-            status="succeeded",
-            started_at=datetime(2026, 1, 1),
-            finished_at=datetime(2026, 1, 1, 0, 1),
-            tables=1,
-            tasks=0,
+        "run_instance_pull",
+        lambda project_id, instance_id, *, trigger_type="manual", force=False: (
+            PullRecord(
+                id=1000,
+                project_id=project_id,
+                instance_id=instance_id,
+                plugin_id="dtb",
+                trigger_type="forced" if force else trigger_type,
+                status="succeeded",
+                started_at=datetime(2026, 1, 1),
+                finished_at=datetime(2026, 1, 1, 0, 1),
+                tables=2,
+                tasks=1,
+                warnings='["dim_x carry-forward"]',
+            )
         ),
     )
     issued = c.post(
@@ -349,8 +365,13 @@ def test_rest_time_fields_have_utc_offset(client, monkeypatch):
         "knowledge_gap_review": gap_reviewed.json(),
         "build": c.get(f"/api/v1/builds/{build_id}", headers=headers).json(),
         "builds": c.get("/api/v1/builds", headers=headers).json(),
-        "pull_ossie": c.post("/api/v1/pulls/ossie", headers=headers).json(),
+        "pull_instance_trigger": c.post(
+            "/api/v1/projects/default/pull-instances/time-inst/pull", headers=headers
+        ).json(),
         "pulls": c.get("/api/v1/pulls", headers=headers).json(),
+        "pull_instances": c.get(
+            "/api/v1/projects/default/pull-instances", headers=headers
+        ).json(),
         "generations": c.get("/api/v1/generations", headers=headers).json(),
         "providers": c.get("/api/v1/providers", headers=headers).json(),
         "conversations": c.get("/api/v1/conversations", headers=headers).json(),
@@ -388,6 +409,9 @@ def test_rest_time_fields_have_utc_offset(client, monkeypatch):
         if (problems := utc_failures(payload))
     }
     assert not failures, f"time fields without UTC offset: {failures}"
+    assert "fallback_reason" in payloads["build"]
+    assert payloads["pull_instance_trigger"]["instance_id"] == "time-inst"
+    assert payloads["pull_instance_trigger"]["warnings"] == ["dim_x carry-forward"]
 
 
 def test_source_history_time_has_utc_offset(client, tmp_path):

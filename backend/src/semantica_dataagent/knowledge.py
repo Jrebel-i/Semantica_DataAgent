@@ -3,6 +3,7 @@
 import fcntl
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -16,7 +17,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import Lock
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote, unquote, urlsplit
 
 import grpc
 import numpy as np
@@ -90,6 +91,253 @@ def source_file_difference(previous, current, previous_generated, current_genera
     )
 
 
+DEFAULT_INCREMENTAL_FALLBACK_THRESHOLD = 0.20
+
+
+def _incremental_fallback_threshold(values: Mapping[str, object]) -> float:
+    raw = values.get("incremental_fallback_threshold")
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        for env_key in (
+            "DATAAGENT_INCREMENTAL_FALLBACK_THRESHOLD",
+            "INCREMENTAL_FALLBACK_THRESHOLD",
+            "incremental_fallback_threshold",
+        ):
+            env_val = os.environ.get(env_key)
+            if env_val is not None and env_val.strip():
+                raw = env_val
+                break
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        return DEFAULT_INCREMENTAL_FALLBACK_THRESHOLD
+    try:
+        parsed = float(raw)
+    except (TypeError, ValueError):
+        return DEFAULT_INCREMENTAL_FALLBACK_THRESHOLD
+    if not math.isfinite(parsed):
+        return DEFAULT_INCREMENTAL_FALLBACK_THRESHOLD
+    return max(0.0, min(1.0, parsed))
+
+
+def _record_provenance_label(record) -> str:
+    src = record.source_file or "<unknown>"
+    parts = src.split("/")
+    if len(parts) >= 3 and parts[0] in {"ossie", "pulls"}:
+        return f"instance {parts[1]!r} ({src})"
+    return src
+
+
+def _record_identifier(record) -> str:
+    data = record.data
+    if record.kind == "table":
+        return ".".join(
+            p for p in (data.get("catalog") or "", data["database"], data["name"]) if p
+        )
+    if record.kind == "field":
+        return ".".join(
+            p
+            for p in (
+                data.get("catalog") or "",
+                data["database"],
+                data["table"],
+                data["name"],
+            )
+            if p
+        )
+    if record.kind == "task":
+        return str(data["name"])
+    if record.kind == "document":
+        return f"{data['category']}/{data['path']}"
+    if record.kind == "relationship":
+        from_full = ".".join(
+            p
+            for p in (
+                data.get("from_catalog") or "",
+                data["from_database"],
+                data["from_table"],
+            )
+            if p
+        )
+        to_full = ".".join(
+            p
+            for p in (
+                data.get("to_catalog") or "",
+                data["to_database"],
+                data["to_table"],
+            )
+            if p
+        )
+        return f"{from_full}->{to_full}:{data['name']}"
+    return record.kind
+
+
+def _canonical_sha256(payload) -> str:
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    ).hexdigest()
+
+
+def _record_snapshot(record) -> dict:
+    return {
+        "data": record.data,
+        "source_file": record.source_file,
+        "source_key": record.source_key,
+        "source_files": list(record.source_files),
+    }
+
+
+def _table_entity_key(data: Mapping) -> str:
+    table_data = (
+        {
+            "catalog": data.get("catalog"),
+            "database": data["database"],
+            "name": data["name"],
+        }
+        if "table" not in data
+        else {
+            "catalog": data.get("catalog"),
+            "database": data["database"],
+            "name": data["table"],
+        }
+    )
+    return reference("table", table_data)
+
+
+def _dim_table_entity_key(database: str, table: str) -> str:
+    return f"dim_table:{quote(database, safe='')}.{quote(table, safe='')}"
+
+
+def compute_entity_hashes(records) -> dict[str, str]:
+    """Compute deterministic SHA-256 content hashes per canonical entity unit."""
+    tables_by_key: dict[str, object] = {}
+    fields_by_table: dict[str, list] = {}
+    dim_groups: dict[tuple[str, str], list] = {}
+    lineage_groups: dict[str, list] = {}
+    column_lineage_groups: dict[str, list] = {}
+    hashes: dict[str, str] = {}
+
+    for record in records:
+        data = record.data
+        if record.kind == "table":
+            tables_by_key[_table_entity_key(data)] = record
+        elif record.kind == "field":
+            fields_by_table.setdefault(_table_entity_key(data), []).append(record)
+        elif record.kind == "task":
+            hashes[f"task:{data['name']}"] = _canonical_sha256(_record_snapshot(record))
+        elif record.kind == "dimension_value":
+            dim_groups.setdefault((data["database"], data["table"]), []).append(record)
+        elif record.kind == "document":
+            hashes[f"document:{data['category']}/{data['path']}"] = _canonical_sha256(
+                _record_snapshot(record)
+            )
+        elif record.kind == "relationship":
+            hashes[reference("relationship", data)] = _canonical_sha256(
+                _record_snapshot(record)
+            )
+        elif record.kind == "lineage":
+            key = f"lineage:{data.get('task_id', '')}:{data['upstream']}:{data['downstream']}"
+            lineage_groups.setdefault(key, []).append(record)
+        elif record.kind == "column_lineage":
+            key = (
+                f"column_lineage:{data.get('task_id', '')}:"
+                f"{data['upstream_table']}.{data['upstream_field']}:"
+                f"{data['downstream_table']}.{data['downstream_field']}"
+            )
+            column_lineage_groups.setdefault(key, []).append(record)
+
+    for table_key in sorted(set(tables_by_key) | set(fields_by_table)):
+        table_rec = tables_by_key.get(table_key)
+        field_recs = sorted(
+            fields_by_table.get(table_key, []), key=lambda r: r.data["name"]
+        )
+        hashes[table_key] = _canonical_sha256(
+            {
+                "table": _record_snapshot(table_rec) if table_rec is not None else None,
+                "fields": [_record_snapshot(f) for f in field_recs],
+            }
+        )
+
+    for (db_name, tbl_name), group in sorted(dim_groups.items()):
+        sorted_group = sorted(
+            group,
+            key=lambda r: (
+                r.data["field"],
+                r.data["value"],
+                str(r.data.get("row_id") or ""),
+            ),
+        )
+        hashes[_dim_table_entity_key(db_name, tbl_name)] = _canonical_sha256(
+            [_record_snapshot(r) for r in sorted_group]
+        )
+
+    for key, group in sorted(lineage_groups.items()):
+        sorted_group = sorted(
+            group,
+            key=lambda r: (
+                r.data.get("evidence", ""),
+                r.data.get("parse_status", ""),
+                r.source_file or "",
+            ),
+        )
+        hashes[key] = _canonical_sha256([_record_snapshot(r) for r in sorted_group])
+
+    for key, group in sorted(column_lineage_groups.items()):
+        sorted_group = sorted(group, key=lambda r: r.source_file or "")
+        hashes[key] = _canonical_sha256([_record_snapshot(r) for r in sorted_group])
+
+    return hashes
+
+
+def _dim_tables_from_entities(entities: set[str]) -> set[tuple[str, str]]:
+    result: set[tuple[str, str]] = set()
+    for key in entities:
+        if key.startswith("dim_table:"):
+            rest = key[len("dim_table:") :]
+            if "." in rest:
+                db_part, tbl_part = rest.split(".", 1)
+                result.add((unquote(db_part), unquote(tbl_part)))
+    return result
+
+
+def select_incremental_records(
+    records, touched_entities: set[str], dirty_tables: set[tuple[str, str]] = ()
+):
+    """Select only canonical records belonging to added/changed/dirty entity units."""
+    touched_table_refs = {k for k in touched_entities if k.startswith("table:")}
+    touched_task_names = {
+        k[len("task:") :] for k in touched_entities if k.startswith("task:")
+    }
+    touched_dim_tables = set(dirty_tables) | _dim_tables_from_entities(touched_entities)
+    touched_doc_keys = {k for k in touched_entities if k.startswith("document:")}
+    touched_rel_refs = {k for k in touched_entities if k.startswith("relationship:")}
+    has_touched_lineage = any(k.startswith("lineage:") for k in touched_entities)
+    has_touched_column_lineage = any(
+        k.startswith("column_lineage:") for k in touched_entities
+    )
+
+    selected = []
+    for record in records:
+        data = record.data
+        if record.kind in {"table", "field"}:
+            if _table_entity_key(data) in touched_table_refs:
+                selected.append(record)
+        elif record.kind == "task":
+            if data["name"] in touched_task_names:
+                selected.append(record)
+        elif record.kind == "dimension_value":
+            if (data["database"], data["table"]) in touched_dim_tables:
+                selected.append(record)
+        elif record.kind == "document":
+            if f"document:{data['category']}/{data['path']}" in touched_doc_keys:
+                selected.append(record)
+        elif record.kind == "relationship":
+            if reference("relationship", data) in touched_rel_refs:
+                selected.append(record)
+        elif (record.kind == "lineage" and has_touched_lineage) or (
+            record.kind == "column_lineage" and has_touched_column_lineage
+        ):
+            selected.append(record)
+    return selected
+
+
 def validate_records(records):
     fields = {
         "table": ("database", "name"),
@@ -97,7 +345,7 @@ def validate_records(records):
         "task": ("name",),
         "document": ("category", "path"),
     }
-    seen = set()
+    seen = {}
     for record in records:
         data = record.data
         if record.kind == "relationship":
@@ -131,8 +379,12 @@ def validate_records(records):
         else:
             continue
         if key in seen:
-            raise ValueError("Duplicate " + record.kind + " reference")
-        seen.add(key)
+            prev = seen[key]
+            raise ValueError(
+                f"Duplicate {record.kind} reference {_record_identifier(record)!r}: "
+                f"{_record_provenance_label(prev)} vs {_record_provenance_label(record)}"
+            )
+        seen[key] = record
 
 
 def settings(project_id=None):
@@ -725,6 +977,102 @@ def _stage_name(stage):
     return module.removesuffix("_stage")
 
 
+def _precompute_texts_for_selected(
+    selected, all_records, *, touched_lineage: bool = False
+) -> list[str]:
+    from . import document_stage, table_stage, task_stage
+
+    texts: list[str] = []
+    texts.extend(table_stage.vector_texts(selected))
+    texts.extend(document_stage.vector_texts(selected))
+    if touched_lineage or any(record.kind == "lineage" for record in selected):
+        task_records = [r for r in all_records if r.kind == "task"]
+    else:
+        task_records = selected
+    texts.extend(task_stage.vector_texts(task_records))
+    return texts
+
+
+def _should_run_stage(stage, selected, storage) -> bool:
+    if not storage.is_incremental:
+        return True
+    module = stage.__module__
+    if module.endswith("table_stage"):
+        return any(r.kind in {"table", "field"} for r in selected)
+    if module.endswith("dimension_stage"):
+        return bool(getattr(storage, "_dirty_tables", None)) or any(
+            r.kind == "field" for r in selected
+        )
+    if module.endswith("document_stage"):
+        return any(r.kind == "document" for r in selected)
+    if module.endswith("task_stage"):
+        return (
+            bool(getattr(storage, "rebuilt_table_keys", None))
+            or bool(getattr(storage, "_touched_lineage", False))
+            or any(
+                r.kind in {"task", "lineage", "column_lineage", "table", "field"}
+                for r in selected
+            )
+        )
+    return True
+
+
+def _run_stages_and_reconcile(
+    build_id,
+    generation,
+    storage,
+    selected,
+    all_records,
+    counts,
+    failures,
+    logs,
+    stages_list,
+    reconcile_fn,
+):
+    for stage in stages_list:
+        if not _should_run_stage(stage, selected, storage):
+            continue
+        stage_started = time.monotonic()
+        embedding_before = storage.embedding_counts()
+        result = stage(selected, generation, storage)
+        elapsed = time.monotonic() - stage_started
+        embedding_after = storage.embedding_counts()
+        stage_counts = dict(result.counts)
+        for key in (
+            "embedding_inputs",
+            "embedding_unique",
+            "embedding_cache_hits",
+            "embedding_cache_misses",
+        ):
+            delta = embedding_after[key] - embedding_before[key]
+            stage_counts[key] = delta
+            counts[key] += delta
+        counts.update(result.counts)
+        failures.extend(result.failures)
+        summary = ", ".join(
+            f"{key}={value}" for key, value in sorted(stage_counts.items())
+        )
+        if result.errors:
+            _record_log(
+                build_id,
+                logs,
+                _stage_name(stage),
+                f"Failed after {elapsed:.3f}s: " + "; ".join(result.errors),
+                "error",
+            )
+        else:
+            _record_log(
+                build_id,
+                logs,
+                _stage_name(stage),
+                f"Completed in {elapsed:.3f}s" + (f": {summary}" if summary else ""),
+            )
+        if result.errors:
+            raise ValueError("; ".join(result.errors))
+    reconcile_fn(storage, all_records, generation)
+    _record_log(build_id, logs, "relationships", "Reconciled relationships")
+
+
 def run_build(build_id):
     status, counts, error = "failed", {}, None
     failures = []
@@ -828,6 +1176,7 @@ def run_build(build_id):
                 level="info",
             )
         validate_records(records)
+        current_entity_hashes = compute_entity_hashes(records)
         _record_log(
             build_id,
             logs,
@@ -838,11 +1187,14 @@ def run_build(build_id):
         generated = {
             r.source_key for r in records if r.source_key and r.data.get("generated")
         }
+        fallback_reason: str | None = None
+        previous_entity_hashes: dict[str, str] | None = None
         with sessions().begin() as db:
             build = db.get(Build, build_id)
             build.generation = generation
             build.source_commit = commit
             build.source_hashes = json.dumps(hashes, sort_keys=True)
+            build.entity_hashes = json.dumps(current_entity_hashes, sort_keys=True)
             build.dimension_tables = json.dumps(dimensions, sort_keys=True)
             build.generated_files = json.dumps(sorted(generated))
             build.config_hash = config_hash
@@ -859,19 +1211,6 @@ def run_build(build_id):
                 .order_by(Build.id.desc())
                 .first()
             )
-            if build_type == "incremental" and previous is None:
-                raise ValueError(
-                    "A successful full build is required before incremental builds"
-                )
-            if build_type == "incremental" and previous.config_hash != config_hash:
-                raise ValueError("Build configuration changed; run a full build")
-            previous_hashes = json.loads(previous.source_hashes) if previous else {}
-            previous_generated = (
-                set(json.loads(previous.generated_files or "[]")) if previous else set()
-            )
-            prior_dimensions = (
-                json.loads(previous.dimension_tables or "{}") if previous else {}
-            )
             failed_builds = (
                 db.query(Build)
                 .filter(
@@ -883,45 +1222,107 @@ def run_build(build_id):
                 )
                 .all()
             )
-            if build_type == "incremental" and any(
-                (row.build_type != "incremental" and row.affected_files)
-                or (
-                    row.affected_files
-                    and row.config_hash
-                    and row.config_hash != config_hash
-                )
-                for row in failed_builds
-            ):
-                raise ValueError(
-                    "A full build failed; run a full build to repair the generation"
-                )
+            if build_type == "incremental":
+                if previous is None:
+                    fallback_reason = "no_previous_full"
+                elif previous.config_hash != config_hash:
+                    fallback_reason = "config_changed"
+                elif any(
+                    (row.build_type != "incremental" and row.affected_files)
+                    or (
+                        row.affected_files
+                        and row.config_hash
+                        and row.config_hash != config_hash
+                    )
+                    for row in failed_builds
+                ):
+                    fallback_reason = "previous_full_failed"
+                elif previous.entity_hashes is not None:
+                    previous_entity_hashes = json.loads(previous.entity_hashes)
+                    prev_table_keys = {
+                        k for k in previous_entity_hashes if k.startswith("table:")
+                    }
+                    curr_table_keys = {
+                        k for k in current_entity_hashes if k.startswith("table:")
+                    }
+                    total_tables = max(len(prev_table_keys), len(curr_table_keys))
+                    table_diff = hash_difference(
+                        {k: previous_entity_hashes[k] for k in prev_table_keys},
+                        {k: current_entity_hashes[k] for k in curr_table_keys},
+                    )
+                    changed_tables = (
+                        len(table_diff["added"])
+                        + len(table_diff["changed"])
+                        + len(table_diff["deleted"])
+                    )
+                    threshold = _incremental_fallback_threshold(values)
+                    if (
+                        total_tables >= 5
+                        and (changed_tables / total_tables) > threshold
+                    ):
+                        fallback_reason = "threshold_exceeded"
+
+                if fallback_reason is not None:
+                    build_type = "full"
+                    generation = project.new_generation()
+                    values = project_context.with_generation(values, generation)
+                    project = project_context.from_values(values)
+                    new_values = values.copy()
+                    build.build_type = "full"
+                    build.fallback_reason = fallback_reason
+                    build.generation = generation
+                    previous = None
+                    previous_entity_hashes = None
+                    failed_builds = []
+
+            previous_hashes = json.loads(previous.source_hashes) if previous else {}
+            previous_generated = (
+                set(json.loads(previous.generated_files or "[]")) if previous else set()
+            )
+            prior_dimensions = (
+                json.loads(previous.dimension_tables or "{}") if previous else {}
+            )
             dirty = set()
+            dirty_entities = set()
             old_ids = set()
             dirty_tables = set()
             for failed in failed_builds:
                 if failed.affected_files:
                     saved = json.loads(failed.affected_files)
                     dirty.update(saved.get("files", []))
+                    dirty_entities.update(saved.get("entities", []))
                     old_ids.update(saved.get("vector_ids", []))
                     dirty_tables.update(
                         tuple(table) for table in saved.get("dimension_tables", [])
                     )
-        changes = hash_difference(previous_hashes, hashes)
-        counts = dict.fromkeys(KINDS.values(), 0)
-        counts.update(
-            {
-                "embedding_inputs": 0,
-                "embedding_unique": 0,
-                "embedding_cache_hits": 0,
-                "embedding_cache_misses": 0,
-            }
-        )
-        counts.update(adapter_stats)
-        physical_changes = source_file_difference(
-            previous_hashes, hashes, previous_generated, generated
-        )
-        counts.update({name: len(paths) for name, paths in physical_changes.items()})
-        counts["filtered"] = filtered
+        if fallback_reason is not None:
+            _record_log(
+                build_id,
+                logs,
+                "build",
+                f"Falling back to full build: {fallback_reason}",
+                level="info",
+            )
+
+        def _base_counts():
+            base = dict.fromkeys(KINDS.values(), 0)
+            base.update(
+                {
+                    "embedding_inputs": 0,
+                    "embedding_unique": 0,
+                    "embedding_cache_hits": 0,
+                    "embedding_cache_misses": 0,
+                }
+            )
+            base.update(adapter_stats)
+            physical_changes = source_file_difference(
+                previous_hashes, hashes, previous_generated, generated
+            )
+            base.update({name: len(paths) for name, paths in physical_changes.items()})
+            base["filtered"] = filtered
+            return base, physical_changes
+
+        counts, physical_changes = _base_counts()
         _record_log(
             build_id,
             logs,
@@ -933,159 +1334,342 @@ def run_build(build_id):
             )
             + f"; filtered={filtered}",
         )
-        touched = set().union(*changes.values()) | dirty
-        selected = (
-            records
-            if build_type == "full"
-            else incremental_plan(
+
+        use_entity_diff = (
+            build_type == "incremental" and previous_entity_hashes is not None
+        )
+        touched_entities: set[str] = set()
+        touched = set()
+        if build_type == "full":
+            selected = records
+        elif use_entity_diff:
+            entity_changes = hash_difference(
+                previous_entity_hashes, current_entity_hashes
+            )
+            touched_entities = set().union(*entity_changes.values()) | dirty_entities
+            dirty_tables.update(_dim_tables_from_entities(touched_entities))
+            selected = select_incremental_records(
+                records, touched_entities, dirty_tables
+            )
+        else:
+            changes = hash_difference(previous_hashes, hashes)
+            touched = set().union(*changes.values()) | dirty
+            selected = incremental_plan(
                 records, {"added": touched, "changed": set(), "deleted": set()}
             )
-        )
+            for path in touched:
+                dirty_tables.update(
+                    tuple(table) for table in prior_dimensions.get(path, [])
+                )
+                dirty_tables.update(tuple(table) for table in dimensions.get(path, []))
+            if dirty_tables:
+                selected = [r for r in selected if r.kind != "dimension_value"] + [
+                    r
+                    for r in records
+                    if r.kind == "dimension_value"
+                    and (r.data["database"], r.data["table"]) in dirty_tables
+                ]
         counts.update(Counter(r.kind for r in selected))
-        for path in touched:
-            dirty_tables.update(
-                tuple(table) for table in prior_dimensions.get(path, [])
-            )
-            dirty_tables.update(tuple(table) for table in dimensions.get(path, []))
-        if build_type == "incremental" and dirty_tables:
-            selected = [r for r in selected if r.kind != "dimension_value"] + [
-                r
-                for r in records
-                if r.kind == "dimension_value"
-                and (r.data["database"], r.data["table"]) in dirty_tables
-            ]
+
         from .relationships import reconcile
         from .stages import STAGES
 
         values["_build_id"] = build_id
-        manager = (
-            build_storage(values, stats)
-            if build_type == "full"
-            else incremental_storage(values, stats)
-        )
-        with manager as storage:
-            storage.build_id = build_id
-            storage.all_records = records
-            storage.is_incremental = build_type == "incremental"
-            if build_type == "incremental":
-                selected_refs = sorted(
-                    {
-                        ref
-                        for record in selected
-                        if (ref := _entity_ref(record)) is not None
-                    }
-                )
-                params = {
-                    "generation": generation,
-                    "files": sorted(touched),
-                    "selected_refs": selected_refs,
-                    "tables": [
-                        {"database": db, "table": table}
-                        for db, table in sorted(dirty_tables)
-                    ],
-                }
-                found = storage.execute(
-                    "MATCH (n:SDAEntity {generation:$generation}) WHERE n.source_file IN $files OR n.source_key IN $files OR any(s IN coalesce(n.source_files, []) WHERE s IN $files) OR n.ref IN $selected_refs OR n.doc_id IN $selected_refs OR (n:SDADimensionValue AND any(t IN $tables WHERE t.database = n.database AND t.table = n.table)) RETURN n.ref AS ref",
-                    params,
-                )
-                old_ids.update(row["ref"] for row in found if row["ref"])
-                selected_ids = {id(record) for record in selected}
-                rebuilt = [
-                    record
-                    for record in records
-                    if id(record) not in selected_ids
-                    and (ref := _entity_ref(record)) is not None
-                    and ref in old_ids
+
+        if build_type == "incremental":
+            touched_lineage = any(
+                k.startswith(("lineage:", "column_lineage:")) for k in touched_entities
+            )
+            precompute_texts = _precompute_texts_for_selected(
+                selected, records, touched_lineage=touched_lineage
+            )
+            inc_failed_exc: Exception | None = None
+            with incremental_storage(values, stats) as storage:
+                storage.build_id = build_id
+                storage.all_records = records
+                storage.is_incremental = True
+                storage._dirty_tables = dirty_tables
+                storage._touched_lineage = touched_lineage
+                # Pre-compute embeddings BEFORE mutating Neo4j/Milvus so embedding
+                # failures leave the live generation completely untouched.
+                storage.precompute_vectors(precompute_texts)
+                emb_after_pre = storage.embedding_counts()
+                counts["embedding_cache_hits"] += emb_after_pre["embedding_cache_hits"]
+                counts["embedding_cache_misses"] += emb_after_pre[
+                    "embedding_cache_misses"
                 ]
-                if rebuilt:
-                    selected = [*selected, *rebuilt]
-                    for record in rebuilt:
-                        counts[record.kind] = counts.get(record.kind, 0) + 1
-                with sessions().begin() as db:
-                    db.get(Build, build_id).affected_files = json.dumps(
-                        {
-                            "files": sorted(touched),
-                            "vector_ids": sorted(old_ids),
-                            "dimension_tables": sorted(dirty_tables),
+                try:
+                    if use_entity_diff:
+                        from .markdown import doc_ref
+
+                        touched_table_refs = sorted(
+                            k for k in touched_entities if k.startswith("table:")
+                        )
+                        touched_table_rows = []
+                        for r in selected:
+                            if r.kind == "table":
+                                touched_table_rows.append(
+                                    {
+                                        "catalog": r.data.get("catalog") or "",
+                                        "database": r.data["database"],
+                                        "table": r.data["name"],
+                                    }
+                                )
+                        touched_task_refs = [
+                            bounded_ref("task:" + quote(k[len("task:") :], safe=""))
+                            for k in sorted(touched_entities)
+                            if k.startswith("task:")
+                        ]
+                        touched_task_names = [
+                            k[len("task:") :]
+                            for k in sorted(touched_entities)
+                            if k.startswith("task:")
+                        ]
+                        touched_doc_refs = []
+                        for k in sorted(touched_entities):
+                            if k.startswith("document:"):
+                                cat, path = k[len("document:") :].split("/", 1)
+                                touched_doc_refs.append(doc_ref(cat, path))
+                        selected_refs = sorted(
+                            {
+                                *touched_table_refs,
+                                *(
+                                    ref
+                                    for r in selected
+                                    if (ref := _entity_ref(r)) is not None
+                                ),
+                                *touched_task_refs,
+                                *touched_doc_refs,
+                            }
+                        )
+                        if touched_table_refs:
+                            attached_fields = storage.execute(
+                                "MATCH (t:SDATable {generation:$generation})-[:HAS_FIELD]->(f:SDAField {generation:$generation}) "
+                                "WHERE t.ref IN $table_refs RETURN f.ref AS ref",
+                                {
+                                    "generation": generation,
+                                    "table_refs": touched_table_refs,
+                                },
+                            )
+                            selected_refs = sorted(
+                                {
+                                    *selected_refs,
+                                    *(
+                                        row["ref"]
+                                        for row in attached_fields
+                                        if row.get("ref")
+                                    ),
+                                }
+                            )
+                        if touched_table_rows:
+                            existing_fields = storage.execute(
+                                "MATCH (f:SDAField {generation:$generation}) "
+                                "WHERE any(t IN $tables WHERE t.database = f.database AND t.table = f.table AND coalesce(t.catalog, '') = coalesce(f.catalog, '')) "
+                                "RETURN f.ref AS ref",
+                                {
+                                    "generation": generation,
+                                    "tables": touched_table_rows,
+                                },
+                            )
+                            selected_refs = sorted(
+                                {
+                                    *selected_refs,
+                                    *(
+                                        row["ref"]
+                                        for row in existing_fields
+                                        if row.get("ref")
+                                    ),
+                                }
+                            )
+                        params = {
+                            "generation": generation,
+                            "files": [],
+                            "selected_refs": selected_refs,
+                            "touched_tables": touched_table_rows,
+                            "tables": [
+                                {"database": db, "table": table}
+                                for db, table in sorted(dirty_tables)
+                            ],
                         }
-                    )
-                delete_batches(
-                    storage.execute,
-                    "MATCH (:SDATable {generation:$generation})-[r:DEPENDS_ON]->(:SDATable {generation:$generation}) WHERE r.source_file IN $files",
-                    "r",
-                    {"generation": generation, "files": sorted(touched)},
-                )
-                delete_batches(
-                    storage.execute,
-                    "MATCH (:SDATable {generation:$generation})-[r:RELATES_TO]->(:SDATable {generation:$generation}) WHERE r.source_file IN $files OR r.source_key IN $files OR any(s IN coalesce(r.source_files, []) WHERE s IN $files)",
-                    "r",
-                    {"generation": generation, "files": sorted(touched)},
-                )
-                delete_batches(
-                    storage.execute,
-                    "MATCH (n:SDAEntity {generation:$generation}) WHERE n.source_file IN $files OR n.source_key IN $files OR any(s IN coalesce(n.source_files, []) WHERE s IN $files) OR n.ref IN $selected_refs OR n.doc_id IN $selected_refs OR (n:SDADimensionValue AND any(t IN $tables WHERE t.database = n.database AND t.table = n.table))",
-                    "n",
-                    params,
-                    detach=True,
-                )
-                vector_ids = sorted(old_ids)
-                for offset in range(0, len(vector_ids), WRITE_BATCH_SIZE):
-                    storage._vectors.delete_vectors(
-                        vector_ids[offset : offset + WRITE_BATCH_SIZE]
-                    )
-                if dirty_tables:
-                    storage.execute(
-                        "UNWIND $rows AS row MATCH (f:SDAField {generation:$generation, database:row.database, table:row.table}) REMOVE f.dimension_count, f.dimension_too_many, f.dimension_samples",
-                        {"generation": generation, "rows": params["tables"]},
-                    )
-            for stage in STAGES:
-                if (
-                    build_type == "incremental"
-                    and stage.__module__.endswith("dimension_stage")
-                    and not dirty_tables
-                    and not any(record.kind == "field" for record in selected)
-                ):
-                    continue
-                stage_started = time.monotonic()
-                embedding_before = storage.embedding_counts()
-                result = stage(selected, generation, storage)
-                elapsed = time.monotonic() - stage_started
-                embedding_after = storage.embedding_counts()
-                stage_counts = dict(result.counts)
-                for key in (
-                    "embedding_inputs",
-                    "embedding_unique",
-                    "embedding_cache_hits",
-                    "embedding_cache_misses",
-                ):
-                    delta = embedding_after[key] - embedding_before[key]
-                    stage_counts[key] = delta
-                    counts[key] += delta
-                counts.update(result.counts)
-                failures.extend(result.failures)
-                summary = ", ".join(
-                    f"{key}={value}" for key, value in sorted(stage_counts.items())
-                )
-                if result.errors:
-                    _record_log(
+                        found = storage.execute(
+                            "MATCH (n:SDAEntity {generation:$generation}) "
+                            "WHERE n.source_file IN $files OR n.source_key IN $files "
+                            "OR any(s IN coalesce(n.source_files, []) WHERE s IN $files) "
+                            "OR n.ref IN $selected_refs OR n.doc_id IN $selected_refs "
+                            "OR (n:SDAField AND any(t IN $touched_tables WHERE t.database = n.database AND t.table = n.table AND coalesce(t.catalog, '') = coalesce(n.catalog, ''))) "
+                            "OR (n:SDADimensionValue AND any(t IN $tables WHERE t.database = n.database AND t.table = n.table)) "
+                            "RETURN n.ref AS ref",
+                            params,
+                        )
+                        old_ids.update(row["ref"] for row in found if row.get("ref"))
+                        old_ids.update(selected_refs)
+                        with sessions().begin() as db:
+                            db.get(Build, build_id).affected_files = json.dumps(
+                                {
+                                    "files": [],
+                                    "entities": sorted(touched_entities),
+                                    "vector_ids": sorted(old_ids),
+                                    "dimension_tables": sorted(dirty_tables),
+                                }
+                            )
+                        if touched_task_names:
+                            for edge_query in (
+                                "MATCH (:SDATable {generation:$generation})-[r:DEPENDS_ON]->(:SDATable {generation:$generation}) WHERE r.task_id IN $task_names",
+                                "MATCH (:SDALineageTable {generation:$generation})-[r:DEPENDS_ON]->(:SDALineageTable {generation:$generation}) WHERE r.task_id IN $task_names",
+                                "MATCH (:SDAField {generation:$generation})-[r:FIELD_DEPENDS_ON]->(:SDAField {generation:$generation}) WHERE r.task_id IN $task_names",
+                            ):
+                                delete_batches(
+                                    storage.execute,
+                                    edge_query,
+                                    "r",
+                                    {
+                                        "generation": generation,
+                                        "task_names": touched_task_names,
+                                    },
+                                )
+                        if selected_refs or dirty_tables or touched_table_rows:
+                            delete_batches(
+                                storage.execute,
+                                "MATCH (n:SDAEntity {generation:$generation}) "
+                                "WHERE n.source_file IN $files OR n.source_key IN $files "
+                                "OR any(s IN coalesce(n.source_files, []) WHERE s IN $files) "
+                                "OR n.ref IN $selected_refs OR n.doc_id IN $selected_refs "
+                                "OR (n:SDAField AND any(t IN $touched_tables WHERE t.database = n.database AND t.table = n.table AND coalesce(t.catalog, '') = coalesce(n.catalog, ''))) "
+                                "OR (n:SDADimensionValue AND any(t IN $tables WHERE t.database = n.database AND t.table = n.table))",
+                                "n",
+                                params,
+                                detach=True,
+                            )
+                    else:
+                        selected_refs = sorted(
+                            {
+                                ref
+                                for record in selected
+                                if (ref := _entity_ref(record)) is not None
+                            }
+                        )
+                        params = {
+                            "generation": generation,
+                            "files": sorted(touched),
+                            "selected_refs": selected_refs,
+                            "tables": [
+                                {"database": db, "table": table}
+                                for db, table in sorted(dirty_tables)
+                            ],
+                        }
+                        found = storage.execute(
+                            "MATCH (n:SDAEntity {generation:$generation}) WHERE n.source_file IN $files OR n.source_key IN $files OR any(s IN coalesce(n.source_files, []) WHERE s IN $files) OR n.ref IN $selected_refs OR n.doc_id IN $selected_refs OR (n:SDADimensionValue AND any(t IN $tables WHERE t.database = n.database AND t.table = n.table)) RETURN n.ref AS ref",
+                            params,
+                        )
+                        old_ids.update(row["ref"] for row in found if row["ref"])
+                        selected_ids = {id(record) for record in selected}
+                        rebuilt = [
+                            record
+                            for record in records
+                            if id(record) not in selected_ids
+                            and (ref := _entity_ref(record)) is not None
+                            and ref in old_ids
+                        ]
+                        if rebuilt:
+                            selected = [*selected, *rebuilt]
+                            for record in rebuilt:
+                                counts[record.kind] = counts.get(record.kind, 0) + 1
+                        with sessions().begin() as db:
+                            db.get(Build, build_id).affected_files = json.dumps(
+                                {
+                                    "files": sorted(touched),
+                                    "vector_ids": sorted(old_ids),
+                                    "dimension_tables": sorted(dirty_tables),
+                                }
+                            )
+                        delete_batches(
+                            storage.execute,
+                            "MATCH (:SDATable {generation:$generation})-[r:DEPENDS_ON]->(:SDATable {generation:$generation}) WHERE r.source_file IN $files",
+                            "r",
+                            {"generation": generation, "files": sorted(touched)},
+                        )
+                        delete_batches(
+                            storage.execute,
+                            "MATCH (:SDATable {generation:$generation})-[r:RELATES_TO]->(:SDATable {generation:$generation}) WHERE r.source_file IN $files OR r.source_key IN $files OR any(s IN coalesce(r.source_files, []) WHERE s IN $files)",
+                            "r",
+                            {"generation": generation, "files": sorted(touched)},
+                        )
+                        delete_batches(
+                            storage.execute,
+                            "MATCH (n:SDAEntity {generation:$generation}) WHERE n.source_file IN $files OR n.source_key IN $files OR any(s IN coalesce(n.source_files, []) WHERE s IN $files) OR n.ref IN $selected_refs OR n.doc_id IN $selected_refs OR (n:SDADimensionValue AND any(t IN $tables WHERE t.database = n.database AND t.table = n.table))",
+                            "n",
+                            params,
+                            detach=True,
+                        )
+                    vector_ids = sorted(old_ids)
+                    for offset in range(0, len(vector_ids), WRITE_BATCH_SIZE):
+                        storage._vectors.delete_vectors(
+                            vector_ids[offset : offset + WRITE_BATCH_SIZE]
+                        )
+                    if dirty_tables:
+                        storage.execute(
+                            "UNWIND $rows AS row MATCH (f:SDAField {generation:$generation, database:row.database, table:row.table}) REMOVE f.dimension_count, f.dimension_too_many, f.dimension_samples",
+                            {"generation": generation, "rows": params["tables"]},
+                        )
+                    _run_stages_and_reconcile(
                         build_id,
+                        generation,
+                        storage,
+                        selected,
+                        records,
+                        counts,
+                        failures,
                         logs,
-                        _stage_name(stage),
-                        f"Failed after {elapsed:.3f}s: " + "; ".join(result.errors),
-                        "error",
+                        STAGES,
+                        reconcile,
                     )
-                else:
-                    _record_log(
-                        build_id,
-                        logs,
-                        _stage_name(stage),
-                        f"Completed in {elapsed:.3f}s"
-                        + (f": {summary}" if summary else ""),
-                    )
-                if result.errors:
-                    raise ValueError("; ".join(result.errors))
-            reconcile(storage, records, generation)
-            _record_log(build_id, logs, "relationships", "Reconciled relationships")
+                except Exception as exc:  # noqa: BLE001 - fall back to full new-generation rebuild
+                    inc_failed_exc = exc
+
+            if inc_failed_exc is not None:
+                _record_log(
+                    build_id,
+                    logs,
+                    "build",
+                    f"Incremental storage mutation failed ({inc_failed_exc}); falling back to full build",
+                    "warning",
+                )
+                build_type = "full"
+                fallback_reason = "incremental_failed"
+                generation = project.new_generation()
+                values = project_context.with_generation(values, generation)
+                project = project_context.from_values(values)
+                new_values = values.copy()
+                previous_hashes = {}
+                previous_generated = set()
+                counts, _ = _base_counts()
+                counts.update(Counter(r.kind for r in records))
+                failures = []
+                selected = records
+                with sessions().begin() as db:
+                    row = db.get(Build, build_id)
+                    row.build_type = "full"
+                    row.fallback_reason = "incremental_failed"
+                    row.generation = generation
+                    row.affected_files = None
+
+        if build_type == "full":
+            with build_storage(values, stats) as storage:
+                storage.build_id = build_id
+                storage.all_records = records
+                storage.is_incremental = False
+                _run_stages_and_reconcile(
+                    build_id,
+                    generation,
+                    storage,
+                    selected,
+                    records,
+                    counts,
+                    failures,
+                    logs,
+                    STAGES,
+                    reconcile,
+                )
         read_graph(values)
         read_vectors(values)
         _record_log(build_id, logs, "build", "Build succeeded")

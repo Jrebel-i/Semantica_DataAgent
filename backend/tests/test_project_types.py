@@ -136,8 +136,9 @@ def test_plugin_listing_reports_supported_project_types(client):
     assert response.status_code == 200, response.text
     source = {row["id"]: row for row in response.json() if row["category"] == "source"}
     assert source["markdown"]["project_types"] == ["warehouse", "document"]
-    assert source["dtb"]["project_types"] == ["warehouse"]
+    assert source["ossie"]["project_types"] == ["warehouse"]
     assert source["canonical"]["project_types"] == ["warehouse"]
+    assert "dtb" not in source
 
 
 def test_adapter_compatibility_validation():
@@ -148,9 +149,9 @@ def test_adapter_compatibility_validation():
 
     ensure_adapter_compatible("document", "markdown")
     ensure_adapter_compatible("warehouse", "markdown")
-    ensure_adapter_compatible("warehouse", "dtb")
-    with pytest.raises(AdapterIncompatible, match="dtb"):
-        ensure_adapter_compatible("document", "dtb")
+    ensure_adapter_compatible("warehouse", "ossie")
+    with pytest.raises(AdapterIncompatible, match="ossie"):
+        ensure_adapter_compatible("document", "ossie")
     with pytest.raises(AdapterIncompatible, match="missing"):
         ensure_adapter_compatible("document", "missing")
 
@@ -245,7 +246,7 @@ def test_project_type_cannot_be_changed_after_creation(client):
     assert listing[project["id"]]["type"] == "document"
 
 
-def test_document_project_build_never_runs_dtb_even_when_globally_enabled(
+def test_document_project_build_never_runs_ossie_even_when_globally_enabled(
     client, tmp_path, monkeypatch
 ):
     import json
@@ -254,7 +255,7 @@ def test_document_project_build_never_runs_dtb_even_when_globally_enabled(
     from semantica_dataagent import knowledge, project_context, relationships, stages
     from semantica_dataagent.canonical import ReadResult, Record
     from semantica_dataagent.db import Build, sessions
-    from semantica_dataagent.dtb_source import DtbAdapter
+    from semantica_dataagent.ossie_source import OssieAdapter
     from semantica_dataagent.stage_contract import StageResult, StorageHandles
 
     c, admin = client
@@ -262,7 +263,7 @@ def test_document_project_build_never_runs_dtb_even_when_globally_enabled(
     project = _create_project(c, admin, "Handbook", "document")
     warehouse = _create_project(c, admin, "Warehouse", "warehouse")
     enabled = c.put(
-        "/api/v1/plugins/source/dtb",
+        "/api/v1/plugins/source/ossie",
         headers=headers,
         json={"enabled": True, "parameters": {}},
     )
@@ -270,7 +271,7 @@ def test_document_project_build_never_runs_dtb_even_when_globally_enabled(
     configured = c.put(
         f"/api/v1/projects/{warehouse['id']}/adapters",
         headers=headers,
-        json={"adapters": [{"id": "dtb", "enabled": True, "parameters": {}}]},
+        json={"adapters": [{"id": "ossie", "enabled": True, "parameters": {}}]},
     )
     assert configured.status_code == 200, configured.text
 
@@ -285,22 +286,22 @@ def test_document_project_build_never_runs_dtb_even_when_globally_enabled(
 
     calls = []
 
-    def fake_dtb_read(self, directory, parameters):
+    def fake_ossie_read(self, directory, parameters):
         calls.append(parameters)
         return ReadResult(
             [
                 Record(
                     "document",
-                    {"category": "dtb", "path": "sentinel.md"},
-                    "dtb/sentinel.md",
-                    "dtb/sentinel.md",
+                    {"category": "ossie", "path": "sentinel.md"},
+                    "ossie/sentinel.md",
+                    "ossie/sentinel.md",
                     (),
                 )
             ],
-            {"dtb/sentinel.md": "0" * 64},
+            {"ossie/sentinel.md": "0" * 64},
         )
 
-    monkeypatch.setattr(DtbAdapter, "read", fake_dtb_read)
+    monkeypatch.setattr(OssieAdapter, "read", fake_ossie_read)
 
     values = {
         **project_context.current_project(project["id"]).values,
@@ -362,12 +363,12 @@ def test_document_project_build_never_runs_dtb_even_when_globally_enabled(
     assert "install.md" in documents
     assert "sentinel.md" not in documents
     assert "knowledge/guide/install.md" in document_hashes
-    assert not any(path.startswith("dtb/") for path in document_hashes)
+    assert not any(path.startswith("ossie/") for path in document_hashes)
 
     seen.clear()
     warehouse_hashes = run_build_for(warehouse["id"])
     assert calls == [{}]
-    assert "dtb/sentinel.md" in warehouse_hashes
+    assert "ossie/sentinel.md" in warehouse_hashes
 
 
 def test_read_sources_derives_the_project_type_from_the_project_id(

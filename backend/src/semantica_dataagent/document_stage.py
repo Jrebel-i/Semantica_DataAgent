@@ -5,6 +5,16 @@ from .relationships import link_table_documents
 from .stage_contract import StageResult
 
 
+def vector_texts(records) -> list[str]:
+    """Return embedding texts for all non-index document chunks."""
+    texts = []
+    for r in records:
+        if r.kind == "document" and r.data.get("path") != "index.md":
+            for part in chunks(r.data["content"]):
+                texts.append(part["content"])
+    return texts
+
+
 def write(records, generation, storage):
     from .refs import bounded_ref
 
@@ -62,6 +72,7 @@ def write(records, generation, storage):
         "UNWIND $rows AS row CREATE (d:SDAEntity:SDADocument) SET d = row, d.generation = $generation",
         {"generation": generation, "rows": rows},
     )
+    storage.rebuilt_doc_refs.update(row["ref"] for row in rows)
     storage.execute(
         "UNWIND $rows AS row MATCH (d:SDADocument {generation:$generation, ref:row.doc_id}) CREATE (p:SDAEntity:SDAChunk) SET p = row, p.generation = $generation CREATE (d)-[:HAS_CHUNK]->(p)",
         {"generation": generation, "rows": parts},

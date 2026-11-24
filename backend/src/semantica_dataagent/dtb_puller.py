@@ -7,7 +7,6 @@ import re
 import tempfile
 import time
 from pathlib import Path
-from typing import ClassVar
 from urllib.parse import quote
 
 import httpx
@@ -15,6 +14,7 @@ import sqlglot
 from sqlglot import exp
 
 from .dtb_auth import authentication_failed
+from .dtb_snapshot import DtbSnapshotReader
 
 TASK_SQL = "select version_id,\nversion_code,message,committer,task_id,task_name,\n(case when task_type_id=1 then 'shell'\nwhen task_type_id=2 then 'merge onself'\nwhen task_type_id=3 then 'spark sql'\nelse '' end) as task_type\n,task_conf,task_src,project_name,upstream_tasks,output_table_name,a.create_time,a.modify_time\n from(\n    select *,rank() over(partition by task_id order by modify_time desc) rk  from mysql.data_tool_box_emr.task_version\n    where status!=1 and task_type_id!=4\n) a\nleft join  mysql.data_tool_box_emr.project b\non a.project_id=b.project_id\nwhere rk=1 and status=2"
 TABLE_SQL = "select a.*,b.column_name,b.seq_no,b.column_type,b.column_comment,b.column_business_comment from\n(\n    select table_id,table_name,database_name,create_time,modify_time,\n    comment,output_task_id,output_task_name,use_direction\n    from mysql.data_tool_box_emr.metadata_table where catalog_type='HIVE' and status='在用'\n) a\n left join mysql.data_tool_box_emr.metadata_column b on a.table_id=b.table_id"
@@ -185,20 +185,7 @@ class TableFailure(ValueError):
 
 
 class DtbPuller:
-    id = "dtb"
-    version = "1"
-    display_name = "DTB"
-    parameters_schema: ClassVar[dict] = {
-        "type": "object",
-        "properties": {
-            "url": {"type": "string", "format": "uri"},
-            "token": {"type": "string", "format": "password"},
-            "interval_seconds": {"type": "integer", "minimum": 0},
-            "layer": {"type": "string", "enum": ["dimensions"]},
-            "max_tables": {"type": "integer", "minimum": 1, "maximum": 100},
-        },
-        "additionalProperties": False,
-    }
+    """Internal DTB HTTP client helper for metadata, tasks, and dimension rows."""
 
     @staticmethod
     def _get(client, base_url, token, endpoint, params=None):
@@ -498,7 +485,17 @@ class DtbPuller:
         except (httpx.HTTPError, KeyError, TypeError, AttributeError) as exc:
             raise ValueError("DTB query request failed") from exc
 
-    def _fetch_dimension_table(self, client, base_url, token, table, stats, maximum):
+    def _fetch_dimension_table(
+        self,
+        client,
+        base_url,
+        token,
+        table,
+        stats,
+        maximum,
+        *,
+        dimension_limit=None,
+    ):
         name = table["tableName"]
         columns = table["columns"]
         partition_columns = [
@@ -540,7 +537,8 @@ class DtbPuller:
             where = f" WHERE {field} = '{escaped}'"
         elif stat is not None:
             raise TableFailure("partition_stats_field_mismatch")
-        dimension_limit = 100 if maximum is not None else 50000
+        if dimension_limit is None:
+            dimension_limit = 100 if maximum is not None else 50000
         content = self.query_download(
             client,
             base_url,
@@ -609,8 +607,13 @@ class DtbPuller:
             ),
         }
 
+    def pull(self, context):
+        """Execute a unified PullerPlugin pull returning a PullArtifact."""
+        from .dtb_ossie import DtbPluginPuller
+
+        return DtbPluginPuller(fetcher=self).pull(context)
+
     def fetch(self, client, base_url, token, parameters=None):
-        from .dtb_source import DtbAdapter
 
         parameters = parameters or {}
         layer = parameters.get("layer", "dimensions")
@@ -624,6 +627,31 @@ class DtbPuller:
             )
         ):
             raise ValueError("Invalid pull scope")
+        raw_row_limit = parameters.get("dimension_row_limit")
+        if raw_row_limit is not None:
+            if (
+                isinstance(raw_row_limit, bool)
+                or not isinstance(raw_row_limit, int)
+                or not 1 <= raw_row_limit <= MAX_ROW_LIMIT
+            ):
+                raise ValueError("Invalid dimension_row_limit")
+            effective_row_limit = raw_row_limit
+        else:
+            effective_row_limit = 100 if maximum is not None else 50000
+        raw_low_card = parameters.get("low_cardinality_limit")
+        if raw_low_card is not None and (
+            isinstance(raw_low_card, bool)
+            or not isinstance(raw_low_card, int)
+            or not 1 <= raw_low_card <= 500
+        ):
+            raise ValueError("Invalid low_cardinality_limit")
+        raw_sample = parameters.get("sample_limit")
+        if raw_sample is not None and (
+            isinstance(raw_sample, bool)
+            or not isinstance(raw_sample, int)
+            or not 1 <= raw_sample <= 50
+        ):
+            raise ValueError("Invalid sample_limit")
         tables = self.fetch_dimensions_metadata(client, base_url, token)
         tables.sort(key=lambda table: table["tableName"])
         if maximum is not None:
@@ -667,7 +695,13 @@ class DtbPuller:
             try:
                 files.update(
                     self._fetch_dimension_table(
-                        client, base_url, token, table, stats, maximum
+                        client,
+                        base_url,
+                        token,
+                        table,
+                        stats,
+                        maximum,
+                        dimension_limit=effective_row_limit,
                     )
                 )
             except DtbAuthenticationError:
@@ -689,8 +723,12 @@ class DtbPuller:
                 dest = root / "dtb" / "snapshot" / name
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 dest.write_bytes(content)
-            result = DtbAdapter().read(
-                root, {"dimensions_path": "dtb/snapshot/dimensions"}
+            result = DtbSnapshotReader().read(
+                root,
+                {
+                    "dimensions_path": "dtb/snapshot/dimensions",
+                    "dimension_row_limit": effective_row_limit,
+                },
             )
             counts = {
                 "tables": sum(r.kind == "table" for r in result.records),

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import time
 import uuid
 from collections.abc import Mapping, Sequence
@@ -14,6 +15,7 @@ import sqlglot
 from fastapi import HTTPException
 from sqlglot import exp
 
+from . import query_api as _query_api
 from .crypto import decrypt
 from .db import PersonalDtbToken, QueryAudit, sessions
 from .dtb_auth import authentication_failed
@@ -27,6 +29,8 @@ from .project_context import (
 )
 from .query_api import _config as _executor_config
 from .query_api import _validate_sql as _validate_readonly_query
+
+_ORIG_EXECUTOR_CONFIG = _executor_config
 
 _EXTRA_FORBIDDEN_NODES = tuple(
     node
@@ -82,8 +86,15 @@ class DiscoveryAuthenticationError(DiscoveryExecutionError):
 class DiscoveryExecutorUnavailableError(DiscoveryExecutionError):
     """Raised when no valid DTB executor plugin is enabled."""
 
-    def __init__(self, detail: str = "尚未启用执行器"):
-        super().__init__(detail, status_code=503, category="executor_unavailable")
+    def __init__(
+        self,
+        detail: str = "当前项目尚未启用查询执行器，仅支持知识问答",
+        *,
+        status_code: int = 503,
+    ):
+        super().__init__(
+            detail, status_code=status_code, category="executor_unavailable"
+        )
 
 
 class DiscoveryTimeoutError(DiscoveryExecutionError):
@@ -419,18 +430,35 @@ def require_personal_dtb_token(owner_id: str) -> str:
     return token
 
 
-def resolve_executor_plugin() -> tuple[Any, dict[str, Any]]:
-    """Return the configured and enabled DTB executor plugin, or raise 503."""
+def _call_executor_config(project_id: str | None = None) -> tuple[Any, dict[str, Any]]:
+    if _executor_config is _ORIG_EXECUTOR_CONFIG:
+        return _query_api._call_config(project_id)
     try:
-        return _executor_config()
+        return _executor_config(project_id)
+    except TypeError:
+        if not inspect.signature(_executor_config).parameters:
+            return _executor_config()
+        raise
+
+
+def resolve_executor_plugin(
+    project_id: str | None = None,
+) -> tuple[Any, dict[str, Any]]:
+    """Return the configured and enabled executor plugin for the target project."""
+    try:
+        return _call_executor_config(project_id)
     except HTTPException as exc:
-        raise DiscoveryExecutorUnavailableError(str(exc.detail)) from None
+        raise DiscoveryExecutorUnavailableError(
+            str(exc.detail), status_code=exc.status_code
+        ) from None
 
 
-def resolve_discovery_dtb_runtime(owner_id: str) -> tuple[Any, dict[str, Any], str]:
+def resolve_discovery_dtb_runtime(
+    owner_id: str, project_id: str | None = None
+) -> tuple[Any, dict[str, Any], str]:
     """Validate personal DTB token (400) and configured executor plugin (503)."""
     token = require_personal_dtb_token(owner_id)
-    plugin, config = resolve_executor_plugin()
+    plugin, config = resolve_executor_plugin(project_id=project_id)
     return plugin, config, token
 
 
@@ -471,6 +499,7 @@ async def execute_readonly_dtb_query(
     timeout_seconds: float | None = None,
     runtime: tuple[Any, dict[str, Any], str] | None = None,
     require_limit: bool = True,
+    project_id: str | None = None,
 ) -> DiscoveryQueryResult:
     """Execute one controlled read-only SELECT via caller's personal DTB token with QueryAudit.
 
@@ -482,7 +511,9 @@ async def execute_readonly_dtb_query(
         raise DiscoverySqlValidationError("limit 必须为正整数")
 
     plugin, config, token = (
-        runtime if runtime is not None else resolve_discovery_dtb_runtime(owner_id)
+        runtime
+        if runtime is not None
+        else resolve_discovery_dtb_runtime(owner_id, project_id=project_id)
     )
     config_timeout = float(config.get("timeout_seconds", 300))
     effective_timeout = (
@@ -588,6 +619,7 @@ async def fetch_query_history(
     now: datetime | None = None,
     database_filter: str | Sequence[str] | None = None,
     runtime: tuple[Any, dict[str, Any], str] | None = None,
+    project_id: str | None = None,
 ) -> QueryHistoryFetchResult:
     """Fetch recent successful query-history rows using controlled AST SQL and caller DTB token."""
     sql = build_query_history_sql(config, now=now, database_filter=database_filter)
@@ -601,6 +633,7 @@ async def fetch_query_history(
         timeout_seconds=timeout_seconds,
         runtime=runtime,
         require_limit=True,
+        project_id=project_id,
     )
 
     lowered = [c.lower() for c in result.columns]

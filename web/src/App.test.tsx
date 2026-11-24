@@ -303,9 +303,14 @@ test("search debug is accessible from navigation", async () => {
       return Response.json({});
     }),
   );
-  render(<App />);
+  const { container } = render(<App />);
   fireEvent.click(await screen.findByRole("link", { name: "知识库" }));
-  fireEvent.click(await screen.findByRole("link", { name: "检索调试" }));
+  expect(container.querySelector(".sub-nav")).toBeNull();
+  expect(screen.queryByRole("link", { name: "知识浏览" })).toBeNull();
+  expect(screen.queryByRole("link", { name: "检索调试" })).toBeNull();
+
+  fireEvent.click(screen.getByRole("link", { name: "搜索" }));
+  expect(container.querySelector(".sub-nav")).toBeNull();
   expect(screen.getByRole("heading", { name: "检索调试" })).toBeTruthy();
   expect(screen.getByLabelText("查询内容")).toBeTruthy();
 });
@@ -376,9 +381,13 @@ test("conversation deep links open the addressed conversation with the current t
     }),
   ).toBeTruthy();
   expect(await screen.findByText("深链接问题")).toBeTruthy();
-  expect(fetcher).toHaveBeenCalledWith("/api/v1/conversations/conv-deep", {
-    headers: { Authorization: "Bearer deep-token" },
-  });
+  expect(fetcher).toHaveBeenCalledWith(
+    "/api/v1/conversations/conv-deep",
+    expect.objectContaining({
+      headers: { Authorization: "Bearer deep-token" },
+      signal: expect.any(AbortSignal),
+    }),
+  );
   expect(window.location.pathname).toBe("/chat/conv-deep");
   history.replaceState(null, "", "/");
 });
