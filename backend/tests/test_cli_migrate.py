@@ -67,8 +67,8 @@ def test_migrate_upgrades_from_0016_and_keeps_data(database, capsys):
     assert cli.main(["migrate"]) == 0
 
     output = capsys.readouterr().out
-    assert "0016" in output and "0042" in output
-    assert _schema_version(database) == "0042"
+    assert "0016" in output and "0043" in output
+    assert _schema_version(database) == "0043"
     assert _kept_rows(database) == (("kept token", "admin"), ("kept value",))
 
 
@@ -162,7 +162,7 @@ def test_migrate_backs_up_before_upgrade_and_is_repeatable(database, capsys):
 
     capsys.readouterr()
     assert cli.main(["migrate"]) == 0
-    assert "0042" in capsys.readouterr().out
+    assert "0043" in capsys.readouterr().out
     assert len(_backups(database)) == 1
 
 
@@ -187,14 +187,14 @@ def test_serve_migrates_before_starting(database, capsys, monkeypatch):
 
     assert cli.main(["serve"]) == 0
     assert started == [True]
-    assert _schema_version(database) == "0042"
+    assert _schema_version(database) == "0043"
     assert _kept_rows(database) == (("kept token", "admin"), ("kept value",))
     assert len(_backups(database)) == 1
 
     assert cli.main(["serve"]) == 0
     assert started == [True, True]
     assert len(_backups(database)) == 1
-    assert "0042" in capsys.readouterr().out
+    assert "0043" in capsys.readouterr().out
 
 
 def test_serve_does_not_start_when_migration_fails(database, capsys, monkeypatch):
@@ -215,7 +215,7 @@ def test_init_still_initializes_an_empty_database(database):
     token = cli.initialize()
 
     assert token
-    assert _schema_version(database) == "0042"
+    assert _schema_version(database) == "0043"
     with sqlite3.connect(database) as db:
         row = db.execute("SELECT name, role FROM tokens").fetchone()
     assert row == ("initial admin", "admin")
@@ -240,7 +240,7 @@ def test_serve_upgrades_0023_conversations_and_backs_up(database, monkeypatch):
         )
     monkeypatch.setattr(cli, "_serve", lambda: None)
     assert cli.main(["serve"]) == 0
-    assert _schema_version(database) == "0042"
+    assert _schema_version(database) == "0043"
     with sqlite3.connect(database) as db:
         assert db.execute(
             "SELECT title, pinned_at, archived_at FROM conversations WHERE id='old'"
@@ -310,7 +310,7 @@ def test_migrate_adds_empty_model_capabilities_for_existing_providers(database):
 
     assert cli.main(["migrate"]) == 0
 
-    assert _schema_version(database) == "0042"
+    assert _schema_version(database) == "0043"
     with sqlite3.connect(database) as db:
         columns = {
             row[1] for row in db.execute("PRAGMA table_info(providers)").fetchall()
@@ -432,7 +432,7 @@ def test_master_project_database_upgrades_to_audit_table(database):
 
     assert cli.main(["migrate"]) == 0
 
-    assert _schema_version(database) == "0042"
+    assert _schema_version(database) == "0043"
     with sqlite3.connect(database) as db:
         assert db.execute("SELECT count(*) FROM project_audit").fetchone() == (0,)
         assert (
@@ -461,7 +461,7 @@ def test_project_migration_preserves_existing_data(database):
 
     assert cli.main(["migrate"]) == 0
 
-    assert _schema_version(database) == "0042"
+    assert _schema_version(database) == "0043"
     assert {
         table: _table_rows(database, table, old_columns[table]) for table in OLD_TABLES
     } == before
@@ -509,9 +509,9 @@ def test_empty_database_has_a_single_migration_head(database):
     from alembic.script import ScriptDirectory
 
     config = _config(database)
-    assert ScriptDirectory.from_config(config).get_heads() == ["0042"]
+    assert ScriptDirectory.from_config(config).get_heads() == ["0043"]
     command.upgrade(config, "head")
-    assert _schema_version(database) == "0042"
+    assert _schema_version(database) == "0043"
     with sqlite3.connect(database) as db:
         assert db.execute("SELECT count(*) FROM projects").fetchone() == (1,)
         assert db.execute("SELECT count(*) FROM project_members").fetchone() == (0,)
@@ -553,7 +553,7 @@ def test_migrate_adds_null_effort_for_existing_turns(database):
 
     assert cli.main(["migrate"]) == 0
 
-    assert _schema_version(database) == "0042"
+    assert _schema_version(database) == "0043"
     with sqlite3.connect(database) as db:
         columns = {row[1] for row in db.execute("PRAGMA table_info(turns)").fetchall()}
         assert "effort" in columns
@@ -579,7 +579,7 @@ def test_migrate_backfills_agent_credential_project(database):
             ("credential-digest",),
         ).fetchone()
     assert project == ("default",)
-    assert _schema_version(database) == "0042"
+    assert _schema_version(database) == "0043"
 
 
 def test_migrated_builds_index_is_unique_per_project_and_status(database):
@@ -632,7 +632,7 @@ def test_conversations_gain_the_default_project_when_upgrading(database):
             "FROM conversations WHERE id='old'"
         ).fetchone()
         assert db.execute("SELECT version_num FROM alembic_version").fetchone() == (
-            "0042",
+            "0043",
         )
     assert after == before + ("default",)
 
@@ -691,20 +691,20 @@ def test_migrate_0038_extends_correction_proposals_and_builds(database):
         assert "stale_overrides" not in build_cols
 
 
-def test_migrate_0042_pull_instances_and_idempotency(
+def test_migrate_0043_pull_instances_and_idempotency(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     import json
 
     from alembic.script import ScriptDirectory
 
-    db_path = tmp_path / "migrate_0042.db"
+    db_path = tmp_path / "migrate_0043.db"
     monkeypatch.setenv("DATAAGENT_DB_PATH", str(db_path))
     monkeypatch.delenv("DATAAGENT_ENCRYPTION_KEY", raising=False)
 
     cfg = _config(db_path)
-    assert ScriptDirectory.from_config(cfg).get_heads() == ["0042"]
-    command.upgrade(cfg, "0041")
+    assert ScriptDirectory.from_config(cfg).get_heads() == ["0043"]
+    command.upgrade(cfg, "0042")
 
     legacy_cipher_default = "fernet-ciphertext-default-do-not-decrypt"
     legacy_cipher_wh = "fernet-ciphertext-wh-do-not-decrypt"
@@ -749,8 +749,8 @@ def test_migrate_0042_pull_instances_and_idempotency(
             (legacy_cipher_wh,),
         )
 
-    # Run upgrade to 0042 WITHOUT DATAAGENT_ENCRYPTION_KEY set
-    command.upgrade(cfg, "0042")
+    # Run upgrade to 0043 WITHOUT DATAAGENT_ENCRYPTION_KEY set
+    command.upgrade(cfg, "0043")
 
     with sqlite3.connect(db_path) as db:
         rows = db.execute(
@@ -775,8 +775,8 @@ def test_migrate_0042_pull_instances_and_idempotency(
     assert json.loads(wh_row[5]) == {"token": legacy_cipher_wh}
     assert wh_row[6:9] == (None, "Asia/Shanghai", 0.5)
 
-    # Downgrade to 0041 and re-upgrade to 0042 succeeds cleanly
-    command.downgrade(cfg, "0041")
+    # Downgrade to 0042 and re-upgrade to 0043 succeeds cleanly
+    command.downgrade(cfg, "0042")
     with sqlite3.connect(db_path) as db:
         tables = {
             row[0]
@@ -797,5 +797,5 @@ def test_migrate_0042_pull_instances_and_idempotency(
         )
         assert not ({"entity_hashes", "fallback_reason"} & build_cols)
 
-    command.upgrade(cfg, "0042")
-    assert _schema_version(db_path) == "0042"
+    command.upgrade(cfg, "0043")
+    assert _schema_version(db_path) == "0043"

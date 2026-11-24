@@ -26,7 +26,14 @@ from .auth import Requester
 from .auth import current_requester as rest_requester
 from .build_queue import active_build
 from .clarification import _owned_conversation
-from .db import Conversation, CorrectionProposal, MetadataOverride, Token, sessions
+from .db import (
+    Conversation,
+    CorrectionProposal,
+    KnowledgeGap,
+    MetadataOverride,
+    Token,
+    sessions,
+)
 from .mcp_context import bind_mcp_context, current_conversation_id, current_requester
 from .project_api import admin_project_scope, project_scope
 from .project_context import add_queued_build
@@ -302,9 +309,15 @@ def propose_in_project(
     eval_candidate: dict[str, Any] | None = None,
     extra_gate_report: dict[str, Any] | None = None,
     proposal_id: str | None = None,
+    knowledge_gap_id: str | None = None,
 ) -> dict:
     """Propose replacement content or a structured semantic override inside one project."""
     requester = current_requester()
+    if knowledge_gap_id is not None:
+        with sessions()() as db:
+            gap = db.get(KnowledgeGap, knowledge_gap_id)
+            if gap is None or gap.project_id != project_id or gap.status != "confirmed":
+                raise ValueError("Confirmed knowledge gap not found in project")
     resolved_conversation_id = (
         conversation_id if conversation_id is not None else current_conversation_id()
     )
@@ -454,7 +467,7 @@ def propose_in_project(
             raise ValueError("Correction does not change the target")
 
     policy = project_context.evolution_policy(project_id)
-    if source == "discovery":
+    if source == "discovery" or knowledge_gap_id is not None:
         # Discovery proposals MUST always enter human review regardless of auto-apply switches.
         require_review = True
     elif source == "evolution":
@@ -491,6 +504,7 @@ def propose_in_project(
             project_id=project_id,
             owner_id=requester.id,
             conversation_id=resolved_conversation_id,
+            knowledge_gap_id=knowledge_gap_id,
             target=target,
             patch=patch_text,
             original_patch=patch_text,
@@ -589,6 +603,7 @@ class ProposalCreate(BaseModel):
     target_kind: TargetKind | None = None
     structured_patch: dict[str, Any] | None = None
     conversation_id: str | None = None
+    knowledge_gap_id: str | None = None
     turn_id: int | None = None
     question: str | None = Field(default=None, max_length=20000)
     reference_sql: str | None = Field(default=None, max_length=20000)
@@ -648,6 +663,7 @@ def create_proposal(
                 target_kind=body.target_kind,
                 structured_patch=body.structured_patch,
                 conversation_id=body.conversation_id,
+                knowledge_gap_id=body.knowledge_gap_id,
                 eval_candidate=eval_candidate
                 if any(v is not None for v in eval_candidate.values())
                 else None,

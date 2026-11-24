@@ -287,6 +287,10 @@ class KnowledgeGap(Base):
     question: Mapped[str]
     missing: Mapped[str]
     created_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC))
+    status: Mapped[str] = mapped_column(default="pending", server_default="pending")
+    reviewed_at: Mapped[datetime | None]
+    reviewer_id: Mapped[str | None]
+    reviewer_name: Mapped[str | None]
 
 
 class CorrectionProposal(Base):
@@ -295,6 +299,7 @@ class CorrectionProposal(Base):
     project_id: Mapped[str] = mapped_column(default="default", server_default="default")
     owner_id: Mapped[str]
     conversation_id: Mapped[str | None]
+    knowledge_gap_id: Mapped[str | None]
     source: Mapped[str] = mapped_column(default="manual", server_default="manual")
     target_kind: Mapped[str] = mapped_column(
         default="document", server_default="document"

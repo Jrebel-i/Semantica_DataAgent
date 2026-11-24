@@ -251,6 +251,8 @@ def preview(
     replace,
     category_root="knowledge",
     delete_root=None,
+    *,
+    append_only=False,
 ):
     """Compare an upload with the source directory without modifying anything."""
     target = relative(target)
@@ -258,6 +260,8 @@ def preview(
     if replace and delete_target.parent != relative(category_root):
         raise ValueError("Replacement requires a knowledge category")
     paths = _upload_paths(files)
+    if append_only and replace:
+        raise ValueError("Append-only uploads cannot replace files")
     for path in paths:
         safe(root, target / path)
     if replace:
@@ -273,6 +277,8 @@ def preview(
         paths,
         delete_target if replace else None,
     )
+    if append_only and (overwritten or unchanged or deleted):
+        raise ValueError("Append-only uploads require new file paths")
     result = {
         "added": added,
         "overwritten": overwritten,
@@ -302,6 +308,8 @@ def upload(
     author,
     category_root="knowledge",
     delete_root=None,
+    *,
+    append_only=False,
 ):
     target = relative(target)
     delete_target = relative(delete_root) if delete_root else target
@@ -314,6 +322,8 @@ def upload(
     if replace and delete_target.parent != relative(category_root):
         raise ValueError("Replacement requires a knowledge category")
     paths = _upload_paths(files)
+    if append_only and replace:
+        raise ValueError("Append-only uploads cannot replace files")
     for path in paths:
         safe(root, target / path)
     destination = safe(root, target)
@@ -328,12 +338,14 @@ def upload(
         and any(p.is_symlink() for p in replacement.rglob("*"))
     ):
         raise ValueError("Unsafe replacement directory")
-    added, overwritten, _, deleted = _classify(
+    added, overwritten, unchanged, deleted = _classify(
         root,
         target,
         paths,
         delete_target if replace else None,
     )
+    if append_only and (overwritten or unchanged or deleted):
+        raise ValueError("Append-only uploads require new file paths")
     if git(root, "diff", "--cached", "--name-only"):
         raise ValueError("Source repository has staged changes")
     try:

@@ -348,6 +348,12 @@ def test_rest_time_fields_have_utc_offset(client, monkeypatch):
     assert evo_triggered.status_code == 202, evo_triggered.text
     disc_triggered = c.post("/api/v1/discovery/runs", headers=headers)
     assert disc_triggered.status_code == 202, disc_triggered.text
+    gap_reviewed = c.post(
+        "/api/v1/knowledge-gaps/time-gap/review",
+        headers=headers,
+        json={"status": "confirmed"},
+    )
+    assert gap_reviewed.status_code == 200, gap_reviewed.text
     payloads = {
         "token_issued": issued.json(),
         "tokens": c.get("/api/v1/tokens", headers=headers).json(),
@@ -356,6 +362,7 @@ def test_rest_time_fields_have_utc_offset(client, monkeypatch):
             "/api/v1/corrections/time-proposal", headers=headers
         ).json(),
         "knowledge_gaps": c.get("/api/v1/knowledge-gaps", headers=headers).json(),
+        "knowledge_gap_review": gap_reviewed.json(),
         "build": c.get(f"/api/v1/builds/{build_id}", headers=headers).json(),
         "builds": c.get("/api/v1/builds", headers=headers).json(),
         "pull_instance_trigger": c.post(

@@ -51,6 +51,87 @@ def upload(c, h, target, files, **kwargs):
     )
 
 
+def test_append_only_rejects_existing_and_replace_after_preview(source_client):
+    c, h, root = source_client
+    body = {
+        "target": "knowledge/sales",
+        "files": [{"path": "a.md", "content_base64": payload("new")}],
+        "append_only": True,
+    }
+    assert (
+        c.post("/api/v1/source/upload/preview", headers=h, json=body).status_code == 200
+    )
+    assert upload(c, h, "knowledge/sales", {"a.md": "other"}).status_code == 200
+    assert c.post("/api/v1/source/upload", headers=h, json=body).status_code == 422
+    assert (root / "knowledge/sales/a.md").read_text() == "other"
+    assert (
+        c.post(
+            "/api/v1/source/upload/preview", headers=h, json={**body, "replace": True}
+        ).status_code
+        == 422
+    )
+    assert (
+        c.post(
+            "/api/v1/source/upload", headers=h, json={**body, "replace": True}
+        ).status_code
+        == 422
+    )
+    fresh = {**body, "files": [{"path": "b.md", "content_base64": payload("fresh")}]}
+    assert (
+        c.post("/api/v1/source/upload/preview", headers=h, json=fresh).status_code
+        == 200
+    )
+    assert c.post("/api/v1/source/upload", headers=h, json=fresh).status_code == 200
+    assert c.post("/api/v1/source/upload", headers=h, json=fresh).status_code == 422
+
+
+def test_gap_upload_requires_confirmed_gap_in_same_project(source_client):
+    from semantica_dataagent.db import KnowledgeGap, sessions
+    from semantica_dataagent.project_api import create_project_record
+
+    c, h, _ = source_client
+    with sessions().begin() as db:
+        db.add(
+            KnowledgeGap(
+                id="gap-source",
+                project_id="default",
+                owner_id="u",
+                question="q",
+                missing="m",
+            )
+        )
+    body = {
+        "target": "knowledge/sales",
+        "files": [{"path": "a.md", "content_base64": payload("new")}],
+        "knowledge_gap_id": "gap-source",
+        "append_only": True,
+    }
+    assert (
+        c.post("/api/v1/source/upload/preview", headers=h, json=body).status_code == 422
+    )
+    with sessions().begin() as db:
+        db.get(KnowledgeGap, "gap-source").status = "confirmed"
+    other = create_project_record("Other gap source", "document")
+    assert (
+        c.post(
+            "/api/v1/source/upload/preview",
+            headers=h,
+            params={"project": other.id},
+            json=body,
+        ).status_code
+        == 422
+    )
+    assert (
+        c.post("/api/v1/source/upload/preview", headers=h, json=body).status_code == 200
+    )
+    assert (
+        c.post(
+            "/api/v1/source/upload", headers=h, json={**body, "append_only": False}
+        ).status_code
+        == 422
+    )
+
+
 def test_upload_history_diff_and_replace(source_client):
     c, h, root = source_client
     first = upload(

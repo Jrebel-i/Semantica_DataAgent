@@ -3370,8 +3370,30 @@
         "title": "FilterRules",
         "type": "object"
       },
+      "GapReview": {
+        "properties": {
+          "status": {
+            "enum": [
+              "confirmed",
+              "rejected"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "GapReview",
+        "type": "object"
+      },
       "GapView": {
         "properties": {
+          "can_review": {
+            "default": false,
+            "title": "Can Review",
+            "type": "boolean"
+          },
           "created_at": {
             "format": "date-time",
             "title": "Created At",
@@ -3396,6 +3418,44 @@
           "question": {
             "title": "Question",
             "type": "string"
+          },
+          "reviewed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewed At"
+          },
+          "reviewer_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewer Id"
+          },
+          "reviewer_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewer Name"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
           }
         },
         "required": [
@@ -3404,7 +3464,11 @@
           "owner_id",
           "question",
           "missing",
-          "created_at"
+          "created_at",
+          "status",
+          "reviewed_at",
+          "reviewer_id",
+          "reviewer_name"
         ],
         "title": "GapView",
         "type": "object"
@@ -4291,6 +4355,17 @@
               }
             ],
             "title": "Expected Tables"
+          },
+          "knowledge_gap_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Knowledge Gap Id"
           },
           "patch": {
             "default": "",
@@ -5682,6 +5757,11 @@
       },
       "SourceUpload": {
         "properties": {
+          "append_only": {
+            "default": false,
+            "title": "Append Only",
+            "type": "boolean"
+          },
           "archive_base64": {
             "anyOf": [
               {
@@ -5711,6 +5791,17 @@
             },
             "title": "Files",
             "type": "array"
+          },
+          "knowledge_gap_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Knowledge Gap Id"
           },
           "replace": {
             "default": false,
@@ -8875,6 +8966,76 @@
           }
         ],
         "summary": "List Gaps"
+      }
+    },
+    "/api/v1/knowledge-gaps/{gap_id}/review": {
+      "post": {
+        "operationId": "review_gap_api_v1_knowledge_gaps__gap_id__review_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "gap_id",
+            "required": true,
+            "schema": {
+              "title": "Gap Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "project",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Project"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GapReview"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GapView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Review Gap"
       }
     },
     "/api/v1/me": {
