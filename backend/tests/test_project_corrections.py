@@ -364,3 +364,96 @@ def test_interrupted_project_approval_recovers_only_that_project(
         "after-a\n" if expected == "approved" else "before-a\n"
     )
     assert (root_b / f"knowledge/metrics/{b.id}.md").read_text() == "before-b\n"
+
+
+def test_project_all_sources_default_pending_and_expose_unified_evidence(
+    tmp_path, monkeypatch
+):
+    from semantica_dataagent import corrections, knowledge, mcp_context, project_context
+    from semantica_dataagent.app import app
+    from semantica_dataagent.auth import Requester
+    from semantica_dataagent.db import Token, digest, sessions
+
+    token = configure(tmp_path, monkeypatch)
+    a, _ = project_source_a_and_b(tmp_path)
+    headers = {"Authorization": f"Bearer {token}"}
+    monkeypatch.setattr(knowledge, "existing_refs", lambda refs, project_id=None: set())
+    monkeypatch.setattr(knowledge, "read_graph", lambda values: object())
+    monkeypatch.setattr(knowledge, "execute", lambda *args: [])
+    monkeypatch.setattr(project_context, "wake_build_queue", lambda: None)
+
+    with sessions()() as db:
+        admin_id = db.get(Token, digest(token)).id
+
+    with TestClient(app, headers=headers) as client:
+        # 1) Manual new document proposal via REST -> strictly pending with unified evidence
+        manual_res = client.post(
+            "/api/v1/corrections",
+            params={"project": a.id},
+            json={
+                "target": "document:knowledge/guides/manual_faq.md",
+                "target_kind": "document",
+                "patch": "# 手工 FAQ\n\n内容。\n",
+                "reason": "手工新增常见问题",
+                "evidence": {"question": "如何定义净收入？"},
+            },
+        )
+        assert manual_res.status_code == 201, manual_res.text
+        m_prop = manual_res.json()
+        assert m_prop["status"] == "pending"
+        assert m_prop["is_new_file"] is True
+        assert m_prop["evidence"]["source_type"] == "manual"
+        assert m_prop["evidence"]["summary_reason"] == "手工新增常见问题"
+        assert m_prop["evidence"]["trigger_evidence"]["question"] == "如何定义净收入？"
+
+        # 2) Evolution & Discovery proposals strictly enter pending with unified evidence
+        with mcp_context.bind_mcp_context(
+            Requester(id=admin_id, role="admin", token=token, project_id=a.id),
+            project_id=a.id,
+        ):
+            with corrections.trusted_evolution_source():
+                evo_prop = corrections.propose_in_project(
+                    a.id,
+                    "document:knowledge/evolution/trace_rule.md",
+                    "# Trace 演化规则\n\n说明。\n",
+                    "从对话回溯中归纳的新规则",
+                    source="evolution",
+                    target_kind="document",
+                    extra_gate_report={
+                        "provenance": {"evolution_run_id": "run-1", "trace_ids": ["t1"]}
+                    },
+                )
+            with corrections.trusted_discovery_source():
+                disc_prop = corrections.propose_in_project(
+                    a.id,
+                    "document:knowledge/discovery/sql_pattern.md",
+                    "# 高频 SQL 模式\n\n说明。\n",
+                    "历史查询高频模式归纳",
+                    source="discovery",
+                    target_kind="document",
+                    extra_gate_report={
+                        "discovery_evidence": {
+                            "run_id": "disc-1",
+                            "query_history_frequency": 9,
+                        }
+                    },
+                )
+
+        assert evo_prop["status"] == "pending"
+        assert evo_prop["evidence"]["source_type"] == "evolution"
+        assert evo_prop["evidence"]["trigger_evidence"]["evolution_run_id"] == "run-1"
+        assert disc_prop["status"] == "pending"
+        assert disc_prop["evidence"]["source_type"] == "discovery"
+        assert disc_prop["evidence"]["trigger_evidence"]["query_history_frequency"] == 9
+
+        # List & Get endpoints preserve unified evidence & is_new_file
+        listed = client.get("/api/v1/corrections", params={"project": a.id}).json()
+        by_id = {item["id"]: item for item in listed}
+        for pid in (m_prop["id"], evo_prop["id"], disc_prop["id"]):
+            assert by_id[pid]["status"] == "pending"
+            assert by_id[pid]["is_new_file"] is True
+            assert by_id[pid]["evidence"]["source_type"] in {
+                "manual",
+                "evolution",
+                "discovery",
+            }

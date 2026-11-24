@@ -443,14 +443,12 @@ def set_project_auto_build(
 
 class EvolutionPolicyView(BaseModel):
     correction_require_review: bool
-    evolution_require_review: bool
 
 
 class EvolutionPolicyUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     correction_require_review: bool | None = None
-    evolution_require_review: bool | None = None
 
 
 @router.get(
@@ -464,7 +462,6 @@ def get_project_evolution_policy(
     policy = project_context.evolution_policy(scope.project_id)
     return EvolutionPolicyView(
         correction_require_review=policy["correction_require_review"],
-        evolution_require_review=True,
     )
 
 
@@ -506,7 +503,6 @@ def set_project_evolution_policy(
         policy = project_context.evolution_policy(scope.project_id, db)
         view_payload = {
             "correction_require_review": policy["correction_require_review"],
-            "evolution_require_review": True,
         }
         record_project_audit(
             db,

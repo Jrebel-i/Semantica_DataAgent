@@ -17,7 +17,8 @@ from typing import Annotated, Any, Literal
 
 import yaml
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, Field, field_validator
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy import text
 
 from . import knowledge, project_context
@@ -34,6 +35,11 @@ from .db import (
     Token,
     sessions,
 )
+from .knowledge_synthesizer import (
+    LLMUnavailableError,
+    markdown_root_for_project,
+    unified_diff_text,
+)
 from .mcp_context import bind_mcp_context, current_conversation_id, current_requester
 from .project_api import admin_project_scope, project_scope
 from .project_context import add_queued_build
@@ -48,6 +54,7 @@ from .semantic_overrides import (
     normalize_structured_patch,
     override_file_path,
     run_l1_gate,
+    validate_markdown_relpath,
 )
 from .source_directory import git, relative, repository, safe
 
@@ -85,21 +92,19 @@ def trusted_discovery_source():
         _TRUSTED_DISCOVERY_SOURCE.reset(token)
 
 
-def _evolution_doc_relpath(target: str) -> str:
+def _validate_doc_relpath(target: str, project_id: str) -> str:
     if not target.startswith("document:"):
-        raise ValueError("Evolution document target must start with document:")
-    rel = relative(target[len("document:") :])
-    parts = rel.parts
-    if (
-        len(parts) < 3
-        or parts[0] != "knowledge"
-        or any(part.startswith(".") for part in parts)
-        or rel.suffix.lower() != ".md"
-    ):
-        raise ValueError(
-            "Evolution document target must live under knowledge/<category>/*.md"
-        )
-    return rel.as_posix()
+        raise ValueError("Document target must start with document:")
+    md_root = markdown_root_for_project(project_id)
+    return validate_markdown_relpath(
+        target[len("document:") :],
+        markdown_root=md_root,
+        require_category_subdir=True,
+    )
+
+
+def _evolution_doc_relpath(target: str) -> str:
+    return _validate_doc_relpath(target, project_context.DEFAULT_PROJECT_ID)
 
 
 def _atomic_write(path: Path, content: str) -> None:
@@ -308,10 +313,11 @@ def propose_in_project(
     conversation_id: str | None = None,
     eval_candidate: dict[str, Any] | None = None,
     extra_gate_report: dict[str, Any] | None = None,
+    evidence: dict[str, Any] | None = None,
     proposal_id: str | None = None,
     knowledge_gap_id: str | None = None,
 ) -> dict:
-    """Propose replacement content or a structured semantic override inside one project."""
+    """Propose replacement content, a new Markdown document, or a structured semantic override inside one project."""
     requester = current_requester()
     if knowledge_gap_id is not None:
         with sessions()() as db:
@@ -366,6 +372,8 @@ def propose_in_project(
             raise ValueError("Correction patch must not be blank")
 
     original = ""
+    doc_source_path: str | None = None
+    is_new_file = False
     if parsed_patch is None:
         if (
             resolved_kind == "ossie"
@@ -389,16 +397,23 @@ def propose_in_project(
                     else knowledge.existing_refs([target], project_id)
                 )
             except (KeyError, knowledge.StorageUnavailable, ValueError, RuntimeError):
-                if source != "evolution":
+                if source != "evolution" and resolved_kind != "document":
                     raise
                 known = set()
             if target not in known:
-                if source == "evolution" and resolved_kind == "document":
-                    rel_doc = _evolution_doc_relpath(target)
+                if resolved_kind == "document":
+                    rel_doc = _validate_doc_relpath(target, project_id)
+                    doc_source_path = rel_doc
                     if project.source_directory_value:
-                        cand = Path(project.source_directory_value) / rel_doc
+                        cand = safe(
+                            Path(project.source_directory_value), relative(rel_doc)
+                        )
                         if cand.is_file():
                             original = cand.read_text(encoding="utf-8")
+                        else:
+                            is_new_file = True
+                    else:
+                        is_new_file = True
                 else:
                     raise ValueError(
                         "Target is not in the current knowledge generation"
@@ -416,9 +431,20 @@ def propose_in_project(
                     node.get("generated") or not node.get("source_file")
                 ):
                     raise ValueError("Document has no editable source")
+                doc_source_path = (
+                    str(node.get("source_file"))
+                    if target.startswith("document:") and node.get("source_file")
+                    else None
+                )
                 original = node.get(
                     "content" if target.startswith("document:") else "comment", ""
                 )
+                if doc_source_path and project.source_directory_value:
+                    cand = safe(
+                        Path(project.source_directory_value), relative(doc_source_path)
+                    )
+                    if cand.is_file():
+                        original = cand.read_text(encoding="utf-8")
 
     gate_report = run_l1_gate(
         target=target,
@@ -427,6 +453,8 @@ def propose_in_project(
         structured_patch=parsed_patch,
         target_kind=resolved_kind,
         project_id=project_id,
+        resolved_path=doc_source_path,
+        is_new_file=is_new_file,
     )
     if not gate_report.passed:
         raise GateValidationError(gate_report)
@@ -462,13 +490,16 @@ def propose_in_project(
             )
         if resolved_kind in {"override", "ossie"}:
             stored_structured_patch = legacy_target_to_patch(target, patch_text)
-        diff = _unified_diff(target, original, patch_text)
+        if is_new_file and doc_source_path:
+            diff = unified_diff_text(doc_source_path, "", patch_text, is_new_file=True)
+        else:
+            diff = _unified_diff(target, original, patch_text)
         if not diff:
             raise ValueError("Correction does not change the target")
 
     policy = project_context.evolution_policy(project_id)
     if source in {"discovery", "evolution"} or knowledge_gap_id is not None:
-        # Discovery and evolution proposals MUST always enter human review.
+        # Discovery, evolution, and confirmed-gap proposals MUST always enter human review.
         require_review = True
     else:
         require_review = policy["correction_require_review"]
@@ -495,6 +526,23 @@ def propose_in_project(
         if cleaned_candidate:
             gate_payload["eval_candidate"] = cleaned_candidate
 
+    trigger_evidence: dict[str, Any] = {}
+    if isinstance(evidence, dict):
+        trigger_evidence.update(evidence)
+    elif isinstance(gate_payload.get("discovery_evidence"), dict):
+        trigger_evidence.update(gate_payload["discovery_evidence"])
+    elif isinstance(gate_payload.get("provenance"), dict):
+        trigger_evidence.update(gate_payload["provenance"])
+    if knowledge_gap_id and "knowledge_gap_id" not in trigger_evidence:
+        trigger_evidence["knowledge_gap_id"] = knowledge_gap_id
+    if resolved_conversation_id and "conversation_id" not in trigger_evidence:
+        trigger_evidence["conversation_id"] = resolved_conversation_id
+    gate_payload["evidence"] = {
+        "source_type": source,
+        "summary_reason": reason,
+        "trigger_evidence": trigger_evidence,
+    }
+
     proposal_id = proposal_id or uuid.uuid4().hex
     with sessions().begin() as db:
         row = CorrectionProposal(
@@ -512,6 +560,15 @@ def propose_in_project(
             status="pending",
             source=source,
             target_kind=resolved_kind,
+            source_path=(
+                doc_source_path
+                if resolved_kind == "document"
+                else (
+                    OVERRIDE_RELATIVE_PATH
+                    if resolved_kind == "override" and project.source_directory_value
+                    else None
+                )
+            ),
             structured_patch=(
                 json.dumps(stored_structured_patch, ensure_ascii=False)
                 if stored_structured_patch is not None
@@ -558,8 +615,10 @@ class ProposalView(BaseModel):
     status: str
     source: str = "manual"
     target_kind: str = "document"
+    is_new_file: bool = False
     structured_patch: dict[str, Any] | None = None
     gate_report: dict[str, Any] | None = None
+    evidence: dict[str, Any] | None = None
     reviewer_id: str | None
     reviewed_at: UtcDatetime | None
     reverted_at: UtcDatetime | None = None
@@ -578,6 +637,28 @@ class ProposalView(BaseModel):
                 return None
             return json.loads(stripped)
         return value
+
+    @model_validator(mode="after")
+    def _derive_evidence_and_new_file(self):
+        if self.target_kind == "document" and self.diff.startswith("--- /dev/null"):
+            self.is_new_file = True
+        if self.evidence is None:
+            gate = self.gate_report or {}
+            stored_ev = gate.get("evidence")
+            if isinstance(stored_ev, dict):
+                self.evidence = dict(stored_ev)
+            else:
+                trigger_ev = {}
+                if isinstance(gate.get("discovery_evidence"), dict):
+                    trigger_ev = dict(gate["discovery_evidence"])
+                elif isinstance(gate.get("provenance"), dict):
+                    trigger_ev = dict(gate["provenance"])
+                self.evidence = {
+                    "source_type": self.source,
+                    "summary_reason": self.reason,
+                    "trigger_evidence": trigger_ev,
+                }
+        return self
 
 
 class Approval(BaseModel):
@@ -600,6 +681,7 @@ class ProposalCreate(BaseModel):
     source: Literal["manual"] | None = None
     target_kind: TargetKind | None = None
     structured_patch: dict[str, Any] | None = None
+    evidence: dict[str, Any] | None = None
     conversation_id: str | None = None
     knowledge_gap_id: str | None = None
     turn_id: int | None = None
@@ -625,7 +707,18 @@ def draft_proposal(
     requester: Annotated[Requester, Depends(rest_requester)],
     project: Annotated[str | None, Query()] = None,
 ):
-    return draft_correction_in_project(body, requester, query_project=project)
+    try:
+        return draft_correction_in_project(body, requester, query_project=project)
+    except LLMUnavailableError as exc:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "detail": exc.message,
+                "code": exc.code,
+                "fallback": "manual_edit",
+                "manual_edit_recommended": True,
+            },
+        )
 
 
 @router.post("/api/v1/corrections", status_code=201)
@@ -662,6 +755,7 @@ def create_proposal(
                 structured_patch=body.structured_patch,
                 conversation_id=body.conversation_id,
                 knowledge_gap_id=body.knowledge_gap_id,
+                evidence=body.evidence,
                 eval_candidate=eval_candidate
                 if any(v is not None for v in eval_candidate.values())
                 else None,
@@ -762,11 +856,17 @@ def _rollback_applying_row(proposal_id: str) -> None:
         row.status = "pending"
         if row.original_patch is not None:
             row.patch = row.original_patch
-        row.diff = _unified_diff(
-            OVERRIDE_RELATIVE_PATH if row.structured_patch else row.target,
-            row.original,
-            row.patch,
-        )
+        is_new_doc = (row.target_kind or "document") == "document" and not row.original
+        if is_new_doc and row.source_path:
+            row.diff = unified_diff_text(
+                row.source_path, "", row.patch, is_new_file=True
+            )
+        else:
+            row.diff = _unified_diff(
+                OVERRIDE_RELATIVE_PATH if row.structured_patch else row.target,
+                row.original,
+                row.patch,
+            )
         row.reviewer_id = None
         row.reviewer_name = None
 
@@ -976,6 +1076,7 @@ def _merged_gate_report_json(
                     "l2_gate",
                     "provenance",
                     "discovery_evidence",
+                    "evidence",
                 ):
                     if preserved_key in existing:
                         payload[preserved_key] = existing[preserved_key]
@@ -1115,13 +1216,31 @@ def _apply_proposal(
                 {"generation": project.generation, "ref": row_target},
             )
         except (KeyError, knowledge.StorageUnavailable, ValueError, RuntimeError):
-            if row_source != "evolution":
-                raise
             nodes = []
-        if len(nodes) == 1 and nodes[0]["node"].get("source_file"):
+        if (
+            len(nodes) == 1
+            and nodes[0]["node"].get("source_file")
+            and not nodes[0]["node"].get("generated")
+        ):
             doc_source_file = nodes[0]["node"]["source_file"]
-        elif row_source == "evolution" and row_target.startswith("document:"):
-            doc_source_file = _evolution_doc_relpath(row_target)
+        elif row_target.startswith("document:"):
+            try:
+                candidate_rel = _validate_doc_relpath(row_target, row_project_id)
+            except ValueError as exc:
+                raise HTTPException(409, "Document no longer exists") from exc
+            if row_source == "evolution":
+                doc_source_file = candidate_rel
+            else:
+                with sessions()() as db:
+                    snap = db.get(CorrectionProposal, proposal_id)
+                    orig_empty = snap is not None and snap.original == ""
+                if orig_empty or (
+                    project.source_directory_value
+                    and (Path(project.source_directory_value) / candidate_rel).is_file()
+                ):
+                    doc_source_file = candidate_rel
+                else:
+                    raise HTTPException(409, "Document no longer exists")
         else:
             raise HTTPException(409, "Document no longer exists")
     elif (
@@ -1150,7 +1269,10 @@ def _apply_proposal(
         row.gate_report = _merged_gate_report_json(
             row.gate_report, gate_report, approval_eval
         )
-        row.diff = _unified_diff(row.source_path, row.original, effective_patch)
+        is_new_doc = row_kind == "document" and row.original == ""
+        row.diff = unified_diff_text(
+            row.source_path, row.original, effective_patch, is_new_file=is_new_doc
+        )
         row.status = "applying"
         row.reviewer_id = reviewer_id
         row.reviewer_name = reviewer_name

@@ -165,7 +165,7 @@ def _mock_graph(
 
 
 def test_correction_draft_routing_preview_and_guardrails(tmp_path: Path, monkeypatch):
-    from semantica_dataagent import project_context
+    from semantica_dataagent import correction_draft, project_context
     from semantica_dataagent.app import app
     from semantica_dataagent.db import CorrectionProposal, sessions
     from semantica_dataagent.project_api import create_project_record
@@ -253,6 +253,72 @@ def test_correction_draft_routing_preview_and_guardrails(tmp_path: Path, monkeyp
         has_document_links=has_doc_links,
         relates_to_edges=relates_edges,
     )
+    monkeypatch.setattr(project_context, "wake_build_queue", lambda: None)
+
+    def fake_routing_llm(ctx: dict) -> dict:
+        target = ctx.get("target")
+        if target == "document:gmv":
+            return {
+                "route": "existing_document",
+                "target": "document:gmv",
+                "reason": "补充 GMV 支付口径与退款排除规则",
+                "patch": "# GMV\n\n原口径描述。\n\n## 口径补充\n\nGMV 仅包含 status = 'paid' 的已支付订单，不含已退款订单。\n",
+            }
+        if target == "document:ossie_orders":
+            return {
+                "route": "override",
+                "target": "table:shop.orders",
+                "reason": "将派生文档业务说明写入语义覆盖层",
+                "structured_patch": {
+                    "version": 1,
+                    "tables": {
+                        "shop.orders": {
+                            "database": "shop",
+                            "name": "orders",
+                            "instructions": "按订单支付时间统计，测试订单需过滤。",
+                        }
+                    },
+                },
+            }
+        if target == "field:shop.orders.status":
+            return {
+                "route": "override",
+                "target": "field:shop.orders.status",
+                "reason": "补充订单状态字段枚举说明",
+                "structured_patch": {
+                    "version": 1,
+                    "fields": {
+                        "shop.orders.status": {
+                            "database": "shop",
+                            "table": "orders",
+                            "name": "status",
+                            "comment": "paid=已支付，refunded=已退款",
+                        }
+                    },
+                },
+            }
+        return {
+            "route": "override",
+            "target": "relationship:shop.orders:shop.users:fk_orders_user",
+            "reason": "补充外键关联过滤说明",
+            "structured_patch": {
+                "version": 1,
+                "relationships": {
+                    "fk_orders_user": {
+                        "name": "fk_orders_user",
+                        "from_database": "shop",
+                        "from_table": "orders",
+                        "from_columns": ["user_id"],
+                        "to_database": "shop",
+                        "to_table": "users",
+                        "to_columns": ["id"],
+                        "instructions": "关联时仅使用未注销用户",
+                    }
+                },
+            },
+        }
+
+    monkeypatch.setattr(correction_draft, "generate_with_llm", fake_routing_llm)
 
     with TestClient(app, headers=headers) as client:
         assert (
@@ -585,3 +651,231 @@ def test_correction_draft_pluggable_llm_scrubs_secrets_and_runs_gate(
         unsafe_body = unsafe.json()
         assert unsafe_body["gate_report"]["passed"] is False
         assert unsafe_body["gate_report"]["errors"]
+
+
+def test_correction_draft_auto_routes_without_target_across_all_three_lanes(
+    tmp_path: Path, monkeypatch
+):
+    from semantica_dataagent import correction_draft, project_context
+    from semantica_dataagent.app import app
+    from semantica_dataagent.project_api import create_project_record
+
+    admin_token = _configure(tmp_path, monkeypatch)
+    headers = {"Authorization": f"Bearer {admin_token}"}
+    project = create_project_record("Auto Route Proj", "warehouse")
+
+    nodes = {
+        "document:gmv": {
+            "ref": "document:gmv",
+            "title": "GMV 口径",
+            "source_file": "knowledge/metrics/gmv.md",
+            "generated": False,
+            "content": "# GMV\n\n基础 GMV 定义。\n",
+        },
+        "table:shop.orders": {
+            "ref": "table:shop.orders",
+            "database": "shop",
+            "name": "orders",
+            "comment": "订单表",
+        },
+        "field:shop.orders.amount": {
+            "ref": "field:shop.orders.amount",
+            "database": "shop",
+            "table": "orders",
+            "name": "amount",
+            "comment": "金额",
+        },
+    }
+    _mock_graph(monkeypatch, {"document:gmv": "# GMV\n\n基础 GMV 定义。\n"}, nodes)
+    monkeypatch.setattr(project_context, "wake_build_queue", lambda: None)
+
+    def auto_route_llm(ctx: dict) -> dict:
+        desc = ctx["description"]
+        assert ctx["target"] is None
+        if "退款" in desc and "跨表" in desc:
+            return {
+                "route": "new_document",
+                "new_doc_path": "knowledge/rules/refund_policy.md",
+                "reason": "新增跨表退单归因与冲销规则文档",
+                "patch": "# 退单归因规则\n\n跨表计算净 GMV 时按退款完成时间冲销。\n",
+            }
+        if "GMV" in desc:
+            return {
+                "route": "existing_document",
+                "target": "document:gmv",
+                "reason": "将 GMV 排除测试单说明合并到已有文档",
+                "patch": "# GMV\n\n基础 GMV 定义。\n\n## 过滤条件\n\n排除测试账号订单。\n",
+            }
+        return {
+            "route": "override",
+            "reason": "为 amount 字段补充单位说明",
+            "structured_patch": {
+                "version": 1,
+                "fields": {
+                    "shop.orders.amount": {
+                        "database": "shop",
+                        "table": "orders",
+                        "name": "amount",
+                        "comment": "实付金额（元）",
+                    }
+                },
+            },
+        }
+
+    monkeypatch.setattr(correction_draft, "generate_with_llm", auto_route_llm)
+
+    with TestClient(app, headers=headers) as client:
+        assert (
+            client.put(
+                f"/api/v1/projects/{project.id}/auto-build",
+                json={"enabled": False},
+            ).status_code
+            == 200
+        )
+        _upload_doc(client, project.id, "gmv.md", "# GMV\n\n基础 GMV 定义。\n")
+
+        # 1) Omitted target -> override
+        r_override = client.post(
+            "/api/v1/corrections/draft",
+            json={"project": project.id, "description": "orders.amount 单位是元"},
+        )
+        assert r_override.status_code == 200, r_override.text
+        b1 = r_override.json()
+        assert b1["target"] == "field:shop.orders.amount"
+        assert b1["target_kind"] == "override"
+        assert b1["resolved_path"] == "overrides/semantic_overrides.yaml"
+        assert b1["is_new_file"] is False
+        assert b1["used_llm"] is True
+
+        # 2) Empty string target -> existing markdown document merge
+        r_doc = client.post(
+            "/api/v1/corrections/draft",
+            json={
+                "project": project.id,
+                "target": "   ",
+                "description": "GMV 计算需排除测试账号订单",
+            },
+        )
+        assert r_doc.status_code == 200, r_doc.text
+        b2 = r_doc.json()
+        assert b2["target"] == "document:gmv"
+        assert b2["target_kind"] == "document"
+        assert b2["resolved_path"] == "knowledge/metrics/gmv.md"
+        assert b2["is_new_file"] is False
+        assert "排除测试账号订单" in b2["patch"]
+
+        # 3) Omitted target -> new markdown document proposal -> submit & approve
+        r_new = client.post(
+            "/api/v1/corrections/draft",
+            json={
+                "project": project.id,
+                "description": "新增跨表退款归因与冲销规则",
+            },
+        )
+        assert r_new.status_code == 200, r_new.text
+        b3 = r_new.json()
+        assert b3["target"] == "document:knowledge/rules/refund_policy.md"
+        assert b3["target_kind"] == "document"
+        assert b3["resolved_path"] == "knowledge/rules/refund_policy.md"
+        assert b3["is_new_file"] is True
+        assert "--- /dev/null" in b3["diff"]
+        assert "+++ b/knowledge/rules/refund_policy.md" in b3["diff"]
+        assert b3["gate_report"]["passed"] is True
+
+        sub = client.post(
+            "/api/v1/corrections",
+            params={"project": project.id},
+            json={
+                "target": b3["target"],
+                "target_kind": b3["target_kind"],
+                "patch": b3["patch"],
+                "reason": b3["reason"],
+            },
+        )
+        assert sub.status_code == 201, sub.text
+        assert sub.json()["status"] == "pending"
+        assert sub.json()["is_new_file"] is True
+        app_res = client.post(
+            f"/api/v1/corrections/{sub.json()['id']}/approve",
+            params={"project": project.id},
+        )
+        assert app_res.status_code == 200, app_res.text
+        src_dir = project_context.project_source_directory(project.id)
+        assert (src_dir / "knowledge/rules/refund_policy.md").read_text(
+            encoding="utf-8"
+        ) == "# 退单归因规则\n\n跨表计算净 GMV 时按退款完成时间冲销。\n"
+
+
+def test_correction_draft_returns_503_llm_unavailable_without_silent_concatenation(
+    tmp_path: Path, monkeypatch
+):
+    from semantica_dataagent import correction_draft
+    from semantica_dataagent.app import app
+    from semantica_dataagent.project_api import create_project_record
+
+    admin_token = _configure(tmp_path, monkeypatch)
+    headers = {"Authorization": f"Bearer {admin_token}"}
+    project = create_project_record("No LLM Proj", "warehouse")
+
+    nodes = {
+        "document:gmv": {
+            "ref": "document:gmv",
+            "title": "GMV 口径",
+            "source_file": "knowledge/metrics/gmv.md",
+            "generated": False,
+            "content": "# GMV\n\n原口径描述。\n",
+        },
+        "table:shop.orders": {
+            "ref": "table:shop.orders",
+            "database": "shop",
+            "name": "orders",
+            "comment": "订单表",
+        },
+    }
+    _mock_graph(monkeypatch, {"document:gmv": "# GMV\n\n原口径描述。\n"}, nodes)
+
+    with TestClient(app, headers=headers) as client:
+        _upload_doc(client, project.id, "gmv.md", "# GMV\n\n原口径描述。\n")
+
+        # 1) Unconfigured LLM -> HTTP 503 with explicit manual-edit signal (never silent concatenation)
+        res_unconf = client.post(
+            "/api/v1/corrections/draft",
+            json={
+                "project": project.id,
+                "target": "document:gmv",
+                "description": "口语化补充：只看已支付订单",
+            },
+        )
+        assert res_unconf.status_code == 503, res_unconf.text
+        err1 = res_unconf.json()
+        assert err1["code"] == "llm_unavailable"
+        assert err1["fallback"] == "manual_edit"
+        assert err1["manual_edit_recommended"] is True
+        assert "手工编辑" in err1["detail"]
+
+        # 2) LLM failure / invalid output -> HTTP 503 too
+        monkeypatch.setattr(correction_draft, "generate_with_llm", lambda _ctx: None)
+        res_fail = client.post(
+            "/api/v1/corrections/draft",
+            json={
+                "project": project.id,
+                "target": "table:shop.orders",
+                "description": "补充表注释",
+            },
+        )
+        assert res_fail.status_code == 503, res_fail.text
+        assert res_fail.json()["code"] == "llm_unavailable"
+
+        # 3) Manual fallback via POST /api/v1/corrections still succeeds and enters pending
+        manual = client.post(
+            "/api/v1/corrections",
+            params={"project": project.id},
+            json={
+                "target": "document:gmv",
+                "target_kind": "document",
+                "patch": "# GMV\n\n手工编辑后的口径。\n",
+                "reason": "手工补充支付状态口径",
+            },
+        )
+        assert manual.status_code == 201, manual.text
+        assert manual.json()["status"] == "pending"

@@ -730,3 +730,113 @@ def test_user_can_submit_table_correction_via_rest(client, monkeypatch):
         row["owner_id"] == requester.id and row["patch"] == "新说明"
         for row in reviewed.json()
     )
+
+
+def test_new_markdown_document_proposal_approve_and_revert(
+    client, monkeypatch, tmp_path
+):
+    import subprocess
+
+    from semantica_dataagent import knowledge
+
+    c, token = client
+    headers = {"Authorization": f"Bearer {token}"}
+    root = tmp_path / "source"
+    assert (
+        c.put(
+            "/api/v1/settings",
+            headers=headers,
+            json={"values": {"source_directory": str(root)}},
+        ).status_code
+        == 200
+    )
+    monkeypatch.setattr(knowledge, "existing_refs", lambda refs, project_id=None: set())
+    monkeypatch.setattr(knowledge, "read_graph", lambda values: object())
+    monkeypatch.setattr(knowledge, "execute", lambda *args: [])
+
+    # Reject path traversal, top-level docs, and non-markdown targets
+    for bad_target in (
+        "document:knowledge/../secret.md",
+        "document:knowledge/top_level.md",
+        "document:knowledge/rules/notes.txt",
+    ):
+        bad_resp = c.post(
+            "/api/v1/corrections",
+            headers=headers,
+            json={
+                "target": bad_target,
+                "target_kind": "document",
+                "patch": "# Bad\n",
+                "reason": "非法路径校验",
+            },
+        )
+        assert bad_resp.status_code == 422, (bad_target, bad_resp.text)
+
+    # Create a new Markdown document proposal
+    created = c.post(
+        "/api/v1/corrections",
+        headers=headers,
+        json={
+            "target": "document:knowledge/rules/nested/refund_caliber.md",
+            "target_kind": "document",
+            "patch": "# 退单口径\n\n统计净 GMV 时扣减已完成退款。\n",
+            "reason": "新增退单口径说明文档",
+            "evidence": {"question": "净 GMV 是否扣减退款？", "gap_id": "gap-1"},
+        },
+    )
+    assert created.status_code == 201, created.text
+    prop = created.json()
+    assert prop["status"] == "pending"
+    assert prop["is_new_file"] is True
+    assert prop["diff"].startswith(
+        "--- /dev/null\n+++ b/knowledge/rules/nested/refund_caliber.md"
+    )
+    assert prop["evidence"]["source_type"] == "manual"
+    assert prop["evidence"]["summary_reason"] == "新增退单口径说明文档"
+    assert prop["evidence"]["trigger_evidence"]["gap_id"] == "gap-1"
+
+    new_file = root / "knowledge" / "rules" / "nested" / "refund_caliber.md"
+    assert not new_file.exists()
+
+    # Approve creates parent dirs, writes file, commits to Git, and enqueues incremental build
+    approved = c.post(f"/api/v1/corrections/{prop['id']}/approve", headers=headers)
+    assert approved.status_code == 200, approved.text
+    app_body = approved.json()
+    assert app_body["status"] == "approved"
+    assert app_body["commit_sha"]
+    assert new_file.is_file()
+    assert (
+        new_file.read_text(encoding="utf-8")
+        == "# 退单口径\n\n统计净 GMV 时扣减已完成退款。\n"
+    )
+    from semantica_dataagent.db import Build, sessions
+
+    with sessions()() as db:
+        assert (
+            db.query(Build)
+            .filter_by(build_type="incremental", correction_proposal_id=prop["id"])
+            .count()
+            == 1
+        )
+
+    # Git revert cleanly removes the created file and leaves clean working tree
+    reverted = c.post(f"/api/v1/corrections/{prop['id']}/revert", headers=headers)
+    assert reverted.status_code == 200, reverted.text
+    rev_body = reverted.json()
+    assert rev_body["status"] == "reverted"
+    assert rev_body["revert_commit_sha"]
+    assert not new_file.exists()
+    assert not subprocess.check_output(
+        ["git", "-C", str(root), "status", "--porcelain", "--untracked-files=all"],
+        text=True,
+    ).strip()
+    with sessions()() as db:
+        assert (
+            db.query(Build)
+            .filter_by(
+                build_type="incremental",
+                correction_proposal_id=f"revert:{prop['id']}",
+            )
+            .count()
+            == 1
+        )

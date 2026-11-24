@@ -133,22 +133,19 @@ def test_evolution_policy_defaults_when_unset_or_blank_and_enforces_scope(
         assert resp.status_code == 200, resp.text
         assert resp.json() == {
             "correction_require_review": True,
-            "evolution_require_review": True,
         }
 
     # Blank / whitespace values in DB must fall back to True
     with sqlite3.connect(tmp_path / "app.db") as db:
         db.execute(
             "INSERT OR REPLACE INTO project_settings (project_id, key, value) VALUES "
-            "(?, 'correction_require_review', '   '), "
-            "(?, 'evolution_require_review', '')",
-            (proj_id, proj_id),
+            "(?, 'correction_require_review', '   ')",
+            (proj_id,),
         )
     blank_resp = c.get(f"/api/v1/projects/{proj_id}/evolution-policy", headers=headers)
     assert blank_resp.status_code == 200
     assert blank_resp.json() == {
         "correction_require_review": True,
-        "evolution_require_review": True,
     }
 
     # Create member, project_admin, and outsider tokens
@@ -206,7 +203,15 @@ def test_evolution_policy_defaults_when_unset_or_blank_and_enforces_scope(
         ).status_code
         == 404
     )
-    # Project admin updates correction_require_review -> False, keeping evolution_require_review -> True
+    # Project admin updates correction_require_review -> False; evolution_require_review is removed (422)
+    assert (
+        c.put(
+            f"/api/v1/projects/{proj_id}/evolution-policy",
+            headers=_headers(proj_admin_tok),
+            json={"evolution_require_review": False},
+        ).status_code
+        == 422
+    )
     updated = c.put(
         f"/api/v1/projects/{proj_id}/evolution-policy",
         headers=_headers(proj_admin_tok),
@@ -215,7 +220,6 @@ def test_evolution_policy_defaults_when_unset_or_blank_and_enforces_scope(
     assert updated.status_code == 200, updated.text
     assert updated.json() == {
         "correction_require_review": False,
-        "evolution_require_review": True,
     }
 
     # Explicit null resets back to default True
@@ -227,7 +231,6 @@ def test_evolution_policy_defaults_when_unset_or_blank_and_enforces_scope(
     assert reset.status_code == 200, reset.text
     assert reset.json() == {
         "correction_require_review": True,
-        "evolution_require_review": True,
     }
 
     # Archived project: GET works, PUT returns 409, member still gets 403, outsider gets 404
@@ -3037,13 +3040,20 @@ def test_rest_corrections_blocks_evolution_source_spoofing_and_top_level_docs(
     ).json()["token"]
     mheaders = _headers(member_tok)
 
-    # Even if evolution_require_review=False while correction_require_review=True,
-    # REST callers cannot spoof source="evolution"
+    # evolution_require_review cannot be re-enabled (422) and REST callers cannot spoof source="evolution"
     assert (
         c.put(
             f"/api/v1/projects/{proj_id}/evolution-policy",
             headers=headers,
             json={"correction_require_review": True, "evolution_require_review": False},
+        ).status_code
+        == 422
+    )
+    assert (
+        c.put(
+            f"/api/v1/projects/{proj_id}/evolution-policy",
+            headers=headers,
+            json={"correction_require_review": False},
         ).status_code
         == 200
     )
@@ -3110,6 +3120,35 @@ def test_rest_corrections_blocks_evolution_source_spoofing_and_top_level_docs(
             )
             assert valid_prop["source"] == "evolution"
             assert valid_prop["status"] == "pending"
+            assert valid_prop["is_new_file"] is True
+            assert "--- /dev/null" in valid_prop["diff"]
+            assert "+++ b/knowledge/evolution/valid_gap.md" in valid_prop["diff"]
+            assert valid_prop["evidence"]["source_type"] == "evolution"
+            assert valid_prop["evidence"]["summary_reason"] == "valid category subdir"
+
+    # Discovery source also stays strictly pending even when correction_require_review=False
+    with (
+        mcp_context.bind_mcp_context(
+            Requester(id="admin", role="admin", token=admin, project_id=proj_id),
+            project_id=proj_id,
+        ),
+        corrections.trusted_discovery_source(),
+    ):
+        disc_prop = corrections.propose_in_project(
+            proj_id,
+            "document:knowledge/discovery/discovered_note.md",
+            "# Discovered Note\n",
+            "cold-start discovery rule",
+            source="discovery",
+            target_kind="document",
+            evidence={"query_history_frequency": 12},
+        )
+        assert disc_prop["source"] == "discovery"
+        assert disc_prop["status"] == "pending"
+        assert disc_prop["evidence"]["source_type"] == "discovery"
+        assert (
+            disc_prop["evidence"]["trigger_evidence"]["query_history_frequency"] == 12
+        )
 
     approved = c.post(
         f"/api/v1/corrections/{valid_prop['id']}/approve",
