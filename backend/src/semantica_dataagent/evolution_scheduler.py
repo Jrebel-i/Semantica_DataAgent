@@ -5,11 +5,10 @@ from __future__ import annotations
 import logging
 import os
 import threading
-from datetime import UTC, datetime, timedelta
+from datetime import datetime
 
-from . import evolution_runner, project_context, trajectory_miner
-from .api_time import as_utc as _as_utc
-from .db import EvolutionCheckpoint, EvolutionRun, Project, sessions
+from . import evolution_runner, project_context
+from .db import Project, sessions
 
 LOGGER = logging.getLogger(__name__)
 DEFAULT_POLL_INTERVAL_SECONDS = 60.0
@@ -17,68 +16,7 @@ DEFAULT_POLL_INTERVAL_SECONDS = 60.0
 
 def should_trigger_project(project_id: str, *, now: datetime | None = None) -> bool:
     """Evaluate whether a project satisfies auto-evolution trigger thresholds."""
-    ts = _as_utc(now) or datetime.now(UTC)
-    if project_context.project_is_frozen(project_id):
-        return False
-
-    cfg = project_context.evolution_config(project_id)
-    if not cfg.get("auto_evolve_enabled", False):
-        return False
-
-    with sessions()() as db:
-        project = db.get(Project, project_id)
-        if project is None or project.status in project_context.FROZEN_STATUSES:
-            return False
-        running = (
-            db.query(EvolutionRun.id)
-            .filter(
-                EvolutionRun.project_id == project_id,
-                EvolutionRun.status == "running",
-            )
-            .first()
-        )
-        if running is not None:
-            return False
-        ckpt = db.get(EvolutionCheckpoint, project_id)
-        ckpt_id = ckpt.checkpoint_trajectory_id if ckpt is not None else None
-        ckpt_at = _as_utc(ckpt.checkpoint_at) if ckpt is not None else None
-        last_run = (
-            db.query(EvolutionRun)
-            .filter(EvolutionRun.project_id == project_id)
-            .order_by(EvolutionRun.started_at.desc(), EvolutionRun.id.desc())
-            .first()
-        )
-        project_created_at = _as_utc(project.created_at) or ts
-
-    new_count, earliest_at, _ = trajectory_miner.count_eligible_trajectories_since(
-        project_id, after_id=ckpt_id, now=ts
-    )
-    if new_count <= 0:
-        return False
-
-    min_trajectories = int(cfg["min_trajectories"])
-    min_interval = timedelta(hours=float(cfg["min_interval_hours"]))
-    max_idle = timedelta(days=float(cfg["max_idle_days"]))
-
-    # Cooldown applies from last run attempt (if any) so incomplete runs do not tight-loop.
-    cooldown_anchor = None
-    if last_run is not None:
-        cooldown_anchor = _as_utc(last_run.finished_at or last_run.started_at)
-    if cooldown_anchor is not None and (ts - cooldown_anchor) < min_interval:
-        return False
-
-    if ckpt_at is not None:
-        elapsed = ts - ckpt_at
-        return bool(
-            (new_count >= min_trajectories and elapsed >= min_interval)
-            or (elapsed >= max_idle and new_count >= 1)
-        )
-
-    # Zero-history brand-new project (no prior accepted checkpoint)
-    if new_count >= min_trajectories:
-        return True
-    idle_baseline = earliest_at or project_created_at
-    return bool((ts - idle_baseline) >= max_idle and new_count >= 1)
+    return False
 
 
 class EvolutionScheduler:

@@ -2,6 +2,7 @@
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from datetime import datetime
 from importlib.metadata import entry_points
 from typing import Any, ClassVar, Literal, Protocol
 
@@ -15,6 +16,7 @@ GROUPS = {
     "parser": "semantica_dataagent.task_parsers",
     "executor": "semantica_dataagent.executors",
     "puller": "semantica_dataagent.pullers",
+    "trace_source": "semantica_dataagent.trace_sources",
 }
 
 # Agent runners are plugins too, but they are not persisted or enabled per
@@ -77,6 +79,43 @@ class PullerPlugin(Protocol):
     parameters_schema: ClassVar[dict]
 
     def pull(self, context: PullContext) -> PullArtifact: ...
+
+
+@dataclass(frozen=True)
+class TraceMessage:
+    role: Literal["user", "assistant"]
+    content: str
+    timestamp: datetime | None = None
+
+
+@dataclass(frozen=True)
+class TraceConversation:
+    trace_id: str
+    project_id: str
+    messages: list[TraceMessage] = field(default_factory=list)
+    started_at: datetime | None = None
+    ended_at: datetime | None = None
+    session_id: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class TraceQuery:
+    project_id: str
+    parameters: dict[str, Any] = field(default_factory=dict)
+    secrets: dict[str, str] = field(default_factory=dict)
+    since: datetime | None = None
+    until: datetime | None = None
+    limit: int = 200
+
+
+class TraceSourcePlugin(Protocol):
+    id: str
+    version: str
+    display_name: str
+    parameters_schema: ClassVar[dict]
+
+    def fetch_traces(self, query: TraceQuery) -> list[TraceConversation]: ...
 
 
 def secret_parameter_keys(schema: Mapping[str, Any]) -> set[str]:

@@ -461,7 +461,11 @@ def get_project_evolution_policy(
     project_id: str,
     scope: Annotated[ProjectContext, Depends(admin_project_path_scope)],
 ):
-    return EvolutionPolicyView(**project_context.evolution_policy(scope.project_id))
+    policy = project_context.evolution_policy(scope.project_id)
+    return EvolutionPolicyView(
+        correction_require_review=policy["correction_require_review"],
+        evolution_require_review=True,
+    )
 
 
 @router.put(
@@ -476,23 +480,13 @@ def set_project_evolution_policy(
 ):
     if scope.status in FROZEN_STATUSES:
         raise HTTPException(status_code=409, detail=ARCHIVED_DETAIL)
-    updates = (
-        (
-            "correction_require_review",
-            project_context.CORRECTION_REQUIRE_REVIEW_KEY,
-            body.correction_require_review,
-        ),
-        (
-            "evolution_require_review",
-            project_context.EVOLUTION_REQUIRE_REVIEW_KEY,
-            body.evolution_require_review,
-        ),
-    )
     with sessions().begin() as db:
-        for field_name, setting_key, value in updates:
-            if field_name not in body.model_fields_set:
-                continue
-            row = db.get(ProjectSetting, (scope.project_id, setting_key))
+        if "correction_require_review" in body.model_fields_set:
+            value = body.correction_require_review
+            row = db.get(
+                ProjectSetting,
+                (scope.project_id, project_context.CORRECTION_REQUIRE_REVIEW_KEY),
+            )
             if value is None:
                 if row is not None:
                     db.delete(row)
@@ -502,7 +496,7 @@ def set_project_evolution_policy(
                     db.add(
                         ProjectSetting(
                             project_id=scope.project_id,
-                            key=setting_key,
+                            key=project_context.CORRECTION_REQUIRE_REVIEW_KEY,
                             value=stored,
                         )
                     )
@@ -510,15 +504,19 @@ def set_project_evolution_policy(
                     row.value = stored
         db.flush()
         policy = project_context.evolution_policy(scope.project_id, db)
+        view_payload = {
+            "correction_require_review": policy["correction_require_review"],
+            "evolution_require_review": True,
+        }
         record_project_audit(
             db,
             project_id=scope.project_id,
             actor_id=requester.id,
             actor_name=actor_name(db, requester),
             action="project.evolution_policy",
-            detail=policy,
+            detail=view_payload,
         )
-        return EvolutionPolicyView(**policy)
+        return EvolutionPolicyView(**view_payload)
 
 
 ADAPTER_DEFAULT_ENABLED = frozenset({"canonical", "markdown"})

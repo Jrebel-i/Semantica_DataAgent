@@ -1751,7 +1751,6 @@ def prune_generations(values):
             db.query(KnowledgeGeneration)
             .filter(
                 KnowledgeGeneration.project_id == project.project_id,
-                KnowledgeGeneration.is_candidate.is_(False),
             )
             .order_by(KnowledgeGeneration.created_at.desc())
             .all()
@@ -1934,7 +1933,6 @@ def build_candidate_generation(
                 build_id=None,
                 created_at=datetime.now(UTC).isoformat(),
                 deleting=False,
-                is_candidate=True,
             )
         )
 
@@ -1992,10 +1990,6 @@ def destroy_candidate_generation(
     with sessions().begin() as db:
         row = db.get(KnowledgeGeneration, generation)
         if row is not None:
-            if not row.is_candidate:
-                raise ValueError(
-                    f"Refusing to destroy non-candidate generation {generation}"
-                )
             resolved_pid = row.project_id
             pointer = generation_pointer(db, resolved_pid)
             if pointer is not None and pointer.generation == generation:
@@ -2017,7 +2011,7 @@ def destroy_candidate_generation(
 
     with sessions().begin() as db:
         row = db.get(KnowledgeGeneration, generation)
-        if row is not None and row.is_candidate:
+        if row is not None:
             db.delete(row)
 
 
@@ -2043,30 +2037,8 @@ def candidate_generation(
 
 
 def cleanup_candidate_generations(project_id: str | None = None) -> int:
-    """Sweep orphan candidate generations left by crashes or project deletion."""
-    import logging
-
-    logger = logging.getLogger(__name__)
+    """Sweep leftover `.candidates` workdirs (L2 candidate generations are retired)."""
     cleaned = 0
-    handled: set[tuple[str, str]] = set()
-    with sessions()() as db:
-        query = db.query(KnowledgeGeneration).filter(
-            KnowledgeGeneration.is_candidate.is_(True)
-        )
-        if project_id is not None:
-            query = query.filter(KnowledgeGeneration.project_id == project_id)
-        rows = [(row.name, row.project_id) for row in query.all()]
-
-    for cand_gen, pid in rows:
-        handled.add((pid, cand_gen))
-        try:
-            destroy_candidate_generation(cand_gen, pid)
-            cleaned += 1
-        except Exception:  # noqa: BLE001 - retry on next startup if storage is unreachable
-            logger.warning(
-                "Could not clean orphan candidate generation %s (%s)", cand_gen, pid
-            )
-
     root = project_context.projects_root()
     if root.exists():
         project_dirs = (
@@ -2078,23 +2050,8 @@ def cleanup_candidate_generations(project_id: str | None = None) -> int:
             cand_root = pdir / ".candidates"
             if not cand_root.is_dir():
                 continue
-            pid = pdir.name
-            for entry in list(cand_root.iterdir()):
-                if not entry.is_dir():
-                    continue
-                if (pid, entry.name) in handled:
-                    continue
-                try:
-                    values = _cleanup_values_for_project(pid)
-                    if values.get("neo4j_uri") and values.get("milvus_uri"):
-                        delete_generation_data(
-                            project_context.with_generation(values, entry.name)
-                        )
-                except Exception:  # noqa: BLE001 - best-effort sweep for filesystem-only orphans
-                    logger.warning(
-                        "Best-effort storage sweep skipped for orphan %s", entry.name
-                    )
-                shutil.rmtree(entry, ignore_errors=True)
+            for item in cand_root.iterdir():
+                shutil.rmtree(item, ignore_errors=True)
                 cleaned += 1
             with suppress(OSError):
                 cand_root.rmdir()

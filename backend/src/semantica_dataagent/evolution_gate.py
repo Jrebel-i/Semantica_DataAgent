@@ -28,7 +28,7 @@ from . import (
     project_context,
     provider_probe,
     sql_validation,
-    trajectories,
+    telemetry,
 )
 from . import (
     eval as eval_mod,
@@ -174,7 +174,7 @@ async def _collect_single_agent_answer(
                 elif event.type == ERROR:
                     raw_msg = str(event.data.get("message") or "").strip()
                     error = (
-                        trajectories.scrub_text(raw_msg)
+                        telemetry.scrub_text(raw_msg)
                         if raw_msg.startswith("Agent failed:")
                         else "Agent failed: unknown/unknown"
                     )
@@ -641,10 +641,7 @@ def _evaluate_cold_start_ab(
     reserve_id_filter = (
         set(reserve_trajectory_ids) if reserve_trajectory_ids is not None else None
     )
-    all_rows = sorted(
-        trajectories.list_trajectories(project_id),
-        key=lambda r: (r["recorded_at"], r["id"]),
-    )
+    all_rows: list[dict[str, Any]] = []
     diag_questions = {
         _norm_question(row.get("question"))
         for row in all_rows

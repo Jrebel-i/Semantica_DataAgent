@@ -467,11 +467,9 @@ def propose_in_project(
             raise ValueError("Correction does not change the target")
 
     policy = project_context.evolution_policy(project_id)
-    if source == "discovery" or knowledge_gap_id is not None:
-        # Discovery proposals MUST always enter human review regardless of auto-apply switches.
+    if source in {"discovery", "evolution"} or knowledge_gap_id is not None:
+        # Discovery and evolution proposals MUST always enter human review.
         require_review = True
-    elif source == "evolution":
-        require_review = policy["evolution_require_review"]
     else:
         require_review = policy["correction_require_review"]
     if not require_review:

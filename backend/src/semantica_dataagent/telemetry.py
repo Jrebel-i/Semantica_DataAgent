@@ -13,6 +13,7 @@ import httpx
 import sqlglot
 from sqlglot import exp
 
+from . import semantic_overrides
 from .crypto import decrypt
 from .db import Setting, sessions
 
@@ -89,6 +90,9 @@ ALLOWED_FIELDS = frozenset(
         "prompt",
         "answer",
         "content",
+        "tags",
+        "messages",
+        "role",
     }
 )
 
@@ -123,6 +127,8 @@ CONTENT_FIELDS = frozenset(
         "columns",
         "values",
         "issues",
+        "messages",
+        "role",
     }
 )
 
@@ -391,9 +397,98 @@ def _scrub(value, secrets=()):
     return None
 
 
-def _default_metadata(metadata, secrets):
-    if not isinstance(metadata, dict):
+_RAW_TRACE_ROW_KEYS = frozenset(
+    {"rows", "row_data", "sample_rows", "preview_rows", "data_rows", "result_rows"}
+)
+_QUERY_RESULT_PREAMBLE = "查询已执行，请根据以下结果信息给出结论："
+
+
+def scrub_text(value: str, secrets: tuple[str, ...] = ()) -> str:
+    """Scrub secrets, headers, credentials, and prompt injections."""
+    cleaned = _scrub(str(value or ""), secrets) or ""
+    return semantic_overrides.scrub_untrusted_text(cleaned)
+
+
+def _strip_trace_query_rows(value, secrets=()):
+    """Strip raw query result rows from conversation trace payloads."""
+    if isinstance(value, dict):
+        return {
+            key: _strip_trace_query_rows(item, secrets)
+            for key, item in value.items()
+            if str(key).lower() not in _RAW_TRACE_ROW_KEYS
+        }
+    if isinstance(value, list):
+        return [_strip_trace_query_rows(item, secrets) for item in value]
+    if isinstance(value, str):
+        scrubbed = _scrub(value, secrets) or ""
+        if _QUERY_RESULT_PREAMBLE in scrubbed:
+            prefix, _, _ = scrubbed.partition(_QUERY_RESULT_PREAMBLE)
+            return (prefix.strip() or "查询结果解读")[:12000]
+        return scrubbed
+    return value
+
+
+def _extract_project_id(event, secrets=()):
+    if not isinstance(event, dict):
         return None
+    raw = event.get("project_id")
+    if not isinstance(raw, str) or not raw.strip():
+        meta = event.get("metadata")
+        raw = meta.get("project_id") if isinstance(meta, dict) else None
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    cleaned = _scrub(raw.strip(), secrets)
+    if not isinstance(cleaned, str) or not cleaned.strip():
+        return None
+    return cleaned.strip()[:200]
+
+
+def _safe_tags(event, project_id, secrets=()):
+    tags = []
+    raw_tags = event.get("tags") if isinstance(event, dict) else None
+    if isinstance(raw_tags, list):
+        for item in raw_tags:
+            if not isinstance(item, str) or not item.strip():
+                continue
+            cleaned = (_scrub(item.strip(), secrets) or "").strip()[:128]
+            if cleaned and "[REDACTED]" not in cleaned and cleaned not in tags:
+                tags.append(cleaned)
+    if project_id:
+        project_tag = f"project:{project_id}"
+        if project_tag not in tags:
+            tags.append(project_tag)
+    return tags
+
+
+def _scrub_trace_messages(raw_messages, secrets=()):
+    """Keep only scrubbed user/assistant messages without tool internals or query rows."""
+    if not isinstance(raw_messages, list):
+        return []
+    cleaned = []
+    for item in raw_messages:
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role") or "").strip().lower()
+        if role not in {"user", "assistant"}:
+            continue
+        raw_content = item.get("content")
+        if isinstance(raw_content, str):
+            text = _strip_trace_query_rows(raw_content, secrets)
+        elif isinstance(raw_content, (dict, list)):
+            stripped = _strip_trace_query_rows(raw_content, secrets)
+            text = _scrub(str(stripped), secrets) if stripped else ""
+        else:
+            text = ""
+        text = text.strip() if isinstance(text, str) else ""
+        if not text:
+            continue
+        cleaned.append({"role": role, "content": text})
+    return cleaned
+
+
+def _default_metadata(metadata, secrets, *, project_id=None):
+    if not isinstance(metadata, dict):
+        return {"project_id": project_id} if project_id else None
     clean = {}
     for key in _METADATA_KEYS:
         value = metadata.get(key)
@@ -402,7 +497,9 @@ def _default_metadata(metadata, secrets):
                 clean[key] = value
         elif isinstance(value, str) and value:
             clean[key] = _scrub(value, secrets)[:200]
-    return clean
+    if project_id and "project_id" not in clean:
+        clean["project_id"] = project_id
+    return clean or None
 
 
 def _default_envelope(event, secrets):
@@ -420,9 +517,13 @@ def _default_envelope(event, secrets):
     name = _trusted_tool_name(event, secrets)
     if name:
         payload["name"] = name
-    metadata = _default_metadata(event.get("metadata"), secrets)
+    project_id = _extract_project_id(event, secrets)
+    metadata = _default_metadata(event.get("metadata"), secrets, project_id=project_id)
     if metadata:
         payload["metadata"] = metadata
+    tags = _safe_tags(event, project_id, secrets)
+    if tags:
+        payload["tags"] = tags
     return payload
 
 
@@ -430,12 +531,15 @@ def _add_metadata_summary(payload, event, secrets):
     """Persist trusted derived fields where the receiver actually stores them."""
     metadata = payload.get("metadata")
     metadata = dict(metadata) if isinstance(metadata, dict) else {}
+    preserved_messages = metadata.pop("messages", None)
     metadata = {
         key: value
         for key, value in metadata.items()
         if key not in _SUMMARY_METADATA_KEYS
     }
     metadata.update(_metadata_summary(event, secrets))
+    if preserved_messages is not None:
+        metadata["messages"] = preserved_messages
     if metadata:
         payload["metadata"] = metadata
     else:
@@ -446,7 +550,7 @@ def _filtered(value, secrets=(), capture_content=False, _top_level=True):
     if not capture_content:
         return _default_envelope(value, secrets)
     if isinstance(value, dict):
-        return {
+        payload = {
             key: _filtered(item, secrets, True, False)
             for key, item in value.items()
             if key in ALLOWED_FIELDS
@@ -456,6 +560,40 @@ def _filtered(value, secrets=(), capture_content=False, _top_level=True):
                 and _trusted_tool_name(value, secrets) is None
             )
         }
+        if _top_level:
+            project_id = _extract_project_id(value, secrets)
+            if project_id:
+                meta = payload.get("metadata")
+                meta = dict(meta) if isinstance(meta, dict) else {}
+                meta.setdefault("project_id", project_id)
+                payload["metadata"] = meta
+            tags = _safe_tags(value, project_id, secrets)
+            if tags:
+                payload["tags"] = tags
+            raw_messages = payload.pop("messages", None)
+            if value.get("name") == "online-conversation":
+                if "input" in payload:
+                    payload["input"] = _strip_trace_query_rows(
+                        payload["input"], secrets
+                    )
+                if "output" in payload:
+                    payload["output"] = _strip_trace_query_rows(
+                        payload["output"], secrets
+                    )
+            if raw_messages is None and value.get("name") == "online-conversation":
+                derived = []
+                if isinstance(payload.get("input"), str) and payload["input"].strip():
+                    derived.append({"role": "user", "content": payload["input"]})
+                if isinstance(payload.get("output"), str) and payload["output"].strip():
+                    derived.append({"role": "assistant", "content": payload["output"]})
+                raw_messages = derived
+            scrubbed_messages = _scrub_trace_messages(raw_messages, secrets)
+            if scrubbed_messages:
+                meta = payload.get("metadata")
+                meta = dict(meta) if isinstance(meta, dict) else {}
+                meta["messages"] = scrubbed_messages
+                payload["metadata"] = meta
+        return payload
     if isinstance(value, list):
         return [_filtered(item, secrets, True, False) for item in value]
     if isinstance(value, str):

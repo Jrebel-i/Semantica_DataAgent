@@ -8,7 +8,7 @@ from typing import Annotated, Any, Literal
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from . import evolution_runner, project_context, trajectory_miner
+from . import evolution_runner, project_context
 from .api_time import UtcDatetime
 from .auth import Requester, current_requester
 from .db import (
@@ -149,9 +149,7 @@ def _build_config_view(project_id: str) -> EvolutionConfigView:
         ckpt = db.get(EvolutionCheckpoint, project_id)
         ckpt_id = ckpt.checkpoint_trajectory_id if ckpt is not None else None
         ckpt_at = ckpt.checkpoint_at if ckpt is not None else None
-    pending_count, _, _ = trajectory_miner.count_eligible_trajectories_since(
-        project_id, after_id=ckpt_id
-    )
+    pending_count = 0
     return EvolutionConfigView(
         **cfg,
         checkpoint_trajectory_id=ckpt_id,

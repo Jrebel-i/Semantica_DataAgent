@@ -56,7 +56,6 @@ SCHEDULE_INTERVAL_KEY = "schedule_interval_seconds"
 DIMENSION_VALUE_LIMIT_KEY = "dimension_value_limit"
 GENERATION_PREFIX_KEY = "generation_prefix"
 CORRECTION_REQUIRE_REVIEW_KEY = "correction_require_review"
-EVOLUTION_REQUIRE_REVIEW_KEY = "evolution_require_review"
 
 AUTO_EVOLVE_ENABLED_KEY = "evolution_auto_enabled"
 EVOLUTION_MIN_TRAJECTORIES_KEY = "evolution_min_trajectories"
@@ -179,18 +178,14 @@ def parse_bool_setting(raw: str | None, *, default: bool = True) -> bool:
 
 
 def evolution_policy(project_id: str, db=None) -> dict[str, bool]:
-    """Return a project's correction and evolution review switches."""
+    """Return a project's correction review switch."""
     if db is None:
         with sessions()() as own:
             return evolution_policy(project_id, own)
     corr = db.get(ProjectSetting, (project_id, CORRECTION_REQUIRE_REVIEW_KEY))
-    evol = db.get(ProjectSetting, (project_id, EVOLUTION_REQUIRE_REVIEW_KEY))
     return {
         "correction_require_review": parse_bool_setting(
             corr.value if corr is not None else None, default=True
-        ),
-        "evolution_require_review": parse_bool_setting(
-            evol.value if evol is not None else None, default=True
         ),
     }
 

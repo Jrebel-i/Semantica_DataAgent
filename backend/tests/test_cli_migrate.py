@@ -67,8 +67,8 @@ def test_migrate_upgrades_from_0016_and_keeps_data(database, capsys):
     assert cli.main(["migrate"]) == 0
 
     output = capsys.readouterr().out
-    assert "0016" in output and "0043" in output
-    assert _schema_version(database) == "0043"
+    assert "0016" in output and "0044" in output
+    assert _schema_version(database) == "0044"
     assert _kept_rows(database) == (("kept token", "admin"), ("kept value",))
 
 
@@ -162,7 +162,7 @@ def test_migrate_backs_up_before_upgrade_and_is_repeatable(database, capsys):
 
     capsys.readouterr()
     assert cli.main(["migrate"]) == 0
-    assert "0043" in capsys.readouterr().out
+    assert "0044" in capsys.readouterr().out
     assert len(_backups(database)) == 1
 
 
@@ -187,14 +187,14 @@ def test_serve_migrates_before_starting(database, capsys, monkeypatch):
 
     assert cli.main(["serve"]) == 0
     assert started == [True]
-    assert _schema_version(database) == "0043"
+    assert _schema_version(database) == "0044"
     assert _kept_rows(database) == (("kept token", "admin"), ("kept value",))
     assert len(_backups(database)) == 1
 
     assert cli.main(["serve"]) == 0
     assert started == [True, True]
     assert len(_backups(database)) == 1
-    assert "0043" in capsys.readouterr().out
+    assert "0044" in capsys.readouterr().out
 
 
 def test_serve_does_not_start_when_migration_fails(database, capsys, monkeypatch):
@@ -215,7 +215,7 @@ def test_init_still_initializes_an_empty_database(database):
     token = cli.initialize()
 
     assert token
-    assert _schema_version(database) == "0043"
+    assert _schema_version(database) == "0044"
     with sqlite3.connect(database) as db:
         row = db.execute("SELECT name, role FROM tokens").fetchone()
     assert row == ("initial admin", "admin")
@@ -240,7 +240,7 @@ def test_serve_upgrades_0023_conversations_and_backs_up(database, monkeypatch):
         )
     monkeypatch.setattr(cli, "_serve", lambda: None)
     assert cli.main(["serve"]) == 0
-    assert _schema_version(database) == "0043"
+    assert _schema_version(database) == "0044"
     with sqlite3.connect(database) as db:
         assert db.execute(
             "SELECT title, pinned_at, archived_at FROM conversations WHERE id='old'"
@@ -310,7 +310,7 @@ def test_migrate_adds_empty_model_capabilities_for_existing_providers(database):
 
     assert cli.main(["migrate"]) == 0
 
-    assert _schema_version(database) == "0043"
+    assert _schema_version(database) == "0044"
     with sqlite3.connect(database) as db:
         columns = {
             row[1] for row in db.execute("PRAGMA table_info(providers)").fetchall()
@@ -432,7 +432,7 @@ def test_master_project_database_upgrades_to_audit_table(database):
 
     assert cli.main(["migrate"]) == 0
 
-    assert _schema_version(database) == "0043"
+    assert _schema_version(database) == "0044"
     with sqlite3.connect(database) as db:
         assert db.execute("SELECT count(*) FROM project_audit").fetchone() == (0,)
         assert (
@@ -461,7 +461,7 @@ def test_project_migration_preserves_existing_data(database):
 
     assert cli.main(["migrate"]) == 0
 
-    assert _schema_version(database) == "0043"
+    assert _schema_version(database) == "0044"
     assert {
         table: _table_rows(database, table, old_columns[table]) for table in OLD_TABLES
     } == before
@@ -509,9 +509,9 @@ def test_empty_database_has_a_single_migration_head(database):
     from alembic.script import ScriptDirectory
 
     config = _config(database)
-    assert ScriptDirectory.from_config(config).get_heads() == ["0043"]
+    assert ScriptDirectory.from_config(config).get_heads() == ["0044"]
     command.upgrade(config, "head")
-    assert _schema_version(database) == "0043"
+    assert _schema_version(database) == "0044"
     with sqlite3.connect(database) as db:
         assert db.execute("SELECT count(*) FROM projects").fetchone() == (1,)
         assert db.execute("SELECT count(*) FROM project_members").fetchone() == (0,)
@@ -553,7 +553,7 @@ def test_migrate_adds_null_effort_for_existing_turns(database):
 
     assert cli.main(["migrate"]) == 0
 
-    assert _schema_version(database) == "0043"
+    assert _schema_version(database) == "0044"
     with sqlite3.connect(database) as db:
         columns = {row[1] for row in db.execute("PRAGMA table_info(turns)").fetchall()}
         assert "effort" in columns
@@ -579,7 +579,7 @@ def test_migrate_backfills_agent_credential_project(database):
             ("credential-digest",),
         ).fetchone()
     assert project == ("default",)
-    assert _schema_version(database) == "0043"
+    assert _schema_version(database) == "0044"
 
 
 def test_migrated_builds_index_is_unique_per_project_and_status(database):
@@ -632,7 +632,7 @@ def test_conversations_gain_the_default_project_when_upgrading(database):
             "FROM conversations WHERE id='old'"
         ).fetchone()
         assert db.execute("SELECT version_num FROM alembic_version").fetchone() == (
-            "0043",
+            "0044",
         )
     assert after == before + ("default",)
 
@@ -703,7 +703,7 @@ def test_migrate_0043_pull_instances_and_idempotency(
     monkeypatch.delenv("DATAAGENT_ENCRYPTION_KEY", raising=False)
 
     cfg = _config(db_path)
-    assert ScriptDirectory.from_config(cfg).get_heads() == ["0043"]
+    assert ScriptDirectory.from_config(cfg).get_heads() == ["0044"]
     command.upgrade(cfg, "0042")
 
     legacy_cipher_default = "fernet-ciphertext-default-do-not-decrypt"
@@ -798,4 +798,95 @@ def test_migrate_0043_pull_instances_and_idempotency(
         assert not ({"entity_hashes", "fallback_reason"} & build_cols)
 
     command.upgrade(cfg, "0043")
-    assert _schema_version(db_path) == "0043"
+
+
+def test_migrate_0044_unified_evolution_and_downgrade(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from alembic.script import ScriptDirectory
+
+    db_path = tmp_path / "migrate_0044.db"
+    monkeypatch.setenv("DATAAGENT_DB_PATH", str(db_path))
+    monkeypatch.setenv("DATAAGENT_ENCRYPTION_KEY", Fernet.generate_key().decode())
+
+    cfg = _config(db_path)
+    assert ScriptDirectory.from_config(cfg).get_heads() == ["0044"]
+    command.upgrade(cfg, "0043")
+
+    with sqlite3.connect(db_path) as db:
+        db.execute(
+            "INSERT INTO knowledge_generations (name, project_id, created_at, is_candidate) "
+            "VALUES ('default_active', 'default', '2026-01-01', 0), "
+            "('default_cand_1', 'default', '2026-01-02', 1)"
+        )
+        db.execute(
+            "INSERT INTO interaction_trajectories "
+            "(project_id, source_type, session_key, question, answer, last_activity_at, recorded_at, updated_at) "
+            "VALUES ('default', 'online', 'sess-1', 'q', 'a', '2026-01-01', '2026-01-01', '2026-01-01')"
+        )
+        db.execute(
+            "INSERT INTO project_settings (project_id, key, value) "
+            "VALUES ('default', 'evolution_require_review', 'false'), "
+            "('default', 'correction_require_review', 'true')"
+        )
+
+    command.upgrade(cfg, "0044")
+
+    with sqlite3.connect(db_path) as db:
+        tables = {
+            row[0]
+            for row in db.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+        assert "interaction_trajectories" not in tables
+        assert "project_evolution_configs" in tables
+        evo_cols = {
+            row[1]
+            for row in db.execute(
+                "PRAGMA table_info(project_evolution_configs)"
+            ).fetchall()
+        }
+        assert {
+            "project_id",
+            "enabled",
+            "trace_source_plugin",
+            "trace_source_parameters",
+            "trace_source_encrypted_secrets",
+            "schedule_cron",
+            "timezone",
+            "last_trace_timestamp",
+        } <= evo_cols
+
+        kg_cols = {
+            row[1]
+            for row in db.execute("PRAGMA table_info(knowledge_generations)").fetchall()
+        }
+        assert "is_candidate" not in kg_cols
+        gens = db.execute("SELECT name FROM knowledge_generations").fetchall()
+        assert gens == [("default_active",)]
+
+        settings = db.execute(
+            "SELECT key, value FROM project_settings WHERE project_id = 'default'"
+        ).fetchall()
+        assert settings == [("correction_require_review", "true")]
+
+    # Downgrade to 0043 and re-upgrade to 0044 cleanly
+    command.downgrade(cfg, "0043")
+    with sqlite3.connect(db_path) as db:
+        tables = {
+            row[0]
+            for row in db.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+        assert "interaction_trajectories" in tables
+        assert "project_evolution_configs" not in tables
+        kg_cols = {
+            row[1]
+            for row in db.execute("PRAGMA table_info(knowledge_generations)").fetchall()
+        }
+        assert "is_candidate" in kg_cols
+
+    command.upgrade(cfg, "0044")
+    assert _schema_version(db_path) == "0044"

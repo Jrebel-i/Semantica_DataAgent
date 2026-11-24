@@ -3021,7 +3021,6 @@ def test_rest_corrections_blocks_evolution_source_spoofing_and_top_level_docs(
         mcp_context,
     )
     from semantica_dataagent.auth import Requester
-    from semantica_dataagent.db import ProjectSetting, sessions
 
     c, admin = client
     headers = _headers(admin)
@@ -3101,10 +3100,6 @@ def test_rest_corrections_blocks_evolution_source_spoofing_and_top_level_docs(
                     source="evolution",
                     target_kind="document",
                 )
-            with sessions().begin() as db:
-                row = db.get(ProjectSetting, (proj_id, "evolution_require_review"))
-                assert row is not None
-                row.value = "true"
             valid_prop = corrections.propose_in_project(
                 proj_id,
                 "document:knowledge/evolution/valid_gap.md",

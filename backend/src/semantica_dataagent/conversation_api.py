@@ -23,7 +23,6 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, text
 
-from . import trajectories
 from .agent_plugin import build_attachment_prompt
 from .agent_runner import DONE, ERROR, AgentEvent, AgentTurnRequest, get_runner
 from .api_time import UtcDatetime
@@ -156,7 +155,7 @@ def cleanup_expired_sessions() -> None:
     with sessions()() as db:
         cutoff = retention_cutoff(db)
         active = db.query(Turn.conversation_id).filter(Turn.status == "running")
-        has_expired_conversation = (
+        has_expired = (
             db.query(Conversation.id)
             .filter(
                 Conversation.resumable.is_(True),
@@ -165,10 +164,6 @@ def cleanup_expired_sessions() -> None:
             )
             .first()
             is not None
-        )
-        has_expired = (
-            has_expired_conversation
-            or trajectories.has_expired_local_trajectories(db, cutoff)
         )
     if not has_expired:
         return
@@ -198,9 +193,7 @@ def cleanup_expired_sessions() -> None:
             db.query(AgentCredential).filter_by(conversation_id=row.id).delete(
                 synchronize_session=False
             )
-            trajectories.delete_conversation_trajectories(db, row.id)
             row.resumable = False
-        trajectories.delete_expired_local_trajectories(db, cutoff)
 
 
 def public_base_url() -> str:
@@ -363,7 +356,6 @@ def _sse(event: str, data: dict) -> str:
 
 
 def _record_event(turn_id: int, seq: int, event: AgentEvent) -> None:
-    conversation_id: str | None = None
     with sessions().begin() as db:
         db.add(
             TurnEvent(
@@ -383,28 +375,14 @@ def _record_event(turn_id: int, seq: int, event: AgentEvent) -> None:
                 ),
             )
         )
-        if event.type == "clarification":
-            turn = db.get(Turn, turn_id)
-            if turn is not None:
-                conversation_id = turn.conversation_id
-    if conversation_id is not None and event.type == "clarification":
-        trajectories.append_online_event(
-            conversation_id=conversation_id,
-            turn_id=turn_id,
-            event_type=event.type,
-            data=event.data,
-        )
 
 
 def _finish_turn(turn_id: int, status: str, event: AgentEvent | None, error=None):
-    conversation_id: str | None = None
-    secrets: tuple[str, ...] = ()
     effective_sql: list[dict] | None = None
     with sessions().begin() as db:
         row = db.get(Turn, turn_id)
         if row is None:
             return
-        conversation_id = row.conversation_id
         db.query(AgentCredential).filter_by(turn_id=turn_id).delete()
         row.status = status
         row.finished_at = datetime.now(UTC)
@@ -445,32 +423,6 @@ def _finish_turn(turn_id: int, status: str, event: AgentEvent | None, error=None
         conversation = db.get(Conversation, row.conversation_id)
         if conversation is not None:
             conversation.updated_at = datetime.now(UTC)
-        provider = db.get(Provider, row.provider_id) if row.provider_id else None
-        if provider is not None and provider.api_key:
-            from .crypto import decrypt
-
-            secrets = (decrypt(provider.api_key),)
-    if conversation_id is not None:
-        final_sql = effective_sql if event is not None and event.type == DONE else None
-        citations = (
-            event.data.get("citations", [])
-            if event is not None and event.type == DONE
-            else None
-        )
-        answer = (
-            event.data.get("text", "")
-            if event is not None and event.type == DONE
-            else ""
-        )
-        trajectories.finish_online_trajectory(
-            conversation_id=conversation_id,
-            turn_id=turn_id,
-            status=status,
-            answer=answer,
-            final_sql=final_sql,
-            citations=citations,
-            secrets=secrets,
-        )
 
 
 @router.get("/api/v1/conversations", response_model=list[ConversationView])
@@ -651,7 +603,6 @@ def delete_conversation(
         db.query(QueryExecution).filter_by(conversation_id=conversation_id).delete(
             synchronize_session=False
         )
-        trajectories.delete_conversation_trajectories(db, conversation_id)
         db.delete(conversation)
     remove_conversation_workspace(agent_root(), conversation_id)
     cleanup_conversation_attachments(conversation_id)
@@ -876,14 +827,6 @@ async def _start_turn(
         effort=body.effort,
         attachments=tuple(attachments),
     )
-    trajectories.start_online_trajectory(
-        project_id=project_id,
-        conversation_id=conversation_id,
-        turn_id=turn_id,
-        token_id=requester.id,
-        question=body.question.strip(),
-        secrets=(run_request.mcp_token, run_request.provider.api_key or ""),
-    )
     return StreamingResponse(
         _stream(
             run_request,
@@ -1006,13 +949,6 @@ async def confirm_query(
         )
         event = AgentEvent("query_result", result)
         _record_event(turn_id, seq, event)
-        trajectories.append_online_event(
-            conversation_id=conversation_id,
-            turn_id=turn_id,
-            event_type="query_confirmation",
-            data=result,
-            secrets=(provider_settings.api_key or "",),
-        )
     except Exception:
         with sessions().begin() as db:
             turn = db.get(Turn, turn_id)
@@ -1085,10 +1021,16 @@ async def _stream(
             project_id = conv.project_id if conv is not None else DEFAULT_PROJECT_ID
     observation_id = trace_id(conversation_id, turn_id)
     secrets = (run_request.mcp_token, run_request.provider.api_key or "")
+    trace_messages = (
+        [{"role": "user", "content": run_request.prompt}]
+        if include_conversation
+        else []
+    )
     trace = {
         "id": observation_id,
         "name": "online-conversation",
         "input": run_request.prompt if include_conversation else "查询结果解读",
+        "messages": trace_messages,
         "metadata": {
             "agent": runner.agent_id,
             "provider": run_request.provider.name,
@@ -1150,9 +1092,14 @@ async def _stream(
                 terminal = True
                 return
             if event.type == DONE:
+                answer_text = event.data.get("text", "")
+                done_messages = [
+                    *trace_messages,
+                    {"role": "assistant", "content": answer_text},
+                ]
                 submit(
                     "trace-create",
-                    {**trace, "output": event.data.get("text", "")},
+                    {**trace, "output": answer_text, "messages": done_messages},
                     secrets,
                 )
                 _finish_turn(turn_id, "completed", event)
