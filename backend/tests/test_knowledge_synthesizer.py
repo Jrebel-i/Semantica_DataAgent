@@ -511,3 +511,209 @@ def test_synthesizer_resolves_default_and_override_providers_and_raises_when_mis
     assert out.is_new_file is True
     assert out.target == "document:knowledge/faq/guide.md"
     assert out.resolved_path == "knowledge/faq/guide.md"
+
+
+def test_synthesizer_scrubs_evidence_without_json_bypass_or_crash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from datetime import UTC, datetime
+
+    from semantica_dataagent import knowledge_synthesizer
+
+    _setup_env(tmp_path, monkeypatch)
+    src = tmp_path / "src_scrub"
+    _seed_project("projscrub", project_type="document", source_dir=src)
+    _mock_warehouse_graph(monkeypatch, [], [])
+
+    captured: list[dict] = []
+
+    def stub_llm(ctx: dict) -> dict:
+        captured.append(ctx)
+        return {
+            "route": "new_document",
+            "new_doc_path": "knowledge/faq/safe_guide.md",
+            "reason": "脱敏后归纳",
+            "patch": "# 安全指南\n\n规范说明。\n",
+        }
+
+    res = knowledge_synthesizer.synthesize_knowledge(
+        project_id="projscrub",
+        source_type="manual",
+        description="整理安全说明",
+        raw_evidence={
+            "description": 'password="mysecret123"',
+            "broken": 'password=abcd"ef',
+            "recorded_at": datetime(2026, 1, 1, tzinfo=UTC),
+        },
+        llm_fn=stub_llm,
+    )
+    assert res.gate_report["passed"] is True
+    ev_dump = json.dumps(captured[0]["evidence"], ensure_ascii=False)
+    assert "mysecret123" not in ev_dump
+    assert "abcd" not in ev_dump
+    assert "[REDACTED]" in ev_dump
+
+
+def test_synthesizer_rejects_index_md_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from semantica_dataagent import knowledge_synthesizer
+
+    _setup_env(tmp_path, monkeypatch)
+    src = tmp_path / "src_idx"
+    _seed_project("projidx", project_type="document", source_dir=src)
+    _mock_warehouse_graph(monkeypatch, [], [])
+
+    out = knowledge_synthesizer.synthesize_knowledge(
+        project_id="projidx",
+        source_type="manual",
+        description="新建目录索引",
+        llm_fn=lambda _c: {
+            "route": "new_document",
+            "new_doc_path": "knowledge/metrics/index.md",
+            "reason": "覆盖索引页",
+            "patch": "# 索引\n",
+        },
+    )
+    assert out.gate_report["passed"] is False
+    assert any("index.md" in e for e in out.gate_report["errors"])
+
+
+def test_synthesizer_metric_update_not_false_duplicate_and_batch_dedup_resilience(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from semantica_dataagent import knowledge_synthesizer
+
+    _setup_env(tmp_path, monkeypatch)
+    src = tmp_path / "src_batch"
+    _seed_project("projbatch", project_type="warehouse", source_dir=src)
+    (src / "overrides").mkdir(parents=True)
+    (src / "overrides" / "semantic_overrides.yaml").write_text(
+        (
+            "version: 1\n"
+            "metrics:\n"
+            "  daily_gmv:\n"
+            "    name: daily_gmv\n"
+            "    expression: SUM(orders.amount)\n"
+            "    dialect: doris\n"
+            "    tables:\n"
+            "      - shop.orders\n"
+        ),
+        encoding="utf-8",
+    )
+    tables = [
+        {
+            "database": "shop",
+            "name": "orders",
+            "fields": [{"name": "amount"}, {"name": "status"}],
+        }
+    ]
+    _mock_warehouse_graph(monkeypatch, [], tables)
+
+    def resilient_batch_llm(_ctx: dict) -> dict:
+        return {
+            "proposals": [
+                # Malformed item -> skipped instead of aborting batch
+                {"route": "override", "reason": "missing patch"},
+                # Metric update adding filters to existing daily_gmv -> NOT a duplicate
+                {
+                    "route": "override",
+                    "reason": "为 daily_gmv 增加已支付过滤条件",
+                    "structured_patch": {
+                        "version": 1,
+                        "metrics": {
+                            "daily_gmv": {
+                                "name": "daily_gmv",
+                                "expression": "SUM(orders.amount)",
+                                "dialect": "doris",
+                                "tables": ["shop.orders"],
+                                "filters": ["orders.status = 'paid'"],
+                            }
+                        },
+                    },
+                },
+                # Intra-batch duplicate of the previous item -> skipped
+                {
+                    "route": "override",
+                    "reason": "重复归纳 daily_gmv 过滤条件",
+                    "structured_patch": {
+                        "version": 1,
+                        "metrics": {
+                            "daily_gmv": {
+                                "name": "daily_gmv",
+                                "expression": "SUM(orders.amount)",
+                                "dialect": "doris",
+                                "tables": ["shop.orders"],
+                                "filters": ["orders.status = 'paid'"],
+                            }
+                        },
+                    },
+                },
+                # Distinct second valid item -> kept
+                {
+                    "route": "override",
+                    "reason": "补充 status 说明",
+                    "structured_patch": {
+                        "version": 1,
+                        "fields": {
+                            "shop.orders.status": {
+                                "database": "shop",
+                                "table": "orders",
+                                "name": "status",
+                                "comment": "订单状态",
+                            }
+                        },
+                    },
+                },
+            ]
+        }
+
+    items = knowledge_synthesizer.synthesize_proposals(
+        project_id="projbatch",
+        source_type="evolution",
+        description="批量归纳指标与字段",
+        allow_multi=True,
+        skip_duplicates=True,
+        llm_fn=resilient_batch_llm,
+    )
+    assert [i.target for i in items] == ["metric:daily_gmv", "field:shop.orders.status"]
+    assert all(not i.is_duplicate for i in items)
+
+    # All-malformed batch still raises LLMUnavailableError
+    with pytest.raises(knowledge_synthesizer.LLMUnavailableError):
+        knowledge_synthesizer.synthesize_proposals(
+            project_id="projbatch",
+            source_type="evolution",
+            description="全畸形批次",
+            allow_multi=True,
+            skip_duplicates=True,
+            llm_fn=lambda _c: {"proposals": [{"route": "override"}]},
+        )
+
+
+def test_synthesizer_fallback_provider_ignores_mismatched_system_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from semantica_dataagent import knowledge_synthesizer
+    from semantica_dataagent.db import Provider, Setting, sessions
+
+    _setup_env(tmp_path, monkeypatch)
+    _seed_project("projfb", project_type="document")
+    with sessions().begin() as db:
+        db.add(
+            Provider(
+                id="p-openai",
+                name="OpenAI",
+                type="openai-completions",
+                base_url="http://127.0.0.1:9993",
+                models=json.dumps(["gpt-4o", "gpt-4o-mini"]),
+            )
+        )
+        # No assistant_provider_id (or deleted provider), mismatched assistant_model
+        db.add(Setting(key="assistant_provider_id", value="deleted-provider"))
+        db.add(Setting(key="assistant_model", value="claude-sonnet"))
+
+    resolved = knowledge_synthesizer.resolve_llm_provider("projfb")
+    assert resolved is not None
+    assert resolved["id"] == "p-openai"
+    assert resolved["model"] == "gpt-4o"

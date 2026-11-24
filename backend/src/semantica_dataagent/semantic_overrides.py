@@ -1041,6 +1041,10 @@ def validate_markdown_relpath(
             raise ValueError(
                 f"Document target must live under {root_clean}/<category>/*.md"
             )
+        if rel.name.lower() == "index.md":
+            raise ValueError(
+                "Category index.md cannot be created or overwritten by corrections"
+            )
     return rel.as_posix()
 
 

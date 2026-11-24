@@ -754,10 +754,11 @@ def test_new_markdown_document_proposal_approve_and_revert(
     monkeypatch.setattr(knowledge, "read_graph", lambda values: object())
     monkeypatch.setattr(knowledge, "execute", lambda *args: [])
 
-    # Reject path traversal, top-level docs, and non-markdown targets
+    # Reject path traversal, top-level docs, index.md, and non-markdown targets
     for bad_target in (
         "document:knowledge/../secret.md",
         "document:knowledge/top_level.md",
+        "document:knowledge/rules/index.md",
         "document:knowledge/rules/notes.txt",
     ):
         bad_resp = c.post(

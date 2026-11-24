@@ -9,7 +9,7 @@ import logging
 import os
 import re
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, Literal
@@ -189,6 +189,7 @@ def resolve_llm_provider(
         )
 
         row: Provider | None = None
+        used_fallback_provider = False
         if configured_pid:
             row = db.get(Provider, configured_pid)
             if row is None and explicit_pid:
@@ -198,10 +199,7 @@ def resolve_llm_provider(
                 row = db.get(Provider, system_pid)
             if row is None:
                 row = db.query(Provider).order_by(Provider.name, Provider.id).first()
-                if row is not None and not configured_model and system_model:
-                    configured_model = system_model
-            elif not configured_model:
-                configured_model = system_model
+                used_fallback_provider = row is not None
 
         if row is None or not row.base_url:
             return None
@@ -213,7 +211,14 @@ def resolve_llm_provider(
         except ValueError:
             models = []
 
-        chosen_model = configured_model or (models[0] if models else "")
+        if configured_model:
+            chosen_model = configured_model
+        elif system_model and (not models or system_model in models):
+            chosen_model = system_model
+        elif used_fallback_provider:
+            chosen_model = models[0] if models else ""
+        else:
+            chosen_model = models[0] if models else ""
         if not chosen_model:
             return None
 
@@ -800,6 +805,50 @@ def _override_matches_existing(
             str(mentry.get("expression") or "")
         ) != _normalize_text_for_dup(str(em.get("expression") or "")):
             return False
+        for attr in ("description", "instructions", "dialect"):
+            val = _normalize_text_for_dup(str(mentry.get(attr) or ""))
+            if val and val != _normalize_text_for_dup(str(em.get(attr) or "")):
+                return False
+        cand_filters = sorted(
+            _normalize_text_for_dup(str(f))
+            for f in (mentry.get("filters") or ())
+            if str(f).strip()
+        )
+        exist_filters = sorted(
+            _normalize_text_for_dup(str(f))
+            for f in (em.get("filters") or ())
+            if str(f).strip()
+        )
+        if cand_filters != exist_filters:
+            return False
+        cand_tables = {
+            str(t).strip().lower()
+            for t in (
+                ([mentry["table"]] if mentry.get("table") else [])
+                + list(mentry.get("tables") or ())
+            )
+            if str(t).strip()
+        }
+        exist_tables = {
+            str(t).strip().lower()
+            for t in (
+                ([em["table"]] if em.get("table") else [])
+                + list(em.get("tables") or ())
+            )
+            if str(t).strip()
+        }
+        if cand_tables != exist_tables:
+            return False
+        cand_syn = {
+            str(s).strip().lower()
+            for s in (mentry.get("synonyms") or ())
+            if str(s).strip()
+        }
+        exist_syn = {
+            str(s).strip().lower() for s in (em.get("synonyms") or ()) if str(s).strip()
+        }
+        if cand_syn and not cand_syn.issubset(exist_syn):
+            return False
     return True
 
 
@@ -1332,6 +1381,76 @@ def _build_single_candidate(
     )
 
 
+def _scrub_json_value(value: Any) -> Any:
+    """Recursively scrub secrets and prompt-injection patterns across JSON-like values."""
+    if isinstance(value, str):
+        return scrub_untrusted_text(value)
+    if isinstance(value, Mapping):
+        return {str(k): _scrub_json_value(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_scrub_json_value(item) for item in value]
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    return scrub_untrusted_text(str(value))
+
+
+def _check_intra_batch_duplicate(
+    candidate: SynthesizedProposal, accepted: Sequence[SynthesizedProposal]
+) -> DuplicateCheckResult:
+    norm_patch = _normalize_text_for_dup(candidate.patch)
+    norm_reason = _normalize_text_for_dup(candidate.reason)
+    patch_fp = hashlib.sha256(norm_patch.encode("utf-8")).hexdigest()
+    for prev in accepted:
+        if (
+            candidate.target_kind == "override"
+            and prev.target_kind == "override"
+            and candidate.structured_patch is not None
+            and prev.structured_patch is not None
+            and _overrides_overlap(candidate.structured_patch, prev.structured_patch)
+        ):
+            return DuplicateCheckResult(
+                True,
+                duplicate_of=f"batch_proposal:{prev.target}",
+                reason=f"与同批次前序提案 {prev.target} 的结构化覆盖重叠",
+            )
+        if candidate.target_kind == "document" and prev.target_kind == "document":
+            prev_norm_patch = _normalize_text_for_dup(prev.patch)
+            prev_fp = hashlib.sha256(prev_norm_patch.encode("utf-8")).hexdigest()
+            same_target = (
+                candidate.target == prev.target
+                or candidate.resolved_path == prev.resolved_path
+            )
+            if same_target and (
+                prev_fp == patch_fp
+                or (
+                    norm_reason
+                    and _jaccard_overlap(
+                        norm_reason, _normalize_text_for_dup(prev.reason)
+                    )
+                    >= 0.8
+                )
+                or SequenceMatcher(None, norm_patch, prev_norm_patch).ratio() >= 0.9
+            ):
+                return DuplicateCheckResult(
+                    True,
+                    duplicate_of=f"batch_proposal:{prev.target}",
+                    reason=f"与同批次前序文档提案 {prev.target} 重复",
+                )
+            if not same_target and (
+                prev_fp == patch_fp
+                or (
+                    _jaccard_overlap(candidate.patch, prev.patch) >= 0.85
+                    and _jaccard_overlap(candidate.reason, prev.reason) >= 0.8
+                )
+            ):
+                return DuplicateCheckResult(
+                    True,
+                    duplicate_of=f"batch_proposal:{prev.target}",
+                    reason=f"与同批次前序文档提案 {prev.target} 语义高度重复",
+                )
+    return DuplicateCheckResult(False)
+
+
 def synthesize_proposals(
     *,
     project_id: str,
@@ -1401,9 +1520,7 @@ def synthesize_proposals(
         # Allow unit tests injecting a custom llm_fn stub without seeding Provider rows.
         pass
 
-    scrubbed_evidence = json.loads(
-        scrub_untrusted_text(json.dumps(dict(raw_evidence or {}), ensure_ascii=False))
-    )
+    scrubbed_evidence = _scrub_json_value(dict(raw_evidence or {}))
     llm_context: dict[str, Any] = {
         "project_id": project_id,
         "project_type": ctx_bundle["project_type"],
@@ -1470,31 +1587,74 @@ def synthesize_proposals(
         default_ref_sql = str(sql_blocks[-1].get("sql") or "").strip() or None
 
     results: list[SynthesizedProposal] = []
+    valid_count = 0
+    batch_errors: list[Exception] = []
     for item in raw_items:
-        candidate = _build_single_candidate(
-            item,
-            project_id=project_id,
-            proj_type=ctx_bundle["project_type"],
-            md_root=ctx_bundle["markdown_root"],
-            src_dir=src_dir,
-            values=values,
-            generation=generation,
-            explicit_target=clean_target,
-            explicit_node=explicit_node,
-            explicit_doc=explicit_doc,
-            explicit_generated=explicit_generated,
-            all_docs=all_docs,
-            existing_overrides=ctx_bundle["existing_overrides"],
-            default_reference_sql=default_ref_sql,
-            source_type=source_type,
-            raw_evidence=raw_evidence or {},
-            description_hint=description,
-        )
+        try:
+            candidate = _build_single_candidate(
+                item,
+                project_id=project_id,
+                proj_type=ctx_bundle["project_type"],
+                md_root=ctx_bundle["markdown_root"],
+                src_dir=src_dir,
+                values=values,
+                generation=generation,
+                explicit_target=clean_target,
+                explicit_node=explicit_node,
+                explicit_doc=explicit_doc,
+                explicit_generated=explicit_generated,
+                all_docs=all_docs,
+                existing_overrides=ctx_bundle["existing_overrides"],
+                default_reference_sql=default_ref_sql,
+                source_type=source_type,
+                raw_evidence=raw_evidence or {},
+                description_hint=description,
+            )
+        except (LLMUnavailableError, ValueError, KeyError, TypeError) as exc:
+            if not allow_multi:
+                raise
+            logger.warning("Skipping malformed batch synthesis item: %s", exc)
+            batch_errors.append(exc)
+            continue
+
+        if not candidate.is_duplicate and results:
+            batch_dup = _check_intra_batch_duplicate(candidate, results)
+            if batch_dup.is_duplicate:
+                updated_gate = dict(candidate.gate_report)
+                updated_checks = [
+                    c
+                    for c in (updated_gate.get("checks") or [])
+                    if not (
+                        isinstance(c, Mapping) and c.get("name") == "anti_duplication"
+                    )
+                ]
+                updated_checks.append(
+                    {
+                        "name": "anti_duplication",
+                        "passed": False,
+                        "details": [batch_dup.reason] if batch_dup.reason else [],
+                    }
+                )
+                updated_gate["checks"] = updated_checks
+                candidate = replace(
+                    candidate,
+                    gate_report=updated_gate,
+                    is_duplicate=True,
+                    duplicate_of=batch_dup.duplicate_of,
+                    duplicate_reason=batch_dup.reason,
+                )
+
+        valid_count += 1
         if skip_duplicates and candidate.is_duplicate:
             continue
         results.append(candidate)
         if not allow_multi:
             break
+    if valid_count == 0 and batch_errors:
+        first_err = batch_errors[0]
+        if isinstance(first_err, LLMUnavailableError):
+            raise first_err
+        raise LLMUnavailableError(str(first_err))
     return results
 
 
