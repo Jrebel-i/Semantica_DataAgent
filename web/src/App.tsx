@@ -18,6 +18,7 @@ import { PersonalSettingsPage } from "./PersonalSettingsPage";
 import { McpAccessPage } from "./McpAccessPage";
 import { AgentSettings } from "./AgentSettings";
 import { PlatformSettings } from "./PlatformSettings";
+import { SkillsPage } from "./SkillsPage";
 import {
   DatabaseOutlined,
   FolderOpenOutlined,
@@ -306,7 +307,7 @@ export function App() {
             path: "/config",
             label: t.sidebarSystemConfig,
             icon: <SettingOutlined />,
-            activePaths: ["/config", "/plugins", "/tokens"],
+            activePaths: ["/config", "/plugins", "/skills", "/tokens"],
           },
         ]
       : []),
@@ -318,6 +319,7 @@ export function App() {
     { path: "/evolution", label: t.evolutionTitle },
     { path: "/config", label: t.workbenchConfig },
     { path: "/plugins", label: t.plugins },
+    { path: "/skills", label: t.skills },
     { path: "/tokens", label: t.tokens },
     { path: "/projects", label: t.projects },
     { path: "/mcp-access", label: t.mcpAccess },
@@ -344,12 +346,16 @@ export function App() {
           : []),
         { path: "/knowledge-gaps", label: t.gapTitle },
       ];
-    if (["/config", "/plugins", "/tokens"].includes(path) && role === "admin")
+    if (
+      ["/config", "/plugins", "/skills", "/tokens"].includes(path) &&
+      role === "admin"
+    )
       return [
         { path: "/config", label: t.workbenchConfig },
         ...(role === "admin"
           ? [
               { path: "/plugins", label: t.plugins },
+              { path: "/skills", label: t.skills },
               { path: "/tokens", label: t.tokens },
             ]
           : []),
@@ -433,6 +439,12 @@ export function App() {
     ) : path === "/plugins" ? (
       role === "admin" ? (
         <PluginsPage token={token} messages={t} />
+      ) : (
+        <Alert title={t.forbidden} type="warning" />
+      )
+    ) : path === "/skills" ? (
+      role === "admin" ? (
+        <SkillsPage token={token} messages={t} />
       ) : (
         <Alert title={t.forbidden} type="warning" />
       )
@@ -755,6 +767,9 @@ export function App() {
                     initialConversationId={conversationId}
                     onNavigateChat={() => navigate("/chat")}
                     onNavigateKnowledge={() => navigate("/knowledge")}
+                    onNavigatePersonalSettings={() =>
+                      navigate("/personal-settings")
+                    }
                   />
                 </div>
                 {!isChat &&

@@ -7,6 +7,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { ChatPage } from "../ChatPage";
 import { getMessages } from "../i18n";
@@ -796,4 +797,196 @@ test("点击输入区 + 菜单可添加附件或切换项目，点击外部自�
   expect(container.querySelector(".composer-plus-menu")).toBeTruthy();
   fireEvent.mouseDown(document.body);
   expect(container.querySelector(".composer-plus-menu")).toBeNull();
+});
+
+test("输入 / 候选、键盘与点击选择 Skill、结构化提交及普通斜杠文本保持不变", async () => {
+  const messages = getMessages("zh");
+  const askCalls: Record<string, unknown>[] = [];
+  const skills = [
+    {
+      name: "dataagent-retrieval",
+      description: "内置数仓检索能力",
+      project_types: ["warehouse"],
+      projects: [],
+      secrets: [],
+      dependencies: [],
+      trust_warning: null,
+      source: "builtin",
+      protected: true,
+      enabled: true,
+      configured_secrets: [],
+      missing_secrets: [],
+      ready: true,
+    },
+    {
+      name: "jira-helper",
+      description: "查询 Jira 工单状态",
+      project_types: ["warehouse"],
+      projects: ["default"],
+      secrets: ["JIRA_TOKEN"],
+      dependencies: [],
+      trust_warning: "untrusted",
+      source: "upload",
+      protected: false,
+      enabled: true,
+      configured_secrets: ["JIRA_TOKEN"],
+      missing_secrets: [],
+      ready: true,
+    },
+  ];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/v1/agents")
+        return json([
+          { id: "pi", name: "pi", available: true, supports_skills: true },
+          {
+            id: "legacy-agent",
+            name: "legacy-agent",
+            available: true,
+            supports_skills: false,
+          },
+        ]);
+      if (url === "/api/v1/providers") return json([provider]);
+      if (url === "/api/v1/conversations") return json([]);
+      if (url === "/api/v1/assistant-defaults")
+        return json({
+          assistant_agent: "pi",
+          assistant_provider_id: provider.id,
+          assistant_model: provider.models[0],
+        });
+      if (url.startsWith("/api/v1/skills/available")) return json(skills);
+      if (url === "/api/v1/conversations/ask" && init?.method === "POST") {
+        askCalls.push(JSON.parse(String(init.body)) as Record<string, unknown>);
+        return new Response(sse, {
+          headers: { "Content-Type": "text/event-stream" },
+        });
+      }
+      return new Response("", { status: 404 });
+    }),
+  );
+
+  render(<ChatPage token="token" role="user" messages={messages} />);
+
+  const textarea = (await screen.findByLabelText(
+    "问题",
+  )) as HTMLTextAreaElement;
+
+  // 1. Ordinary slash text must NOT open the Skill popover
+  fireEvent.change(textarea, {
+    target: { value: "请按 a/b 口径核对 https://a/b" },
+  });
+  expect(screen.queryByRole("listbox")).toBeNull();
+
+  // 2. Leading "/" opens candidate popover and filters by typing
+  fireEvent.change(textarea, { target: { value: "/jira" } });
+  const listbox = await screen.findByRole("listbox");
+  expect(listbox.textContent).toContain("/jira-helper");
+  expect(listbox.textContent).not.toContain("/dataagent-retrieval");
+
+  // 3. Keyboard Enter selects candidate without submitting
+  fireEvent.keyDown(textarea, { key: "Enter" });
+  expect(screen.queryByRole("listbox")).toBeNull();
+  expect(textarea.value).toBe("");
+  expect(
+    document.querySelector(".composer-selected-skill")?.textContent,
+  ).toContain("/jira-helper");
+  expect(askCalls).toHaveLength(0);
+
+  // 4. Unsupported runner shows notice and disables send
+  fireEvent.change(screen.getByLabelText("Agent"), {
+    target: { value: "legacy-agent" },
+  });
+  expect(await screen.findByText(/不支持调用 Skill/)).toBeTruthy();
+  fireEvent.change(textarea, { target: { value: "帮我查工单" } });
+  expect(
+    (screen.getByRole("button", { name: /提\s*问/ }) as HTMLButtonElement)
+      .disabled,
+  ).toBe(true);
+
+  // Switch back to pi -> sends structured skill_name
+  fireEvent.change(screen.getByLabelText("Agent"), { target: { value: "pi" } });
+  fireEvent.click(screen.getByRole("button", { name: /提\s*问/ }));
+  await waitFor(() => expect(askCalls).toHaveLength(1));
+  expect(askCalls[0].skill_name).toBe("jira-helper");
+  expect(askCalls[0].question).toBe("帮我查工单");
+});
+
+test("缺少个人密钥时提示并阻止发送，融合式输入框去除内层边框", async () => {
+  const messages = getMessages("zh");
+  const goSettings = vi.fn();
+  const skills = [
+    {
+      name: "needs-key",
+      description: "需要个人密钥",
+      project_types: ["warehouse"],
+      projects: ["default"],
+      secrets: ["API_KEY"],
+      dependencies: [],
+      trust_warning: "untrusted",
+      source: "upload",
+      protected: false,
+      enabled: true,
+      configured_secrets: [],
+      missing_secrets: ["API_KEY"],
+      ready: false,
+    },
+  ];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/v1/agents")
+        return json([
+          { id: "pi", name: "pi", available: true, supports_skills: true },
+        ]);
+      if (url === "/api/v1/providers") return json([provider]);
+      if (url === "/api/v1/conversations") return json([]);
+      if (url === "/api/v1/assistant-defaults")
+        return json({
+          assistant_agent: "pi",
+          assistant_provider_id: provider.id,
+          assistant_model: provider.models[0],
+        });
+      if (url.startsWith("/api/v1/skills/available")) return json(skills);
+      return new Response("", { status: 404 });
+    }),
+  );
+
+  render(
+    <ChatPage
+      token="token"
+      role="user"
+      messages={messages}
+      onNavigatePersonalSettings={goSettings}
+    />,
+  );
+
+  const textarea = await screen.findByLabelText("问题");
+  fireEvent.change(textarea, { target: { value: "/" } });
+  const listbox = await screen.findByRole("listbox");
+  const option = within(listbox).getByRole("option");
+  fireEvent.click(option);
+
+  expect(await screen.findByText(/缺少必需的个人密钥（API_KEY）/)).toBeTruthy();
+  fireEvent.click(
+    screen.getByRole("button", { name: messages.skillsGoPersonalSettings }),
+  );
+  expect(goSettings).toHaveBeenCalledTimes(1);
+
+  fireEvent.change(textarea, { target: { value: "执行查询" } });
+  expect(
+    (screen.getByRole("button", { name: /提\s*问/ }) as HTMLButtonElement)
+      .disabled,
+  ).toBe(true);
+  expect(
+    document
+      .querySelector(".composer-box")
+      ?.classList.contains("composer-box--error"),
+  ).toBe(true);
+
+  const composerBoxCss = cssDeclarations(".composer-box");
+  expect(composerBoxCss).toContain("border-radius: 22px;");
+  expect(composerBoxCss).toContain("background: var(--composer-bg);");
 });
