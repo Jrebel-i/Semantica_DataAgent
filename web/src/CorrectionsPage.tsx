@@ -16,10 +16,20 @@ import { DiffViewer } from "./DiffViewer";
 import type { Messages } from "./i18n";
 import { safeDecodePath } from "./paths";
 import { ProjectSelector, storedProject } from "./ProjectSelector";
-import { formatRegressions } from "./EvolutionPage";
 import { formatOverlapRatio, formatProbePartitions } from "./DiscoveryPanel";
 import { TableScroll } from "./TableScroll";
 import { CorrectionDraftDrawer } from "./chat/CorrectionDraftDrawer";
+
+function formatRegressions(regressions: unknown): string {
+  if (Array.isArray(regressions)) {
+    const ids = regressions.map(String).filter(Boolean);
+    return ids.length > 0 ? `${ids.length} (${ids.join(", ")})` : "0";
+  }
+  if (typeof regressions === "number" && Number.isFinite(regressions)) {
+    return String(regressions);
+  }
+  return "0";
+}
 
 type L2GateReport = {
   passed?: boolean;
@@ -41,8 +51,58 @@ type ProvenanceReport = {
   evidence_trajectory_ids?: number[];
 };
 
-type DiscoveryEvidenceReport = {
+type SqlClusterItem = {
+  fingerprint?: string;
+  template_sql?: string;
+  tables?: string[];
+  execution_count?: number;
+  distinct_callers?: number;
+  dialect?: string;
+};
+
+type FkProbeEvidenceItem = {
+  from_table?: string;
+  from_columns?: string[];
+  to_table?: string;
+  to_columns?: string[];
+  sample_distinct_count?: number | null;
+  matched_count?: number | null;
+  overlap_ratio?: number | null;
+  inclusion_rate?: number | null;
+  join_matched?: boolean | null;
+  join_hit?: boolean | null;
+  probe_partitions?: Record<string, Record<string, string>>;
+  probing_status?: string;
+};
+
+type TraceExcerptMessage = {
+  role?: string;
+  content?: string;
+};
+
+type TraceMessageSummary = {
+  trace_id?: string;
+  started_at?: string | null;
+  messages?: TraceExcerptMessage[];
+};
+
+type TriggerEvidence = {
+  question?: string;
+  answer?: string;
+  description?: string;
+  conversation_id?: string | null;
+  turn_id?: number | null;
+  knowledge_gap_id?: string | null;
+  evolution_run_id?: string;
+  trace_source_plugin?: string;
+  trace_ids?: string[];
+  session_ids?: string[];
+  window_since?: string | null;
+  window_until?: string | null;
+  conversation_count?: number;
+  message_summary?: TraceMessageSummary[];
   run_id?: string;
+  discovery_run_id?: string;
   candidate_kind?: string;
   from_table?: string;
   from_columns?: string[];
@@ -55,7 +115,9 @@ type DiscoveryEvidenceReport = {
   sample_distinct_count?: number | null;
   matched_count?: number | null;
   overlap_ratio?: number | null;
+  inclusion_rate?: number | null;
   join_matched?: boolean | null;
+  join_hit?: boolean | null;
   probe_partitions?: Record<string, Record<string, string>>;
   probing_status?: string;
   topic?: string;
@@ -63,6 +125,15 @@ type DiscoveryEvidenceReport = {
   predicate?: string;
   template_count?: number;
   co_occurrence_ratio?: number;
+  sql_clusters?: SqlClusterItem[];
+  fk_probe_evidence?: FkProbeEvidenceItem[];
+  llm_rationale?: string;
+};
+
+type UnifiedEvidence = {
+  source_type?: string;
+  summary_reason?: string;
+  trigger_evidence?: TriggerEvidence;
 };
 
 type GateReport = {
@@ -76,7 +147,8 @@ type GateReport = {
   };
   l2_gate?: L2GateReport;
   provenance?: ProvenanceReport;
-  discovery_evidence?: DiscoveryEvidenceReport;
+  discovery_evidence?: TriggerEvidence;
+  evidence?: UnifiedEvidence;
 };
 
 type Proposal = {
@@ -88,8 +160,10 @@ type Proposal = {
   status: string;
   source?: string;
   target_kind?: string;
+  is_new_file?: boolean;
   structured_patch?: Record<string, unknown> | null;
   gate_report?: GateReport | null;
+  evidence?: UnifiedEvidence | null;
 };
 
 function initialPatchForProposal(row: Proposal): string {
@@ -147,65 +221,238 @@ function sourceLabel(source: string | undefined, t: Messages): string {
   return source || "";
 }
 
+function isNewFileProposal(row: Proposal): boolean {
+  return (
+    Boolean(row.is_new_file) ||
+    (row.target_kind === "document" && row.diff.startsWith("--- /dev/null"))
+  );
+}
+
+function formatEvidenceTime(value: string | null | undefined): string {
+  if (!value) return "-";
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString();
+}
+
 function discoveryKindText(kind: string | undefined, t: Messages): string {
   if (kind === "relationship") return t.discoveryKindRelationship;
   if (kind === "metric") return t.discoveryKindMetric;
   if (kind === "filter_rule") return t.discoveryKindFilterRule;
+  if (kind === "table") return t.discoveryKindTable;
+  if (kind === "field") return t.discoveryKindField;
+  if (kind === "override") return t.discoveryKindOverride;
+  if (kind === "document") return t.discoveryKindDocument;
+  if (kind === "synthesized") return t.discoveryKindSynthesized;
   if (kind === "eval_draft") return t.discoveryKindEvalDraft;
   return kind || "-";
 }
 
-function DiscoveryEvidenceCard({
-  evidence,
+function ProposalEvidenceCard({
+  proposal,
   t,
 }: {
-  evidence: DiscoveryEvidenceReport | undefined;
+  proposal: Proposal;
   t: Messages;
 }) {
-  if (!evidence) {
-    return (
-      <div className="discovery-evidence-card">
-        <strong>{t.discoveryEvidenceTitle}</strong>
-        <div className="muted">{t.discoveryEvidenceNoDetail}</div>
-      </div>
-    );
+  const unified = proposal.evidence ?? proposal.gate_report?.evidence ?? null;
+  const legacyDisc = proposal.gate_report?.discovery_evidence;
+  const legacyProv = proposal.gate_report?.provenance;
+  const trigger: TriggerEvidence = {
+    ...(legacyDisc ?? {}),
+    ...(unified?.trigger_evidence ?? {}),
+  };
+  const sourceType = unified?.source_type || proposal.source || "manual";
+  const summaryReason = unified?.summary_reason || proposal.reason;
+  const runId =
+    trigger.run_id ||
+    trigger.discovery_run_id ||
+    trigger.evolution_run_id ||
+    legacyProv?.evolution_run_id;
+  const overlapRatio =
+    typeof trigger.overlap_ratio === "number"
+      ? trigger.overlap_ratio
+      : typeof trigger.inclusion_rate === "number"
+        ? trigger.inclusion_rate
+        : null;
+  const overlapText = formatOverlapRatio(overlapRatio);
+  const partitionsText = formatProbePartitions(trigger.probe_partitions);
+  const joinMatched =
+    typeof trigger.join_matched === "boolean"
+      ? trigger.join_matched
+      : typeof trigger.join_hit === "boolean"
+        ? trigger.join_hit
+        : null;
+  const sqlClusters = Array.isArray(trigger.sql_clusters)
+    ? trigger.sql_clusters
+    : [];
+  const fkProbes = Array.isArray(trigger.fk_probe_evidence)
+    ? trigger.fk_probe_evidence
+    : [];
+  const traceIds = Array.isArray(trigger.trace_ids) ? trigger.trace_ids : [];
+  const messageSummary = Array.isArray(trigger.message_summary)
+    ? trigger.message_summary
+    : [];
+
+  const hasDetail = Boolean(
+    trigger.question ||
+    trigger.description ||
+    trigger.conversation_id ||
+    trigger.knowledge_gap_id ||
+    runId ||
+    traceIds.length > 0 ||
+    trigger.window_since ||
+    trigger.window_until ||
+    messageSummary.length > 0 ||
+    typeof trigger.query_history_frequency === "number" ||
+    sqlClusters.length > 0 ||
+    fkProbes.length > 0 ||
+    overlapText ||
+    legacyDisc ||
+    legacyProv,
+  );
+
+  if (!unified && !legacyDisc && proposal.source !== "discovery") {
+    return null;
   }
-  const overlapText = formatOverlapRatio(evidence.overlap_ratio);
-  const partitionsText = formatProbePartitions(evidence.probe_partitions);
+
   return (
     <div className="discovery-evidence-card">
       <div className="discovery-evidence-header">
-        <strong>{t.discoveryEvidenceTitle}</strong>
+        <strong>
+          {sourceType === "discovery"
+            ? t.discoveryEvidenceTitle
+            : t.proposalEvidenceTitle}
+        </strong>
         <Space size={6} wrap>
-          {evidence.candidate_kind && (
-            <Tag>{discoveryKindText(evidence.candidate_kind, t)}</Tag>
-          )}
-          {evidence.run_id && (
+          <Tag>{sourceLabel(sourceType, t)}</Tag>
+          {trigger.trace_source_plugin && (
             <Tag className="mono">
-              {t.discoveryEvidenceRunId}: {evidence.run_id}
+              {t.evidenceTracePlugin}: {trigger.trace_source_plugin}
+            </Tag>
+          )}
+          {trigger.candidate_kind && (
+            <Tag>{discoveryKindText(trigger.candidate_kind, t)}</Tag>
+          )}
+          {runId && (
+            <Tag className="mono">
+              {t.discoveryEvidenceRunId}: {runId}
             </Tag>
           )}
         </Space>
       </div>
+
+      {summaryReason && (
+        <div>
+          <span className="muted">{t.proposalSummaryReason}: </span>
+          <span>{summaryReason}</span>
+        </div>
+      )}
+
+      {!hasDetail && sourceType === "discovery" && (
+        <div className="muted">{t.discoveryEvidenceNoDetail}</div>
+      )}
+
+      {trigger.question && (
+        <div>
+          <span className="muted">{t.evidenceQuestion}: </span>
+          <span>{trigger.question}</span>
+        </div>
+      )}
+
+      {trigger.description && trigger.description !== summaryReason && (
+        <div>
+          <span className="muted">{t.evidenceDescription}: </span>
+          <span>{trigger.description}</span>
+        </div>
+      )}
+
+      {(trigger.conversation_id || trigger.knowledge_gap_id) && (
+        <div className="discovery-evidence-pills">
+          {trigger.conversation_id && (
+            <Tag className="mono">
+              {t.evidenceConversation}: {trigger.conversation_id}
+              {typeof trigger.turn_id === "number" ? `#${trigger.turn_id}` : ""}
+            </Tag>
+          )}
+          {trigger.knowledge_gap_id && (
+            <Tag className="mono">
+              {t.evidenceKnowledgeGap}: {trigger.knowledge_gap_id}
+            </Tag>
+          )}
+        </div>
+      )}
+
+      {(trigger.window_since ||
+        trigger.window_until ||
+        typeof trigger.conversation_count === "number" ||
+        traceIds.length > 0) && (
+        <div className="stack" style={{ gap: 6 }}>
+          <div className="discovery-evidence-pills">
+            {(trigger.window_since || trigger.window_until) && (
+              <Tag className="mono">
+                {t.evidenceTraceWindow}:{" "}
+                {formatEvidenceTime(trigger.window_since)} →{" "}
+                {formatEvidenceTime(trigger.window_until)}
+              </Tag>
+            )}
+            {typeof trigger.conversation_count === "number" && (
+              <Tag>
+                {t.evidenceTraceCount}: {trigger.conversation_count}
+              </Tag>
+            )}
+            {traceIds.length > 0 && (
+              <Tag className="mono">
+                {t.evidenceTraceIds}: {traceIds.slice(0, 5).join(", ")}
+                {traceIds.length > 5 ? ` (+${traceIds.length - 5})` : ""}
+              </Tag>
+            )}
+          </div>
+          {messageSummary.length > 0 && (
+            <div className="evidence-excerpt-list">
+              <strong>{t.evidenceTraceExcerpts}</strong>
+              {messageSummary.slice(0, 3).map((item, idx) => (
+                <div
+                  key={item.trace_id || idx}
+                  className="evidence-excerpt-item"
+                >
+                  <div className="mono muted">
+                    {item.trace_id || `#${idx + 1}`}{" "}
+                    {item.started_at
+                      ? `· ${formatEvidenceTime(item.started_at)}`
+                      : ""}
+                  </div>
+                  {(item.messages ?? []).slice(0, 4).map((msg, msgIdx) => (
+                    <div key={msgIdx}>
+                      <strong className="mono">[{msg.role}]: </strong>
+                      <span>{msg.content}</span>
+                    </div>
+                  ))}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       <div className="discovery-evidence-pills">
-        {typeof evidence.query_history_frequency === "number" && (
+        {typeof trigger.query_history_frequency === "number" && (
           <Tag>
-            {t.discoveryEvidenceFrequency}: {evidence.query_history_frequency}
+            {t.discoveryEvidenceFrequency}: {trigger.query_history_frequency}
           </Tag>
         )}
-        {typeof evidence.distinct_callers === "number" && (
+        {typeof trigger.distinct_callers === "number" && (
           <Tag>
-            {t.discoveryEvidenceDistinctCallers}: {evidence.distinct_callers}
+            {t.discoveryEvidenceDistinctCallers}: {trigger.distinct_callers}
           </Tag>
         )}
-        {typeof evidence.sample_distinct_count === "number" && (
+        {typeof trigger.sample_distinct_count === "number" && (
           <Tag>
-            {t.discoveryEvidenceSampleCount}: {evidence.sample_distinct_count}
+            {t.discoveryEvidenceSampleCount}: {trigger.sample_distinct_count}
           </Tag>
         )}
-        {typeof evidence.matched_count === "number" && (
+        {typeof trigger.matched_count === "number" && (
           <Tag>
-            {t.discoveryEvidenceMatchedCount}: {evidence.matched_count}
+            {t.discoveryEvidenceMatchedCount}: {trigger.matched_count}
           </Tag>
         )}
         {overlapText && (
@@ -213,31 +460,115 @@ function DiscoveryEvidenceCard({
             {t.discoveryEvidenceOverlapRatio}: {overlapText}
           </Tag>
         )}
-        {typeof evidence.join_matched === "boolean" && (
-          <Tag color={evidence.join_matched ? "green" : "red"}>
+        {joinMatched !== null && (
+          <Tag color={joinMatched ? "green" : "red"}>
             {t.discoveryEvidenceJoinProbe}:{" "}
-            {evidence.join_matched
+            {joinMatched
               ? t.discoveryEvidenceJoinPassed
               : t.discoveryEvidenceJoinFailed}
           </Tag>
         )}
-        {evidence.probing_status &&
-          evidence.probing_status !== "not_applicable" && (
+        {trigger.probing_status &&
+          trigger.probing_status !== "not_applicable" && (
             <Tag className="mono">
-              {t.discoveryEvidenceProbingStatus}: {evidence.probing_status}
+              {t.discoveryEvidenceProbingStatus}: {trigger.probing_status}
             </Tag>
           )}
       </div>
+
       {partitionsText && (
         <div className="muted mono">
           {t.discoveryEvidencePartitions}: {partitionsText}
         </div>
       )}
-      {evidence.expression && (
-        <div className="muted mono">{evidence.expression}</div>
+      {trigger.expression && (
+        <div className="muted mono">{trigger.expression}</div>
       )}
-      {evidence.predicate && (
-        <div className="muted mono">{evidence.predicate}</div>
+      {trigger.predicate && (
+        <div className="muted mono">{trigger.predicate}</div>
+      )}
+
+      {sqlClusters.length > 0 && (
+        <div className="evidence-cluster-list">
+          <strong>{t.evidenceSqlClusters}</strong>
+          {sqlClusters.slice(0, 3).map((cluster, idx) => (
+            <div
+              key={cluster.fingerprint || idx}
+              className="evidence-cluster-item"
+            >
+              <Space size={6} wrap>
+                {typeof cluster.execution_count === "number" && (
+                  <Tag>
+                    {t.evidenceClusterExecs.replace(
+                      "{count}",
+                      String(cluster.execution_count),
+                    )}
+                  </Tag>
+                )}
+                {typeof cluster.distinct_callers === "number" && (
+                  <Tag>
+                    {t.evidenceClusterCallers.replace(
+                      "{count}",
+                      String(cluster.distinct_callers),
+                    )}
+                  </Tag>
+                )}
+                {cluster.dialect && <Tag>{cluster.dialect}</Tag>}
+                {Array.isArray(cluster.tables) && cluster.tables.length > 0 && (
+                  <span className="mono muted">
+                    {cluster.tables.join(", ")}
+                  </span>
+                )}
+              </Space>
+              {cluster.template_sql && (
+                <pre className="mono evidence-sql-preview">
+                  {cluster.template_sql}
+                </pre>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {fkProbes.length > 0 && (
+        <div className="evidence-cluster-list">
+          <strong>{t.evidenceFkProbes}</strong>
+          {fkProbes.map((fk, idx) => {
+            const fkRate = formatOverlapRatio(
+              typeof fk.overlap_ratio === "number"
+                ? fk.overlap_ratio
+                : typeof fk.inclusion_rate === "number"
+                  ? fk.inclusion_rate
+                  : null,
+            );
+            return (
+              <div key={idx} className="evidence-cluster-item">
+                <span className="mono">
+                  {fk.from_table}({(fk.from_columns ?? []).join(", ")}) →{" "}
+                  {fk.to_table}({(fk.to_columns ?? []).join(", ")})
+                </span>
+                <Space size={6} wrap>
+                  {fkRate && (
+                    <Tag color="blue">
+                      {t.discoveryEvidenceOverlapRatio}: {fkRate}
+                    </Tag>
+                  )}
+                  {typeof fk.sample_distinct_count === "number" && (
+                    <Tag>
+                      {t.discoveryEvidenceSampleCount}:{" "}
+                      {fk.sample_distinct_count}
+                    </Tag>
+                  )}
+                  {typeof fk.matched_count === "number" && (
+                    <Tag>
+                      {t.discoveryEvidenceMatchedCount}: {fk.matched_count}
+                    </Tag>
+                  )}
+                </Space>
+              </div>
+            );
+          })}
+        </div>
       )}
     </div>
   );
@@ -821,6 +1152,9 @@ export function CorrectionsPage({
                               {targetLabel}
                             </span>
                             <Space size={4}>
+                              {isNewFileProposal(row) && (
+                                <Tag color="purple">{t.draftNewFileBadge}</Tag>
+                              )}
                               {srcText && <Tag>{srcText}</Tag>}
                               <Tag color={meta.color}>{meta.label}</Tag>
                             </Space>
@@ -839,6 +1173,9 @@ export function CorrectionsPage({
                         {safeDecodePath(selected.target)}
                       </h2>
                       <Space size={6}>
+                        {isNewFileProposal(selected) && (
+                          <Tag color="purple">{t.draftNewFileBadge}</Tag>
+                        )}
                         {selected.source && (
                           <Tag>{sourceLabel(selected.source, t)}</Tag>
                         )}
@@ -921,13 +1258,7 @@ export function CorrectionsPage({
                         )}
                       </>
                     )}
-                    {(selected.gate_report?.discovery_evidence ||
-                      selected.source === "discovery") && (
-                      <DiscoveryEvidenceCard
-                        evidence={selected.gate_report?.discovery_evidence}
-                        t={t}
-                      />
-                    )}
+                    <ProposalEvidenceCard proposal={selected} t={t} />
                     <DiffViewer
                       diff={selected.diff}
                       messages={t}

@@ -1,31 +1,46 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Alert, Button, Space, Tag } from "antd";
+import { Alert, Button, Checkbox, Input, Select, Space, Tag } from "antd";
 import type { components } from "./api";
 import { DiscoveryPanel } from "./DiscoveryPanel";
 import { readErrorDetail } from "./httpErrors";
 import type { Messages } from "./i18n";
 import { ProjectSelector, storedProject, useProjects } from "./ProjectSelector";
 
+type TraceSourcePlugin = components["schemas"]["TraceSourcePluginView"];
 type EvolutionConfig = components["schemas"]["EvolutionConfigView"];
 type EvolutionConfigUpdate = components["schemas"]["EvolutionConfigUpdate"];
 type EvolutionRun = components["schemas"]["EvolutionRunView"];
-type EvolutionRound = components["schemas"]["EvolutionRoundView"];
+type EvolutionRunTrigger = components["schemas"]["EvolutionRunTrigger"];
 type Provider = components["schemas"]["ProviderView"];
 
+type ParamSchema = {
+  type?: string;
+  title?: string;
+  description?: string;
+  format?: string;
+  default?: unknown;
+  enum?: (string | number | boolean)[];
+  properties?: Record<string, ParamSchema>;
+  required?: string[];
+};
+
 const DEFAULT_CONFIG: EvolutionConfig = {
-  auto_evolve_enabled: false,
-  min_trajectories: 30,
-  min_interval_hours: 24,
-  max_idle_days: 7,
-  max_rounds: 3,
-  max_eval_cases: 20,
+  project_id: "default",
+  enabled: false,
+  trace_source_plugin: null,
+  trace_source_parameters: {},
+  trace_source_secrets: {},
+  configured_secrets: [],
+  secret_configured: false,
+  schedule_cron: null,
+  timezone: "Asia/Shanghai",
   evolution_provider_id: null,
   evolution_model: null,
-  judge_provider_id: null,
-  judge_model: null,
-  checkpoint_trajectory_id: null,
-  checkpoint_at: null,
-  pending_trajectories: 0,
+  max_traces_per_run: 200,
+  last_trace_timestamp: null,
+  last_triggered_at: null,
+  next_run_at: null,
+  global_langfuse_configured: false,
 };
 
 function formatDateTime(value: string | null | undefined): string {
@@ -34,44 +49,78 @@ function formatDateTime(value: string | null | undefined): string {
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
 }
 
+function toIsoUtc(localOrIso: string): string | undefined {
+  const trimmed = localOrIso.trim();
+  if (!trimmed) return undefined;
+  const parsed = new Date(trimmed);
+  return Number.isNaN(parsed.getTime()) ? trimmed : parsed.toISOString();
+}
+
 function runStatusColor(status: EvolutionRun["status"]): string {
-  if (status === "accepted") return "green";
+  if (status === "succeeded" || status === "accepted") return "green";
   if (status === "running") return "blue";
+  if (status === "failed") return "red";
   return "orange";
 }
 
-function decisionColor(decision: EvolutionRound["decision"]): string {
-  if (decision === "accept") return "green";
-  if (decision === "reject") return "red";
-  if (decision === "running") return "blue";
-  return "orange";
+function runStatusLabel(status: EvolutionRun["status"], t: Messages): string {
+  if (status === "succeeded") return t.evolutionStatusSucceeded;
+  if (status === "accepted") return t.evolutionStatusAccepted;
+  if (status === "running") return t.evolutionStatusRunning;
+  if (status === "failed") return t.evolutionStatusFailed;
+  return t.evolutionStatusIncomplete;
 }
 
-function formatNumber(value: unknown, fallback = 0): number {
-  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+function isSecretParam(
+  key: string,
+  field: ParamSchema,
+  secretKeys: string[],
+): boolean {
+  return field.format === "password" || secretKeys.includes(key);
 }
 
-export function formatRegressions(regressions: unknown): string {
-  if (Array.isArray(regressions)) {
-    const ids = regressions.map(String).filter(Boolean);
-    return ids.length > 0 ? `${ids.length} (${ids.join(", ")})` : "0";
-  }
-  if (typeof regressions === "number" && Number.isFinite(regressions)) {
-    return String(regressions);
-  }
-  return "0";
-}
+function splitTraceSourcePayload(
+  schema: ParamSchema,
+  paramValues: Record<string, unknown>,
+  secretValues: Record<string, string>,
+  secretKeys: string[],
+  configuredSecrets: Set<string>,
+): {
+  parameters: Record<string, unknown>;
+  secrets: Record<string, string | null>;
+} {
+  const parameters: Record<string, unknown> = {};
+  const secrets: Record<string, string | null> = {};
+  const properties = schema.properties || {};
 
-function formatL2Summary(l2: Record<string, unknown>): string {
-  const mode = typeof l2.mode === "string" ? l2.mode : "-";
-  const cases = formatNumber(l2.evaluated_cases);
-  if (mode === "cold_start_ab") {
-    return `${mode} · cases=${cases} · W_c=${formatNumber(l2.W_c)} W_p=${formatNumber(l2.W_p)} E_c=${formatNumber(l2.E_c)} new_validate_errors=${formatNumber(l2.new_validate_errors)}`;
+  for (const [name, field] of Object.entries(properties)) {
+    if (isSecretParam(name, field, secretKeys)) {
+      const rawSecret = secretValues[name];
+      const wasConfigured = configuredSecrets.has(name);
+      if (rawSecret === "***") {
+        if (wasConfigured) secrets[name] = "***";
+      } else if (rawSecret === "") {
+        if (wasConfigured) secrets[name] = "";
+      } else if (typeof rawSecret === "string" && rawSecret.length > 0) {
+        secrets[name] = rawSecret;
+      }
+      continue;
+    }
+
+    const raw = paramValues[name];
+    const effective = raw !== undefined ? raw : field.default;
+    if (effective === undefined || effective === null || effective === "") {
+      continue;
+    }
+    if (field.type === "integer" || field.type === "number") {
+      const num = Number(effective);
+      if (Number.isFinite(num)) parameters[name] = num;
+    } else {
+      parameters[name] = effective;
+    }
   }
-  if (mode === "confirmed_regression") {
-    return `${mode} · cases=${cases} · regressions=${formatRegressions(l2.regressions)}`;
-  }
-  return `${mode} · cases=${cases}`;
+
+  return { parameters, secrets };
 }
 
 function ProviderModelPair({
@@ -82,6 +131,7 @@ function ProviderModelPair({
   providerId,
   model,
   providers,
+  disabled = false,
   onProviderChange,
   onModelChange,
 }: {
@@ -92,6 +142,7 @@ function ProviderModelPair({
   providerId: string | null | undefined;
   model: string | null | undefined;
   providers: Provider[];
+  disabled?: boolean;
   onProviderChange: (nextProviderId: string | null) => void;
   onModelChange: (nextModel: string | null) => void;
 }) {
@@ -108,6 +159,7 @@ function ProviderModelPair({
         <label htmlFor={`${idPrefix}-provider`}>{providerLabel}</label>
         <select
           id={`${idPrefix}-provider`}
+          disabled={disabled}
           value={providerId ?? ""}
           onChange={(e) => onProviderChange(e.target.value || null)}
         >
@@ -123,6 +175,7 @@ function ProviderModelPair({
         <label htmlFor={`${idPrefix}-model`}>{modelLabel}</label>
         <select
           id={`${idPrefix}-model`}
+          disabled={disabled}
           value={model ?? ""}
           onChange={(e) => onModelChange(e.target.value || null)}
         >
@@ -135,91 +188,6 @@ function ProviderModelPair({
         </select>
       </div>
     </>
-  );
-}
-
-function RoundCard({ round, t }: { round: EvolutionRound; t: Messages }) {
-  const l1 = round.l1_gate_report as
-    | {
-        passed?: boolean;
-        checks?: { name?: string; passed?: boolean; details?: string[] }[];
-        errors?: string[];
-      }
-    | null
-    | undefined;
-  const l2 = round.l2_gate_report as Record<string, unknown> | null | undefined;
-  const l1Errors = Array.isArray(l1?.errors) ? l1.errors : [];
-  const decisionLabel =
-    round.decision === "accept"
-      ? t.evolutionDecisionAccepted
-      : round.decision === "reject"
-        ? t.evolutionDecisionRejected
-        : round.decision === "running"
-          ? t.evolutionStatusRunning
-          : round.decision === "incomplete"
-            ? t.evolutionStatusIncomplete
-            : t.evolutionDecisionError;
-
-  return (
-    <article className="evolution-round-card">
-      <div className="evolution-round-header">
-        <strong>
-          {t.evolutionRoundTitle.replace("{n}", String(round.round_number))}
-        </strong>
-        <Space size={6} wrap>
-          <Tag>{round.signal_kind}</Tag>
-          <Tag className="mono">{`${round.target_kind}:${round.target}`}</Tag>
-          <Tag color={decisionColor(round.decision)}>{decisionLabel}</Tag>
-        </Space>
-      </div>
-      <div className="evolution-round-body">
-        <div>
-          <span className="muted">{t.evolutionHypothesis}: </span>
-          <span>{round.hypothesis}</span>
-        </div>
-        {(round.evidence_trajectory_ids?.length ?? 0) > 0 && (
-          <div className="muted">
-            {t.evolutionEvidenceIds}:{" "}
-            <span className="mono">
-              {round.evidence_trajectory_ids?.join(", ")}
-            </span>
-          </div>
-        )}
-        {round.reject_reason && (
-          <div className="muted">
-            {t.evolutionRejectReason}: {round.reject_reason}
-          </div>
-        )}
-        {l1 && (
-          <div className="evolution-gate-block">
-            <Space size={8}>
-              <span>{t.evolutionL1Gate}</span>
-              <Tag color={l1.passed ? "green" : "red"}>
-                {l1.passed ? t.evolutionL2Passed : t.evolutionL2Failed}
-              </Tag>
-            </Space>
-            {l1Errors.length > 0 && (
-              <ul className="stale-overrides-list">
-                {l1Errors.map((err, idx) => (
-                  <li key={idx}>{err}</li>
-                ))}
-              </ul>
-            )}
-          </div>
-        )}
-        {l2 && (
-          <div className="evolution-gate-block">
-            <Space size={8}>
-              <span>{t.evolutionL2Gate}</span>
-              <Tag color={l2.passed ? "green" : "red"}>
-                {l2.passed ? t.evolutionL2Passed : t.evolutionL2Failed}
-              </Tag>
-            </Space>
-            <div className="mono muted">{formatL2Summary(l2)}</div>
-          </div>
-        )}
-      </div>
-    </article>
   );
 }
 
@@ -245,15 +213,22 @@ export function EvolutionPage({
     () => projects.find((item) => item.id === project) ?? null,
     [projects, project],
   );
+  const isArchivedProject =
+    currentProject?.status === "archived" ||
+    currentProject?.status === "deleting";
   const projectRef = useRef(project);
   projectRef.current = project;
   const requestGenRef = useRef(0);
   const pollInFlightRef = useRef(false);
 
   const [providers, setProviders] = useState<Provider[]>([]);
+  const [plugins, setPlugins] = useState<TraceSourcePlugin[]>([]);
   const [config, setConfig] = useState<EvolutionConfig>(DEFAULT_CONFIG);
   const [runs, setRuns] = useState<EvolutionRun[]>([]);
   const [selectedRunId, setSelectedRunId] = useState("");
+  const [sinceInput, setSinceInput] = useState("");
+  const [untilInput, setUntilInput] = useState("");
+  const [maxTracesOverride, setMaxTracesOverride] = useState("");
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [triggering, setTriggering] = useState(false);
@@ -262,20 +237,26 @@ export function EvolutionPage({
 
   useEffect(() => {
     const controller = new AbortController();
-    fetch("/api/v1/providers", {
-      headers: { Authorization: `Bearer ${token}` },
-      signal: controller.signal,
-    })
-      .then(async (response) => {
-        if (!response.ok) return;
-        const data = (await response.json()) as Provider[];
-        if (!controller.signal.aborted) {
-          setProviders(Array.isArray(data) ? data : []);
-        }
+    const headers = { Authorization: `Bearer ${token}` };
+    Promise.all([
+      fetch("/api/v1/providers", { headers, signal: controller.signal })
+        .then(async (res) => (res.ok ? ((await res.json()) as unknown) : []))
+        .catch(() => []),
+      fetch("/api/v1/trace-source-plugins", {
+        headers,
+        signal: controller.signal,
       })
-      .catch(() => {
-        // Ignore abort / optional provider metadata failures
-      });
+        .then(async (res) => (res.ok ? ((await res.json()) as unknown) : []))
+        .catch(() => []),
+    ]).then(([provData, pluginData]) => {
+      if (controller.signal.aborted) return;
+      if (Array.isArray(provData)) {
+        setProviders(provData as Provider[]);
+      }
+      if (Array.isArray(pluginData)) {
+        setPlugins(pluginData as TraceSourcePlugin[]);
+      }
+    });
     return () => controller.abort();
   }, [token]);
 
@@ -285,11 +266,11 @@ export function EvolutionPage({
       const headers = { Authorization: `Bearer ${token}` };
       const encoded = encodeURIComponent(targetProject);
       const [cfgRes, runsRes] = await Promise.all([
-        fetch(`/api/v1/projects/${encoded}/evolution-config`, {
+        fetch(`/api/v1/projects/${encoded}/evolution/config`, {
           headers,
           signal,
         }),
-        fetch(`/api/v1/evolution/runs?project=${encoded}`, {
+        fetch(`/api/v1/projects/${encoded}/evolution/runs`, {
           headers,
           signal,
         }),
@@ -309,7 +290,13 @@ export function EvolutionPage({
       ) {
         return;
       }
-      setConfig(nextConfig);
+      setConfig({
+        ...DEFAULT_CONFIG,
+        ...nextConfig,
+        trace_source_parameters: nextConfig.trace_source_parameters ?? {},
+        trace_source_secrets: nextConfig.trace_source_secrets ?? {},
+        configured_secrets: nextConfig.configured_secrets ?? [],
+      });
       const safeRuns = Array.isArray(nextRuns) ? nextRuns : [];
       setRuns(safeRuns);
       setSelectedRunId((prev) =>
@@ -330,7 +317,7 @@ export function EvolutionPage({
     setSaveNotice("");
     void loadProjectData(project, controller.signal)
       .catch((failure) => {
-        if (!controller.signal.aborted) {
+        if (!controller.signal.aborted && projectRef.current === project) {
           setError(failure instanceof Error ? failure.message : t.error);
         }
       })
@@ -365,32 +352,75 @@ export function EvolutionPage({
     projectRef.current = nextProject;
     setSelectedRunId("");
     setRuns([]);
-    setConfig(DEFAULT_CONFIG);
+    setConfig({ ...DEFAULT_CONFIG, project_id: nextProject });
     setError("");
     setSaveNotice("");
     setProject(nextProject);
   }
 
+  const activePlugin = useMemo(
+    () =>
+      plugins.find((item) => item.id === config.trace_source_plugin) ?? null,
+    [plugins, config.trace_source_plugin],
+  );
+
+  const activeSchema = (activePlugin?.parameters_schema ?? {
+    type: "object",
+    properties: {},
+  }) as ParamSchema;
+
+  const activeSecretKeys = useMemo(() => {
+    const keys = new Set<string>(activePlugin?.secret_parameter_keys ?? []);
+    Object.entries(activeSchema.properties || {}).forEach(([key, prop]) => {
+      if (prop.format === "password") keys.add(key);
+    });
+    return Array.from(keys);
+  }, [activePlugin, activeSchema]);
+
+  const configuredSecretsSet = useMemo(() => {
+    const set = new Set<string>(config.configured_secrets ?? []);
+    for (const [key, val] of Object.entries(
+      config.trace_source_secrets ?? {},
+    )) {
+      if (val) set.add(key);
+    }
+    return set;
+  }, [config.configured_secrets, config.trace_source_secrets]);
+
   async function saveConfig() {
+    if (isArchivedProject) return;
     const targetProject = project;
     setSaving(true);
     setError("");
     setSaveNotice("");
+
     const payload: EvolutionConfigUpdate = {
-      auto_evolve_enabled: config.auto_evolve_enabled,
-      min_trajectories: config.min_trajectories,
-      min_interval_hours: config.min_interval_hours,
-      max_idle_days: config.max_idle_days,
-      max_rounds: config.max_rounds,
-      max_eval_cases: config.max_eval_cases,
+      enabled: config.enabled,
+      trace_source_plugin: config.trace_source_plugin || null,
+      schedule_cron: config.schedule_cron?.trim() || null,
+      timezone: config.timezone?.trim() || "Asia/Shanghai",
+      max_traces_per_run: config.max_traces_per_run,
       evolution_provider_id: config.evolution_provider_id ?? null,
       evolution_model: config.evolution_model ?? null,
-      judge_provider_id: config.judge_provider_id ?? null,
-      judge_model: config.judge_model ?? null,
     };
+
+    if (config.trace_source_plugin && activePlugin) {
+      const split = splitTraceSourcePayload(
+        activeSchema,
+        config.trace_source_parameters ?? {},
+        config.trace_source_secrets ?? {},
+        activeSecretKeys,
+        configuredSecretsSet,
+      );
+      payload.trace_source_parameters = split.parameters;
+      if (Object.keys(split.secrets).length > 0) {
+        payload.trace_source_secrets = split.secrets;
+      }
+    }
+
     try {
       const response = await fetch(
-        `/api/v1/projects/${encodeURIComponent(targetProject)}/evolution-config`,
+        `/api/v1/projects/${encodeURIComponent(targetProject)}/evolution/config`,
         {
           method: "PUT",
           headers: {
@@ -405,7 +435,13 @@ export function EvolutionPage({
       }
       const updated = (await response.json()) as EvolutionConfig;
       if (projectRef.current === targetProject) {
-        setConfig(updated);
+        setConfig({
+          ...DEFAULT_CONFIG,
+          ...updated,
+          trace_source_parameters: updated.trace_source_parameters ?? {},
+          trace_source_secrets: updated.trace_source_secrets ?? {},
+          configured_secrets: updated.configured_secrets ?? [],
+        });
         setSaveNotice(t.evolutionConfigSaved);
       }
     } catch (failure) {
@@ -418,19 +454,30 @@ export function EvolutionPage({
   }
 
   async function triggerRun() {
+    if (isArchivedProject) return;
     const targetProject = project;
     setTriggering(true);
     setError("");
+    const payload: EvolutionRunTrigger = {};
+    const parsedSince = toIsoUtc(sinceInput);
+    const parsedUntil = toIsoUtc(untilInput);
+    if (parsedSince) payload.since = parsedSince;
+    if (parsedUntil) payload.until = parsedUntil;
+    const parsedMax = Number.parseInt(maxTracesOverride.trim(), 10);
+    if (Number.isFinite(parsedMax) && parsedMax > 0) {
+      payload.max_traces = parsedMax;
+    }
+
     try {
       const response = await fetch(
-        `/api/v1/evolution/runs?project=${encodeURIComponent(targetProject)}`,
+        `/api/v1/projects/${encodeURIComponent(targetProject)}/evolution/runs`,
         {
           method: "POST",
           headers: {
             Authorization: `Bearer ${token}`,
             "Content-Type": "application/json",
           },
-          body: JSON.stringify({}),
+          body: JSON.stringify(payload),
         },
       );
       if (!response.ok) {
@@ -458,11 +505,12 @@ export function EvolutionPage({
     [runs, selectedRunId],
   );
 
-  function statusLabel(status: EvolutionRun["status"]): string {
-    if (status === "accepted") return t.evolutionStatusAccepted;
-    if (status === "running") return t.evolutionStatusRunning;
-    return t.evolutionStatusIncomplete;
-  }
+  const selectedProposalIds = useMemo(() => {
+    if (!selectedRun) return [];
+    const ids = selectedRun.proposal_ids ?? [];
+    if (ids.length > 0) return ids;
+    return selectedRun.proposal_id ? [selectedRun.proposal_id] : [];
+  }, [selectedRun]);
 
   return (
     <section className="stack admin-page">
@@ -476,29 +524,20 @@ export function EvolutionPage({
           </p>
         </div>
         {activeTab === "evolution" && (
-          <>
-            <Button
-              onClick={() => void loadProjectData(projectRef.current)}
-              loading={loading}
-            >
-              {t.refresh}
-            </Button>
-            <Button
-              type="primary"
-              onClick={() => void triggerRun()}
-              loading={triggering}
-              disabled={hasRunning}
-            >
-              {t.triggerEvolution}
-            </Button>
-          </>
+          <Button
+            autoInsertSpace={false}
+            onClick={() => void loadProjectData(projectRef.current)}
+            loading={loading}
+          >
+            {t.refresh}
+          </Button>
         )}
         <ProjectSelector
           token={token}
           value={project}
           onChange={handleProjectChange}
           messages={t}
-          includeArchived={activeTab === "discovery"}
+          includeArchived
         />
       </div>
 
@@ -535,6 +574,9 @@ export function EvolutionPage({
         />
       ) : (
         <>
+          {isArchivedProject && (
+            <Alert type="warning" showIcon title={t.projectArchivedNotice} />
+          )}
           {error && <Alert type="error" title={error} showIcon />}
           {saveNotice && <Alert type="success" title={saveNotice} showIcon />}
 
@@ -543,13 +585,22 @@ export function EvolutionPage({
               <h2 className="card-title">{t.evolutionTitle}</h2>
               <Space size={8} wrap>
                 <Tag color="blue">
-                  {t.evolutionPendingTrajectories}:{" "}
-                  {config.pending_trajectories}
+                  {t.evolutionLastWatermark}:{" "}
+                  {formatDateTime(config.last_trace_timestamp)}
                 </Tag>
-                <Tag>
-                  {t.evolutionCheckpoint}:{" "}
-                  {config.checkpoint_trajectory_id ?? "-"}
+                <Tag color="cyan">
+                  {t.evolutionNextRunAt}: {formatDateTime(config.next_run_at)}
                 </Tag>
+                {config.last_triggered_at && (
+                  <Tag>
+                    {t.evolutionLastTriggeredAt}:{" "}
+                    {formatDateTime(config.last_triggered_at)}
+                  </Tag>
+                )}
+                {config.global_langfuse_configured &&
+                  !config.trace_source_plugin && (
+                    <Tag color="green">{t.evolutionGlobalLangfuseBadge}</Tag>
+                  )}
               </Space>
             </div>
 
@@ -557,103 +608,105 @@ export function EvolutionPage({
               <label className="evolution-checkbox">
                 <input
                   type="checkbox"
-                  checked={config.auto_evolve_enabled}
+                  disabled={isArchivedProject}
+                  checked={config.enabled}
                   onChange={(e) =>
                     setConfig((prev) => ({
                       ...prev,
-                      auto_evolve_enabled: e.target.checked,
+                      enabled: e.target.checked,
                     }))
                   }
                 />
-                <span>{t.autoEvolveEnabled}</span>
+                <span>{t.evolutionEnabled}</span>
               </label>
 
               <div className="evolution-field">
-                <label htmlFor="evo-min-trajectories">
-                  {t.evolutionMinTrajectories}
+                <label htmlFor="evo-trace-plugin">
+                  {t.evolutionTraceSourcePlugin}
                 </label>
-                <input
-                  id="evo-min-trajectories"
-                  type="number"
-                  min={1}
-                  value={config.min_trajectories}
-                  onChange={(e) =>
-                    setConfig((prev) => ({
-                      ...prev,
-                      min_trajectories: Number(e.target.value) || 1,
-                    }))
-                  }
-                />
-              </div>
-
-              <div className="evolution-field">
-                <label htmlFor="evo-min-interval">
-                  {t.evolutionMinIntervalHours}
-                </label>
-                <input
-                  id="evo-min-interval"
-                  type="number"
-                  min={0}
-                  value={config.min_interval_hours}
+                <select
+                  id="evo-trace-plugin"
+                  disabled={isArchivedProject}
+                  value={config.trace_source_plugin ?? ""}
                   onChange={(e) => {
-                    const next = Number(e.target.value);
+                    const nextPlugin = e.target.value || null;
                     setConfig((prev) => ({
                       ...prev,
-                      min_interval_hours: Number.isFinite(next)
-                        ? Math.max(0, next)
-                        : 0,
+                      trace_source_plugin: nextPlugin,
+                      trace_source_parameters:
+                        nextPlugin === prev.trace_source_plugin
+                          ? prev.trace_source_parameters
+                          : {},
+                      trace_source_secrets:
+                        nextPlugin === prev.trace_source_plugin
+                          ? prev.trace_source_secrets
+                          : {},
+                      configured_secrets:
+                        nextPlugin === prev.trace_source_plugin
+                          ? prev.configured_secrets
+                          : [],
                     }));
                   }}
-                />
+                >
+                  <option value="">{t.evolutionTraceSourceNone}</option>
+                  {plugins.map((plugin) => (
+                    <option key={plugin.id} value={plugin.id}>
+                      {plugin.display_name} ({plugin.id})
+                    </option>
+                  ))}
+                </select>
               </div>
 
               <div className="evolution-field">
-                <label htmlFor="evo-max-idle-days">
-                  {t.evolutionMaxIdleDays}
+                <label htmlFor="evo-schedule-cron">
+                  {t.evolutionScheduleCron}
                 </label>
                 <input
-                  id="evo-max-idle-days"
-                  type="number"
-                  min={1}
-                  value={config.max_idle_days}
+                  id="evo-schedule-cron"
+                  type="text"
+                  disabled={isArchivedProject}
+                  placeholder="02:30"
+                  value={config.schedule_cron ?? ""}
                   onChange={(e) =>
                     setConfig((prev) => ({
                       ...prev,
-                      max_idle_days: Number(e.target.value) || 1,
+                      schedule_cron: e.target.value,
                     }))
                   }
                 />
               </div>
 
               <div className="evolution-field">
-                <label htmlFor="evo-max-rounds">{t.evolutionMaxRounds}</label>
+                <label htmlFor="evo-timezone">{t.evolutionTimezone}</label>
                 <input
-                  id="evo-max-rounds"
-                  type="number"
-                  min={1}
-                  value={config.max_rounds}
+                  id="evo-timezone"
+                  type="text"
+                  disabled={isArchivedProject}
+                  value={config.timezone ?? "Asia/Shanghai"}
                   onChange={(e) =>
                     setConfig((prev) => ({
                       ...prev,
-                      max_rounds: Number(e.target.value) || 1,
+                      timezone: e.target.value,
                     }))
                   }
                 />
               </div>
 
               <div className="evolution-field">
-                <label htmlFor="evo-max-eval-cases">
-                  {t.evolutionMaxEvalCases}
+                <label htmlFor="evo-max-traces">
+                  {t.evolutionMaxTracesPerRun}
                 </label>
                 <input
-                  id="evo-max-eval-cases"
+                  id="evo-max-traces"
                   type="number"
                   min={1}
-                  value={config.max_eval_cases}
+                  max={2000}
+                  disabled={isArchivedProject}
+                  value={config.max_traces_per_run}
                   onChange={(e) =>
                     setConfig((prev) => ({
                       ...prev,
-                      max_eval_cases: Number(e.target.value) || 1,
+                      max_traces_per_run: Number(e.target.value) || 200,
                     }))
                   }
                 />
@@ -667,6 +720,7 @@ export function EvolutionPage({
                 providerId={config.evolution_provider_id}
                 model={config.evolution_model}
                 providers={providers}
+                disabled={isArchivedProject}
                 onProviderChange={(next) =>
                   setConfig((prev) => ({
                     ...prev,
@@ -681,38 +735,209 @@ export function EvolutionPage({
                   }))
                 }
               />
-
-              <ProviderModelPair
-                idPrefix="evo-judge"
-                providerLabel={t.judgeProviderLabel}
-                modelLabel={t.judgeModelLabel}
-                defaultLabel={t.evolutionModelDefault}
-                providerId={config.judge_provider_id}
-                model={config.judge_model}
-                providers={providers}
-                onProviderChange={(next) =>
-                  setConfig((prev) => ({
-                    ...prev,
-                    judge_provider_id: next,
-                    judge_model: null,
-                  }))
-                }
-                onModelChange={(next) =>
-                  setConfig((prev) => ({
-                    ...prev,
-                    judge_model: next,
-                  }))
-                }
-              />
             </div>
+
+            <p className="field-hint" style={{ marginTop: 8 }}>
+              {t.pullScheduleCronHint}
+            </p>
+
+            {activePlugin &&
+              Object.keys(activeSchema.properties || {}).length > 0 && (
+                <div
+                  className="evolution-config-grid"
+                  style={{ marginTop: 12 }}
+                >
+                  {Object.entries(activeSchema.properties || {}).map(
+                    ([paramKey, field]) => {
+                      const secret = isSecretParam(
+                        paramKey,
+                        field,
+                        activeSecretKeys,
+                      );
+                      const isNumeric =
+                        field.type === "integer" || field.type === "number";
+                      const rawValue = secret
+                        ? (config.trace_source_secrets?.[paramKey] ?? "")
+                        : (config.trace_source_parameters?.[paramKey] ??
+                          field.default ??
+                          "");
+                      const labelText = `${field.title || paramKey}${activeSchema.required?.includes(paramKey) ? " *" : ""}`;
+                      const inputId = `evo-ts-${paramKey}`;
+                      if (field.enum) {
+                        return (
+                          <div className="evolution-field" key={paramKey}>
+                            <label htmlFor={inputId}>{labelText}</label>
+                            <Select
+                              id={inputId}
+                              aria-label={labelText}
+                              disabled={isArchivedProject}
+                              value={
+                                typeof rawValue === "string"
+                                  ? rawValue
+                                  : undefined
+                              }
+                              onChange={(val) =>
+                                setConfig((prev) => ({
+                                  ...prev,
+                                  trace_source_parameters: {
+                                    ...(prev.trace_source_parameters ?? {}),
+                                    [paramKey]: val,
+                                  },
+                                }))
+                              }
+                              options={field.enum.map((opt) => ({
+                                value: opt,
+                                label: String(opt),
+                              }))}
+                            />
+                          </div>
+                        );
+                      }
+                      if (field.type === "boolean") {
+                        return (
+                          <label className="evolution-checkbox" key={paramKey}>
+                            <Checkbox
+                              aria-label={labelText}
+                              disabled={isArchivedProject}
+                              checked={rawValue === true}
+                              onChange={(e) =>
+                                setConfig((prev) => ({
+                                  ...prev,
+                                  trace_source_parameters: {
+                                    ...(prev.trace_source_parameters ?? {}),
+                                    [paramKey]: e.target.checked,
+                                  },
+                                }))
+                              }
+                            >
+                              {labelText}
+                            </Checkbox>
+                          </label>
+                        );
+                      }
+                      return (
+                        <div className="evolution-field" key={paramKey}>
+                          <label htmlFor={inputId}>{labelText}</label>
+                          <Input
+                            id={inputId}
+                            aria-label={labelText}
+                            disabled={isArchivedProject}
+                            type={
+                              secret
+                                ? "password"
+                                : isNumeric
+                                  ? "number"
+                                  : "text"
+                            }
+                            placeholder={field.description}
+                            value={rawValue == null ? "" : String(rawValue)}
+                            onChange={(e) => {
+                              const nextVal = e.target.value;
+                              if (secret) {
+                                setConfig((prev) => ({
+                                  ...prev,
+                                  trace_source_secrets: {
+                                    ...(prev.trace_source_secrets ?? {}),
+                                    [paramKey]: nextVal,
+                                  },
+                                }));
+                              } else {
+                                setConfig((prev) => ({
+                                  ...prev,
+                                  trace_source_parameters: {
+                                    ...(prev.trace_source_parameters ?? {}),
+                                    [paramKey]:
+                                      isNumeric && nextVal !== ""
+                                        ? Number(nextVal)
+                                        : nextVal,
+                                  },
+                                }));
+                              }
+                            }}
+                          />
+                        </div>
+                      );
+                    },
+                  )}
+                </div>
+              )}
+
+            {activePlugin && configuredSecretsSet.size > 0 && (
+              <p className="field-hint" style={{ marginTop: 8 }}>
+                {t.pullSecretMaskHint}
+              </p>
+            )}
 
             <div style={{ marginTop: 12 }}>
               <Button
                 type="primary"
+                autoInsertSpace={false}
+                disabled={isArchivedProject}
                 onClick={() => void saveConfig()}
                 loading={saving}
               >
                 {t.evolutionSaveConfig}
+              </Button>
+            </div>
+          </section>
+
+          <section className="card section-card">
+            <div className="card-title-row">
+              <h2 className="card-title">{t.evolutionManualSectionTitle}</h2>
+            </div>
+            <div className="evolution-config-grid">
+              <div className="evolution-field">
+                <label htmlFor="evo-trigger-since">
+                  {t.evolutionSinceLabel}
+                </label>
+                <input
+                  id="evo-trigger-since"
+                  aria-label={t.evolutionSinceLabel}
+                  type="datetime-local"
+                  disabled={isArchivedProject}
+                  value={sinceInput}
+                  onChange={(e) => setSinceInput(e.target.value)}
+                />
+              </div>
+              <div className="evolution-field">
+                <label htmlFor="evo-trigger-until">
+                  {t.evolutionUntilLabel}
+                </label>
+                <input
+                  id="evo-trigger-until"
+                  aria-label={t.evolutionUntilLabel}
+                  type="datetime-local"
+                  disabled={isArchivedProject}
+                  value={untilInput}
+                  onChange={(e) => setUntilInput(e.target.value)}
+                />
+              </div>
+              <div className="evolution-field">
+                <label htmlFor="evo-trigger-max">
+                  {t.evolutionMaxTracesOverride}
+                </label>
+                <input
+                  id="evo-trigger-max"
+                  aria-label={t.evolutionMaxTracesOverride}
+                  type="number"
+                  min={1}
+                  max={2000}
+                  disabled={isArchivedProject}
+                  placeholder={String(config.max_traces_per_run)}
+                  value={maxTracesOverride}
+                  onChange={(e) => setMaxTracesOverride(e.target.value)}
+                />
+              </div>
+            </div>
+            <div style={{ marginTop: 12 }}>
+              <Button
+                type="primary"
+                autoInsertSpace={false}
+                onClick={() => void triggerRun()}
+                loading={triggering}
+                disabled={isArchivedProject || hasRunning}
+              >
+                {t.triggerEvolution}
               </Button>
             </div>
           </section>
@@ -743,10 +968,11 @@ export function EvolutionPage({
                         </span>
                         <Space size={4}>
                           <Tag>
-                            {run.rounds_completed}/{run.max_rounds}
+                            {t.evolutionProposalsCreated}:{" "}
+                            {run.proposals_created ?? 0}
                           </Tag>
                           <Tag color={runStatusColor(run.status)}>
-                            {statusLabel(run.status)}
+                            {runStatusLabel(run.status, t)}
                           </Tag>
                         </Space>
                       </button>
@@ -768,25 +994,12 @@ export function EvolutionPage({
                       </div>
                     </div>
                     <Space size={8} wrap>
+                      {selectedRun.trace_source_plugin && (
+                        <Tag>{selectedRun.trace_source_plugin}</Tag>
+                      )}
                       <Tag color={runStatusColor(selectedRun.status)}>
-                        {statusLabel(selectedRun.status)}
+                        {runStatusLabel(selectedRun.status, t)}
                       </Tag>
-                      {selectedRun.stop_reason && (
-                        <Tag>{`${t.evolutionStopReason}: ${selectedRun.stop_reason}`}</Tag>
-                      )}
-                      {selectedRun.proposal_id && (
-                        <Button
-                          type="primary"
-                          size="small"
-                          onClick={() =>
-                            onNavigateCorrections?.(
-                              selectedRun.proposal_id ?? undefined,
-                            )
-                          }
-                        >
-                          {t.viewEvolutionProposal}
-                        </Button>
-                      )}
                     </Space>
                   </div>
 
@@ -794,27 +1007,56 @@ export function EvolutionPage({
                     <Alert type="error" title={selectedRun.error} showIcon />
                   )}
 
-                  <Space size={8} wrap>
+                  <div className="discovery-metrics-grid">
                     <Tag>
-                      {t.evolutionDiagnosisPool}:{" "}
-                      {selectedRun.diagnosis_trajectory_ids?.length ?? 0}
+                      {t.evolutionTracesFetched}:{" "}
+                      {selectedRun.traces_fetched ?? 0}
+                    </Tag>
+                    <Tag color="blue">
+                      {t.evolutionProposalsCreated}:{" "}
+                      {selectedRun.proposals_created ?? 0}
                     </Tag>
                     <Tag>
-                      {t.evolutionReservePool}:{" "}
-                      {selectedRun.reserve_trajectory_ids?.length ?? 0}
+                      {t.evolutionDuplicatesSkipped}:{" "}
+                      {selectedRun.duplicates_skipped ?? 0}
                     </Tag>
-                    <Tag>
-                      {t.evolutionCheckpoint}:{" "}
-                      {selectedRun.checkpoint_before_trajectory_id ?? "-"} →{" "}
-                      {selectedRun.checkpoint_after_trajectory_id ?? "-"}
+                    <Tag color="orange">
+                      {t.evolutionL1Rejected}: {selectedRun.l1_rejected ?? 0}
                     </Tag>
-                  </Space>
-
-                  <div className="stack">
-                    {(selectedRun.rounds ?? []).map((round) => (
-                      <RoundCard key={round.id} round={round} t={t} />
-                    ))}
                   </div>
+
+                  {(selectedRun.window_since || selectedRun.window_until) && (
+                    <div className="muted mono">
+                      {t.evolutionWindowLabel}:{" "}
+                      {formatDateTime(selectedRun.window_since)} →{" "}
+                      {formatDateTime(selectedRun.window_until)}
+                    </div>
+                  )}
+
+                  {selectedRun.summary && (
+                    <div className="evolution-round-card">
+                      <strong>{t.evolutionSummaryLabel}</strong>
+                      <div>{selectedRun.summary}</div>
+                    </div>
+                  )}
+
+                  {selectedProposalIds.length > 0 && (
+                    <Space size={8} wrap>
+                      {selectedProposalIds.map((pid) => (
+                        <Button
+                          key={pid}
+                          type="primary"
+                          size="small"
+                          autoInsertSpace={false}
+                          onClick={() => onNavigateCorrections?.(pid)}
+                        >
+                          {selectedProposalIds.length === 1
+                            ? t.viewEvolutionProposal
+                            : `${t.viewEvolutionProposal} (${pid.slice(0, 8)})`}
+                        </Button>
+                      ))}
+                    </Space>
+                  )}
                 </div>
               ) : (
                 <div className="empty-state">{t.evolutionEmptyRuns}</div>

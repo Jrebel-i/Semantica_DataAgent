@@ -1,11 +1,14 @@
 import { useEffect, useState } from "react";
-import { Alert, Button, Drawer, Input, Select, Space, Tag } from "antd";
+import { Alert, Button, Drawer, Input, Radio, Select, Space, Tag } from "antd";
 import type { components } from "../api";
 import { DiffViewer } from "../DiffViewer";
 import { readErrorDetail } from "../httpErrors";
 import type { Messages } from "../i18n";
 
 type DraftResponse = components["schemas"]["DraftCorrectionResponse"];
+type Provider = components["schemas"]["ProviderView"];
+
+type TargetMode = "auto" | "manual";
 
 export function CorrectionDraftDrawer({
   open,
@@ -21,6 +24,7 @@ export function CorrectionDraftDrawer({
   initialDescription = "",
   knowledgeGapId,
   allowDirectEdit = false,
+  providers: initialProviders,
   onClose,
   onSubmitted,
 }: {
@@ -37,34 +41,78 @@ export function CorrectionDraftDrawer({
   initialDescription?: string;
   knowledgeGapId?: string;
   allowDirectEdit?: boolean;
+  providers?: Provider[];
   onClose: () => void;
   onSubmitted?: (proposalId?: string) => void;
 }) {
+  const [targetMode, setTargetMode] = useState<TargetMode>(
+    target ? "manual" : "auto",
+  );
   const [category, setCategory] = useState(defaultCategory);
   const [targetInput, setTargetInput] = useState(target || "");
   const [description, setDescription] = useState("");
+  const [providers, setProviders] = useState<Provider[]>(
+    initialProviders ?? [],
+  );
+  const [providerId, setProviderId] = useState("");
+  const [model, setModel] = useState("");
   const [draft, setDraft] = useState<DraftResponse | null>(null);
   const [patch, setPatch] = useState("");
   const [reason, setReason] = useState("");
   const [drafting, setDrafting] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
+  const [llmUnavailableDetail, setLlmUnavailableDetail] = useState("");
+  const [manualFallbackActive, setManualFallbackActive] = useState(false);
 
   useEffect(() => {
     if (!open) return;
+    setTargetMode(target ? "manual" : "auto");
     setCategory(defaultCategory || "caliber");
     setTargetInput(target || "");
     setDescription(initialDescription);
+    setProviderId("");
+    setModel("");
     setDraft(null);
     setPatch("");
     setReason("");
     setError("");
+    setLlmUnavailableDetail("");
+    setManualFallbackActive(false);
   }, [open, project, target, turnId, defaultCategory, initialDescription]);
+
+  useEffect(() => {
+    if (initialProviders) {
+      setProviders(initialProviders);
+      return;
+    }
+    if (!open) return;
+    const controller = new AbortController();
+    fetch("/api/v1/providers", {
+      headers: { Authorization: `Bearer ${token}` },
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        if (!response.ok) return;
+        const data = (await response.json()) as unknown;
+        if (!controller.signal.aborted && Array.isArray(data)) {
+          setProviders(data as Provider[]);
+        }
+      })
+      .catch(() => {
+        // Provider list is optional for drawer fallback
+      });
+    return () => controller.abort();
+  }, [open, token, initialProviders]);
+
+  const selectedProvider = providers.find((item) => item.id === providerId);
+  const availableModels = selectedProvider?.models ?? [];
 
   async function generateDraft() {
     if (!description.trim()) return;
     setDrafting(true);
     setError("");
+    setLlmUnavailableDetail("");
     try {
       const response = await fetch("/api/v1/corrections/draft", {
         method: "POST",
@@ -76,11 +124,45 @@ export function CorrectionDraftDrawer({
           project,
           conversation_id: conversationId || undefined,
           turn_id: turnId,
-          target: targetInput.trim() || undefined,
+          target:
+            targetMode === "manual" && targetInput.trim()
+              ? targetInput.trim()
+              : undefined,
           category,
           description: description.trim(),
+          provider_id: providerId || undefined,
+          model: model || undefined,
         }),
       });
+      if (response.status === 503) {
+        let detail = "";
+        let isLlmUnavailable = true;
+        try {
+          const payload = (await response.json()) as {
+            detail?: string;
+            code?: string;
+            fallback?: string;
+          };
+          if (typeof payload.detail === "string" && payload.detail.trim()) {
+            detail = payload.detail;
+          }
+          if (
+            payload.code &&
+            payload.code !== "llm_unavailable" &&
+            payload.fallback !== "manual_edit"
+          ) {
+            isLlmUnavailable = false;
+          }
+        } catch {
+          // Use fallback message when body is not JSON
+        }
+        if (isLlmUnavailable) {
+          setDraft(null);
+          setLlmUnavailableDetail(detail || t.draftLlmUnavailableTitle);
+          return;
+        }
+        throw new Error(detail || t.draftError);
+      }
       if (!response.ok) {
         throw new Error(await readErrorDetail(response, t.draftError));
       }
@@ -88,11 +170,19 @@ export function CorrectionDraftDrawer({
       setDraft(next);
       setPatch(next.patch);
       setReason(next.reason);
+      setManualFallbackActive(false);
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : t.draftError);
     } finally {
       setDrafting(false);
     }
+  }
+
+  function enterManualEdit() {
+    setDraft(null);
+    setTargetMode("manual");
+    setManualFallbackActive(true);
+    setError("");
   }
 
   async function submitCorrection() {
@@ -143,16 +233,19 @@ export function CorrectionDraftDrawer({
   }
 
   const isStructuredOnly = Boolean(
-    sourceGenerated || targetInput.trim().startsWith("relationship:"),
+    sourceGenerated ||
+    (targetMode === "manual" && targetInput.trim().startsWith("relationship:")),
   );
+  const directEditAllowed = allowDirectEdit || manualFallbackActive;
   const showDirectFields =
-    (allowDirectEdit && !isStructuredOnly) || draft !== null;
+    (directEditAllowed && !isStructuredOnly) || draft !== null;
   const gatePassed = draft ? Boolean(draft.gate_report?.passed) : true;
   const canSubmit = draft
     ? gatePassed && Boolean(reason.trim())
     : Boolean(
-        allowDirectEdit &&
+        directEditAllowed &&
         !isStructuredOnly &&
+        targetMode === "manual" &&
         targetInput.trim() &&
         patch.trim() &&
         reason.trim(),
@@ -171,6 +264,23 @@ export function CorrectionDraftDrawer({
     >
       <div className="stack">
         {error && <Alert type="error" title={error} />}
+        {llmUnavailableDetail && (
+          <Alert
+            type="warning"
+            showIcon
+            title={t.draftLlmUnavailableTitle}
+            description={llmUnavailableDetail}
+            action={
+              <Button
+                size="small"
+                autoInsertSpace={false}
+                onClick={enterManualEdit}
+              >
+                {t.draftSwitchManualEdit}
+              </Button>
+            }
+          />
+        )}
         {sourceGenerated && (
           <Alert type="info" showIcon title={t.draftGeneratedHint} />
         )}
@@ -189,17 +299,79 @@ export function CorrectionDraftDrawer({
           />
         </div>
         <div className="field">
-          <label className="field-label" htmlFor="draft-target-input">
-            {t.draftTargetLabel}
-          </label>
-          <Input
-            id="draft-target-input"
-            aria-label={t.draftTargetLabel}
-            value={targetInput}
-            onChange={(e) => setTargetInput(e.target.value)}
-            placeholder="table:db.tbl / field:db.tbl.col / document:ref"
+          <span className="field-label">{t.draftTargetModeLabel}</span>
+          <Radio.Group
+            value={targetMode}
+            onChange={(event) =>
+              setTargetMode(event.target.value as TargetMode)
+            }
+            optionType="button"
+            options={[
+              { value: "auto", label: t.draftTargetAuto },
+              { value: "manual", label: t.draftTargetManual },
+            ]}
           />
+          {targetMode === "auto" && (
+            <p className="field-hint">{t.draftTargetAutoHint}</p>
+          )}
         </div>
+        {targetMode === "manual" && (
+          <div className="field">
+            <label className="field-label" htmlFor="draft-target-input">
+              {t.draftTargetLabel}
+            </label>
+            <Input
+              id="draft-target-input"
+              aria-label={t.draftTargetLabel}
+              value={targetInput}
+              onChange={(e) => setTargetInput(e.target.value)}
+              placeholder="table:db.tbl / field:db.tbl.col / document:category/doc.md"
+            />
+          </div>
+        )}
+        {providers.length > 0 && (
+          <Space wrap style={{ width: "100%" }}>
+            <div className="field" style={{ minWidth: 200 }}>
+              <label className="field-label" htmlFor="draft-provider-select">
+                {t.draftProviderLabel}
+              </label>
+              <Select
+                id="draft-provider-select"
+                aria-label={t.draftProviderLabel}
+                value={providerId}
+                onChange={(next) => {
+                  setProviderId(next || "");
+                  setModel("");
+                }}
+                options={[
+                  { value: "", label: t.draftModelDefault },
+                  ...providers.map((item) => ({
+                    value: item.id,
+                    label: item.name,
+                  })),
+                ]}
+              />
+            </div>
+            <div className="field" style={{ minWidth: 200 }}>
+              <label className="field-label" htmlFor="draft-model-select">
+                {t.draftModelLabel}
+              </label>
+              <Select
+                id="draft-model-select"
+                aria-label={t.draftModelLabel}
+                value={model}
+                onChange={(next) => setModel(next || "")}
+                options={[
+                  { value: "", label: t.draftModelDefault },
+                  ...availableModels.map((item) => ({
+                    value: item,
+                    label: item,
+                  })),
+                ]}
+              />
+            </div>
+          </Space>
+        )}
         <div className="field">
           <label className="field-label" htmlFor="draft-description-input">
             {t.draftDescriptionLabel}
@@ -221,6 +393,15 @@ export function CorrectionDraftDrawer({
           >
             {t.draftGenerateBtn}
           </Button>
+          {!manualFallbackActive && !isStructuredOnly && (
+            <Button
+              type="link"
+              autoInsertSpace={false}
+              onClick={enterManualEdit}
+            >
+              {t.draftSwitchManualEdit}
+            </Button>
+          )}
         </Space>
 
         {draft && (
@@ -228,6 +409,10 @@ export function CorrectionDraftDrawer({
             <Space wrap>
               <Tag>{draft.target}</Tag>
               <Tag color="blue">{draft.target_kind}</Tag>
+              {draft.is_new_file && (
+                <Tag color="purple">{t.draftNewFileBadge}</Tag>
+              )}
+              {draft.used_llm && <Tag color="green">{t.draftLlmUsedBadge}</Tag>}
               {(draft.source_generated || sourceGenerated) && (
                 <Tag color="cyan">{t.draftGeneratedRouted}</Tag>
               )}
@@ -235,6 +420,16 @@ export function CorrectionDraftDrawer({
                 {t.draftPreviewPath}: {draft.resolved_path}
               </span>
             </Space>
+            {draft.is_duplicate && (
+              <Alert
+                type="warning"
+                showIcon
+                title={t.draftDuplicateWarning}
+                description={
+                  draft.duplicate_reason || draft.duplicate_of || undefined
+                }
+              />
+            )}
             <Alert
               type={gatePassed ? "success" : "error"}
               showIcon
@@ -263,6 +458,9 @@ export function CorrectionDraftDrawer({
 
         {showDirectFields && (
           <div className="stack">
+            {manualFallbackActive && !draft && (
+              <Alert type="info" showIcon title={t.draftManualFallbackHint} />
+            )}
             {(draft?.target_kind === "document" || !draft) && (
               <div className="field">
                 <label className="field-label" htmlFor="correction-patch">

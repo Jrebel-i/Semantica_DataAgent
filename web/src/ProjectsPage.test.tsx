@@ -1371,11 +1371,10 @@ test("exports Ossie YAML and JSON from active warehouse project detail and surfa
   expect(await screen.findByText("当前知识代暂无可导出的物理表")).toBeTruthy();
 });
 
-test("admin can view and toggle correction and evolution review policy switches", async () => {
+test("admin can view and toggle correction review policy switch without obsolete evolution_require_review", async () => {
   const requests: { url: string; method: string; body: unknown }[] = [];
   let policy = {
     correction_require_review: true,
-    evolution_require_review: false,
   };
   let failPut = false;
   vi.stubGlobal(
@@ -1410,26 +1409,23 @@ test("admin can view and toggle correction and evolution review policy switches"
   const corrSwitch = await screen.findByRole("switch", {
     name: "人工纠错需要审核",
   });
-  const evoSwitch = screen.getByRole("switch", {
-    name: "知识演化需要审核",
-  });
+  expect(screen.queryByRole("switch", { name: "知识演化需要审核" })).toBeNull();
   expect(corrSwitch.getAttribute("aria-checked")).toBe("true");
-  expect(evoSwitch.getAttribute("aria-checked")).toBe("false");
 
-  fireEvent.click(evoSwitch);
+  fireEvent.click(corrSwitch);
   await waitFor(() =>
     expect(requests).toContainEqual({
       url: "/api/v1/projects/default/evolution-policy",
       method: "PUT",
-      body: { evolution_require_review: true },
+      body: { correction_require_review: false },
     }),
   );
   await waitFor(() =>
-    expect(evoSwitch.getAttribute("aria-checked")).toBe("true"),
+    expect(corrSwitch.getAttribute("aria-checked")).toBe("false"),
   );
 
   failPut = true;
   fireEvent.click(corrSwitch);
   expect(await screen.findByText("项目已归档")).toBeTruthy();
-  expect(corrSwitch.getAttribute("aria-checked")).toBe("true");
+  expect(corrSwitch.getAttribute("aria-checked")).toBe("false");
 });

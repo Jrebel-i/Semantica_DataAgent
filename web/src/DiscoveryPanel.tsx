@@ -137,6 +137,11 @@ function candidateKindLabel(
   if (kind === "relationship") return t.discoveryKindRelationship;
   if (kind === "metric") return t.discoveryKindMetric;
   if (kind === "filter_rule") return t.discoveryKindFilterRule;
+  if (kind === "table") return t.discoveryKindTable;
+  if (kind === "field") return t.discoveryKindField;
+  if (kind === "override") return t.discoveryKindOverride;
+  if (kind === "document") return t.discoveryKindDocument;
+  if (kind === "synthesized") return t.discoveryKindSynthesized;
   return t.discoveryKindEvalDraft;
 }
 
@@ -317,10 +322,13 @@ export function DiscoveryPanel({
     useState<DiscoveryRunDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
 
-  // Trigger panel state: seed_eval_drafts MUST default to false
+  // Trigger panel state: enable_fk_probing & generate_eval_drafts MUST default to false
   const [mineQueryHistory, setMineQueryHistory] = useState(true);
-  const [probeRelationships, setProbeRelationships] = useState(true);
-  const [seedEvalDrafts, setSeedEvalDrafts] = useState(false);
+  const [enableFkProbing, setEnableFkProbing] = useState(false);
+  const [generateEvalDrafts, setGenerateEvalDrafts] = useState(false);
+  const [topTemplatesInput, setTopTemplatesInput] = useState("20");
+  const [triggerProviderId, setTriggerProviderId] = useState<string>("");
+  const [triggerModel, setTriggerModel] = useState<string>("");
   const [overrideLookbackDays, setOverrideLookbackDays] = useState("");
   const [overrideMaxQueries, setOverrideMaxQueries] = useState("");
   const [overrideMaxFkCandidates, setOverrideMaxFkCandidates] = useState("");
@@ -371,7 +379,7 @@ export function DiscoveryPanel({
           headers,
           signal,
         }),
-        fetch(`/api/v1/discovery/runs?project=${encoded}`, {
+        fetch(`/api/v1/projects/${encoded}/discovery/runs`, {
           headers,
           signal,
         }),
@@ -459,7 +467,7 @@ export function DiscoveryPanel({
       const detailGen = detailGenRef.current;
       const reqGen = requestGenRef.current;
       const response = await fetch(
-        `/api/v1/discovery/runs/${encodeURIComponent(runId)}?project=${encodeURIComponent(targetProject)}`,
+        `/api/v1/projects/${encodeURIComponent(targetProject)}/discovery/runs/${encodeURIComponent(runId)}`,
         {
           headers: { Authorization: `Bearer ${token}` },
           signal,
@@ -633,9 +641,15 @@ export function DiscoveryPanel({
     setError("");
     const payload: DiscoveryRunTrigger = {
       mine_query_history: mineQueryHistory,
-      probe_relationships: probeRelationships,
-      seed_eval_drafts: seedEvalDrafts,
+      enable_fk_probing: enableFkProbing,
+      generate_eval_drafts: generateEvalDrafts,
+      top_templates: Math.max(
+        1,
+        Math.min(100, parseOptionalInt(topTemplatesInput) ?? 20),
+      ),
     };
+    if (triggerProviderId) payload.provider_id = triggerProviderId;
+    if (triggerModel) payload.model = triggerModel;
     const lb = parseOptionalInt(overrideLookbackDays);
     if (lb !== undefined) payload.lookback_days = lb;
     const mq = parseOptionalInt(overrideMaxQueries);
@@ -651,7 +665,7 @@ export function DiscoveryPanel({
 
     try {
       const response = await fetch(
-        `/api/v1/discovery/runs?project=${encodeURIComponent(targetProject)}`,
+        `/api/v1/projects/${encodeURIComponent(targetProject)}/discovery/runs`,
         {
           method: "POST",
           headers: {
@@ -688,6 +702,11 @@ export function DiscoveryPanel({
       ? [config.model, ...availableModels]
       : availableModels;
 
+  const selectedTriggerProvider = providers.find(
+    (p) => p.id === triggerProviderId,
+  );
+  const triggerAvailableModels = selectedTriggerProvider?.models ?? [];
+
   const selectedRunSummary = useMemo(
     () => runs.find((r) => r.id === selectedRunId) ?? runs[0] ?? null,
     [runs, selectedRunId],
@@ -702,7 +721,15 @@ export function DiscoveryPanel({
       : [];
 
   const noScopeSelected =
-    !mineQueryHistory && !probeRelationships && !seedEvalDrafts;
+    !mineQueryHistory && !enableFkProbing && !generateEvalDrafts;
+  const fkProbingActiveForRun = Boolean(
+    activeRun &&
+    (activeRun.enable_fk_probing ||
+      activeRun.probe_relationships ||
+      (activeRun.fk_candidates_probed ?? activeRun.candidates_probed ?? 0) >
+        0 ||
+      (activeRun.candidates_recalled ?? 0) > 0),
+  );
   const triggerDisabled =
     isArchivedProject ||
     dtbConfigured !== true ||
@@ -1140,8 +1167,8 @@ export function DiscoveryPanel({
             <input
               type="checkbox"
               disabled={isArchivedProject}
-              checked={probeRelationships}
-              onChange={(e) => setProbeRelationships(e.target.checked)}
+              checked={enableFkProbing}
+              onChange={(e) => setEnableFkProbing(e.target.checked)}
             />
             <span>{t.discoveryScopeProbeRelationships}</span>
           </label>
@@ -1149,14 +1176,69 @@ export function DiscoveryPanel({
             <input
               type="checkbox"
               disabled={isArchivedProject}
-              checked={seedEvalDrafts}
-              onChange={(e) => setSeedEvalDrafts(e.target.checked)}
+              checked={generateEvalDrafts}
+              onChange={(e) => setGenerateEvalDrafts(e.target.checked)}
             />
             <span>{t.discoveryScopeSeedEvalDrafts}</span>
           </label>
         </div>
 
         <div className="discovery-override-block">
+          <div className="evolution-config-grid" style={{ marginBottom: 10 }}>
+            <div className="evolution-field">
+              <label htmlFor="disc-top-templates">
+                {t.discoveryTopTemplates}
+              </label>
+              <input
+                id="disc-top-templates"
+                type="number"
+                min={1}
+                max={100}
+                disabled={isArchivedProject}
+                value={topTemplatesInput}
+                onChange={(e) => setTopTemplatesInput(e.target.value)}
+              />
+            </div>
+            <div className="evolution-field">
+              <label htmlFor="disc-trigger-provider">
+                {t.discoveryTriggerProviderLabel}
+              </label>
+              <select
+                id="disc-trigger-provider"
+                disabled={isArchivedProject}
+                value={triggerProviderId}
+                onChange={(e) => {
+                  setTriggerProviderId(e.target.value);
+                  setTriggerModel("");
+                }}
+              >
+                <option value="">{t.evolutionModelDefault}</option>
+                {providers.map((provider) => (
+                  <option key={provider.id} value={provider.id}>
+                    {provider.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="evolution-field">
+              <label htmlFor="disc-trigger-model">
+                {t.discoveryTriggerModelLabel}
+              </label>
+              <select
+                id="disc-trigger-model"
+                disabled={isArchivedProject}
+                value={triggerModel}
+                onChange={(e) => setTriggerModel(e.target.value)}
+              >
+                <option value="">{t.evolutionModelDefault}</option>
+                {triggerAvailableModels.map((item) => (
+                  <option key={item} value={item}>
+                    {item}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
           <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
             {t.discoveryBudgetOverridesTitle}
           </div>
@@ -1327,10 +1409,12 @@ export function DiscoveryPanel({
                   {activeRun.mine_query_history && (
                     <Tag>{t.discoveryKindMetric}</Tag>
                   )}
-                  {activeRun.probe_relationships && (
+                  {(activeRun.enable_fk_probing ||
+                    activeRun.probe_relationships) && (
                     <Tag>{t.discoveryKindRelationship}</Tag>
                   )}
-                  {activeRun.seed_eval_drafts && (
+                  {(activeRun.generate_eval_drafts ||
+                    activeRun.seed_eval_drafts) && (
                     <Tag>{t.discoveryKindEvalDraft}</Tag>
                   )}
                 </Space>
@@ -1338,6 +1422,17 @@ export function DiscoveryPanel({
 
               {activeRun.error && (
                 <Alert type="error" title={activeRun.error} showIcon />
+              )}
+              {activeRun.llm_error && (
+                <Alert
+                  type="warning"
+                  showIcon
+                  title={t.discoveryLlmErrorTitle}
+                  description={activeRun.llm_error}
+                />
+              )}
+              {activeRun.summary && (
+                <div className="evolution-round-card">{activeRun.summary}</div>
               )}
 
               <div className="discovery-metrics-grid">
@@ -1350,30 +1445,52 @@ export function DiscoveryPanel({
                   {activeRun.templates_clustered ?? 0}
                 </Tag>
                 <Tag>
-                  {t.discoveryMetricRecalled}:{" "}
-                  {activeRun.candidates_recalled ?? 0}
-                </Tag>
-                <Tag>
-                  {t.discoveryMetricProbed}: {activeRun.candidates_probed ?? 0}
-                </Tag>
-                <Tag color="green">
-                  {t.discoveryMetricPassed}: {activeRun.candidates_passed ?? 0}
-                </Tag>
-                <Tag color="orange">
-                  {t.discoveryMetricSkipped}:{" "}
-                  {activeRun.candidates_skipped ?? 0}
-                </Tag>
-                <Tag color="red">
-                  {t.discoveryMetricFailed}: {activeRun.candidates_failed ?? 0}
+                  {t.discoveryMetricTemplatesSynthesized}:{" "}
+                  {activeRun.templates_synthesized ?? 0}
                 </Tag>
                 <Tag color="blue">
                   {t.discoveryMetricProposals}:{" "}
                   {activeRun.proposals_created ?? 0}
                 </Tag>
                 <Tag>
+                  {t.discoveryMetricDuplicatesSkipped}:{" "}
+                  {activeRun.duplicates_skipped ?? 0}
+                </Tag>
+                <Tag color="orange">
+                  {t.discoveryMetricL1Rejected}: {activeRun.l1_rejected ?? 0}
+                </Tag>
+                <Tag>
                   {t.discoveryMetricEvalDrafts}:{" "}
                   {activeRun.eval_drafts_created ?? 0}
                 </Tag>
+                {fkProbingActiveForRun && (
+                  <>
+                    <Tag>
+                      {t.discoveryMetricRecalled}:{" "}
+                      {activeRun.candidates_recalled ?? 0}
+                    </Tag>
+                    <Tag>
+                      {t.discoveryMetricProbed}:{" "}
+                      {activeRun.fk_candidates_probed ??
+                        activeRun.candidates_probed ??
+                        0}
+                    </Tag>
+                    <Tag color="green">
+                      {t.discoveryMetricPassed}:{" "}
+                      {activeRun.fk_candidates_verified ??
+                        activeRun.candidates_passed ??
+                        0}
+                    </Tag>
+                    <Tag color="orange">
+                      {t.discoveryMetricSkipped}:{" "}
+                      {activeRun.candidates_skipped ?? 0}
+                    </Tag>
+                    <Tag color="red">
+                      {t.discoveryMetricFailed}:{" "}
+                      {activeRun.candidates_failed ?? 0}
+                    </Tag>
+                  </>
+                )}
               </div>
 
               <div className="stack">

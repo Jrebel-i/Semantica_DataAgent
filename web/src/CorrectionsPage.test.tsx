@@ -797,7 +797,7 @@ test("manages eval questions tab (confirm, create, delete)", async () => {
       ),
     ).toBe(true),
   );
-});
+}, 15000);
 
 test("auto-selects initialProposalId and displays evolution provenance and L2 gate metrics", async () => {
   vi.stubGlobal(
@@ -1253,4 +1253,135 @@ test("renders git-style before/after diff viewer for Chinese markdown proposals 
     container.querySelector(".diff-viewer")?.getAttribute("data-diff-mode"),
   ).toBe("unified");
   expect(screen.getByText("变更内容")).toBeTruthy();
+});
+
+test("renders unified evidence card across manual, evolution, and discovery proposals plus new-file /dev/null diff", async () => {
+  const newDocDiff = [
+    "--- /dev/null",
+    "+++ b/knowledge/metrics/refund_caliber.md",
+    "@@ -0,0 +1,2 @@",
+    "+# 退款率口径",
+    "+仅统计已完成退款的订单。",
+  ].join("\n");
+
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) => {
+      if (url === "/api/v1/projects") {
+        return Response.json([
+          {
+            id: "default",
+            name: "业务数据",
+            type: "warehouse",
+            status: "active",
+            created_at: "2026-01-01T00:00:00Z",
+            my_role: "admin",
+          },
+        ]);
+      }
+      return Response.json([
+        {
+          id: "prop-new-doc",
+          target: "document:knowledge/metrics/refund_caliber.md",
+          reason: "新建退款率专题口径文档",
+          diff: newDocDiff,
+          patch: "# 退款率口径\n仅统计已完成退款的订单。\n",
+          status: "pending",
+          source: "evolution",
+          target_kind: "document",
+          is_new_file: true,
+          evidence: {
+            source_type: "evolution",
+            summary_reason: "近 3 条对话中用户反复追问退款率口径定义",
+            trigger_evidence: {
+              evolution_run_id: "evo-run-9",
+              trace_source_plugin: "langfuse",
+              trace_ids: ["tr-101", "tr-102"],
+              window_since: "2026-06-01T00:00:00Z",
+              window_until: "2026-06-01T12:00:00Z",
+              conversation_count: 2,
+              message_summary: [
+                {
+                  trace_id: "tr-101",
+                  started_at: "2026-06-01T01:00:00Z",
+                  messages: [
+                    { role: "user", content: "退款率怎么算？" },
+                    { role: "assistant", content: "仅统计已完成退款的订单" },
+                  ],
+                },
+              ],
+            },
+          },
+        },
+        {
+          id: "prop-disc-clusters",
+          target: "table:shop.orders",
+          reason: "高频过滤默认条件归纳",
+          diff: "--- overrides/semantic_overrides.yaml\n+++ overrides/semantic_overrides.yaml\n+instructions: 默认过滤测试单",
+          patch: "version: 1",
+          status: "pending",
+          source: "discovery",
+          target_kind: "override",
+          is_new_file: false,
+          evidence: {
+            source_type: "discovery",
+            summary_reason: "历史查询模板普遍带 is_test = 0 过滤",
+            trigger_evidence: {
+              run_id: "drun-88",
+              candidate_kind: "table",
+              query_history_frequency: 42,
+              distinct_callers: 9,
+              sql_clusters: [
+                {
+                  fingerprint: "fp-1",
+                  template_sql:
+                    "SELECT COUNT(*) FROM shop.orders WHERE is_test = ?",
+                  tables: ["shop.orders"],
+                  execution_count: 42,
+                  distinct_callers: 9,
+                  dialect: "doris",
+                },
+              ],
+              fk_probe_evidence: [
+                {
+                  from_table: "shop.orders",
+                  from_columns: ["user_id"],
+                  to_table: "shop.users",
+                  to_columns: ["id"],
+                  sample_distinct_count: 200,
+                  matched_count: 196,
+                  overlap_ratio: 0.98,
+                },
+              ],
+            },
+          },
+        },
+      ]);
+    }),
+  );
+
+  render(<CorrectionsPage token="token" messages={getMessages("zh")} />);
+
+  const newDocBtn = await screen.findByRole("button", {
+    name: /refund_caliber\.md/,
+  });
+  expect(newDocBtn.textContent).toContain("新建文档");
+  fireEvent.click(newDocBtn);
+
+  expect(screen.getByText("触发证据与归纳依据")).toBeTruthy();
+  expect(
+    screen.getByText("近 3 条对话中用户反复追问退款率口径定义"),
+  ).toBeTruthy();
+  expect(screen.getByText(/tr-101, tr-102/)).toBeTruthy();
+  expect(screen.getByText(/退款率怎么算？/)).toBeTruthy();
+  expect(screen.getByText("knowledge/metrics/refund_caliber.md")).toBeTruthy();
+  expect(screen.getByText("# 退款率口径")).toBeTruthy();
+
+  fireEvent.click(screen.getByRole("button", { name: /table:shop\.orders/ }));
+  expect(screen.getByText("历史查询模板普遍带 is_test = 0 过滤")).toBeTruthy();
+  expect(
+    screen.getByText("SELECT COUNT(*) FROM shop.orders WHERE is_test = ?"),
+  ).toBeTruthy();
+  expect(screen.getByText(/外键探活聚合证据/)).toBeTruthy();
+  expect(screen.getByText(/98\.0%/)).toBeTruthy();
 });

@@ -811,6 +811,11 @@
               "relationship",
               "metric",
               "filter_rule",
+              "table",
+              "field",
+              "override",
+              "document",
+              "synthesized",
               "eval_draft"
             ],
             "title": "Candidate Kind",
@@ -1421,6 +1426,16 @@
             ],
             "title": "Created By"
           },
+          "duplicates_skipped": {
+            "default": 0,
+            "title": "Duplicates Skipped",
+            "type": "integer"
+          },
+          "enable_fk_probing": {
+            "default": false,
+            "title": "Enable Fk Probing",
+            "type": "boolean"
+          },
           "error": {
             "anyOf": [
               {
@@ -1449,9 +1464,45 @@
             ],
             "title": "Finished At"
           },
+          "fk_candidates_probed": {
+            "default": 0,
+            "title": "Fk Candidates Probed",
+            "type": "integer"
+          },
+          "fk_candidates_verified": {
+            "default": 0,
+            "title": "Fk Candidates Verified",
+            "type": "integer"
+          },
+          "generate_eval_drafts": {
+            "default": false,
+            "title": "Generate Eval Drafts",
+            "type": "boolean"
+          },
           "id": {
             "title": "Id",
             "type": "string"
+          },
+          "l1_rejected": {
+            "default": 0,
+            "title": "L1 Rejected",
+            "type": "integer"
+          },
+          "llm_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Llm Error"
+          },
+          "llm_used": {
+            "default": false,
+            "title": "Llm Used",
+            "type": "boolean"
           },
           "mine_query_history": {
             "title": "Mine Query History",
@@ -1464,6 +1515,13 @@
           "project_id": {
             "title": "Project Id",
             "type": "string"
+          },
+          "proposal_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Proposal Ids",
+            "type": "array"
           },
           "proposals_created": {
             "default": 0,
@@ -1495,9 +1553,24 @@
             "title": "Status",
             "type": "string"
           },
+          "summary": {
+            "default": "",
+            "title": "Summary",
+            "type": "string"
+          },
           "templates_clustered": {
             "default": 0,
             "title": "Templates Clustered",
+            "type": "integer"
+          },
+          "templates_synthesized": {
+            "default": 0,
+            "title": "Templates Synthesized",
+            "type": "integer"
+          },
+          "top_templates": {
+            "default": 20,
+            "title": "Top Templates",
             "type": "integer"
           }
         },
@@ -1517,6 +1590,16 @@
       "DiscoveryRunTrigger": {
         "additionalProperties": false,
         "properties": {
+          "enable_fk_probing": {
+            "default": false,
+            "title": "Enable Fk Probing",
+            "type": "boolean"
+          },
+          "generate_eval_drafts": {
+            "default": false,
+            "title": "Generate Eval Drafts",
+            "type": "boolean"
+          },
           "lookback_days": {
             "anyOf": [
               {
@@ -1587,6 +1670,17 @@
             "title": "Mine Query History",
             "type": "boolean"
           },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
           "probe_concurrency": {
             "anyOf": [
               {
@@ -1601,9 +1695,15 @@
             "title": "Probe Concurrency"
           },
           "probe_relationships": {
-            "default": true,
-            "title": "Probe Relationships",
-            "type": "boolean"
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Probe Relationships"
           },
           "probe_timeout_seconds": {
             "anyOf": [
@@ -1617,6 +1717,17 @@
               }
             ],
             "title": "Probe Timeout Seconds"
+          },
+          "provider_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider Id"
           },
           "sample_limit": {
             "anyOf": [
@@ -1632,9 +1743,28 @@
             "title": "Sample Limit"
           },
           "seed_eval_drafts": {
-            "default": false,
-            "title": "Seed Eval Drafts",
-            "type": "boolean"
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seed Eval Drafts"
+          },
+          "top_templates": {
+            "anyOf": [
+              {
+                "maximum": 100.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Top Templates"
           }
         },
         "title": "DiscoveryRunTrigger",
@@ -1689,6 +1819,16 @@
             ],
             "title": "Created By"
           },
+          "duplicates_skipped": {
+            "default": 0,
+            "title": "Duplicates Skipped",
+            "type": "integer"
+          },
+          "enable_fk_probing": {
+            "default": false,
+            "title": "Enable Fk Probing",
+            "type": "boolean"
+          },
           "error": {
             "anyOf": [
               {
@@ -1717,9 +1857,45 @@
             ],
             "title": "Finished At"
           },
+          "fk_candidates_probed": {
+            "default": 0,
+            "title": "Fk Candidates Probed",
+            "type": "integer"
+          },
+          "fk_candidates_verified": {
+            "default": 0,
+            "title": "Fk Candidates Verified",
+            "type": "integer"
+          },
+          "generate_eval_drafts": {
+            "default": false,
+            "title": "Generate Eval Drafts",
+            "type": "boolean"
+          },
           "id": {
             "title": "Id",
             "type": "string"
+          },
+          "l1_rejected": {
+            "default": 0,
+            "title": "L1 Rejected",
+            "type": "integer"
+          },
+          "llm_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Llm Error"
+          },
+          "llm_used": {
+            "default": false,
+            "title": "Llm Used",
+            "type": "boolean"
           },
           "mine_query_history": {
             "title": "Mine Query History",
@@ -1732,6 +1908,13 @@
           "project_id": {
             "title": "Project Id",
             "type": "string"
+          },
+          "proposal_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Proposal Ids",
+            "type": "array"
           },
           "proposals_created": {
             "default": 0,
@@ -1763,9 +1946,24 @@
             "title": "Status",
             "type": "string"
           },
+          "summary": {
+            "default": "",
+            "title": "Summary",
+            "type": "string"
+          },
           "templates_clustered": {
             "default": 0,
             "title": "Templates Clustered",
+            "type": "integer"
+          },
+          "templates_synthesized": {
+            "default": 0,
+            "title": "Templates Synthesized",
+            "type": "integer"
+          },
+          "top_templates": {
+            "default": 20,
+            "title": "Top Templates",
             "type": "integer"
           }
         },
@@ -1884,7 +2082,6 @@
             "anyOf": [
               {
                 "maxLength": 120,
-                "minLength": 1,
                 "type": "string"
               },
               {
@@ -1897,7 +2094,6 @@
             "anyOf": [
               {
                 "maxLength": 120,
-                "minLength": 1,
                 "type": "string"
               },
               {
@@ -1928,7 +2124,6 @@
             "anyOf": [
               {
                 "maxLength": 120,
-                "minLength": 1,
                 "type": "string"
               },
               {
@@ -1952,7 +2147,6 @@
             "anyOf": [
               {
                 "maxLength": 2000,
-                "minLength": 1,
                 "type": "string"
               },
               {
@@ -1996,10 +2190,42 @@
             "title": "Diff",
             "type": "string"
           },
+          "duplicate_of": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duplicate Of"
+          },
+          "duplicate_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duplicate Reason"
+          },
           "gate_report": {
             "additionalProperties": true,
             "title": "Gate Report",
             "type": "object"
+          },
+          "is_duplicate": {
+            "default": false,
+            "title": "Is Duplicate",
+            "type": "boolean"
+          },
+          "is_new_file": {
+            "default": false,
+            "title": "Is New File",
+            "type": "boolean"
           },
           "patch": {
             "title": "Patch",
@@ -2601,7 +2827,7 @@
       "EvolutionConfigUpdate": {
         "additionalProperties": false,
         "properties": {
-          "auto_evolve_enabled": {
+          "enabled": {
             "anyOf": [
               {
                 "type": "boolean"
@@ -2610,7 +2836,7 @@
                 "type": "null"
               }
             ],
-            "title": "Auto Evolve Enabled"
+            "title": "Enabled"
           },
           "evolution_model": {
             "anyOf": [
@@ -2634,7 +2860,20 @@
             ],
             "title": "Evolution Provider Id"
           },
-          "judge_model": {
+          "max_traces_per_run": {
+            "anyOf": [
+              {
+                "maximum": 2000.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Traces Per Run"
+          },
+          "schedule_cron": {
             "anyOf": [
               {
                 "type": "string"
@@ -2643,9 +2882,9 @@
                 "type": "null"
               }
             ],
-            "title": "Judge Model"
+            "title": "Schedule Cron"
           },
-          "judge_provider_id": {
+          "timezone": {
             "anyOf": [
               {
                 "type": "string"
@@ -2654,72 +2893,51 @@
                 "type": "null"
               }
             ],
-            "title": "Judge Provider Id"
+            "title": "Timezone"
           },
-          "max_eval_cases": {
+          "trace_source_parameters": {
             "anyOf": [
               {
-                "maximum": 200.0,
-                "minimum": 1.0,
-                "type": "integer"
+                "additionalProperties": true,
+                "type": "object"
               },
               {
                 "type": "null"
               }
             ],
-            "title": "Max Eval Cases"
+            "title": "Trace Source Parameters"
           },
-          "max_idle_days": {
+          "trace_source_plugin": {
             "anyOf": [
               {
-                "maximum": 365.0,
-                "minimum": 1.0,
-                "type": "number"
+                "type": "string"
               },
               {
                 "type": "null"
               }
             ],
-            "title": "Max Idle Days"
+            "title": "Trace Source Plugin"
           },
-          "max_rounds": {
+          "trace_source_secrets": {
             "anyOf": [
               {
-                "maximum": 20.0,
-                "minimum": 1.0,
-                "type": "integer"
+                "additionalProperties": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "type": "object"
               },
               {
                 "type": "null"
               }
             ],
-            "title": "Max Rounds"
-          },
-          "min_interval_hours": {
-            "anyOf": [
-              {
-                "maximum": 8760.0,
-                "minimum": 0.0,
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Min Interval Hours"
-          },
-          "min_trajectories": {
-            "anyOf": [
-              {
-                "maximum": 10000.0,
-                "minimum": 1.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Min Trajectories"
+            "title": "Trace Source Secrets"
           }
         },
         "title": "EvolutionConfigUpdate",
@@ -2727,11 +2945,45 @@
       },
       "EvolutionConfigView": {
         "properties": {
-          "auto_evolve_enabled": {
-            "title": "Auto Evolve Enabled",
+          "configured_secrets": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Configured Secrets",
+            "type": "array"
+          },
+          "enabled": {
+            "title": "Enabled",
             "type": "boolean"
           },
-          "checkpoint_at": {
+          "evolution_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evolution Model"
+          },
+          "evolution_provider_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evolution Provider Id"
+          },
+          "global_langfuse_configured": {
+            "default": false,
+            "title": "Global Langfuse Configured",
+            "type": "boolean"
+          },
+          "last_trace_timestamp": {
             "anyOf": [
               {
                 "format": "date-time",
@@ -2741,20 +2993,42 @@
                 "type": "null"
               }
             ],
-            "title": "Checkpoint At"
+            "title": "Last Trace Timestamp"
           },
-          "checkpoint_trajectory_id": {
+          "last_triggered_at": {
             "anyOf": [
               {
-                "type": "integer"
+                "format": "date-time",
+                "type": "string"
               },
               {
                 "type": "null"
               }
             ],
-            "title": "Checkpoint Trajectory Id"
+            "title": "Last Triggered At"
           },
-          "evolution_model": {
+          "max_traces_per_run": {
+            "default": 200,
+            "title": "Max Traces Per Run",
+            "type": "integer"
+          },
+          "next_run_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Run At"
+          },
+          "project_id": {
+            "title": "Project Id",
+            "type": "string"
+          },
+          "schedule_cron": {
             "anyOf": [
               {
                 "type": "string"
@@ -2763,9 +3037,24 @@
                 "type": "null"
               }
             ],
-            "title": "Evolution Model"
+            "title": "Schedule Cron"
           },
-          "evolution_provider_id": {
+          "secret_configured": {
+            "default": false,
+            "title": "Secret Configured",
+            "type": "boolean"
+          },
+          "timezone": {
+            "default": "Asia/Shanghai",
+            "title": "Timezone",
+            "type": "string"
+          },
+          "trace_source_parameters": {
+            "additionalProperties": true,
+            "title": "Trace Source Parameters",
+            "type": "object"
+          },
+          "trace_source_plugin": {
             "anyOf": [
               {
                 "type": "string"
@@ -2774,63 +3063,19 @@
                 "type": "null"
               }
             ],
-            "title": "Evolution Provider Id"
+            "title": "Trace Source Plugin"
           },
-          "judge_model": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Judge Model"
-          },
-          "judge_provider_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Judge Provider Id"
-          },
-          "max_eval_cases": {
-            "title": "Max Eval Cases",
-            "type": "integer"
-          },
-          "max_idle_days": {
-            "title": "Max Idle Days",
-            "type": "number"
-          },
-          "max_rounds": {
-            "title": "Max Rounds",
-            "type": "integer"
-          },
-          "min_interval_hours": {
-            "title": "Min Interval Hours",
-            "type": "number"
-          },
-          "min_trajectories": {
-            "title": "Min Trajectories",
-            "type": "integer"
-          },
-          "pending_trajectories": {
-            "default": 0,
-            "title": "Pending Trajectories",
-            "type": "integer"
+          "trace_source_secrets": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Trace Source Secrets",
+            "type": "object"
           }
         },
         "required": [
-          "auto_evolve_enabled",
-          "min_trajectories",
-          "min_interval_hours",
-          "max_idle_days",
-          "max_rounds",
-          "max_eval_cases"
+          "project_id",
+          "enabled"
         ],
         "title": "EvolutionConfigView",
         "type": "object"
@@ -2848,17 +3093,6 @@
               }
             ],
             "title": "Correction Require Review"
-          },
-          "evolution_require_review": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Evolution Require Review"
           }
         },
         "title": "EvolutionPolicyUpdate",
@@ -2869,44 +3103,53 @@
           "correction_require_review": {
             "title": "Correction Require Review",
             "type": "boolean"
-          },
-          "evolution_require_review": {
-            "title": "Evolution Require Review",
-            "type": "boolean"
           }
         },
         "required": [
-          "correction_require_review",
-          "evolution_require_review"
+          "correction_require_review"
         ],
         "title": "EvolutionPolicyView",
         "type": "object"
       },
-      "EvolutionRoundView": {
+      "EvolutionRunTrigger": {
+        "additionalProperties": false,
         "properties": {
-          "candidate_change": {
-            "additionalProperties": true,
-            "title": "Candidate Change",
-            "type": "object"
-          },
-          "decision": {
-            "enum": [
-              "running",
-              "accept",
-              "reject",
-              "incomplete"
+          "max_traces": {
+            "anyOf": [
+              {
+                "maximum": 2000.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
             ],
-            "title": "Decision",
-            "type": "string"
+            "title": "Max Traces"
           },
-          "evidence_trajectory_ids": {
-            "items": {
-              "type": "integer"
-            },
-            "title": "Evidence Trajectory Ids",
-            "type": "array"
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
           },
-          "finished_at": {
+          "provider_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider Id"
+          },
+          "since": {
             "anyOf": [
               {
                 "format": "date-time",
@@ -2916,135 +3159,19 @@
                 "type": "null"
               }
             ],
-            "title": "Finished At"
+            "title": "Since"
           },
-          "hypothesis": {
-            "title": "Hypothesis",
-            "type": "string"
-          },
-          "id": {
-            "title": "Id",
-            "type": "string"
-          },
-          "l1_gate_report": {
+          "until": {
             "anyOf": [
               {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "L1 Gate Report"
-          },
-          "l2_gate_report": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "L2 Gate Report"
-          },
-          "project_id": {
-            "title": "Project Id",
-            "type": "string"
-          },
-          "proposal_id": {
-            "anyOf": [
-              {
+                "format": "date-time",
                 "type": "string"
               },
               {
                 "type": "null"
               }
             ],
-            "title": "Proposal Id"
-          },
-          "reject_reason": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Reject Reason"
-          },
-          "round_number": {
-            "title": "Round Number",
-            "type": "integer"
-          },
-          "run_id": {
-            "title": "Run Id",
-            "type": "string"
-          },
-          "signal_kind": {
-            "title": "Signal Kind",
-            "type": "string"
-          },
-          "started_at": {
-            "format": "date-time",
-            "title": "Started At",
-            "type": "string"
-          },
-          "target": {
-            "default": "",
-            "title": "Target",
-            "type": "string"
-          },
-          "target_kind": {
-            "default": "override",
-            "title": "Target Kind",
-            "type": "string"
-          }
-        },
-        "required": [
-          "id",
-          "run_id",
-          "project_id",
-          "round_number",
-          "signal_kind",
-          "hypothesis",
-          "decision",
-          "started_at"
-        ],
-        "title": "EvolutionRoundView",
-        "type": "object"
-      },
-      "EvolutionRunTrigger": {
-        "additionalProperties": false,
-        "properties": {
-          "max_eval_cases": {
-            "anyOf": [
-              {
-                "maximum": 200.0,
-                "minimum": 1.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Max Eval Cases"
-          },
-          "max_rounds": {
-            "anyOf": [
-              {
-                "maximum": 20.0,
-                "minimum": 1.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Max Rounds"
+            "title": "Until"
           }
         },
         "title": "EvolutionRunTrigger",
@@ -3052,28 +3179,6 @@
       },
       "EvolutionRunView": {
         "properties": {
-          "checkpoint_after_trajectory_id": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Checkpoint After Trajectory Id"
-          },
-          "checkpoint_before_trajectory_id": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Checkpoint Before Trajectory Id"
-          },
           "created_at": {
             "format": "date-time",
             "title": "Created At",
@@ -3090,12 +3195,10 @@
             ],
             "title": "Created By"
           },
-          "diagnosis_trajectory_ids": {
-            "items": {
-              "type": "integer"
-            },
-            "title": "Diagnosis Trajectory Ids",
-            "type": "array"
+          "duplicates_skipped": {
+            "default": 0,
+            "title": "Duplicates Skipped",
+            "type": "integer"
           },
           "error": {
             "anyOf": [
@@ -3120,27 +3223,13 @@
             ],
             "title": "Finished At"
           },
-          "frozen_max_trajectory_id": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Frozen Max Trajectory Id"
-          },
           "id": {
             "title": "Id",
             "type": "string"
           },
-          "max_eval_cases": {
-            "title": "Max Eval Cases",
-            "type": "integer"
-          },
-          "max_rounds": {
-            "title": "Max Rounds",
+          "l1_rejected": {
+            "default": 0,
+            "title": "L1 Rejected",
             "type": "integer"
           },
           "project_id": {
@@ -3158,28 +3247,17 @@
             ],
             "title": "Proposal Id"
           },
-          "reserve_trajectory_ids": {
+          "proposal_ids": {
             "items": {
-              "type": "integer"
+              "type": "string"
             },
-            "title": "Reserve Trajectory Ids",
+            "title": "Proposal Ids",
             "type": "array"
           },
-          "rounds": {
-            "items": {
-              "$ref": "#/components/schemas/EvolutionRoundView"
-            },
-            "title": "Rounds",
-            "type": "array"
-          },
-          "rounds_completed": {
-            "title": "Rounds Completed",
+          "proposals_created": {
+            "default": 0,
+            "title": "Proposals Created",
             "type": "integer"
-          },
-          "signal_summary": {
-            "additionalProperties": true,
-            "title": "Signal Summary",
-            "type": "object"
           },
           "started_at": {
             "format": "date-time",
@@ -3189,13 +3267,20 @@
           "status": {
             "enum": [
               "running",
-              "accepted",
-              "incomplete"
+              "succeeded",
+              "failed",
+              "incomplete",
+              "accepted"
             ],
             "title": "Status",
             "type": "string"
           },
-          "stop_reason": {
+          "summary": {
+            "default": "",
+            "title": "Summary",
+            "type": "string"
+          },
+          "trace_source_plugin": {
             "anyOf": [
               {
                 "type": "string"
@@ -3204,11 +3289,40 @@
                 "type": "null"
               }
             ],
-            "title": "Stop Reason"
+            "title": "Trace Source Plugin"
+          },
+          "traces_fetched": {
+            "default": 0,
+            "title": "Traces Fetched",
+            "type": "integer"
           },
           "trigger_type": {
             "title": "Trigger Type",
             "type": "string"
+          },
+          "window_since": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Window Since"
+          },
+          "window_until": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Window Until"
           }
         },
         "required": [
@@ -3216,9 +3330,6 @@
           "project_id",
           "trigger_type",
           "status",
-          "max_rounds",
-          "max_eval_cases",
-          "rounds_completed",
           "started_at",
           "created_at"
         ],
@@ -4328,6 +4439,18 @@
             ],
             "title": "Dialect"
           },
+          "evidence": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evidence"
+          },
           "expected_fields": {
             "anyOf": [
               {
@@ -4503,6 +4626,18 @@
             "title": "Diff",
             "type": "string"
           },
+          "evidence": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evidence"
+          },
           "gate_report": {
             "anyOf": [
               {
@@ -4518,6 +4653,11 @@
           "id": {
             "title": "Id",
             "type": "string"
+          },
+          "is_new_file": {
+            "default": false,
+            "title": "Is New File",
+            "type": "boolean"
           },
           "original": {
             "title": "Original",
@@ -6283,6 +6423,43 @@
           "role"
         ],
         "title": "TokenProjectView",
+        "type": "object"
+      },
+      "TraceSourcePluginView": {
+        "properties": {
+          "display_name": {
+            "title": "Display Name",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "parameters_schema": {
+            "additionalProperties": true,
+            "title": "Parameters Schema",
+            "type": "object"
+          },
+          "secret_parameter_keys": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Secret Parameter Keys",
+            "type": "array"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "version",
+          "display_name",
+          "parameters_schema",
+          "secret_parameter_keys"
+        ],
+        "title": "TraceSourcePluginView",
         "type": "object"
       },
       "TurnFeedbackRequest": {
@@ -8557,187 +8734,6 @@
         "summary": "Update Eval Question"
       }
     },
-    "/api/v1/evolution/runs": {
-      "get": {
-        "operationId": "list_evolution_runs_api_v1_evolution_runs_get",
-        "parameters": [
-          {
-            "in": "query",
-            "name": "project",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Project"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "items": {
-                    "$ref": "#/components/schemas/EvolutionRunView"
-                  },
-                  "title": "Response List Evolution Runs Api V1 Evolution Runs Get",
-                  "type": "array"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "List Evolution Runs"
-      },
-      "post": {
-        "operationId": "trigger_evolution_run_api_v1_evolution_runs_post",
-        "parameters": [
-          {
-            "in": "query",
-            "name": "project",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Project"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "anyOf": [
-                  {
-                    "$ref": "#/components/schemas/EvolutionRunTrigger"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "title": "Body"
-              }
-            }
-          }
-        },
-        "responses": {
-          "202": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EvolutionRunView"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "Trigger Evolution Run"
-      }
-    },
-    "/api/v1/evolution/runs/{run_id}": {
-      "get": {
-        "operationId": "get_evolution_run_api_v1_evolution_runs__run_id__get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "run_id",
-            "required": true,
-            "schema": {
-              "title": "Run Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "project",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Project"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/EvolutionRunView"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "Get Evolution Run"
-      }
-    },
     "/api/v1/filters": {
       "get": {
         "operationId": "read_filters_api_v1_filters_get",
@@ -9799,9 +9795,9 @@
         "summary": "Put Project Discovery Config"
       }
     },
-    "/api/v1/projects/{project_id}/evolution-config": {
+    "/api/v1/projects/{project_id}/discovery/runs": {
       "get": {
-        "operationId": "get_project_evolution_config_api_v1_projects__project_id__evolution_config_get",
+        "operationId": "list_project_discovery_runs_api_v1_projects__project_id__discovery_runs_get",
         "parameters": [
           {
             "in": "path",
@@ -9818,7 +9814,11 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EvolutionConfigView"
+                  "items": {
+                    "$ref": "#/components/schemas/DiscoveryRunView"
+                  },
+                  "title": "Response List Project Discovery Runs Api V1 Projects  Project Id  Discovery Runs Get",
+                  "type": "array"
                 }
               }
             },
@@ -9840,10 +9840,10 @@
             "HTTPBearer": []
           }
         ],
-        "summary": "Get Project Evolution Config"
+        "summary": "List Project Discovery Runs"
       },
-      "put": {
-        "operationId": "put_project_evolution_config_api_v1_projects__project_id__evolution_config_put",
+      "post": {
+        "operationId": "trigger_project_discovery_run_api_v1_projects__project_id__discovery_runs_post",
         "parameters": [
           {
             "in": "path",
@@ -9859,18 +9859,25 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/EvolutionConfigUpdate"
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/DiscoveryRunTrigger"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
               }
             }
-          },
-          "required": true
+          }
         },
         "responses": {
-          "200": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/EvolutionConfigView"
+                  "$ref": "#/components/schemas/DiscoveryRunView"
                 }
               }
             },
@@ -9892,7 +9899,60 @@
             "HTTPBearer": []
           }
         ],
-        "summary": "Put Project Evolution Config"
+        "summary": "Trigger Project Discovery Run"
+      }
+    },
+    "/api/v1/projects/{project_id}/discovery/runs/{run_id}": {
+      "get": {
+        "operationId": "get_project_discovery_run_api_v1_projects__project_id__discovery_runs__run_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiscoveryRunDetailView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Project Discovery Run"
       }
     },
     "/api/v1/projects/{project_id}/evolution-policy": {
@@ -9989,6 +10049,262 @@
           }
         ],
         "summary": "Set Project Evolution Policy"
+      }
+    },
+    "/api/v1/projects/{project_id}/evolution/config": {
+      "get": {
+        "operationId": "get_project_evolution_config_api_v1_projects__project_id__evolution_config_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvolutionConfigView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Project Evolution Config"
+      },
+      "put": {
+        "operationId": "put_project_evolution_config_api_v1_projects__project_id__evolution_config_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EvolutionConfigUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvolutionConfigView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Put Project Evolution Config"
+      }
+    },
+    "/api/v1/projects/{project_id}/evolution/runs": {
+      "get": {
+        "operationId": "list_evolution_runs_api_v1_projects__project_id__evolution_runs_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/EvolutionRunView"
+                  },
+                  "title": "Response List Evolution Runs Api V1 Projects  Project Id  Evolution Runs Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Evolution Runs"
+      },
+      "post": {
+        "operationId": "trigger_evolution_run_api_v1_projects__project_id__evolution_runs_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/EvolutionRunTrigger"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvolutionRunView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Trigger Evolution Run"
+      }
+    },
+    "/api/v1/projects/{project_id}/evolution/runs/{run_id}": {
+      "get": {
+        "operationId": "get_evolution_run_api_v1_projects__project_id__evolution_runs__run_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EvolutionRunView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Evolution Run"
       }
     },
     "/api/v1/projects/{project_id}/executors": {
@@ -12380,6 +12696,33 @@
           }
         ],
         "summary": "Revoke Token"
+      }
+    },
+    "/api/v1/trace-source-plugins": {
+      "get": {
+        "operationId": "list_trace_source_plugins_api_v1_trace_source_plugins_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/TraceSourcePluginView"
+                  },
+                  "title": "Response List Trace Source Plugins Api V1 Trace Source Plugins Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Trace Source Plugins"
       }
     },
     "/api/v1/users": {
