@@ -17,7 +17,7 @@ from fastapi import HTTPException
 from sqlalchemy import exists, func, or_, select, text
 from sqlalchemy.exc import OperationalError
 
-from .db import CatalogSkill, CatalogSkillProject
+from .db import CatalogSkill, CatalogSkillProject, Token, digest, sessions
 from .project_api import active_skill_project, require_skill_project
 from .skill import SKILLS, read_skill, skill_description, skill_name
 from .source_directory import relative, unpack_archive
@@ -332,10 +332,22 @@ def resolve_skill(db, requester, project_id, name):
             raise HTTPException(
                 409, "Skill lookup requires a current transaction"
             ) from exc
+    record = _authorized_record(db, requester, project_id, name, contents=True)
+    return _materialize_skill(name, record)
+
+
+def _authorized_record(
+    db, requester, project_id, name, *, contents, builtin_pairs=None
+):
     project_type = require_skill_project(db, requester, project_id)
-    for item in builtins():
-        if item["name"] == name and project_type in item["project_types"]:
-            return SkillSnapshot(name, "builtin", (), (), read_skill(project_type))
+    if builtin_pairs is None:
+        builtin_pairs = tuple(
+            (item["name"], project_type)
+            for item in builtins()
+            for project_type in item["project_types"]
+        )
+    if (name, project_type) in builtin_pairs:
+        return ("builtin", project_type, None, None)
     types = func.json_each(CatalogSkill.metadata_json, "$.project_types").table_valued(
         "value"
     )
@@ -346,8 +358,13 @@ def resolve_skill(db, requester, project_id, name):
         CatalogSkillProject.skill_name == CatalogSkill.name,
         CatalogSkillProject.project_id == project_id,
     )
+    columns = (
+        (CatalogSkill.generation, CatalogSkill.metadata_json, CatalogSkill.archive)
+        if contents
+        else (CatalogSkill.generation,)
+    )
     row = db.execute(
-        select(CatalogSkill.metadata_json, CatalogSkill.archive).where(
+        select(*columns).where(
             CatalogSkill.name == name,
             CatalogSkill.enabled.is_(True),
             active_skill_project(requester, project_id, project_type),
@@ -364,9 +381,21 @@ def resolve_skill(db, requester, project_id, name):
     if row is None:
         require_skill_project(db, requester, project_id)
         raise HTTPException(404, "Skill not available")
+    return (
+        "upload",
+        row.generation,
+        row.metadata_json if contents else None,
+        bytes(row.archive) if contents else None,
+    )
+
+
+def _materialize_skill(name, record):
+    source, generation, metadata_json, archive = record
+    if source == "builtin":
+        return SkillSnapshot(name, "builtin", (), (), read_skill(generation))
     try:
-        metadata = json.loads(row.metadata_json)
-        package = bytes(row.archive)
+        metadata = json.loads(metadata_json)
+        package = archive
         if validate_package(package) != metadata:
             raise ValueError("Stored metadata differs from package")
         files = tuple(sorted(unpack_archive(package).items()))
@@ -375,3 +404,35 @@ def resolve_skill(db, requester, project_id, name):
     if metadata["name"] != name:
         raise HTTPException(404, "Skill not available")
     return SkillSnapshot(name, "upload", tuple(metadata["secrets"]), files, None)
+
+
+def prepare_skill(requester, project_id, name):
+    """Read and validate a package without holding a database transaction."""
+    builtin_pairs = tuple(
+        (item["name"], project_type)
+        for item in builtins()
+        for project_type in item["project_types"]
+    )
+    with sessions()() as db:
+        require_personal_identity(db, requester)
+        record = _authorized_record(
+            db, requester, project_id, name, contents=True, builtin_pairs=builtin_pairs
+        )
+    return (record[:2], builtin_pairs), _materialize_skill(name, record)
+
+
+def require_prepared_skill(db, requester, project_id, name, version):
+    """Recheck current authorization and package generation under the write lock."""
+    require_personal_identity(db, requester)
+    expected, builtin_pairs = version
+    current = _authorized_record(
+        db, requester, project_id, name, contents=False, builtin_pairs=builtin_pairs
+    )
+    if current[:2] != expected:
+        raise HTTPException(409, "Skill changed during preparation")
+
+
+def require_personal_identity(db, requester):
+    token = db.get(Token, digest(requester.token))
+    if token is None or token.revoked or token.id != requester.id:
+        raise HTTPException(404, "Project not found")

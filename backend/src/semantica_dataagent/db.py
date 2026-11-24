@@ -72,6 +72,7 @@ class CatalogSkill(Base):
     metadata_json: Mapped[str]
     archive: Mapped[bytes] = mapped_column(LargeBinary)
     enabled: Mapped[bool]
+    generation: Mapped[str] = mapped_column(default=lambda: uuid.uuid4().hex)
 
 
 class SkillSecret(Base):

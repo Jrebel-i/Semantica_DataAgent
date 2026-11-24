@@ -29,7 +29,8 @@ from .skill_catalog import (
     MAX_PACKAGE_BYTES,
     TRUST_WARNING,
     builtins,
-    resolve_skill,
+    prepare_skill,
+    require_prepared_skill,
     validate_package,
     view,
 )
@@ -284,9 +285,10 @@ def secret_status(
     scope: Annotated[ProjectContext, Depends(project_scope)],
     actor: Annotated[Requester, Depends(current_requester)],
 ):
+    version, skill = prepare_skill(actor, scope.project_id, name)
     with sessions().begin() as db:
         db.execute(text("BEGIN IMMEDIATE"))
-        skill = resolve_skill(db, actor, scope.project_id, name)
+        require_prepared_skill(db, actor, scope.project_id, name, version)
         stored = {
             row.secret_name
             for row in db.query(SkillSecret.secret_name).filter_by(
@@ -354,12 +356,13 @@ async def put_secret(
 def _store_secret(name, secret_name, value, project_id, actor):
     from .crypto import encrypt
 
+    version, skill = prepare_skill(actor, project_id, name)
+    ciphertext = encrypt(value)
     with sessions().begin() as db:
         db.execute(text("BEGIN IMMEDIATE"))
-        skill = resolve_skill(db, actor, project_id, name)
+        require_prepared_skill(db, actor, project_id, name, version)
         if secret_name not in skill.secrets:
             raise HTTPException(404, "Secret declaration not found")
-        ciphertext = encrypt(value)
         row = db.get(SkillSecret, (actor.id, project_id, name, secret_name))
         if row is None:
             db.add(
@@ -382,9 +385,10 @@ def delete_secret(
     scope: Annotated[ProjectContext, Depends(project_scope)],
     actor: Annotated[Requester, Depends(current_requester)],
 ):
+    version, skill = prepare_skill(actor, scope.project_id, name)
     with sessions().begin() as db:
         db.execute(text("BEGIN IMMEDIATE"))
-        skill = resolve_skill(db, actor, scope.project_id, name)
+        require_prepared_skill(db, actor, scope.project_id, name, version)
         if secret_name not in skill.secrets:
             raise HTTPException(404, "Secret declaration not found")
         db.execute(

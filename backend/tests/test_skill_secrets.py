@@ -1,5 +1,6 @@
 """Personal Skill secret behavior through the authenticated API."""
 
+import pytest
 from test_skill_catalog import archive
 
 pytest_plugins = ("test_skill_catalog",)
@@ -496,3 +497,251 @@ TestClient(app).put("/api/v1/skills/sample/secrets/API_KEY?project=default", hea
         requester = Requester(id=actor.id, role=actor.role, token=token)
     with skill_run_secrets(requester, "default", "sample") as (_, values):
         assert values == {"API_KEY": "synthetic-original"}
+
+
+@pytest.mark.parametrize("operation", ["status", "put", "delete", "runtime"])
+def test_slow_package_validation_does_not_block_writes(client, monkeypatch, operation):
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    import semantica_dataagent.skill_catalog as catalog
+    from semantica_dataagent.auth import Requester
+    from semantica_dataagent.db import Token, digest, sessions
+    from semantica_dataagent.skill_secrets import skill_run_secrets
+
+    c, token = client
+    headers = {"Authorization": f"Bearer {token}"}
+    package = archive(
+        {
+            "sample/SKILL.md": "---\nname: sample\ndescription: Sample\nsecrets: [API_KEY]\n---\nBody\n"
+        }
+    )
+    assert c.post("/api/v1/skills", headers=headers, content=package).status_code == 201
+    assert (
+        c.put(
+            "/api/v1/skills/sample/enabled", headers=headers, json={"enabled": True}
+        ).status_code
+        == 200
+    )
+    assert (
+        c.put(
+            "/api/v1/skills/sample/secrets/API_KEY?project=default",
+            headers=headers,
+            json={"value": "synthetic-value"},
+        ).status_code
+        == 204
+    )
+    with sessions()() as db:
+        actor = db.get(Token, digest(token))
+        requester = Requester(id=actor.id, role=actor.role, token=token)
+    started, release = threading.Event(), threading.Event()
+    original = catalog.validate_package
+
+    def slow(raw):
+        started.set()
+        assert release.wait(30)
+        return original(raw)
+
+    monkeypatch.setattr(catalog, "validate_package", slow)
+
+    def run():
+        path = "/api/v1/skills/sample/secrets/API_KEY?project=default"
+        if operation == "status":
+            return c.get(
+                "/api/v1/skills/sample/secrets?project=default", headers=headers
+            ).status_code
+        if operation == "put":
+            return c.put(
+                path, headers=headers, json={"value": "synthetic-next"}
+            ).status_code
+        if operation == "delete":
+            return c.delete(path, headers=headers).status_code
+        with skill_run_secrets(requester, "default", "sample"):
+            return 200
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        pending = pool.submit(run)
+        written = threading.Event()
+
+        def write():
+            try:
+                return c.put(
+                    "/api/v1/skills/sample/enabled",
+                    headers=headers,
+                    json={"enabled": True},
+                ).status_code
+            finally:
+                written.set()
+
+        try:
+            assert started.wait(10)
+            other = pool.submit(write)
+            assert written.wait(8), "unrelated write blocked during package validation"
+            assert other.result() == 200
+        finally:
+            release.set()
+        assert pending.result(timeout=10) in (200, 204)
+
+
+@pytest.mark.parametrize("operation", ["status", "put", "delete", "runtime"])
+@pytest.mark.parametrize("change", ["replace", "disable", "revoke"])
+def test_prepared_skill_rechecks_changes_before_secret_access(
+    client, monkeypatch, operation, change
+):
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    import semantica_dataagent.skill_catalog as catalog
+    from fastapi import HTTPException
+    from semantica_dataagent.auth import Requester
+    from semantica_dataagent.skill_secrets import skill_run_secrets
+
+    c, token = client
+    admin = {"Authorization": f"Bearer {token}"}
+    member = c.post(
+        "/api/v1/tokens", headers=admin, json={"name": "Member", "role": "user"}
+    ).json()
+    headers = {"Authorization": f"Bearer {member['token']}"}
+    package = archive(
+        {
+            "sample/SKILL.md": "---\nname: sample\ndescription: Sample\nsecrets: [API_KEY]\n---\nBody\n"
+        }
+    )
+    assert c.post("/api/v1/skills", headers=admin, content=package).status_code == 201
+    assert (
+        c.put(
+            "/api/v1/skills/sample/enabled", headers=admin, json={"enabled": True}
+        ).status_code
+        == 200
+    )
+    path = "/api/v1/skills/sample/secrets/API_KEY?project=default"
+    assert (
+        c.put(path, headers=headers, json={"value": "synthetic-old"}).status_code == 204
+    )
+    requester = Requester(id=member["id"], role="user", token=member["token"])
+    started, release = threading.Event(), threading.Event()
+    original = catalog.validate_package
+    first = True
+    guard = threading.Lock()
+
+    def slow(raw):
+        nonlocal first
+        with guard:
+            pause, first = first, False
+        if pause:
+            started.set()
+            assert release.wait(10)
+        return original(raw)
+
+    monkeypatch.setattr(catalog, "validate_package", slow)
+
+    def run():
+        if operation == "status":
+            response = c.get(
+                "/api/v1/skills/sample/secrets?project=default", headers=headers
+            )
+        elif operation == "put":
+            response = c.put(path, headers=headers, json={"value": "synthetic-new"})
+        elif operation == "delete":
+            response = c.delete(path, headers=headers)
+        else:
+            try:
+                with skill_run_secrets(requester, "default", "sample"):
+                    return 200, ""
+            except HTTPException as exc:
+                return exc.status_code, str(exc.detail)
+        return response.status_code, response.text
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        pending = pool.submit(run)
+        try:
+            assert started.wait(10)
+            if change == "replace":
+                assert (
+                    c.delete("/api/v1/skills/sample", headers=admin).status_code == 204
+                )
+                assert (
+                    c.post("/api/v1/skills", headers=admin, content=package).status_code
+                    == 201
+                )
+                assert (
+                    c.put(
+                        "/api/v1/skills/sample/enabled",
+                        headers=admin,
+                        json={"enabled": True},
+                    ).status_code
+                    == 200
+                )
+            elif change == "disable":
+                assert (
+                    c.put(
+                        "/api/v1/skills/sample/enabled",
+                        headers=admin,
+                        json={"enabled": False},
+                    ).status_code
+                    == 200
+                )
+            else:
+                assert (
+                    c.delete(
+                        f"/api/v1/tokens/{member['id']}", headers=admin
+                    ).status_code
+                    == 204
+                )
+        finally:
+            release.set()
+        status, body = pending.result(timeout=10)
+    assert status == (409 if change == "replace" else 404)
+    assert "synthetic-old" not in body and "synthetic-new" not in body
+    if change == "replace":
+        assert c.get(
+            "/api/v1/skills/sample/secrets?project=default", headers=headers
+        ).json() == {"API_KEY": False}
+    else:
+        from semantica_dataagent.crypto import decrypt
+        from semantica_dataagent.db import SkillSecret, sessions
+
+        with sessions()() as db:
+            row = db.get(SkillSecret, (member["id"], "default", "sample", "API_KEY"))
+            assert decrypt(row.ciphertext) == "synthetic-old"
+
+
+def test_historical_sqlite_backup_retains_decryptable_secret_after_skill_deletion(
+    client, tmp_path
+):
+    import sqlite3
+
+    from semantica_dataagent.crypto import decrypt
+
+    c, token = client
+    headers = {"Authorization": f"Bearer {token}"}
+    package = archive(
+        {
+            "sample/SKILL.md": "---\nname: sample\ndescription: Sample\nsecrets: [API_KEY]\n---\nBody\n"
+        }
+    )
+    assert c.post("/api/v1/skills", headers=headers, content=package).status_code == 201
+    assert (
+        c.put(
+            "/api/v1/skills/sample/enabled", headers=headers, json={"enabled": True}
+        ).status_code
+        == 200
+    )
+    assert (
+        c.put(
+            "/api/v1/skills/sample/secrets/API_KEY?project=default",
+            headers=headers,
+            json={"value": "synthetic-backup-proof"},
+        ).status_code
+        == 204
+    )
+    backup = tmp_path / "historical.db"
+    with (
+        sqlite3.connect(tmp_path / "app.db") as source,
+        sqlite3.connect(backup) as target,
+    ):
+        source.backup(target)
+    assert c.delete("/api/v1/skills/sample", headers=headers).status_code == 204
+    with sqlite3.connect(backup) as db:
+        ciphertext = db.execute("SELECT ciphertext FROM skill_secrets").fetchone()[0]
+    assert decrypt(ciphertext) == "synthetic-backup-proof"
