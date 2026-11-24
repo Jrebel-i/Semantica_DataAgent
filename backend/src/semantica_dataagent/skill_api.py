@@ -13,7 +13,15 @@ from starlette.concurrency import run_in_threadpool
 
 from .api_time import UtcDatetime
 from .auth import Requester, admin, current_requester
-from .db import CatalogSkill, CatalogSkillProject, Project, SkillAudit, Token, sessions
+from .db import (
+    CatalogSkill,
+    CatalogSkillProject,
+    Project,
+    SkillAudit,
+    SkillSecret,
+    Token,
+    sessions,
+)
 from .project_api import active_skill_project, project_scope, require_skill_project
 from .project_context import ProjectContext
 from .skill import read_skill, skill_filename
@@ -21,6 +29,7 @@ from .skill_catalog import (
     MAX_PACKAGE_BYTES,
     TRUST_WARNING,
     builtins,
+    resolve_skill,
     validate_package,
     view,
 )
@@ -261,10 +270,131 @@ def delete_skill(
         result = db.execute(delete(CatalogSkill).where(CatalogSkill.name == name))
         if not result.rowcount:
             raise HTTPException(404, "Skill not found")
+        db.execute(delete(SkillSecret).where(SkillSecret.skill_name == name))
         db.execute(
             delete(CatalogSkillProject).where(CatalogSkillProject.skill_name == name)
         )
         db.add(SkillAudit(actor_id=actor.id, action="delete", skill_name=name))
+    return Response(status_code=204)
+
+
+@router.get("/api/v1/skills/{name}/secrets", response_model=dict[str, bool])
+def secret_status(
+    name: str,
+    scope: Annotated[ProjectContext, Depends(project_scope)],
+    actor: Annotated[Requester, Depends(current_requester)],
+):
+    with sessions().begin() as db:
+        db.execute(text("BEGIN IMMEDIATE"))
+        skill = resolve_skill(db, actor, scope.project_id, name)
+        stored = {
+            row.secret_name
+            for row in db.query(SkillSecret.secret_name).filter_by(
+                owner_id=actor.id, project_id=scope.project_id, skill_name=name
+            )
+        }
+        return {key: key in stored for key in skill.secrets}
+
+
+@router.put(
+    "/api/v1/skills/{name}/secrets/{secret_name}",
+    status_code=204,
+    openapi_extra={
+        "requestBody": {
+            "required": True,
+            "content": {
+                "application/json": {
+                    "schema": {
+                        "type": "object",
+                        "required": ["value"],
+                        "additionalProperties": False,
+                        "properties": {
+                            "value": {
+                                "type": "string",
+                                "format": "password",
+                                "writeOnly": True,
+                            }
+                        },
+                    }
+                }
+            },
+        }
+    },
+)
+async def put_secret(
+    name: str,
+    secret_name: str,
+    request: Request,
+    scope: Annotated[ProjectContext, Depends(project_scope)],
+    actor: Annotated[Requester, Depends(current_requester)],
+):
+    try:
+        raw = bytearray()
+        async for chunk in request.stream():
+            if len(raw) + len(chunk) > 16384:
+                raise ValueError()
+            raw.extend(chunk)
+        body = json.loads(raw)
+        if (
+            not isinstance(body, dict)
+            or set(body) != {"value"}
+            or not isinstance(body["value"], str)
+            or not body["value"]
+            or len(body["value"].encode()) > 8192
+        ):
+            raise ValueError()
+    except (ValueError, UnicodeError):
+        raise HTTPException(422, "Invalid secret") from None
+    await run_in_threadpool(
+        _store_secret, name, secret_name, body["value"], scope.project_id, actor
+    )
+    return Response(status_code=204)
+
+
+def _store_secret(name, secret_name, value, project_id, actor):
+    from .crypto import encrypt
+
+    with sessions().begin() as db:
+        db.execute(text("BEGIN IMMEDIATE"))
+        skill = resolve_skill(db, actor, project_id, name)
+        if secret_name not in skill.secrets:
+            raise HTTPException(404, "Secret declaration not found")
+        ciphertext = encrypt(value)
+        row = db.get(SkillSecret, (actor.id, project_id, name, secret_name))
+        if row is None:
+            db.add(
+                SkillSecret(
+                    owner_id=actor.id,
+                    project_id=project_id,
+                    skill_name=name,
+                    secret_name=secret_name,
+                    ciphertext=ciphertext,
+                )
+            )
+        else:
+            row.ciphertext = ciphertext
+
+
+@router.delete("/api/v1/skills/{name}/secrets/{secret_name}", status_code=204)
+def delete_secret(
+    name: str,
+    secret_name: str,
+    scope: Annotated[ProjectContext, Depends(project_scope)],
+    actor: Annotated[Requester, Depends(current_requester)],
+):
+    with sessions().begin() as db:
+        db.execute(text("BEGIN IMMEDIATE"))
+        skill = resolve_skill(db, actor, scope.project_id, name)
+        if secret_name not in skill.secrets:
+            raise HTTPException(404, "Secret declaration not found")
+        db.execute(
+            delete(SkillSecret).where(
+                SkillSecret.owner_id == actor.id,
+                SkillSecret.project_id == scope.project_id,
+                SkillSecret.skill_name == name,
+                SkillSecret.secret_name == secret_name,
+            )
+        )
     return Response(status_code=204)
 
 

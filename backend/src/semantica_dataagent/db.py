@@ -74,6 +74,15 @@ class CatalogSkill(Base):
     enabled: Mapped[bool]
 
 
+class SkillSecret(Base):
+    __tablename__ = "skill_secrets"
+    owner_id: Mapped[str] = mapped_column(primary_key=True)
+    project_id: Mapped[str] = mapped_column(primary_key=True)
+    skill_name: Mapped[str] = mapped_column(primary_key=True)
+    secret_name: Mapped[str] = mapped_column(primary_key=True)
+    ciphertext: Mapped[str]
+
+
 class SkillAudit(Base):
     __tablename__ = "skill_audit"
     id: Mapped[int] = mapped_column(primary_key=True)

@@ -207,6 +207,7 @@ def test_deletion_removes_project_data_but_keeps_tokens_and_audit(client, monkey
         ProjectMember,
         ProjectSetting,
         PullRecord,
+        SkillSecret,
         Token,
         Turn,
         digest,
@@ -214,6 +215,24 @@ def test_deletion_removes_project_data_but_keeps_tokens_and_audit(client, monkey
     )
 
     with sessions().begin() as db:
+        db.add_all(
+            [
+                SkillSecret(
+                    owner_id=user["id"],
+                    project_id=project_id,
+                    skill_name="sample",
+                    secret_name="KEY",
+                    ciphertext="synthetic-ciphertext",
+                ),
+                SkillSecret(
+                    owner_id=user["id"],
+                    project_id=DEFAULT,
+                    skill_name="sample",
+                    secret_name="KEY",
+                    ciphertext="synthetic-ciphertext",
+                ),
+            ]
+        )
         db.add(
             PluginConfig(
                 project_id=project_id,
@@ -270,6 +289,8 @@ def test_deletion_removes_project_data_but_keeps_tokens_and_audit(client, monkey
     with sessions()() as db:
         assert db.get(Project, project_id) is None
         assert db.get(ProjectMember, (project_id, user["id"])) is None
+        assert db.get(SkillSecret, (user["id"], project_id, "sample", "KEY")) is None
+        assert db.get(SkillSecret, (user["id"], DEFAULT, "sample", "KEY")) is not None
         assert db.get(Token, digest(user["token"])) is not None
         assert db.get(KnowledgeGeneration, f"{project_id}_gen") is None
         assert (

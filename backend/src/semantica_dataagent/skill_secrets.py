@@ -1,0 +1,42 @@
+"""Runtime access to personal Skill secrets, scoped to one invocation."""
+
+from contextlib import contextmanager
+
+from cryptography.fernet import InvalidToken
+from fastapi import HTTPException
+from sqlalchemy import text
+
+from .crypto import decrypt
+from .db import SkillSecret, Token, digest, sessions
+from .skill_catalog import resolve_skill
+
+
+@contextmanager
+def skill_run_secrets(requester, project_id, name):
+    values = {}
+    try:
+        with sessions().begin() as db:
+            db.execute(text("BEGIN IMMEDIATE"))
+            token = db.get(Token, digest(requester.token))
+            if token is None or token.revoked or token.id != requester.id:
+                raise HTTPException(404, "Project not found")
+            snapshot = resolve_skill(db, requester, project_id, name)
+            rows = (
+                db.query(SkillSecret)
+                .filter_by(
+                    owner_id=requester.id, project_id=project_id, skill_name=name
+                )
+                .all()
+            )
+            encrypted = {row.secret_name: row.ciphertext for row in rows}
+            if any(key not in encrypted for key in snapshot.secrets):
+                raise HTTPException(409, "Required Skill secret missing")
+            try:
+                values.update(
+                    {key: decrypt(encrypted[key]) for key in snapshot.secrets}
+                )
+            except (InvalidToken, ValueError, KeyError, UnicodeError):
+                raise HTTPException(503, "Skill secrets unavailable") from None
+        yield snapshot, values
+    finally:
+        values.clear()
