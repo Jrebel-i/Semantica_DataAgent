@@ -186,9 +186,8 @@ def test_upgrade_preserves_historical_gaps_as_pending(tmp_path, monkeypatch):
     from alembic import command
     from alembic.script import ScriptDirectory
     from cryptography.fernet import Fernet
-    from test_cli_migrate import _config
-
     from semantica_dataagent import cli
+    from test_cli_migrate import _config
 
     path = tmp_path / "old.sqlite"
     config = _config(path)

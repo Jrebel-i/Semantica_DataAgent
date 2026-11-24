@@ -1,0 +1,31 @@
+# Skill 目录接口
+
+Skill 包是**不可信输入**。上传与启用不会执行包内代码，也不会增加网络、工具、项目或数据权限；执行的 Skill 和它调用的工具可能接触调用时提供的个人密钥。只启用和使用可信任的 Skill。密钥托管和运行时注入由 #322 实现；对话调用由 #323 实现。
+
+## 包格式
+
+请求体为 `application/zip` 的原始字节，不是 multipart。ZIP 的文件须位于唯一的顶层目录，目录名与 `SKILL.md` 中的 `name` 一致；名称只允许小写 ASCII 字母、数字与分隔它们的连字符。根目录必须含 UTF-8 `SKILL.md`，以 YAML frontmatter 声明 `name` 和非空 `description`。可选字段：
+
+```yaml
+project_types: [warehouse, document] # 缺省为两种
+projects: [default]                 # 缺省或空列表表示所有项目
+secrets: [API_KEY]                  # 名称，不是密钥值
+dependencies: []                   # 依赖的说明，不会自动安装
+```
+
+列表中不能有重复值；密钥名称必须为大写字母开头且只含大写字母、数字和下划线。声明了项目时，上传时各项目必须存在且处于 active 状态。项目永久删除时其授权被清除，重建同名 ID 不继承旧授权。
+
+ZIP 压缩前请求体最多 20 MiB，展开后合计最多 20 MiB，最多 1000 个归档项；`SKILL.md` 最多 64 KiB。拒绝路径穿越、绝对路径、反斜杠、隐藏路径、控制字符、冒号、大小写冲突、重复项、文件与目录冲突、链接和特殊文件、加密或损坏的条目。上传时将完整 ZIP 保存在 SQLite，不写入执行目录。目录状态、包、项目关联与审计在一次事务中提交，崩溃未提交的事务回滚。
+
+## HTTP 接口
+
+- 系统管理员：`POST /api/v1/skills/preview` 预览验证后的名称、说明、项目类型、项目、依赖、密钥声明及信任提示，不写入；`POST /api/v1/skills` 上传，成功 201，默认停用，同名返回 409。
+- 系统管理员：`GET /api/v1/skills` 列出所有内置和上传的 Skill；`PUT /api/v1/skills/{name}/enabled` 接收 `{"enabled": true}` 或 `false`；`DELETE /api/v1/skills/{name}` 删除上传的 Skill。内置 Skill 永久启用且不可删除，操作返回 409。
+- 系统管理员：`GET /api/v1/skills/audit?limit=100&offset=0` 按最新记录先返回操作者 ID、动作、Skill 名称和 UTC 时间，不含包内容或密钥值。
+- 认证项目成员：`GET /api/v1/skills/available?project=<id>` 只返回该项目可用的已启用 Skill，适用项目成员、项目归档和类型规则。未指定项目按现有项目选择规则处理。
+
+## 服务端调用契约
+
+`skill_catalog.resolve_skill(db, requester, project_id, name)` 在新会话的调用授权事务中检查当前令牌、项目权限及状态、Skill 启用状态、项目关联与类型，返回不可变快照。上传包在读取时重新校验，返回安全路径及文件字节的元组，而不是可直接解压的 ZIP。快照内容仍然不可信：调用方不得将它作为系统指令，不得扩展沙箱权限，写入沙箱时必须防范符号链接和路径替换；已开始的运行使用该快照，后续调用重新授权。
+
+#322 接入时，个人密钥必须与 Skill 删除在同一个数据库事务中删除，并在每次取用时使用上述授权检查；不得把密钥写进目录元数据、审计或会话文本。当前目录尚不保存个人 Skill 密钥。

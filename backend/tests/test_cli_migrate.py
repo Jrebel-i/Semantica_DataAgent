@@ -5,7 +5,6 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from cryptography.fernet import Fernet
-
 from semantica_dataagent import cli
 
 
@@ -810,7 +809,7 @@ def test_migrate_0044_unified_evolution_and_downgrade(
     monkeypatch.setenv("DATAAGENT_ENCRYPTION_KEY", Fernet.generate_key().decode())
 
     cfg = _config(db_path)
-    assert ScriptDirectory.from_config(cfg).get_heads() == ["0044"]
+    assert ScriptDirectory.from_config(cfg).get_heads() == ["0045"]
     command.upgrade(cfg, "0043")
 
     with sqlite3.connect(db_path) as db:
@@ -890,3 +889,49 @@ def test_migrate_0044_unified_evolution_and_downgrade(
 
     command.upgrade(cfg, "0044")
     assert _schema_version(db_path) == "0044"
+
+
+def test_migrate_0045_preserves_existing_records_and_exposes_catalog(database):
+    import io
+    import zipfile
+
+    from fastapi.testclient import TestClient
+    from semantica_dataagent.app import app
+    from semantica_dataagent.db import digest
+
+    token = "synthetic-migration-token"
+    command.upgrade(_config(database), "0044")
+    with sqlite3.connect(database) as db:
+        db.execute(
+            "INSERT INTO tokens (digest, name, role, id, created_at) VALUES (?, ?, ?, ?, ?)",
+            (digest(token), "kept", "admin", "kept-id", "2026-01-01"),
+        )
+        db.execute("INSERT INTO settings (key, value) VALUES (?, ?)", ("kept", "value"))
+        before = db.execute("SELECT * FROM tokens WHERE id = 'kept-id'").fetchone()
+    assert cli.main(["migrate"]) == 0
+    assert _schema_version(database) == "0045"
+    assert _schema_version(_backups(database)[0]) == "0044"
+    with sqlite3.connect(database) as db:
+        assert (
+            db.execute("SELECT * FROM tokens WHERE id = 'kept-id'").fetchone() == before
+        )
+        assert db.execute(
+            "SELECT value FROM settings WHERE key = 'kept'"
+        ).fetchone() == ("value",)
+    package = io.BytesIO()
+    with zipfile.ZipFile(package, "w") as archive:
+        archive.writestr(
+            "sample/SKILL.md", "---\nname: sample\ndescription: Sample\n---\nBody\n"
+        )
+    client = TestClient(app)
+    headers = {"Authorization": f"Bearer {token}"}
+    assert (
+        client.post(
+            "/api/v1/skills", headers=headers, content=package.getvalue()
+        ).status_code
+        == 201
+    )
+    assert any(
+        item["name"] == "sample"
+        for item in client.get("/api/v1/skills", headers=headers).json()
+    )

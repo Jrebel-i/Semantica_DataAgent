@@ -88,6 +88,7 @@ def test_rest_time_fields_have_utc_offset(client, monkeypatch):
         ProjectPullInstance,
         Provider,
         PullRecord,
+        SkillAudit,
         Token,
         Turn,
         digest,
@@ -146,6 +147,12 @@ def test_rest_time_fields_have_utc_offset(client, monkeypatch):
                     actor_name="time",
                     action="project.create",
                     detail="{}",
+                    created_at=datetime(2026, 1, 1),
+                ),
+                SkillAudit(
+                    actor_id=owner.id,
+                    action="upload",
+                    skill_name="time-skill",
                     created_at=datetime(2026, 1, 1),
                 ),
                 KnowledgeGeneration(name="naive", created_at="2026-01-01T00:00:00"),
@@ -411,6 +418,7 @@ def test_rest_time_fields_have_utc_offset(client, monkeypatch):
         "project_audit": c.get(
             "/api/v1/projects/default/audit", headers=headers
         ).json(),
+        "skill_audit": c.get("/api/v1/skills/audit", headers=headers).json(),
         "evolution_config": c.get(
             "/api/v1/projects/default/evolution/config", headers=headers
         ).json(),

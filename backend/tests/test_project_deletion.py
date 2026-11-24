@@ -978,3 +978,42 @@ def test_cannot_create_the_same_id_while_the_old_deletion_is_in_progress(
     )
     assert variant.status_code == 201, variant.text
     assert variant.json()["id"] != project["id"], "旧删除进行中仍复用了项目 id"
+
+
+def test_recreated_project_does_not_inherit_old_skill_access(client, monkeypatch):
+    import io
+    import zipfile
+
+    from semantica_dataagent import project_deletion
+
+    c, admin = client
+    project = create_project(c, admin, "Reusable Skill Project")
+    package = io.BytesIO()
+    with zipfile.ZipFile(package, "w") as archive_file:
+        archive_file.writestr(
+            "scoped/SKILL.md",
+            f"---\nname: scoped\ndescription: Scoped\nprojects: [{project['id']}]\n---\nBody\n",
+        )
+    auth = headers(admin)
+    assert (
+        c.post("/api/v1/skills", headers=auth, content=package.getvalue()).status_code
+        == 201
+    )
+    assert (
+        c.put(
+            "/api/v1/skills/scoped/enabled", headers=auth, json={"enabled": True}
+        ).status_code
+        == 200
+    )
+    monkeypatch.setattr(project_deletion, "_delete_neo4j", lambda *args: None)
+    monkeypatch.setattr(project_deletion, "_delete_milvus", lambda *args: None)
+    monkeypatch.setattr(project_deletion, "_cleanup_attachments", lambda *args: None)
+    archive(c, admin, project)
+    assert delete(c, admin, project).status_code == 204
+    recreated = create_project(c, admin, "Reusable Skill Project")
+    assert recreated["id"] == project["id"]
+    result = c.get(
+        "/api/v1/skills/available", headers=auth, params={"project": recreated["id"]}
+    )
+    assert result.status_code == 200
+    assert "scoped" not in {item["name"] for item in result.json()}

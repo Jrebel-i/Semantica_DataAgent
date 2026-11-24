@@ -4,7 +4,7 @@ import uuid
 from datetime import UTC, datetime
 from threading import Lock
 
-from sqlalchemy import Index, create_engine, event
+from sqlalchemy import Index, LargeBinary, create_engine, event
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
 
@@ -63,6 +63,30 @@ class ProjectAudit(Base):
     action: Mapped[str]
     detail: Mapped[str]
     created_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC))
+
+
+class CatalogSkill(Base):
+    __tablename__ = "catalog_skills"
+    name: Mapped[str] = mapped_column(primary_key=True)
+    description: Mapped[str]
+    metadata_json: Mapped[str]
+    archive: Mapped[bytes] = mapped_column(LargeBinary)
+    enabled: Mapped[bool]
+
+
+class SkillAudit(Base):
+    __tablename__ = "skill_audit"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    actor_id: Mapped[str]
+    action: Mapped[str]
+    skill_name: Mapped[str]
+    created_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC))
+
+
+class CatalogSkillProject(Base):
+    __tablename__ = "catalog_skill_projects"
+    skill_name: Mapped[str] = mapped_column(primary_key=True)
+    project_id: Mapped[str] = mapped_column(primary_key=True)
 
 
 class ProjectDeletion(Base):
