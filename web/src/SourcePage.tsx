@@ -555,7 +555,19 @@ function ProjectSourcePage({
           <h1 className="page-title">{t.source}</h1>
           <p className="page-subtitle">{t.sourceHint}</p>
         </div>
-        <div className="page-actions source-status-actions">
+        {!appendOnly && (
+          <div className="page-actions">
+            <ProjectSelector
+              token={token}
+              value={project}
+              onChange={setProject}
+              messages={t}
+            />
+          </div>
+        )}
+      </div>
+      <section className="card section-card source-status-bar">
+        <div className="source-status-meta">
           {status && (
             <Tag
               color={statusColors[status.state]}
@@ -589,7 +601,10 @@ function ProjectSourcePage({
               />
             </label>
           )}
+        </div>
+        <div className="page-actions source-status-actions">
           <Button
+            type="primary"
             autoInsertSpace={false}
             disabled={busy}
             onClick={() => void triggerQuickBuild()}
@@ -601,16 +616,8 @@ function ProjectSourcePage({
               {t.sourceViewBuilds}
             </Button>
           )}
-          {!appendOnly && (
-            <ProjectSelector
-              token={token}
-              value={project}
-              onChange={setProject}
-              messages={t}
-            />
-          )}
         </div>
-      </div>
+      </section>
       {projectUnavailable && (
         <Alert type="error" title={t.gapSourceUnavailable} />
       )}

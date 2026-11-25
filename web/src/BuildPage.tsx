@@ -216,6 +216,9 @@ export function BuildPage({
     }
   }
   const selected = builds.find((build) => build.id === selectedId) ?? null;
+  const latestBuild = builds[0] ?? null;
+  const currentGen =
+    generations?.generations?.find((gen) => gen.current) ?? null;
   return (
     <section className="stack admin-page">
       <div className="page-header">
@@ -230,6 +233,28 @@ export function BuildPage({
           messages={t}
         />
       </div>
+      <section className="card gov-metrics-card">
+        <div className="gov-metrics">
+          <div className="gov-metric">
+            <span className="gov-metric-label">{t.buildMetricLatest}</span>
+            <strong>{latestBuild ? `#${latestBuild.id}` : "—"}</strong>
+          </div>
+          <div className="gov-metric">
+            <span className="gov-metric-label">{t.buildMetricQueueCount}</span>
+            <strong>{builds.length}</strong>
+          </div>
+          <div className="gov-metric">
+            <span className="gov-metric-label">{t.buildMetricGeneration}</span>
+            <strong>{currentGen?.name ?? "—"}</strong>
+          </div>
+          <div className="gov-metric">
+            <span className="gov-metric-label">{t.buildMetricSyncState}</span>
+            <strong>
+              {generations?.behind ? t.buildSyncBehind : t.buildSyncUpToDate}
+            </strong>
+          </div>
+        </div>
+      </section>
       <PullsPanel token={token} project={project} messages={t} />
       {generations?.behind && (
         <Alert
@@ -287,6 +312,9 @@ export function BuildPage({
                 dataSource={builds}
                 locale={{ emptyText: t.noBuilds }}
                 pagination={false}
+                rowClassName={(row) =>
+                  row.id === selectedId ? "build-table-row-selected" : ""
+                }
                 onRow={(row) => ({ onClick: () => setSelectedId(row.id) })}
                 columns={[
                   { title: t.buildId, dataIndex: "id" },
