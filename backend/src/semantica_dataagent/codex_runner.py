@@ -16,9 +16,11 @@ from .agent_plugin import (
     agent_process,
     attachment_path,
     available_in_runtime,
+    build_skill_prompt,
     clarification_event,
     default_sandbox_class,
     error_event,
+    inject_skill_secrets,
     is_sandboxed,
     mcp_headers,
     passthrough_environment,
@@ -96,6 +98,7 @@ class CodexEventParser(EventParser):
 class CodexRunner:
     agent_id = "codex"
     effort_levels = tuple(EFFORT_BY_LEVEL)
+    supports_skills = True
 
     def __init__(self, binary=None):
         self.binary = binary
@@ -186,15 +189,26 @@ class CodexRunner:
             command += ["-c", f'model_reasoning_effort="{effort}"']
         if thread:
             command += ["resume", thread]
-        command.append(request.prompt)
-        if images:
-            command += ["-i", *(attachment.path for attachment in images)]
         async with turn:
+            stage_root: str | None = None
+            if request.skill is not None and request.skill.source == "upload":
+                stage_root = await turn.stage_ephemeral_files(request.skill.files)
+            effective_prompt = build_skill_prompt(
+                request.prompt, request.skill, stage_root
+            )
+            command.append(effective_prompt)
+            if images:
+                command += ["-i", *(attachment.path for attachment in images)]
+            keys = inject_skill_secrets(
+                env,
+                ("HOME", "CODEX_HOME", TOKEN_ENV, KEY_ENV),
+                request,
+            )
             if sandboxed:
                 command, exec_header = turn.wrap_command(
                     command,
                     env,
-                    ("HOME", "CODEX_HOME", TOKEN_ENV, KEY_ENV),
+                    keys,
                 )
             else:
                 exec_header = None

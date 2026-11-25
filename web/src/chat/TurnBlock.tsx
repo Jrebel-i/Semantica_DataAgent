@@ -112,6 +112,11 @@ export function TurnBlock({
           我
         </span>
         <div className="message-body">
+          {turn.skill_name && (
+            <div className="turn-skill-row">
+              <span className="turn-skill-badge mono">/{turn.skill_name}</span>
+            </div>
+          )}
           <QuestionText text={turn.question} messages={messages} />
         </div>
       </div>

@@ -1,5 +1,12 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
-import { Button, Input, Select } from "antd";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type FormEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from "react";
+import { Button, Input, Select, Tag } from "antd";
 import {
   ArrowUpOutlined,
   CheckOutlined,
@@ -16,11 +23,14 @@ import { formatAttachmentSize, type PendingAttachment } from "./attachments";
 import { EFFORT_LEVELS } from "./effort";
 import type {
   Agent,
+  AvailableSkill,
   Conversation,
   EffortLevel,
   Project,
   Provider,
 } from "./types";
+
+const SLASH_COMMAND_RE = /^\/([a-z0-9-]*)$/i;
 
 export function Composer({
   messages,
@@ -58,6 +68,12 @@ export function Composer({
   removeAttachment,
   visionEnabled,
   onNavigateKnowledge,
+  availableSkills = [],
+  selectedSkill = null,
+  onSelectSkill,
+  agentSupportsSkills = true,
+  onNavigatePersonalSettings,
+  hasError = false,
 }: {
   messages: Messages;
   question: string;
@@ -94,11 +110,45 @@ export function Composer({
   removeAttachment: (id: string) => void;
   visionEnabled: boolean;
   onNavigateKnowledge?: () => void;
+  availableSkills?: AvailableSkill[];
+  selectedSkill?: AvailableSkill | null;
+  onSelectSkill?: (skill: AvailableSkill | null) => void;
+  agentSupportsSkills?: boolean;
+  onNavigatePersonalSettings?: () => void;
+  hasError?: boolean;
 }) {
   const fileInput = useRef<HTMLInputElement>(null);
   const imageInput = useRef<HTMLInputElement>(null);
   const [plusOpen, setPlusOpen] = useState(false);
+  const [slashDismissed, setSlashDismissed] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(0);
   const t = messages;
+
+  const composerDisabled =
+    !resumable || projectArchived || Boolean(currentConversation?.archived);
+  const slashMatch =
+    !composerDisabled && selectedSkill === null
+      ? SLASH_COMMAND_RE.exec(question)
+      : null;
+  const slashQuery = slashMatch ? slashMatch[1].toLowerCase() : null;
+  const filteredSkills = useMemo(() => {
+    if (slashQuery === null) return [];
+    return availableSkills.filter(
+      (item) =>
+        !slashQuery ||
+        item.name.toLowerCase().includes(slashQuery) ||
+        item.description.toLowerCase().includes(slashQuery),
+    );
+  }, [availableSkills, slashQuery]);
+  const slashOpen =
+    slashQuery !== null && !slashDismissed && availableSkills.length > 0;
+
+  useEffect(() => {
+    if (slashQuery === null) {
+      setSlashDismissed(false);
+    }
+    setActiveIndex(0);
+  }, [slashQuery]);
 
   useEffect(() => {
     if (!plusOpen) return;
@@ -120,6 +170,52 @@ export function Composer({
       document.removeEventListener("keydown", handleKeyDown);
     };
   }, [plusOpen]);
+
+  function chooseSkill(skill: AvailableSkill) {
+    onSelectSkill?.(skill);
+    setQuestion("");
+    setSlashDismissed(false);
+    setActiveIndex(0);
+  }
+
+  function handleTextKeyDown(event: ReactKeyboardEvent<HTMLTextAreaElement>) {
+    if (!slashOpen) return;
+    if (event.key === "Escape") {
+      event.preventDefault();
+      setSlashDismissed(true);
+      return;
+    }
+    if (!filteredSkills.length) return;
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setActiveIndex((idx) => (idx + 1) % filteredSkills.length);
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setActiveIndex(
+        (idx) => (idx - 1 + filteredSkills.length) % filteredSkills.length,
+      );
+    } else if (
+      (event.key === "Enter" && !event.shiftKey) ||
+      event.key === "Tab"
+    ) {
+      event.preventDefault();
+      const chosen = filteredSkills[activeIndex] ?? filteredSkills[0];
+      if (chosen) chooseSkill(chosen);
+    }
+  }
+
+  const missingSecretsList = selectedSkill?.missing_secrets ?? [];
+  const skillMissingSecrets = Boolean(
+    selectedSkill && (!selectedSkill.ready || missingSecretsList.length > 0),
+  );
+  const skillRunnerUnsupported = Boolean(selectedSkill && !agentSupportsSkills);
+  const composerError = Boolean(
+    hasError ||
+    attachmentError ||
+    skillMissingSecrets ||
+    skillRunnerUnsupported,
+  );
+
   const effortLabels: Record<EffortLevel, string> = {
     low: t.effortLow,
     medium: t.effortMedium,
@@ -172,7 +268,104 @@ export function Composer({
           )}
         </>
       )}
-      <form className="composer-box" onSubmit={(event) => onAsk(event)}>
+      <form
+        className={`composer-box${composerDisabled ? " composer-box--disabled" : ""}${composerError ? " composer-box--error" : ""}`}
+        onSubmit={(event) => onAsk(event)}
+      >
+        {slashOpen && (
+          <div
+            className={`composer-slash-popover${emptyConversation ? " composer-slash-popover--down" : " composer-slash-popover--up"}`}
+            role="listbox"
+            aria-label={t.skills}
+          >
+            {filteredSkills.length === 0 ? (
+              <div className="composer-slash-empty">{t.skillsSlashEmpty}</div>
+            ) : (
+              filteredSkills.map((skill, index) => (
+                <button
+                  key={skill.name}
+                  type="button"
+                  role="option"
+                  aria-selected={index === activeIndex}
+                  className={`composer-slash-item${index === activeIndex ? " active" : ""}`}
+                  onMouseEnter={() => setActiveIndex(index)}
+                  onClick={() => chooseSkill(skill)}
+                >
+                  <div className="composer-slash-head">
+                    <span className="composer-slash-name mono">
+                      /{skill.name}
+                    </span>
+                    <Tag color={skill.source === "builtin" ? "blue" : "gold"}>
+                      {skill.source === "builtin"
+                        ? t.skillsBuiltin
+                        : t.skillsUpload}
+                    </Tag>
+                    {!skill.ready && (
+                      <Tag color="warning">{t.skillsNeedsSecrets}</Tag>
+                    )}
+                  </div>
+                  <span className="composer-slash-desc">
+                    {skill.description}
+                  </span>
+                </button>
+              ))
+            )}
+          </div>
+        )}
+        {selectedSkill && (
+          <div className="composer-skill-row">
+            <div className="composer-selected-skill">
+              <span className="mono">/{selectedSkill.name}</span>
+              <Tag color={selectedSkill.source === "builtin" ? "blue" : "gold"}>
+                {selectedSkill.source === "builtin"
+                  ? t.skillsBuiltin
+                  : t.skillsUpload}
+              </Tag>
+              <button
+                type="button"
+                className="composer-skill-remove"
+                aria-label={t.skillsRemoveSelected.replace(
+                  "{name}",
+                  selectedSkill.name,
+                )}
+                onClick={() => onSelectSkill?.(null)}
+              >
+                <CloseOutlined aria-hidden="true" />
+              </button>
+            </div>
+          </div>
+        )}
+        {skillMissingSecrets && selectedSkill && (
+          <div className="composer-skill-alert" role="alert">
+            <span>
+              {t.skillsMissingSecretsNotice
+                .replace("{name}", selectedSkill.name)
+                .replace(
+                  "{keys}",
+                  (missingSecretsList.length
+                    ? missingSecretsList
+                    : selectedSkill.secrets
+                  ).join(", "),
+                )}
+            </span>
+            {onNavigatePersonalSettings && (
+              <Button
+                type="link"
+                size="small"
+                onClick={onNavigatePersonalSettings}
+              >
+                {t.skillsGoPersonalSettings}
+              </Button>
+            )}
+          </div>
+        )}
+        {skillRunnerUnsupported && (
+          <div className="composer-skill-alert" role="alert">
+            <span>
+              {t.skillsRunnerUnsupportedNotice.replace("{agent}", agentId)}
+            </span>
+          </div>
+        )}
         {attachments.length > 0 && (
           <div className="composer-attachments" aria-label={t.attachments}>
             {attachments.map((attachment) => (
@@ -220,15 +413,14 @@ export function Composer({
               ? t.projectArchivedNotice
               : currentConversation?.archived
                 ? t.restoreFirst
-                : t.askPlaceholder
+                : availableSkills.length > 0 && !selectedSkill
+                  ? `${t.askPlaceholder}（${t.skillsSlashHint}）`
+                  : t.askPlaceholder
           }
           autoSize={{ minRows: 1, maxRows: 5 }}
           onChange={(event) => setQuestion(event.target.value)}
-          disabled={
-            !resumable ||
-            projectArchived ||
-            Boolean(currentConversation?.archived)
-          }
+          onKeyDown={handleTextKeyDown}
+          disabled={composerDisabled}
         />
         <div className="composer-controls">
           <div className="composer-left">
@@ -511,11 +703,7 @@ export function Composer({
               .map((example) => (
                 <Button
                   key={example}
-                  disabled={
-                    !resumable ||
-                    projectArchived ||
-                    Boolean(currentConversation?.archived)
-                  }
+                  disabled={composerDisabled}
                   onClick={() => setQuestion(example)}
                 >
                   {example}

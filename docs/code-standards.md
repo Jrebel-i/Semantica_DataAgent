@@ -41,6 +41,8 @@
 
 ## 项目接口
 
+Skill 目录、上传包格式、管理员权限及运行时查询契约见 [skill-catalog.md](skill-catalog.md)。上传包是不可信内容；目录状态、包与审计须在同一事务中写入，项目删除须清理项目授权关联。
+
 项目是独立知识库实例的元数据；成员以令牌的 `id`（用户身份）关联项目，角色为 `admin` 或 `member`。系统管理员（全局角色 `admin`）隐含所有项目的管理员，不需要成员行。
 
 - `GET /api/v1/projects` 需要认证。系统管理员返回全部项目，其它用户只返回自己是成员的项目；每项包含 `id`、`name`、`type`、`status`、`created_at`、`my_role`。系统管理员的 `my_role` 恒为 `admin`。

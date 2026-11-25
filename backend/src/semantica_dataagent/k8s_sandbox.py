@@ -7,6 +7,7 @@ import socket
 from pathlib import Path, PurePosixPath
 from urllib.parse import urlsplit
 
+from .agent_types import ephemeral_tar_bytes, validated_ephemeral_files
 from .failure_diagnostics import (
     safe_pod_status,
     safe_session_category,
@@ -410,6 +411,38 @@ class KubernetesSessionSandbox:
         return subprocess.run(
             command, input=payload, capture_output=True, check=True, timeout=150
         ).stdout
+
+    def stage_ephemeral_files(self, files: tuple[tuple[str, bytes], ...]) -> str:
+        import subprocess
+        import uuid
+
+        payload = ephemeral_tar_bytes(validated_ephemeral_files(files))
+        stage_dir = f"/tmp/sda-skill-{uuid.uuid4().hex}"
+        subprocess.run(
+            [
+                "kubectl",
+                "-n",
+                os.environ.get(
+                    "DATAAGENT_SESSION_NAMESPACE", "semantica-dataagent-sessions"
+                ),
+                "exec",
+                "-i",
+                self.name,
+                "-c",
+                "agent",
+                "--",
+                "sh",
+                "-ec",
+                'mkdir -p "$1" && tar --no-overwrite-dir --no-same-owner -xf - -C "$1"',
+                "--",
+                stage_dir,
+            ],
+            input=payload,
+            capture_output=True,
+            check=True,
+            timeout=150,
+        )
+        return stage_dir
 
     def _upload(self):
         import io

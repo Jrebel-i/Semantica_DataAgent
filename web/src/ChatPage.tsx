@@ -9,7 +9,13 @@ import {
   citationsFromRefs,
   stripCitationRefs,
 } from "./chat/citations";
-import type { ConversationDetail, LiveTurn, Project, Turn } from "./chat/types";
+import type {
+  AvailableSkill,
+  ConversationDetail,
+  LiveTurn,
+  Project,
+  Turn,
+} from "./chat/types";
 import { copyText } from "./chat/sse";
 import { ResultTable } from "./chat/ResultTable";
 import { ToolList } from "./chat/ToolList";
@@ -51,6 +57,7 @@ export function ChatPage({
   initialConversationId = "",
   onNavigateChat,
   onNavigateKnowledge,
+  onNavigatePersonalSettings,
   refreshKey = 0,
 }: {
   token: string;
@@ -62,6 +69,7 @@ export function ChatPage({
   initialConversationId?: string;
   onNavigateChat?: () => void;
   onNavigateKnowledge?: () => void;
+  onNavigatePersonalSettings?: () => void;
   language?: Language;
   onChangeLanguage?: () => void;
   refreshKey?: number;
@@ -91,6 +99,10 @@ export function ChatPage({
   const [feedbackNotice, setFeedbackNotice] = useState("");
   const [markingTurnId, setMarkingTurnId] = useState<number | null>(null);
   const [correctionTurn, setCorrectionTurn] = useState<Turn | null>(null);
+  const [availableSkills, setAvailableSkills] = useState<AvailableSkill[]>([]);
+  const [selectedSkill, setSelectedSkill] = useState<AvailableSkill | null>(
+    null,
+  );
 
   useEffect(() => {
     let active = true;
@@ -214,6 +226,38 @@ export function ChatPage({
   const selectedProject = projects.find((project) => project.id === projectId);
   const projectArchived = selectedProject?.status === "archived";
 
+  useEffect(() => {
+    if (settingsOnly || !token || projectArchived) {
+      setAvailableSkills([]);
+      setSelectedSkill(null);
+      return;
+    }
+    let active = true;
+    const query = projectId ? `?project=${encodeURIComponent(projectId)}` : "";
+    void fetch(`/api/v1/skills/available${query}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then((response) => (response.ok ? response.json() : []))
+      .then((rows: AvailableSkill[]) => {
+        if (!active) return;
+        const list = Array.isArray(rows) ? rows : [];
+        setAvailableSkills(list);
+        setSelectedSkill((current) => {
+          if (!current) return null;
+          return list.find((item) => item.name === current.name) ?? null;
+        });
+      })
+      .catch(() => {
+        if (active) setAvailableSkills([]);
+      });
+    return () => {
+      active = false;
+    };
+  }, [token, projectId, refreshKey, settingsOnly, projectArchived]);
+
+  const currentAgent = agents.find((item) => item.id === agentId);
+  const agentSupportsSkills = currentAgent?.supports_skills ?? true;
+
   async function markTurnAccurate(turn: Turn) {
     if (!currentConversationId || projectArchived) return;
     setMarkingTurnId(turn.id);
@@ -321,6 +365,9 @@ export function ChatPage({
     refreshConversations,
     openConversation,
     loadCompletedConversation,
+    selectedSkill,
+    clearSelectedSkill: () => setSelectedSkill(null),
+    agentSupportsSkills,
   });
 
   async function downloadLinks(id: string): Promise<Record<string, string>> {
@@ -497,6 +544,7 @@ export function ChatPage({
     setLive(null);
     setError("");
     clearAttachments();
+    setSelectedSkill(null);
     if (projectArchived) {
       const fallback =
         projects.find(
@@ -805,6 +853,12 @@ export function ChatPage({
               removeAttachment={removeAttachment}
               visionEnabled={visionEnabled}
               onNavigateKnowledge={onNavigateKnowledge}
+              availableSkills={availableSkills}
+              selectedSkill={selectedSkill}
+              onSelectSkill={setSelectedSkill}
+              agentSupportsSkills={agentSupportsSkills}
+              onNavigatePersonalSettings={onNavigatePersonalSettings}
+              hasError={Boolean(error)}
             />
           </div>
           {citationRef && (

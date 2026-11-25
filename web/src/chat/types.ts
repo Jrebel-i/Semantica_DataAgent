@@ -11,6 +11,10 @@ export type Project = components["schemas"]["ProjectView"];
 export type ConversationDetail = components["schemas"]["ConversationDetail"];
 export type Turn = components["schemas"]["TurnView"];
 export type EventView = components["schemas"]["EventView"];
+export type AvailableSkill = components["schemas"]["AvailableSkillView"];
+export type SkillView = components["schemas"]["SkillView"];
+export type SkillMetadata = components["schemas"]["SkillMetadata"];
+export type SkillAuditView = components["schemas"]["SkillAuditView"];
 export type DocumentView =
   paths["/api/v1/document"]["get"]["responses"][200]["content"]["application/json"];
 

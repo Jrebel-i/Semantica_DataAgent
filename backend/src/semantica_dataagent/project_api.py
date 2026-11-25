@@ -11,7 +11,7 @@ from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from sqlalchemy import func, text
+from sqlalchemy import exists, func, or_, select, text
 
 from . import auto_build, project_context
 from .api_time import UtcDatetime
@@ -186,6 +186,56 @@ def require_query_project_access(
     if project.status in FROZEN_STATUSES:
         raise HTTPException(status_code=409, detail=ARCHIVED_DETAIL)
     return project
+
+
+def _authorized_project_token(requester: Requester, project_id: str):
+    member = exists(
+        select(1)
+        .select_from(ProjectMember)
+        .where(
+            ProjectMember.project_id == project_id, ProjectMember.token_id == Token.id
+        )
+        .correlate(Token)
+    )
+    return exists(
+        select(1)
+        .select_from(Token)
+        .where(
+            Token.id == requester.id,
+            Token.revoked.is_(False),
+            or_(Token.role == "admin", member),
+        )
+    )
+
+
+def require_skill_project(db, requester: Requester, project_id: str) -> str:
+    """Read current Skill project authorization in one database statement."""
+    if requester.project_id is not None and requester.project_id != project_id:
+        raise HTTPException(404, "Project not found")
+    project = db.execute(
+        select(Project.type, Project.status).where(
+            Project.id == project_id, _authorized_project_token(requester, project_id)
+        )
+    ).one_or_none()
+    if project is None:
+        raise HTTPException(404, "Project not found")
+    if project.status in FROZEN_STATUSES:
+        raise HTTPException(409, ARCHIVED_DETAIL)
+    return project.type
+
+
+def active_skill_project(requester: Requester, project_id: str, project_type: str):
+    """SQL predicate for coupling authorization with a Skill snapshot query."""
+    return exists(
+        select(1)
+        .select_from(Project)
+        .where(
+            Project.id == project_id,
+            Project.type == project_type,
+            Project.status == "active",
+            _authorized_project_token(requester, project_id),
+        )
+    )
 
 
 def _resolve_project_context(

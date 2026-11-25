@@ -24,6 +24,7 @@ from . import auto_build, project_context
 from .db import (
     AgentCredential,
     Build,
+    CatalogSkillProject,
     Clarification,
     Conversation,
     CorrectionProposal,
@@ -45,6 +46,7 @@ from .db import (
     ProjectSetting,
     PullRecord,
     QueryExecution,
+    SkillSecret,
     Turn,
     TurnEvent,
     sessions,
@@ -271,6 +273,12 @@ def _delete_database(project_id: str, settings: dict) -> None:
             synchronize_session=False
         )
         db.query(ProjectMember).filter(ProjectMember.project_id == project_id).delete(
+            synchronize_session=False
+        )
+        db.query(SkillSecret).filter_by(project_id=project_id).delete(
+            synchronize_session=False
+        )
+        db.query(CatalogSkillProject).filter_by(project_id=project_id).delete(
             synchronize_session=False
         )
         db.query(KnowledgeGeneration).filter(

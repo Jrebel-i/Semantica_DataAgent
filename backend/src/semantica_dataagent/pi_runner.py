@@ -14,11 +14,13 @@ from .agent_plugin import (
     SandboxTurn,
     agent_process,
     available_in_runtime,
+    build_skill_prompt,
     clarification_event,
     default_sandbox_class,
     error_event,
     extract_refs,
     extract_sql,
+    inject_skill_secrets,
     is_sandboxed,
     mcp_headers,
     query_plan_event,
@@ -135,6 +137,7 @@ class PiEventParser(EventParser):
 class PiRunner:
     agent_id = "pi"
     effort_levels = ("low", "medium", "high", "extra", "max")
+    supports_skills = True
 
     def __init__(self, binary: str | None = None):
         self.binary = binary
@@ -245,13 +248,19 @@ class PiRunner:
         if thinking:
             command.extend(["--thinking", thinking])
         async with turn:
+            stage_root: str | None = None
+            if request.skill is not None and request.skill.source == "upload":
+                stage_root = await turn.stage_ephemeral_files(request.skill.files)
+                command.extend(["--skill", f"{stage_root}/{request.skill.name}"])
+            effective_prompt = build_skill_prompt(
+                request.prompt, request.skill, stage_root
+            )
             if sandboxed:
                 command[command.index(str(sessions))] = "/sessions"
                 env["PI_CODING_AGENT_DIR"] = "/workspace/config"
                 env["PI_CODING_AGENT_SESSION_DIR"] = "/sessions"
                 env["HOME"] = "/tmp"
-                command, exec_header = turn.wrap_command(
-                    command,
+                keys = inject_skill_secrets(
                     env,
                     (
                         "PI_CODING_AGENT_DIR",
@@ -261,8 +270,15 @@ class PiRunner:
                         KEY_ENV,
                         "HOME",
                     ),
+                    request,
+                )
+                command, exec_header = turn.wrap_command(
+                    command,
+                    env,
+                    keys,
                 )
             else:
+                inject_skill_secrets(env, (), request)
                 exec_header = None
             async with agent_process(
                 command,
@@ -277,7 +293,7 @@ class PiRunner:
                 payload = {
                     "id": "turn",
                     "type": "prompt",
-                    "message": request.prompt,
+                    "message": effective_prompt,
                 }
                 images = [
                     {
@@ -315,7 +331,7 @@ class PiRunner:
                         self._sanitize(process.stderr_text(), request)
                         or f"pi exited with status {returncode}"
                     )
-                    yield error_event(message)
+                    yield redact_event(error_event(message), secrets)
                     return
                 yield redact_event(parser.finish(), secrets)
 
@@ -348,7 +364,7 @@ class PiRunner:
         return env
 
     def _sanitize(self, text: str, request: AgentTurnRequest) -> str:
-        for secret in (request.mcp_token, request.provider.api_key):
+        for secret in request_secrets(request):
             if secret:
                 text = text.replace(secret, "[redacted]")
         return text[-4000:]

@@ -28,6 +28,11 @@
           "name": {
             "title": "Name",
             "type": "string"
+          },
+          "supports_skills": {
+            "default": false,
+            "title": "Supports Skills",
+            "type": "boolean"
           }
         },
         "required": [
@@ -256,6 +261,17 @@
             "pattern": "\\S",
             "title": "Question",
             "type": "string"
+          },
+          "skill_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Skill Name"
           }
         },
         "required": [
@@ -289,6 +305,112 @@
           "enabled"
         ],
         "title": "AutoBuildView",
+        "type": "object"
+      },
+      "AvailableSkillView": {
+        "properties": {
+          "configured_secrets": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Configured Secrets",
+            "type": "array"
+          },
+          "dependencies": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Dependencies",
+            "type": "array"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "missing_secrets": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Missing Secrets",
+            "type": "array"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "project_types": {
+            "items": {
+              "enum": [
+                "warehouse",
+                "document"
+              ],
+              "type": "string"
+            },
+            "title": "Project Types",
+            "type": "array"
+          },
+          "projects": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Projects",
+            "type": "array"
+          },
+          "protected": {
+            "title": "Protected",
+            "type": "boolean"
+          },
+          "ready": {
+            "default": true,
+            "title": "Ready",
+            "type": "boolean"
+          },
+          "secrets": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Secrets",
+            "type": "array"
+          },
+          "source": {
+            "enum": [
+              "builtin",
+              "upload"
+            ],
+            "title": "Source",
+            "type": "string"
+          },
+          "trust_warning": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trust Warning"
+          }
+        },
+        "required": [
+          "name",
+          "description",
+          "project_types",
+          "projects",
+          "secrets",
+          "dependencies",
+          "trust_warning",
+          "source",
+          "protected",
+          "enabled"
+        ],
+        "title": "AvailableSkillView",
         "type": "object"
       },
       "Body_ask_with_attachments_api_v1_conversations_ask_with_attachments_post": {
@@ -380,6 +502,17 @@
             "pattern": "\\S",
             "title": "Question",
             "type": "string"
+          },
+          "skill_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Skill Name"
           }
         },
         "required": [
@@ -5732,6 +5865,200 @@
         "title": "SettingsUpdate",
         "type": "object"
       },
+      "SkillAuditView": {
+        "properties": {
+          "action": {
+            "title": "Action",
+            "type": "string"
+          },
+          "actor_id": {
+            "title": "Actor Id",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "skill_name": {
+            "title": "Skill Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "actor_id",
+          "action",
+          "skill_name",
+          "created_at"
+        ],
+        "title": "SkillAuditView",
+        "type": "object"
+      },
+      "SkillEnabled": {
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enabled"
+        ],
+        "title": "SkillEnabled",
+        "type": "object"
+      },
+      "SkillMetadata": {
+        "properties": {
+          "dependencies": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Dependencies",
+            "type": "array"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "project_types": {
+            "items": {
+              "enum": [
+                "warehouse",
+                "document"
+              ],
+              "type": "string"
+            },
+            "title": "Project Types",
+            "type": "array"
+          },
+          "projects": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Projects",
+            "type": "array"
+          },
+          "secrets": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Secrets",
+            "type": "array"
+          },
+          "trust_warning": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trust Warning"
+          }
+        },
+        "required": [
+          "name",
+          "description",
+          "project_types",
+          "projects",
+          "secrets",
+          "dependencies",
+          "trust_warning"
+        ],
+        "title": "SkillMetadata",
+        "type": "object"
+      },
+      "SkillView": {
+        "properties": {
+          "dependencies": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Dependencies",
+            "type": "array"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "project_types": {
+            "items": {
+              "enum": [
+                "warehouse",
+                "document"
+              ],
+              "type": "string"
+            },
+            "title": "Project Types",
+            "type": "array"
+          },
+          "projects": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Projects",
+            "type": "array"
+          },
+          "protected": {
+            "title": "Protected",
+            "type": "boolean"
+          },
+          "secrets": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Secrets",
+            "type": "array"
+          },
+          "source": {
+            "enum": [
+              "builtin",
+              "upload"
+            ],
+            "title": "Source",
+            "type": "string"
+          },
+          "trust_warning": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trust Warning"
+          }
+        },
+        "required": [
+          "name",
+          "description",
+          "project_types",
+          "projects",
+          "secrets",
+          "dependencies",
+          "trust_warning",
+          "source",
+          "protected",
+          "enabled"
+        ],
+        "title": "SkillView",
+        "type": "object"
+      },
       "SourceCommit": {
         "properties": {
           "commit": {
@@ -6720,6 +7047,17 @@
           "sequence": {
             "title": "Sequence",
             "type": "integer"
+          },
+          "skill_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Skill Name"
           },
           "sql": {
             "items": {
@@ -11975,6 +12313,514 @@
           }
         ],
         "summary": "Download Skill"
+      }
+    },
+    "/api/v1/skills": {
+      "get": {
+        "operationId": "list_skills_api_v1_skills_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/SkillView"
+                  },
+                  "title": "Response List Skills Api V1 Skills Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Skills"
+      },
+      "post": {
+        "operationId": "upload_skill_api_v1_skills_post",
+        "requestBody": {
+          "content": {
+            "application/zip": {
+              "schema": {
+                "format": "binary",
+                "type": "string"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Upload Skill"
+      }
+    },
+    "/api/v1/skills/audit": {
+      "get": {
+        "operationId": "skill_audit_api_v1_skills_audit_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/SkillAuditView"
+                  },
+                  "title": "Response Skill Audit Api V1 Skills Audit Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Skill Audit"
+      }
+    },
+    "/api/v1/skills/available": {
+      "get": {
+        "operationId": "available_skills_api_v1_skills_available_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "project",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Project"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AvailableSkillView"
+                  },
+                  "title": "Response Available Skills Api V1 Skills Available Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Available Skills"
+      }
+    },
+    "/api/v1/skills/preview": {
+      "post": {
+        "operationId": "preview_skill_api_v1_skills_preview_post",
+        "requestBody": {
+          "content": {
+            "application/zip": {
+              "schema": {
+                "format": "binary",
+                "type": "string"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillMetadata"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Preview Skill"
+      }
+    },
+    "/api/v1/skills/{name}": {
+      "delete": {
+        "operationId": "delete_skill_api_v1_skills__name__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Delete Skill"
+      }
+    },
+    "/api/v1/skills/{name}/enabled": {
+      "put": {
+        "operationId": "set_skill_enabled_api_v1_skills__name__enabled_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SkillEnabled"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Set Skill Enabled"
+      }
+    },
+    "/api/v1/skills/{name}/secrets": {
+      "get": {
+        "operationId": "secret_status_api_v1_skills__name__secrets_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "project",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Project"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "boolean"
+                  },
+                  "title": "Response Secret Status Api V1 Skills  Name  Secrets Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Secret Status"
+      }
+    },
+    "/api/v1/skills/{name}/secrets/{secret_name}": {
+      "delete": {
+        "operationId": "delete_secret_api_v1_skills__name__secrets__secret_name__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "secret_name",
+            "required": true,
+            "schema": {
+              "title": "Secret Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "project",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Project"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Delete Secret"
+      },
+      "put": {
+        "operationId": "put_secret_api_v1_skills__name__secrets__secret_name__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "secret_name",
+            "required": true,
+            "schema": {
+              "title": "Secret Name",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "project",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Project"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "value": {
+                    "format": "password",
+                    "type": "string",
+                    "writeOnly": true
+                  }
+                },
+                "required": [
+                  "value"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Put Secret"
       }
     },
     "/api/v1/source/diff": {

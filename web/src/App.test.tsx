@@ -914,3 +914,45 @@ test("projectAdmin can open evolution dashboard and navigate to generated propos
   expect(await screen.findByText("路由跳转验证假设")).toBeTruthy();
   history.replaceState(null, "", "/");
 });
+
+test("skills management route is admin-only", async () => {
+  localStorage.setItem("token", "valid-token");
+  history.replaceState(null, "", "/skills");
+
+  // Non-admin sees forbidden alert
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/v1/me") return Response.json({ role: "user" });
+      if (url === "/api/v1/projects") return Response.json([]);
+      return Response.json([]);
+    }),
+  );
+  render(<App />);
+  expect(await screen.findByText("无权限访问")).toBeTruthy();
+
+  cleanup();
+  // Admin loads SkillsPage
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/v1/me") return Response.json({ role: "admin" });
+      if (url === "/api/v1/skills") return Response.json([]);
+      if (url.startsWith("/api/v1/skills/audit")) return Response.json([]);
+      if (url === "/api/v1/projects") return Response.json([]);
+      if (url === "/healthz") return Response.json({});
+      if (url === "/api/v1/generations")
+        return Response.json({ generations: [] });
+      if (url === "/api/v1/me/dtb-token")
+        return Response.json({ configured: false });
+      return Response.json([]);
+    }),
+  );
+  render(<App />);
+  expect(
+    await screen.findByRole("heading", { level: 1, name: "Skill 管理" }),
+  ).toBeTruthy();
+  history.replaceState(null, "", "/");
+});

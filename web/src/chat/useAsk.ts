@@ -4,6 +4,7 @@ import type { FormEvent } from "react";
 import type { Messages } from "../i18n";
 import { citationsOf, sqlBlocks } from "./citations";
 import type {
+  AvailableSkill,
   Clarification,
   Conversation,
   EffortLevel,
@@ -45,6 +46,9 @@ export function useAsk({
   refreshConversations,
   openConversation,
   loadCompletedConversation,
+  selectedSkill = null,
+  clearSelectedSkill,
+  agentSupportsSkills = true,
 }: {
   token: string;
   messages: Messages;
@@ -71,6 +75,9 @@ export function useAsk({
   refreshConversations: () => Promise<void>;
   openConversation: (id: string) => Promise<void>;
   loadCompletedConversation: (id: string, sequence: number) => Promise<void>;
+  selectedSkill?: AvailableSkill | null;
+  clearSelectedSkill?: () => void;
+  agentSupportsSkills?: boolean;
 }) {
   const [question, setQuestion] = useState("");
   const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
@@ -184,6 +191,10 @@ export function useAsk({
     setLive((current) => (current ? change(current) : current));
   }
 
+  const skillBlocked = Boolean(
+    selectedSkill && (!selectedSkill.ready || !agentSupportsSkills),
+  );
+
   async function submitPrompt(prompt: string, files: PendingAttachment[] = []) {
     const trimmed = prompt.trim();
     if (
@@ -193,9 +204,11 @@ export function useAsk({
       sending ||
       !resumable ||
       projectArchived ||
+      skillBlocked ||
       archivedConversations.some((row) => row.id === currentConversationId)
     )
       return;
+    const submittedSkillName = selectedSkill?.name ?? null;
     selectionTouched.current = true;
     const sequence = ++askSequence.current;
     let conversationId = currentConversationId;
@@ -222,6 +235,7 @@ export function useAsk({
         ...(currentConversationId
           ? { conversation_id: currentConversationId }
           : {}),
+        ...(submittedSkillName ? { skill_name: submittedSkillName } : {}),
       };
       let response: Response;
       if (files.length > 0) {
@@ -256,6 +270,9 @@ export function useAsk({
       if (files.length > 0) {
         files.forEach(releaseAttachment);
         setAttachments([]);
+      }
+      if (submittedSkillName) {
+        clearSelectedSkill?.();
       }
       await readSse(response, (name, data) => {
         if (
@@ -352,6 +369,7 @@ export function useAsk({
     model &&
     !sending &&
     resumable &&
+    !skillBlocked &&
     !(attachments.some((item) => item.isImage) && !visionEnabled) &&
     !projectArchived &&
     !archivedConversations.some((row) => row.id === currentConversationId),
