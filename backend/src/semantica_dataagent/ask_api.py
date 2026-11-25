@@ -8,7 +8,12 @@ from datetime import UTC, datetime
 
 from sqlalchemy import func, text
 
-from .agent_runner import DONE, ERROR, AgentEvent, AgentTurnRequest, get_runner
+from .agent_runner import DONE, ERROR, AgentEvent, AgentTurnRequest
+from .assistant_catalog import (
+    AssistantResolutionError,
+    is_catalog_governed,
+    resolve_assistant_target,
+)
 from .auth import issue_agent_credential
 from .conversation_api import (
     _finish_turn,
@@ -53,22 +58,31 @@ def _timeout() -> float:
     return value
 
 
-def _choices() -> tuple[str, str, str]:
+def _legacy_choices(db) -> tuple[str, str, str]:
     agent_id = _configured("assistant_agent") or "pi"
     provider_id = _configured("assistant_provider_id")
     model = _configured("assistant_model")
+    provider = db.get(Provider, provider_id) if provider_id else None
+    if provider is None and provider_id is None:
+        provider = db.query(Provider).order_by(Provider.name, Provider.id).first()
+    if provider is None:
+        raise ToolInvalidInput("The default assistant provider is not configured")
+    models = json.loads(provider.models)
+    if not models:
+        raise ToolInvalidInput("The default assistant model is not configured")
+    if not model:
+        model = models[0]
+    if model not in models:
+        raise ToolInvalidInput("The default assistant model is not configured")
+    return agent_id, provider.id, model
+
+
+def _choices() -> tuple[str, str, str]:
     with sessions()() as db:
-        provider = db.get(Provider, provider_id) if provider_id else None
-        if provider is None and provider_id is None:
-            provider = db.query(Provider).order_by(Provider.name, Provider.id).first()
-        if provider is None:
-            raise RuntimeError("The default assistant provider is not configured")
-        models = json.loads(provider.models)
-        if not model:
-            model = models[0]
-        if model not in models:
-            raise RuntimeError("The default assistant model is not configured")
-        return agent_id, provider.id, model
+        if is_catalog_governed(db):
+            resolved = resolve_assistant_target(db, owner_id=None)
+            return resolved.agent_id, resolved.provider.id, resolved.model
+        return _legacy_choices(db)
 
 
 def _start_turn(
@@ -81,6 +95,7 @@ def _start_turn(
     cleanup_expired_sessions()
     with sessions().begin() as db:
         db.execute(text("BEGIN IMMEDIATE"))
+        conversation: Conversation | None = None
         if conversation_id:
             conversation = db.get(Conversation, conversation_id)
             if conversation is None or conversation.owner_id != owner_id:
@@ -89,9 +104,6 @@ def _start_turn(
                 raise ToolInvalidInput("对话已绑定其它项目，请新建对话")
             if not conversation.resumable:
                 raise ValueError("Conversation session expired and cannot be resumed")
-            agent_id = conversation.agent
-            provider_id = conversation.provider_id
-            model = conversation.model
             sequence = (
                 db.query(func.max(Turn.sequence))
                 .filter(Turn.conversation_id == conversation.id)
@@ -99,13 +111,45 @@ def _start_turn(
                 or 0
             ) + 1
         else:
-            agent_id, provider_id, model = _choices()
+            sequence = 1
+
+        governed = is_catalog_governed(db)
+        try:
+            if governed or conversation is not None:
+                resolved = resolve_assistant_target(
+                    db,
+                    owner_id=owner_id,
+                    conversation=conversation,
+                )
+            else:
+                agent_id, provider_id, model = _legacy_choices(db)
+                resolved = resolve_assistant_target(
+                    db,
+                    owner_id=owner_id,
+                    conversation=None,
+                    agent=agent_id,
+                    provider_id=provider_id,
+                    model=model,
+                )
+        except AssistantResolutionError as exc:
+            if exc.status_code == 503:
+                raise ToolUnavailable(exc.message) from None
+            raise ToolInvalidInput(exc.message) from None
+
+        agent_id = resolved.agent_id
+        provider = resolved.provider
+        provider_id = provider.id
+        model = resolved.model
+        runner = resolved.runner
+
+        if conversation is None:
             conversation = Conversation(
                 id=uuid.uuid4().hex,
                 owner_id=owner_id,
                 project_id=project_id,
                 title=question.strip()[:100],
                 agent=agent_id,
+                agent_profile_id=resolved.agent_profile_id,
                 provider_id=provider_id,
                 model=model,
                 created_at=now,
@@ -113,19 +157,14 @@ def _start_turn(
             )
             db.add(conversation)
             db.flush()
-            sequence = 1
-        provider = db.get(Provider, provider_id)
-        if provider is None:
-            raise RuntimeError("The conversation provider no longer exists")
-        models = json.loads(provider.models)
-        if model not in models:
-            raise RuntimeError("The conversation model is no longer configured")
-        runner = get_runner(agent_id)
-        if runner is None:
-            raise RuntimeError("The conversation agent is no longer available")
-        if not runner.available():
-            raise RuntimeError("The online agent runtime is unavailable")
-        conversation.updated_at = now
+        else:
+            if (
+                conversation.agent_profile_id is None
+                and resolved.agent_profile_id is not None
+            ):
+                conversation.agent_profile_id = resolved.agent_profile_id
+            conversation.updated_at = now
+
         turn = Turn(
             conversation_id=conversation.id,
             provider_id=provider_id,
