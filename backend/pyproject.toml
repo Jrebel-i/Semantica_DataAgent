@@ -28,7 +28,7 @@ sql = "semantica_dataagent.sql_tasks:SQLTaskParser"
 dtb = "semantica_dataagent.dtb_tasks:DtbTaskParser"
 
 [project.entry-points."semantica_dataagent.executors"]
-dtb = "semantica_dataagent.dtb_executor:DtbExecutor"
+dtb_ai_gateway = "semantica_dataagent.dtb_ai_gateway:DtbAiGatewayExecutor"
 
 [project.entry-points."semantica_dataagent.agent_runners"]
 pi = "semantica_dataagent.pi_runner:PiRunner"
@@ -36,7 +36,7 @@ claude = "semantica_dataagent.claude_runner:ClaudeRunner"
 codex = "semantica_dataagent.codex_runner:CodexRunner"
 
 [project.entry-points."semantica_dataagent.pullers"]
-dtb = "semantica_dataagent.dtb_ossie:DtbPluginPuller"
+dtb_ai_gateway = "semantica_dataagent.dtb_ai_gateway:DtbAiGatewayPuller"
 
 [project.entry-points."semantica_dataagent.trace_sources"]
 langfuse = "semantica_dataagent.trace_sources:LangfuseTraceSource"

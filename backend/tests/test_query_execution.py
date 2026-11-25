@@ -406,11 +406,10 @@ def test_partition_safety_and_execution(client, monkeypatch):
 
         def do_POST(self):
             body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-            calls.append((self.headers.get("token"), body))
-            payload = json.dumps(
-                {"status": 200, "data": {"queryKey": "query1"}}
-            ).encode()
-            if self.headers.get("token") == "expired":
+            key = self.headers.get("X-Agent-Key")
+            calls.append((key, body))
+            payload = json.dumps({"data": {"queryKey": "query1"}}).encode()
+            if key == "expired":
                 self.send_response(401)
                 self.end_headers()
                 return
@@ -419,22 +418,31 @@ def test_partition_safety_and_execution(client, monkeypatch):
             self.wfile.write(payload)
 
         def do_GET(self):
-            if self.path.startswith("/api/data-query/result/"):
+            if self.path.startswith("/result/"):
                 payload = json.dumps(
                     {
-                        "status": 200,
                         "data": {
-                            "progress": 1,
-                            "columns": [{"name": "v", "type": "long"}],
-                            "data": [[1], [2]],
-                        },
+                            "status": "200",
+                            "data": {
+                                "progress": 1,
+                                "columns": [{"name": "v", "type": "long"}],
+                                "data": [[1], [2]],
+                            },
+                        }
                     }
                 ).encode()
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(payload)
             else:
                 payload = b"v\n1\n2\n"
-            self.send_response(200)
-            self.end_headers()
-            self.wfile.write(payload)
+                self.send_response(200)
+                self.send_header(
+                    "Content-Disposition", 'attachment; filename="result.csv"'
+                )
+                self.send_header("Content-Type", "text/csv")
+                self.end_headers()
+                self.wfile.write(payload)
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     thread = Thread(target=server.serve_forever, daemon=True)
@@ -454,7 +462,7 @@ def test_partition_safety_and_execution(client, monkeypatch):
         c, headers = client
         base_url = f"http://127.0.0.1:{server.server_port}"
         response = c.put(
-            "/api/v1/plugins/executor/dtb",
+            "/api/v1/plugins/executor/dtb_ai_gateway",
             headers=headers,
             json={
                 "enabled": True,
@@ -512,7 +520,7 @@ def test_partition_safety_and_execution(client, monkeypatch):
         assert plan["execution_limit"] == 5
         assert (
             c.put(
-                "/api/v1/plugins/executor/dtb",
+                "/api/v1/plugins/executor/dtb_ai_gateway",
                 headers=headers,
                 json={
                     "enabled": True,
@@ -618,7 +626,7 @@ def test_interrupted_execution_preserves_audit(tmp_path, monkeypatch):
         with TestClient(app) as c:
             assert (
                 c.put(
-                    "/api/v1/plugins/executor/dtb",
+                    "/api/v1/plugins/executor/dtb_ai_gateway",
                     headers=headers,
                     json={
                         "enabled": True,

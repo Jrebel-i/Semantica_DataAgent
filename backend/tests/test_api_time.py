@@ -313,7 +313,7 @@ def test_rest_time_fields_have_utc_offset(client, monkeypatch):
         project_context.upsert_plugin_config(
             db,
             "executor",
-            "dtb",
+            "dtb_ai_gateway",
             True,
             {"base_url": "http://dtb.local", "timeout_seconds": 30},
         )

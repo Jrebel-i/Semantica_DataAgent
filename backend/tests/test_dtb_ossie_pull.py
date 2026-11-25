@@ -113,18 +113,24 @@ class _FakeDtb:
         return "table"
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/api/data-query/async-execute":
+        path = request.url.path
+        if path in {"/api/data-query/async-execute", "/async-execute"}:
             body = json.loads(request.content)
             key = self._key(body["sql"])
             return httpx.Response(
                 200, json={"status": "200", "data": {"queryKey": key}}
             )
-        if request.url.path.startswith("/api/data-query/result/"):
+        if path.startswith(("/api/data-query/result/", "/result/")):
+            if path.startswith("/result/"):
+                return httpx.Response(
+                    200,
+                    json={"data": {"status": "200", "data": {"progress": 1.0}}},
+                )
             return httpx.Response(
                 200, json={"status": "200", "data": {"progress": 1.0}}
             )
-        if request.url.path.startswith("/api/data-query/download/"):
-            key = request.url.path.rsplit("/", 1)[-1]
+        if path.startswith(("/api/data-query/download/", "/download/")):
+            key = path.rsplit("/", 1)[-1]
             if key == "metadata":
                 payload = json.dumps(
                     {
@@ -136,17 +142,30 @@ class _FakeDtb:
                     ensure_ascii=False,
                 ).encode("utf-8")
                 return httpx.Response(
-                    200, content=payload, headers={"content-type": "application/json"}
+                    200,
+                    content=payload,
+                    headers={
+                        "content-type": "application/json",
+                        "Content-Disposition": 'attachment; filename="metadata.json"',
+                    },
                 )
             if key == "task":
                 return httpx.Response(
-                    200, content=self.task, headers={"content-type": "application/json"}
+                    200,
+                    content=self.task,
+                    headers={
+                        "content-type": "application/json",
+                        "Content-Disposition": 'attachment; filename="task.json"',
+                    },
                 )
             if key == "stats":
                 return httpx.Response(
                     200,
                     content=self.stats.encode("utf-8"),
-                    headers={"content-type": "text/csv"},
+                    headers={
+                        "content-type": "text/csv",
+                        "Content-Disposition": 'attachment; filename="stats.csv"',
+                    },
                 )
             if key == "table":
                 book = Workbook()
@@ -169,7 +188,13 @@ class _FakeDtb:
                     book.active.append(row)
                 buf = io.BytesIO()
                 book.save(buf)
-                return httpx.Response(200, content=buf.getvalue())
+                return httpx.Response(
+                    200,
+                    content=buf.getvalue(),
+                    headers={
+                        "Content-Disposition": 'attachment; filename="tables.xlsx"'
+                    },
+                )
             if key.startswith("dim_"):
                 tname = key[4:]
                 rows = self.dimension_rows.get(tname, [])
@@ -182,7 +207,12 @@ class _FakeDtb:
                     ensure_ascii=False,
                 ).encode("utf-8")
                 return httpx.Response(
-                    200, content=payload, headers={"content-type": "application/json"}
+                    200,
+                    content=payload,
+                    headers={
+                        "content-type": "application/json",
+                        "Content-Disposition": f'attachment; filename="{key}.json"',
+                    },
                 )
         return httpx.Response(404)
 
@@ -191,11 +221,12 @@ def test_dtb_puller_plugin_is_registered_and_transforms_fake_dtb_response(monkey
     from semantica_dataagent.plugins import PullContext, discover
 
     found = discover()
-    assert ("puller", "dtb") in found
+    assert ("puller", "dtb_ai_gateway") in found
+    assert ("puller", "dtb") not in found
     assert ("puller", "ossie") not in found
-    puller = found[("puller", "dtb")]
-    assert puller.id == "dtb"
-    assert puller.display_name == "DTB"
+    puller = found[("puller", "dtb_ai_gateway")]
+    assert puller.id == "dtb_ai_gateway"
+    assert puller.display_name == "DTB (AI Gov 网关)"
     assert "interval_seconds" not in puller.parameters_schema["properties"]
     assert {
         "url",
@@ -668,7 +699,7 @@ def test_project_dtb_pull_instance_lifecycle_and_end_to_end_build(
                 headers=headers,
                 json={
                     "id": "dtb-doc",
-                    "plugin_id": "dtb",
+                    "plugin_id": "dtb_ai_gateway",
                     "display_name": "DTB",
                     "parameters": {"url": "https://dtb.example", "token": "t"},
                 },
@@ -708,7 +739,7 @@ def test_project_dtb_pull_instance_lifecycle_and_end_to_end_build(
             headers=headers,
             json={
                 "id": "dims-main",
-                "plugin_id": "dtb",
+                "plugin_id": "dtb_ai_gateway",
                 "display_name": "Dims Main",
                 "parameters": {
                     "url": "https://dtb.example",

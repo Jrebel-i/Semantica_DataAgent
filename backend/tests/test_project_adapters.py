@@ -201,9 +201,9 @@ def test_project_scoped_pulls_list_and_project_admin_trigger(client, monkeypatch
     _add_member(c, admin, alpha["id"], project_admin["id"], "admin")
 
     class _FakePuller:
-        id = "dtb"
+        id = "dtb_ai_gateway"
         version = "1"
-        display_name = "DTB"
+        display_name = "DTB (AI Gov 网关)"
         parameters_schema: ClassVar[dict[str, object]] = {
             "type": "object",
             "properties": {
@@ -222,7 +222,7 @@ def test_project_scoped_pulls_list_and_project_admin_trigger(client, monkeypatch
     monkeypatch.setattr(
         pull_service,
         "discover",
-        lambda: {("puller", "dtb"): _FakePuller()},
+        lambda: {("puller", "dtb_ai_gateway"): _FakePuller()},
     )
     monkeypatch.setattr(project_context, "wake_build_queue", lambda: None)
 
@@ -232,7 +232,7 @@ def test_project_scoped_pulls_list_and_project_admin_trigger(client, monkeypatch
             headers=_headers(admin),
             json={
                 "id": "inst-main",
-                "plugin_id": "dtb",
+                "plugin_id": "dtb_ai_gateway",
                 "display_name": "Main",
                 "parameters": {"url": "https://dtb.example", "token": "secret"},
             },

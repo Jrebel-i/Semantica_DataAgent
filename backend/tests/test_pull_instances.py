@@ -498,7 +498,7 @@ def test_document_archived_and_member_boundaries_and_deletion(
             json={
                 "executors": [
                     {
-                        "id": "dtb",
+                        "id": "dtb_ai_gateway",
                         "enabled": True,
                         "parameters": {"base_url": "https://dtb.example"},
                     }

@@ -409,7 +409,7 @@ def test_discovery_config_provider_model_used_by_project_discovery_run_trigger(
         project_context.upsert_plugin_config(
             db,
             "executor",
-            "dtb",
+            "dtb_ai_gateway",
             True,
             {"base_url": "http://dtb.local", "timeout_seconds": 30},
         )

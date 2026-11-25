@@ -82,7 +82,7 @@ def _enable_dtb_executor(
         project_context.upsert_plugin_config(
             db,
             "executor",
-            "dtb",
+            "dtb_ai_gateway",
             True,
             {
                 "base_url": base_url,
@@ -239,7 +239,7 @@ def test_alembic_0041_single_head_upgrade_downgrade_and_partial_unique_index(
 
     cfg = _alembic_config(db_path)
     heads = ScriptDirectory.from_config(cfg).get_heads()
-    assert heads == ["0048"]
+    assert heads == ["0049"]
 
     command.upgrade(cfg, "0040")
     command.upgrade(cfg, "0041")
@@ -446,7 +446,7 @@ def test_stage2_fail_closed_skipped_no_partition_never_scans_business_table(
     env, monkeypatch: pytest.MonkeyPatch
 ):
     from semantica_dataagent import fk_probing, knowledge
-    from semantica_dataagent.dtb_executor import DtbExecutor
+    from semantica_dataagent.dtb_ai_gateway import DtbAiGatewayExecutor
 
     _, _, owner_id, _, _ = env
     _save_personal_token(owner_id, "tok-no-part")
@@ -455,34 +455,33 @@ def test_stage2_fail_closed_skipped_no_partition_never_scans_business_table(
     executed_sqls: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/api/data-query/async-execute":
+        if request.url.path == "/async-execute":
             body = json.loads(request.read().decode("utf-8"))
             executed_sqls.append(body.get("sql", ""))
             return httpx.Response(
                 200,
-                json={
-                    "status": "200",
-                    "data": {"queryKey": f"qk-{len(executed_sqls)}"},
-                },
+                json={"data": {"queryKey": f"qk-{len(executed_sqls)}"}},
             )
         # Partition metadata query returns empty rows (no partition resolvable!)
         return httpx.Response(
             200,
             json={
-                "status": "200",
                 "data": {
-                    "progress": 1.0,
-                    "columns": [{"name": "partition_name", "type": "string"}],
-                    "data": [],
-                },
+                    "status": "200",
+                    "data": {
+                        "progress": 1.0,
+                        "columns": [{"name": "partition_name", "type": "string"}],
+                        "data": [],
+                    },
+                }
             },
         )
 
     async_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     monkeypatch.setattr(
-        DtbExecutor,
+        DtbAiGatewayExecutor,
         "bind",
-        lambda self, params, tok: DtbExecutor(
+        lambda self, params, tok: DtbAiGatewayExecutor(
             params["base_url"],
             tok,
             client=async_client,
@@ -538,7 +537,7 @@ def test_e2e_discovery_run_forced_pending_zero_leak_approve_join_and_revert(
         sql_validation,
     )
     from semantica_dataagent.db import ProjectSetting, Provider, QueryAudit, sessions
-    from semantica_dataagent.dtb_executor import DtbExecutor
+    from semantica_dataagent.dtb_ai_gateway import DtbAiGatewayExecutor
 
     client, admin_token, owner_id, db_path, source_dir = env
     _save_personal_token(owner_id, "personal-dtb-secret-token-e2e")
@@ -643,43 +642,49 @@ def test_e2e_discovery_run_forced_pending_zero_leak_approve_join_and_revert(
     probe_sqls: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/api/data-query/async-execute":
+        if request.url.path == "/async-execute":
             body = json.loads(request.read().decode("utf-8"))
             sql = body.get("sql", "")
             qk = f"qk-{len(sql_by_key) + 1}"
             sql_by_key[qk] = sql
-            return httpx.Response(200, json={"status": "200", "data": {"queryKey": qk}})
-        if request.url.path.startswith("/api/data-query/result/"):
+            return httpx.Response(200, json={"data": {"queryKey": qk}})
+        if request.url.path.startswith("/result/"):
             qk = request.url.path.rsplit("/", 1)[-1]
             sql = sql_by_key[qk]
             if "audit_log" in sql:
                 return httpx.Response(
                     200,
                     json={
-                        "status": "200",
                         "data": {
-                            "progress": 1.0,
-                            "columns": [
-                                {"name": "sql_text", "type": "string"},
-                                {"name": "exec_status", "type": "string"},
-                                {"name": "exec_time", "type": "string"},
-                                {"name": "database_name", "type": "string"},
-                                {"name": "caller", "type": "string"},
-                            ],
-                            "data": history_rows,
-                        },
+                            "status": "200",
+                            "data": {
+                                "progress": 1.0,
+                                "columns": [
+                                    {"name": "sql_text", "type": "string"},
+                                    {"name": "exec_status", "type": "string"},
+                                    {"name": "exec_time", "type": "string"},
+                                    {"name": "database_name", "type": "string"},
+                                    {"name": "caller", "type": "string"},
+                                ],
+                                "data": history_rows,
+                            },
+                        }
                     },
                 )
             if "metadata_partition" in sql:
                 return httpx.Response(
                     200,
                     json={
-                        "status": "200",
                         "data": {
-                            "progress": 1.0,
-                            "columns": [{"name": "partition_name", "type": "string"}],
-                            "data": [["dt=2026-11-18"]],
-                        },
+                            "status": "200",
+                            "data": {
+                                "progress": 1.0,
+                                "columns": [
+                                    {"name": "partition_name", "type": "string"}
+                                ],
+                                "data": [["dt=2026-11-18"]],
+                            },
+                        }
                     },
                 )
             probe_sqls.append(sql)
@@ -689,50 +694,62 @@ def test_e2e_discovery_run_forced_pending_zero_leak_approve_join_and_revert(
                     return httpx.Response(
                         200,
                         json={
-                            "status": "200",
                             "data": {
-                                "progress": 1.0,
-                                "columns": [
-                                    {"name": "sample_distinct_count", "type": "bigint"},
-                                    {"name": "matched_count", "type": "bigint"},
-                                ],
-                                "data": [[100, 95]],
-                            },
+                                "status": "200",
+                                "data": {
+                                    "progress": 1.0,
+                                    "columns": [
+                                        {
+                                            "name": "sample_distinct_count",
+                                            "type": "bigint",
+                                        },
+                                        {"name": "matched_count", "type": "bigint"},
+                                    ],
+                                    "data": [[100, 95]],
+                                },
+                            }
                         },
                     )
                 return httpx.Response(
                     200,
                     json={
-                        "status": "200",
                         "data": {
-                            "progress": 1.0,
-                            "columns": [
-                                {"name": "sample_distinct_count", "type": "bigint"},
-                                {"name": "matched_count", "type": "bigint"},
-                            ],
-                            "data": [[100, 20]],
-                        },
+                            "status": "200",
+                            "data": {
+                                "progress": 1.0,
+                                "columns": [
+                                    {
+                                        "name": "sample_distinct_count",
+                                        "type": "bigint",
+                                    },
+                                    {"name": "matched_count", "type": "bigint"},
+                                ],
+                                "data": [[100, 20]],
+                            },
+                        }
                     },
                 )
             # Step 2: SELECT 1 ... INNER JOIN ... LIMIT 1
             return httpx.Response(
                 200,
                 json={
-                    "status": "200",
                     "data": {
-                        "progress": 1.0,
-                        "columns": [{"name": "matched", "type": "int"}],
-                        "data": [[1]],
-                    },
+                        "status": "200",
+                        "data": {
+                            "progress": 1.0,
+                            "columns": [{"name": "matched", "type": "int"}],
+                            "data": [[1]],
+                        },
+                    }
                 },
             )
         raise AssertionError(f"Unexpected path {request.url.path}")
 
     async_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     monkeypatch.setattr(
-        DtbExecutor,
+        DtbAiGatewayExecutor,
         "bind",
-        lambda self, params, tok: DtbExecutor(
+        lambda self, params, tok: DtbAiGatewayExecutor(
             params["base_url"],
             tok,
             client=async_client,
@@ -1063,7 +1080,7 @@ def test_mid_run_401_aborts_immediately_and_single_candidate_timeout_degrades_pa
     env, monkeypatch: pytest.MonkeyPatch
 ):
     from semantica_dataagent import knowledge
-    from semantica_dataagent.dtb_executor import DtbExecutor
+    from semantica_dataagent.dtb_ai_gateway import DtbAiGatewayExecutor
 
     client, admin_token, owner_id, _, _ = env
     secret_tok = "tok-midrun-expiry-98765"
@@ -1103,14 +1120,15 @@ def test_mid_run_401_aborts_immediately_and_single_candidate_timeout_degrades_pa
     def handler_401(request: httpx.Request) -> httpx.Response:
         probe_calls["count"] += 1
         return httpx.Response(
-            200, json={"status": "401", "message": f"expired token={secret_tok}"}
+            200,
+            json={"data": {"status": "401", "message": f"expired token={secret_tok}"}},
         )
 
     c_401 = httpx.AsyncClient(transport=httpx.MockTransport(handler_401))
     monkeypatch.setattr(
-        DtbExecutor,
+        DtbAiGatewayExecutor,
         "bind",
-        lambda self, params, tok: DtbExecutor(
+        lambda self, params, tok: DtbAiGatewayExecutor(
             params["base_url"], tok, client=c_401, retry_delays=(), poll_interval=0
         ),
     )
@@ -1136,56 +1154,62 @@ def test_mid_run_401_aborts_immediately_and_single_candidate_timeout_degrades_pa
     sql_map: dict[str, str] = {}
 
     def handler_partial(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/api/data-query/async-execute":
+        if request.url.path == "/async-execute":
             sql = json.loads(request.read().decode("utf-8")).get("sql", "")
             qk = f"p-{len(sql_map) + 1}"
             sql_map[qk] = sql
-            return httpx.Response(200, json={"status": "200", "data": {"queryKey": qk}})
+            return httpx.Response(200, json={"data": {"queryKey": qk}})
         qk = request.url.path.rsplit("/", 1)[-1]
         sql = sql_map[qk]
         if "dim_product" in sql:
             return httpx.Response(
                 200,
                 json={
-                    "status": "200",
                     "data": {
-                        "progress": 1.0,
-                        "errorMessage": "sensitive platform stack",
-                    },
+                        "status": "200",
+                        "data": {
+                            "progress": 1.0,
+                            "errorMessage": "sensitive platform stack",
+                        },
+                    }
                 },
             )
         if "sample_distinct_count" in sql:
             return httpx.Response(
                 200,
                 json={
-                    "status": "200",
                     "data": {
-                        "progress": 1.0,
-                        "columns": [
-                            {"name": "sample_distinct_count", "type": "bigint"},
-                            {"name": "matched_count", "type": "bigint"},
-                        ],
-                        "data": [[50, 48]],
-                    },
+                        "status": "200",
+                        "data": {
+                            "progress": 1.0,
+                            "columns": [
+                                {"name": "sample_distinct_count", "type": "bigint"},
+                                {"name": "matched_count", "type": "bigint"},
+                            ],
+                            "data": [[50, 48]],
+                        },
+                    }
                 },
             )
         return httpx.Response(
             200,
             json={
-                "status": "200",
                 "data": {
-                    "progress": 1.0,
-                    "columns": [{"name": "matched", "type": "int"}],
-                    "data": [[1]],
-                },
+                    "status": "200",
+                    "data": {
+                        "progress": 1.0,
+                        "columns": [{"name": "matched", "type": "int"}],
+                        "data": [[1]],
+                    },
+                }
             },
         )
 
     c_partial = httpx.AsyncClient(transport=httpx.MockTransport(handler_partial))
     monkeypatch.setattr(
-        DtbExecutor,
+        DtbAiGatewayExecutor,
         "bind",
-        lambda self, params, tok: DtbExecutor(
+        lambda self, params, tok: DtbAiGatewayExecutor(
             params["base_url"], tok, client=c_partial, retry_delays=(), poll_interval=0
         ),
     )
@@ -1219,7 +1243,7 @@ def test_seed_eval_drafts_switch_validate_sql_and_dev_holdout_dedup(
         project_context,
         sql_validation,
     )
-    from semantica_dataagent.dtb_executor import DtbExecutor
+    from semantica_dataagent.dtb_ai_gateway import DtbAiGatewayExecutor
 
     client, admin_token, owner_id, _, _ = env
     _save_personal_token(owner_id, "tok-eval-seed")
@@ -1323,33 +1347,33 @@ def test_seed_eval_drafts_switch_validate_sql_and_dev_holdout_dedup(
     ]
 
     def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/api/data-query/async-execute":
-            return httpx.Response(
-                200, json={"status": "200", "data": {"queryKey": "qk-eval"}}
-            )
+        if request.url.path == "/async-execute":
+            return httpx.Response(200, json={"data": {"queryKey": "qk-eval"}})
         return httpx.Response(
             200,
             json={
-                "status": "200",
                 "data": {
-                    "progress": 1.0,
-                    "columns": [
-                        {"name": "sql_text", "type": "string"},
-                        {"name": "exec_status", "type": "string"},
-                        {"name": "exec_time", "type": "string"},
-                        {"name": "database_name", "type": "string"},
-                        {"name": "caller", "type": "string"},
-                    ],
-                    "data": history_rows,
-                },
+                    "status": "200",
+                    "data": {
+                        "progress": 1.0,
+                        "columns": [
+                            {"name": "sql_text", "type": "string"},
+                            {"name": "exec_status", "type": "string"},
+                            {"name": "exec_time", "type": "string"},
+                            {"name": "database_name", "type": "string"},
+                            {"name": "caller", "type": "string"},
+                        ],
+                        "data": history_rows,
+                    },
+                }
             },
         )
 
     async_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     monkeypatch.setattr(
-        DtbExecutor,
+        DtbAiGatewayExecutor,
         "bind",
-        lambda self, params, tok: DtbExecutor(
+        lambda self, params, tok: DtbAiGatewayExecutor(
             params["base_url"],
             tok,
             client=async_client,
@@ -1561,7 +1585,7 @@ def test_discovery_default_fk_probing_false_skips_probes_and_synthesizes_overrid
 ):
     from semantica_dataagent import knowledge, knowledge_synthesizer
     from semantica_dataagent.db import Provider, QueryAudit, sessions
-    from semantica_dataagent.dtb_executor import DtbExecutor
+    from semantica_dataagent.dtb_ai_gateway import DtbAiGatewayExecutor
 
     client, admin_token, owner_id, _, source_dir = env
     _save_personal_token(owner_id, "tok-default-no-fk")
@@ -1624,35 +1648,35 @@ def test_discovery_default_fk_probing_false_skips_probes_and_synthesizes_overrid
     executed_sqls: list[str] = []
 
     def dtb_handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/api/data-query/async-execute":
+        if request.url.path == "/async-execute":
             sql = json.loads(request.read().decode("utf-8")).get("sql", "")
             executed_sqls.append(sql)
-            return httpx.Response(
-                200, json={"status": "200", "data": {"queryKey": "qk-1"}}
-            )
+            return httpx.Response(200, json={"data": {"queryKey": "qk-1"}})
         return httpx.Response(
             200,
             json={
-                "status": "200",
                 "data": {
-                    "progress": 1.0,
-                    "columns": [
-                        {"name": "sql_text", "type": "string"},
-                        {"name": "exec_status", "type": "string"},
-                        {"name": "exec_time", "type": "string"},
-                        {"name": "database_name", "type": "string"},
-                        {"name": "caller", "type": "string"},
-                    ],
-                    "data": history_rows,
-                },
+                    "status": "200",
+                    "data": {
+                        "progress": 1.0,
+                        "columns": [
+                            {"name": "sql_text", "type": "string"},
+                            {"name": "exec_status", "type": "string"},
+                            {"name": "exec_time", "type": "string"},
+                            {"name": "database_name", "type": "string"},
+                            {"name": "caller", "type": "string"},
+                        ],
+                        "data": history_rows,
+                    },
+                }
             },
         )
 
     async_client = httpx.AsyncClient(transport=httpx.MockTransport(dtb_handler))
     monkeypatch.setattr(
-        DtbExecutor,
+        DtbAiGatewayExecutor,
         "bind",
-        lambda self, params, tok: DtbExecutor(
+        lambda self, params, tok: DtbAiGatewayExecutor(
             params["base_url"],
             tok,
             client=async_client,
@@ -1817,7 +1841,7 @@ def test_discovery_llm_unavailable_explicit_error_and_fk_probing_preservation(
 ):
     from semantica_dataagent import knowledge, knowledge_synthesizer
     from semantica_dataagent.db import Provider, sessions
-    from semantica_dataagent.dtb_executor import DtbExecutor
+    from semantica_dataagent.dtb_ai_gateway import DtbAiGatewayExecutor
 
     client, admin_token, owner_id, _, _ = env
     _save_personal_token(owner_id, "tok-llm-fail")
@@ -1842,41 +1866,45 @@ def test_discovery_llm_unavailable_explicit_error_and_fk_probing_preservation(
     sql_by_key: dict[str, str] = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/api/data-query/async-execute":
+        if request.url.path == "/async-execute":
             sql = json.loads(request.read().decode("utf-8")).get("sql", "")
             qk = f"qk-{len(sql_by_key) + 1}"
             sql_by_key[qk] = sql
-            return httpx.Response(200, json={"status": "200", "data": {"queryKey": qk}})
+            return httpx.Response(200, json={"data": {"queryKey": qk}})
         qk = request.url.path.rsplit("/", 1)[-1]
         sql = sql_by_key[qk]
         if "audit_log" in sql:
             return httpx.Response(
                 200,
                 json={
-                    "status": "200",
                     "data": {
-                        "progress": 1.0,
-                        "columns": [
-                            {"name": "sql_text", "type": "string"},
-                            {"name": "exec_status", "type": "string"},
-                            {"name": "exec_time", "type": "string"},
-                            {"name": "database_name", "type": "string"},
-                            {"name": "caller", "type": "string"},
-                        ],
-                        "data": history_rows,
-                    },
+                        "status": "200",
+                        "data": {
+                            "progress": 1.0,
+                            "columns": [
+                                {"name": "sql_text", "type": "string"},
+                                {"name": "exec_status", "type": "string"},
+                                {"name": "exec_time", "type": "string"},
+                                {"name": "database_name", "type": "string"},
+                                {"name": "caller", "type": "string"},
+                            ],
+                            "data": history_rows,
+                        },
+                    }
                 },
             )
         if "metadata_partition" in sql:
             return httpx.Response(
                 200,
                 json={
-                    "status": "200",
                     "data": {
-                        "progress": 1.0,
-                        "columns": [{"name": "partition_name", "type": "string"}],
-                        "data": [["dt=2026-11-18"]],
-                    },
+                        "status": "200",
+                        "data": {
+                            "progress": 1.0,
+                            "columns": [{"name": "partition_name", "type": "string"}],
+                            "data": [["dt=2026-11-18"]],
+                        },
+                    }
                 },
             )
         if "sample_distinct_count" in sql:
@@ -1884,34 +1912,38 @@ def test_discovery_llm_unavailable_explicit_error_and_fk_probing_preservation(
             return httpx.Response(
                 200,
                 json={
-                    "status": "200",
                     "data": {
-                        "progress": 1.0,
-                        "columns": [
-                            {"name": "sample_distinct_count", "type": "bigint"},
-                            {"name": "matched_count", "type": "bigint"},
-                        ],
-                        "data": [[100, matched]],
-                    },
+                        "status": "200",
+                        "data": {
+                            "progress": 1.0,
+                            "columns": [
+                                {"name": "sample_distinct_count", "type": "bigint"},
+                                {"name": "matched_count", "type": "bigint"},
+                            ],
+                            "data": [[100, matched]],
+                        },
+                    }
                 },
             )
         return httpx.Response(
             200,
             json={
-                "status": "200",
                 "data": {
-                    "progress": 1.0,
-                    "columns": [{"name": "matched", "type": "int"}],
-                    "data": [[1]],
-                },
+                    "status": "200",
+                    "data": {
+                        "progress": 1.0,
+                        "columns": [{"name": "matched", "type": "int"}],
+                        "data": [[1]],
+                    },
+                }
             },
         )
 
     async_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     monkeypatch.setattr(
-        DtbExecutor,
+        DtbAiGatewayExecutor,
         "bind",
-        lambda self, params, tok: DtbExecutor(
+        lambda self, params, tok: DtbAiGatewayExecutor(
             params["base_url"],
             tok,
             client=async_client,
@@ -2102,7 +2134,7 @@ def test_verified_fk_not_dropped_when_llm_bundles_with_duplicate_override(
 ):
     from semantica_dataagent import knowledge, knowledge_synthesizer
     from semantica_dataagent.db import CorrectionProposal, Provider, sessions
-    from semantica_dataagent.dtb_executor import DtbExecutor
+    from semantica_dataagent.dtb_ai_gateway import DtbAiGatewayExecutor
 
     client, admin_token, owner_id, _, _ = env
     _save_personal_token(owner_id, "tok-fk-bundle")
@@ -2167,41 +2199,45 @@ def test_verified_fk_not_dropped_when_llm_bundles_with_duplicate_override(
     sql_by_key: dict[str, str] = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/api/data-query/async-execute":
+        if request.url.path == "/async-execute":
             sql = json.loads(request.read().decode("utf-8")).get("sql", "")
             qk = f"qk-{len(sql_by_key) + 1}"
             sql_by_key[qk] = sql
-            return httpx.Response(200, json={"status": "200", "data": {"queryKey": qk}})
+            return httpx.Response(200, json={"data": {"queryKey": qk}})
         qk = request.url.path.rsplit("/", 1)[-1]
         sql = sql_by_key[qk]
         if "audit_log" in sql:
             return httpx.Response(
                 200,
                 json={
-                    "status": "200",
                     "data": {
-                        "progress": 1.0,
-                        "columns": [
-                            {"name": "sql_text", "type": "string"},
-                            {"name": "exec_status", "type": "string"},
-                            {"name": "exec_time", "type": "string"},
-                            {"name": "database_name", "type": "string"},
-                            {"name": "caller", "type": "string"},
-                        ],
-                        "data": history_rows,
-                    },
+                        "status": "200",
+                        "data": {
+                            "progress": 1.0,
+                            "columns": [
+                                {"name": "sql_text", "type": "string"},
+                                {"name": "exec_status", "type": "string"},
+                                {"name": "exec_time", "type": "string"},
+                                {"name": "database_name", "type": "string"},
+                                {"name": "caller", "type": "string"},
+                            ],
+                            "data": history_rows,
+                        },
+                    }
                 },
             )
         if "metadata_partition" in sql:
             return httpx.Response(
                 200,
                 json={
-                    "status": "200",
                     "data": {
-                        "progress": 1.0,
-                        "columns": [{"name": "partition_name", "type": "string"}],
-                        "data": [["dt=2026-11-18"]],
-                    },
+                        "status": "200",
+                        "data": {
+                            "progress": 1.0,
+                            "columns": [{"name": "partition_name", "type": "string"}],
+                            "data": [["dt=2026-11-18"]],
+                        },
+                    }
                 },
             )
         if "sample_distinct_count" in sql:
@@ -2209,34 +2245,38 @@ def test_verified_fk_not_dropped_when_llm_bundles_with_duplicate_override(
             return httpx.Response(
                 200,
                 json={
-                    "status": "200",
                     "data": {
-                        "progress": 1.0,
-                        "columns": [
-                            {"name": "sample_distinct_count", "type": "bigint"},
-                            {"name": "matched_count", "type": "bigint"},
-                        ],
-                        "data": [[100, matched]],
-                    },
+                        "status": "200",
+                        "data": {
+                            "progress": 1.0,
+                            "columns": [
+                                {"name": "sample_distinct_count", "type": "bigint"},
+                                {"name": "matched_count", "type": "bigint"},
+                            ],
+                            "data": [[100, matched]],
+                        },
+                    }
                 },
             )
         return httpx.Response(
             200,
             json={
-                "status": "200",
                 "data": {
-                    "progress": 1.0,
-                    "columns": [{"name": "matched", "type": "int"}],
-                    "data": [[1]],
-                },
+                    "status": "200",
+                    "data": {
+                        "progress": 1.0,
+                        "columns": [{"name": "matched", "type": "int"}],
+                        "data": [[1]],
+                    },
+                }
             },
         )
 
     async_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     monkeypatch.setattr(
-        DtbExecutor,
+        DtbAiGatewayExecutor,
         "bind",
-        lambda self, params, tok: DtbExecutor(
+        lambda self, params, tok: DtbAiGatewayExecutor(
             params["base_url"],
             tok,
             client=async_client,

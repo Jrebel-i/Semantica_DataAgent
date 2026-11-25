@@ -636,7 +636,7 @@ export function ProjectsPage({
     const defaultPlugin = pullerPlugins[0];
     setEditingInstance(null);
     setInstId("");
-    setInstPluginId(defaultPlugin?.id ?? "dtb");
+    setInstPluginId(defaultPlugin?.id ?? "dtb_ai_gateway");
     setInstDisplayName("");
     setInstEnabled(true);
     setInstScheduleCron("");

@@ -50,7 +50,7 @@ def _enable_dtb_executor(
         project_context.upsert_plugin_config(
             db,
             "executor",
-            "dtb",
+            "dtb_ai_gateway",
             True,
             {
                 "base_url": base_url,
@@ -198,7 +198,7 @@ def test_execute_missing_token_returns_400_and_unconfigured_executor_returns_503
 def test_fetch_query_history_success_and_query_audit_persistence(db_env, monkeypatch):
     from semantica_dataagent import discovery_executor, project_context
     from semantica_dataagent.db import QueryAudit, sessions
-    from semantica_dataagent.dtb_executor import DtbExecutor
+    from semantica_dataagent.dtb_ai_gateway import DtbAiGatewayExecutor
 
     owner_id, _ = db_env
     _save_personal_token(owner_id, "real-user-dtb-tok-999")
@@ -207,52 +207,52 @@ def test_fetch_query_history_success_and_query_audit_persistence(db_env, monkeyp
     captured: dict = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
-        assert request.headers.get("token") == "real-user-dtb-tok-999"
-        if request.url.path == "/api/data-query/async-execute":
+        assert request.headers.get("X-Agent-Key") == "real-user-dtb-tok-999"
+        if request.url.path == "/async-execute":
             captured["sql"] = request.read().decode("utf-8")
-            return httpx.Response(
-                200, json={"status": "200", "data": {"queryKey": "qk-1"}}
-            )
-        if request.url.path == "/api/data-query/result/qk-1":
+            return httpx.Response(200, json={"data": {"queryKey": "qk-1"}})
+        if request.url.path == "/result/qk-1":
             return httpx.Response(
                 200,
                 json={
-                    "status": "200",
                     "data": {
-                        "progress": 1.0,
-                        "columns": [
-                            {"name": "sql_text", "type": "string"},
-                            {"name": "exec_status", "type": "string"},
-                            {"name": "exec_time", "type": "string"},
-                            {"name": "database_name", "type": "string"},
-                            {"name": "caller", "type": "string"},
-                        ],
-                        "data": [
-                            [
-                                "SELECT SUM(amount) FROM shop.orders WHERE dt='2026-11-18'",
-                                "EOF",
-                                "2026-11-18 10:00:00",
-                                "shop",
-                                "analyst_a",
+                        "status": "200",
+                        "data": {
+                            "progress": 1.0,
+                            "columns": [
+                                {"name": "sql_text", "type": "string"},
+                                {"name": "exec_status", "type": "string"},
+                                {"name": "exec_time", "type": "string"},
+                                {"name": "database_name", "type": "string"},
+                                {"name": "caller", "type": "string"},
                             ],
-                            [
-                                "SELECT 1",
-                                "ERR",  # filtered out defensively
-                                "2026-11-18 10:05:00",
-                                "shop",
-                                "analyst_b",
+                            "data": [
+                                [
+                                    "SELECT SUM(amount) FROM shop.orders WHERE dt='2026-11-18'",
+                                    "EOF",
+                                    "2026-11-18 10:00:00",
+                                    "shop",
+                                    "analyst_a",
+                                ],
+                                [
+                                    "SELECT 1",
+                                    "ERR",  # filtered out defensively
+                                    "2026-11-18 10:05:00",
+                                    "shop",
+                                    "analyst_b",
+                                ],
                             ],
-                        ],
-                    },
+                        },
+                    }
                 },
             )
         raise AssertionError(f"Unexpected path {request.url.path}")
 
     async_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     monkeypatch.setattr(
-        DtbExecutor,
+        DtbAiGatewayExecutor,
         "bind",
-        lambda self, params, tok: DtbExecutor(
+        lambda self, params, tok: DtbAiGatewayExecutor(
             params["base_url"],
             tok,
             client=async_client,
@@ -284,7 +284,7 @@ def test_fetch_query_history_success_and_query_audit_persistence(db_env, monkeyp
 def test_dtb_auth_401_aborts_immediately_and_scrubs_raw_errors(db_env, monkeypatch):
     from semantica_dataagent import discovery_executor
     from semantica_dataagent.db import QueryAudit, sessions
-    from semantica_dataagent.dtb_executor import DtbExecutor
+    from semantica_dataagent.dtb_ai_gateway import DtbAiGatewayExecutor
 
     owner_id, _ = db_env
     secret_tok = "satoken-super-secret-xyz"
@@ -298,14 +298,16 @@ def test_dtb_auth_401_aborts_immediately_and_scrubs_raw_errors(db_env, monkeypat
         calls["count"] += 1
         return httpx.Response(
             200,
-            json={"status": "401", "message": f"invalid satoken={secret_tok}"},
+            json={
+                "data": {"status": "401", "message": f"invalid satoken={secret_tok}"}
+            },
         )
 
     client1 = httpx.AsyncClient(transport=httpx.MockTransport(auth_fail_handler))
     monkeypatch.setattr(
-        DtbExecutor,
+        DtbAiGatewayExecutor,
         "bind",
-        lambda self, params, tok: DtbExecutor(
+        lambda self, params, tok: DtbAiGatewayExecutor(
             params["base_url"],
             tok,
             client=client1,
@@ -333,23 +335,23 @@ def test_dtb_auth_401_aborts_immediately_and_scrubs_raw_errors(db_env, monkeypat
     )
 
     def raw_err_handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/api/data-query/async-execute":
-            return httpx.Response(
-                200, json={"status": "200", "data": {"queryKey": "qk-err"}}
-            )
+        if request.url.path == "/async-execute":
+            return httpx.Response(200, json={"data": {"queryKey": "qk-err"}})
         return httpx.Response(
             200,
             json={
-                "status": "200",
-                "data": {"progress": 1.0, "errorMessage": raw_secret_err},
+                "data": {
+                    "status": "200",
+                    "data": {"progress": 1.0, "errorMessage": raw_secret_err},
+                }
             },
         )
 
     client2 = httpx.AsyncClient(transport=httpx.MockTransport(raw_err_handler))
     monkeypatch.setattr(
-        DtbExecutor,
+        DtbAiGatewayExecutor,
         "bind",
-        lambda self, params, tok: DtbExecutor(
+        lambda self, params, tok: DtbAiGatewayExecutor(
             params["base_url"],
             tok,
             client=client2,
@@ -381,7 +383,7 @@ def test_dtb_auth_401_aborts_immediately_and_scrubs_raw_errors(db_env, monkeypat
 def test_execute_enforces_timeout_and_audits_failure(db_env, monkeypatch):
     from semantica_dataagent import discovery_executor
     from semantica_dataagent.db import QueryAudit, sessions
-    from semantica_dataagent.dtb_executor import DtbExecutor
+    from semantica_dataagent.dtb_ai_gateway import DtbAiGatewayExecutor
 
     owner_id, _ = db_env
     _save_personal_token(owner_id, "tok-timeout")
@@ -395,7 +397,9 @@ def test_execute_enforces_timeout_and_audits_failure(db_env, monkeypatch):
             await asyncio.sleep(5)
             return {"columns": ["a"], "data": [[1]]}
 
-    monkeypatch.setattr(DtbExecutor, "bind", lambda self, params, tok: _SlowExecutor())
+    monkeypatch.setattr(
+        DtbAiGatewayExecutor, "bind", lambda self, params, tok: _SlowExecutor()
+    )
 
     with pytest.raises(discovery_executor.DiscoveryTimeoutError) as exc_timeout:
         asyncio.run(

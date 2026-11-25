@@ -102,16 +102,14 @@ class FakeDtb:
 
             def do_POST(self):
                 body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-                fake.calls.append((self.headers.get("token"), body))
+                fake.calls.append((self.headers.get("X-Agent-Key"), body))
                 key = f"sample-{len(fake.calls)}"
                 fake.queries[key] = body.get("sql", "")
                 if fake.status == 401:
                     self.send_response(401)
                     self.end_headers()
                     return
-                payload = json.dumps(
-                    {"status": 200, "data": {"queryKey": key}}
-                ).encode()
+                payload = json.dumps({"data": {"queryKey": key}}).encode()
                 self.send_response(200)
                 self.end_headers()
                 self.wfile.write(payload)
@@ -130,7 +128,7 @@ class FakeDtb:
                         ],
                         "data": [[1, "2025-01-03"], [2, "2025-01-03"]],
                     }
-                payload = json.dumps({"status": 200, "data": data}).encode()
+                payload = json.dumps({"data": {"status": "200", "data": data}}).encode()
                 self.send_response(200)
                 self.end_headers()
                 self.wfile.write(payload)
@@ -153,7 +151,7 @@ class FakeDtb:
 def configure_executor(client, url):
     c, headers, _ = client
     response = c.put(
-        "/api/v1/plugins/executor/dtb",
+        "/api/v1/plugins/executor/dtb_ai_gateway",
         headers=headers,
         json={
             "enabled": True,

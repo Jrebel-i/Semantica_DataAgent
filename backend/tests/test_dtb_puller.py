@@ -58,11 +58,12 @@ def puller():
 
 def test_converged_dtb_puller_plugin_is_discovered():
     found = discover()
-    assert ("puller", "dtb") in found
+    assert ("puller", "dtb_ai_gateway") in found
+    assert ("puller", "dtb") not in found
     assert ("puller", "ossie") not in found
-    plugin = found[("puller", "dtb")]
-    assert plugin.id == "dtb"
-    assert plugin.display_name == "DTB"
+    plugin = found[("puller", "dtb_ai_gateway")]
+    assert plugin.id == "dtb_ai_gateway"
+    assert plugin.display_name == "DTB (AI Gov 网关)"
     assert "interval_seconds" not in plugin.parameters_schema["properties"]
 
 

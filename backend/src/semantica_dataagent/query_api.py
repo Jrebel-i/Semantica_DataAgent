@@ -140,7 +140,7 @@ def _config(project_id: str | None = None):
                 else {}
             )
             if (
-                getattr(plugin, "id", None) == "dtb"
+                getattr(plugin, "id", None) in {"dtb", "dtb_ai_gateway"}
                 or "base_url" in params
                 or "base_url" in schema_props
             ):
