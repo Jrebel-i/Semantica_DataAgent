@@ -186,9 +186,7 @@ test("admin issues and revokes a token", async () => {
   );
   localStorage.setItem("token", "admin");
   render(<App />);
-  fireEvent.click(await screen.findByRole("button", { name: "用户菜单" }));
-  fireEvent.click(await screen.findByRole("button", { name: "管理" }));
-  fireEvent.click(await screen.findByRole("link", { name: "配置" }));
+  fireEvent.click(await screen.findByRole("link", { name: "设置" }));
   fireEvent.click(await screen.findByRole("link", { name: "令牌管理" }));
   fireEvent.click(await screen.findByRole("button", { name: "发放令牌" }));
   fireEvent.change(screen.getByLabelText("名称"), {
@@ -306,10 +304,10 @@ test("search debug is accessible from navigation", async () => {
   const { container } = render(<App />);
   fireEvent.click(await screen.findByRole("link", { name: "知识库" }));
   expect(container.querySelector(".sub-nav")).toBeNull();
-  expect(screen.queryByRole("link", { name: "知识浏览" })).toBeNull();
-  expect(screen.queryByRole("link", { name: "检索调试" })).toBeNull();
+  expect(screen.getByRole("link", { name: "知识浏览" })).toBeTruthy();
+  expect(screen.getByRole("link", { name: "检索调试" })).toBeTruthy();
 
-  fireEvent.click(screen.getByRole("link", { name: "搜索" }));
+  fireEvent.click(screen.getByRole("link", { name: "检索调试" }));
   expect(container.querySelector(".sub-nav")).toBeNull();
   expect(screen.getByRole("heading", { name: "检索调试" })).toBeTruthy();
   expect(screen.getByLabelText("查询内容")).toBeTruthy();
@@ -713,8 +711,6 @@ test("admin opens the projects page from the management menu", async () => {
   );
   localStorage.setItem("token", "admin");
   render(<App />);
-  fireEvent.click(await screen.findByRole("button", { name: "用户菜单" }));
-  fireEvent.click(await screen.findByRole("button", { name: "管理" }));
   fireEvent.click(await screen.findByRole("link", { name: "项目" }));
   const page = within(document.querySelector(".admin-page") as HTMLElement);
   expect(await page.findByText("Platform Docs")).toBeTruthy();
@@ -762,15 +758,14 @@ test("ordinary project admins get the project management menu entry", async () =
     }),
   );
   render(<App />);
-  fireEvent.click(await screen.findByRole("button", { name: "用户菜单" }));
-  fireEvent.click(await screen.findByRole("link", { name: "项目管理" }));
+  fireEvent.click(await screen.findByRole("link", { name: "项目" }));
   const page = within(document.querySelector(".admin-page") as HTMLElement);
   expect(await page.findByText("Alpha")).toBeTruthy();
   expect(screen.queryByRole("button", { name: "创建项目" })).toBeNull();
   history.replaceState(null, "", "/");
 });
 
-test("ordinary members do not get the project management menu entry", async () => {
+test("ordinary members see authorized projects and knowledge gaps, not builds or system settings", async () => {
   history.replaceState(null, "", "/");
   localStorage.setItem("token", "user");
   vi.stubGlobal(
@@ -788,12 +783,66 @@ test("ordinary members do not get the project management menu entry", async () =
             my_role: "member",
           },
         ]);
+      if (
+        url.startsWith("/api/v1/categories") ||
+        url.startsWith("/api/v1/tables")
+      )
+        return Response.json([]);
       return Response.json({});
     }),
   );
   render(<App />);
-  fireEvent.click(await screen.findByRole("button", { name: "用户菜单" }));
-  expect(screen.queryByRole("link", { name: "项目管理" })).toBeNull();
+  expect(await screen.findByRole("link", { name: "项目" })).toBeTruthy();
+  expect(screen.queryByRole("link", { name: "构建与数据" })).toBeNull();
+  fireEvent.click(screen.getByRole("link", { name: "知识库" }));
+  expect(await screen.findByRole("link", { name: "知识缺口" })).toBeTruthy();
+  fireEvent.click(screen.getByRole("link", { name: "设置" }));
+  expect(screen.queryByRole("link", { name: "Agent 配置" })).toBeNull();
+  expect(screen.getByRole("link", { name: "个人设置" })).toBeTruthy();
+  history.replaceState(null, "", "/");
+});
+
+test("settings sub-routes (/config, /agent-settings, /providers, /agent-runners, /platform) are directly reachable for admin", async () => {
+  localStorage.setItem("token", "admin");
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/v1/me") return Response.json({ role: "admin" });
+      if (url === "/api/v1/agents")
+        return Response.json([
+          { id: "pi", name: "pi", available: true },
+          { id: "claude", name: "Claude", available: true },
+        ]);
+      if (url === "/api/v1/providers") return Response.json([]);
+      if (url === "/api/v1/settings") return Response.json({});
+      if (url === "/healthz") return Response.json({});
+      return Response.json([]);
+    }),
+  );
+
+  history.replaceState(null, "", "/agent-runners");
+  render(<App />);
+  expect(
+    await screen.findByRole("heading", { level: 1, name: "Agent 运行器" }),
+  ).toBeTruthy();
+  const runnersPage = within(
+    document.querySelector(".admin-page") as HTMLElement,
+  );
+  expect(await runnersPage.findByText("Claude")).toBeTruthy();
+
+  fireEvent.click(screen.getByRole("link", { name: "供应商与模型" }));
+  expect(window.location.pathname).toBe("/providers");
+  expect(
+    await screen.findByRole("heading", { level: 1, name: "模型服务配置" }),
+  ).toBeTruthy();
+
+  fireEvent.click(screen.getByRole("link", { name: "平台设置" }));
+  expect(window.location.pathname).toBe("/platform");
+  expect(
+    await screen.findByRole("heading", { level: 1, name: "平台设置" }),
+  ).toBeTruthy();
+
   history.replaceState(null, "", "/");
 });
 

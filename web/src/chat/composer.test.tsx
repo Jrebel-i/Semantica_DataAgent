@@ -259,7 +259,7 @@ test("模型与思考强度弹层高于示例区且背景不透明", async () =>
   const popupZIndex = Number(/z-index:\s*(\d+)/.exec(popupCss)?.[1]);
   expect(popupZIndex).toBeGreaterThan(0);
   expect(cssDeclarations(".chat-examples")).not.toContain("z-index");
-  expect(popupCss).toContain("background: #fff");
+  expect(popupCss).toContain("background: var(--panel)");
   expect(
     cssDeclarations(
       ".ant-select-dropdown.composer-select-dropdown:not(.ant-slide-up-leave):not(.ant-slide-down-leave)",
