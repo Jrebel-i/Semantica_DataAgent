@@ -567,7 +567,14 @@ test("browses source history and compares versions", async () => {
     target: { value: "b".repeat(40) },
   });
   fireEvent.click(screen.getByRole("button", { name: "比较版本" }));
-  expect(await screen.findByText(/\+new/)).toBeTruthy();
+  expect(await screen.findByText("old")).toBeTruthy();
+  expect(screen.getByText("new")).toBeTruthy();
+  const splitBtn = screen.getByRole("button", { name: "左右对比" });
+  const unifiedBtn = screen.getByRole("button", { name: "行内对比" });
+  expect(splitBtn.getAttribute("aria-pressed")).toBe("true");
+  fireEvent.click(unifiedBtn);
+  expect(unifiedBtn.getAttribute("aria-pressed")).toBe("true");
+  expect(screen.getByText("new")).toBeTruthy();
   const diffCall = fetcher.mock.calls.find(([url]) =>
     String(url).startsWith("/api/v1/source/diff?"),
   );

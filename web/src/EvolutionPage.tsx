@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Button, Checkbox, Input, Select, Space, Tag } from "antd";
 import type { components } from "./api";
-import { DiscoveryPanel } from "./DiscoveryPanel";
 import { readErrorDetail } from "./httpErrors";
 import type { Messages } from "./i18n";
 import { ProjectSelector, storedProject, useProjects } from "./ProjectSelector";
@@ -194,19 +193,13 @@ function ProviderModelPair({
 export function EvolutionPage({
   token,
   messages: t,
-  initialTab = "evolution",
   onNavigateCorrections,
-  onNavigatePersonalSettings,
 }: {
   token: string;
   messages: Messages;
-  initialTab?: "evolution" | "discovery";
   onNavigateCorrections?: (proposalId?: string) => void;
   onNavigatePersonalSettings?: () => void;
 }) {
-  const [activeTab, setActiveTab] = useState<"evolution" | "discovery">(
-    initialTab,
-  );
   const [project, setProject] = useState(storedProject);
   const { projects } = useProjects(token);
   const currentProject = useMemo(
@@ -309,7 +302,6 @@ export function EvolutionPage({
   );
 
   useEffect(() => {
-    if (activeTab !== "evolution") return;
     const controller = new AbortController();
     requestGenRef.current += 1;
     setLoading(true);
@@ -327,12 +319,12 @@ export function EvolutionPage({
         }
       });
     return () => controller.abort();
-  }, [activeTab, loadProjectData, project, t.error]);
+  }, [loadProjectData, project, t.error]);
 
   const hasRunning = runs.some((r) => r.status === "running");
 
   useEffect(() => {
-    if (activeTab !== "evolution" || !hasRunning) return;
+    if (!hasRunning) return;
     const timer = window.setInterval(() => {
       if (pollInFlightRef.current) return;
       pollInFlightRef.current = true;
@@ -345,7 +337,7 @@ export function EvolutionPage({
         });
     }, 3000);
     return () => window.clearInterval(timer);
-  }, [activeTab, hasRunning, loadProjectData, project]);
+  }, [hasRunning, loadProjectData, project]);
 
   function handleProjectChange(nextProject: string) {
     requestGenRef.current += 1;
@@ -516,22 +508,16 @@ export function EvolutionPage({
     <section className="stack admin-page">
       <div className="page-header">
         <div>
-          <h1 className="page-title">
-            {activeTab === "discovery" ? t.discoveryTitle : t.evolutionTitle}
-          </h1>
-          <p className="page-subtitle">
-            {activeTab === "discovery" ? t.discoveryHint : t.evolutionHint}
-          </p>
+          <h1 className="page-title">{t.evolutionTitle}</h1>
+          <p className="page-subtitle">{t.evolutionHint}</p>
         </div>
-        {activeTab === "evolution" && (
-          <Button
-            autoInsertSpace={false}
-            onClick={() => void loadProjectData(projectRef.current)}
-            loading={loading}
-          >
-            {t.refresh}
-          </Button>
-        )}
+        <Button
+          autoInsertSpace={false}
+          onClick={() => void loadProjectData(projectRef.current)}
+          loading={loading}
+        >
+          {t.refresh}
+        </Button>
         <ProjectSelector
           token={token}
           value={project}
@@ -541,530 +527,517 @@ export function EvolutionPage({
         />
       </div>
 
-      <div className="correction-filters" role="tablist">
-        <button
-          type="button"
-          role="tab"
-          aria-selected={activeTab === "evolution"}
-          className={activeTab === "evolution" ? "active" : ""}
-          onClick={() => setActiveTab("evolution")}
-        >
-          {t.evolutionTitle}
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={activeTab === "discovery"}
-          className={activeTab === "discovery" ? "active" : ""}
-          onClick={() => setActiveTab("discovery")}
-        >
-          {t.discoveryTitle}
-        </button>
-      </div>
+      <>
+        {isArchivedProject && (
+          <Alert type="warning" showIcon title={t.projectArchivedNotice} />
+        )}
+        {error && <Alert type="error" title={error} showIcon />}
+        {saveNotice && <Alert type="success" title={saveNotice} showIcon />}
 
-      {activeTab === "discovery" ? (
-        <DiscoveryPanel
-          token={token}
-          project={project}
-          projectInfo={currentProject}
-          providers={providers}
-          messages={t}
-          onNavigateCorrections={onNavigateCorrections}
-          onNavigatePersonalSettings={onNavigatePersonalSettings}
-        />
-      ) : (
-        <>
-          {isArchivedProject && (
-            <Alert type="warning" showIcon title={t.projectArchivedNotice} />
-          )}
-          {error && <Alert type="error" title={error} showIcon />}
-          {saveNotice && <Alert type="success" title={saveNotice} showIcon />}
-
-          <section className="card section-card">
-            <div className="card-title-row">
-              <h2 className="card-title">{t.evolutionTitle}</h2>
-              <Space size={8} wrap>
-                <Tag color="blue">
-                  {t.evolutionLastWatermark}:{" "}
-                  {formatDateTime(config.last_trace_timestamp)}
+        <section className="card section-card">
+          <div className="card-title-row">
+            <h2 className="card-title">{t.evolutionTitle}</h2>
+            <Space size={8} wrap>
+              <Tag color="blue">
+                {t.evolutionLastWatermark}:{" "}
+                {formatDateTime(config.last_trace_timestamp)}
+              </Tag>
+              <Tag color="cyan">
+                {t.evolutionNextRunAt}: {formatDateTime(config.next_run_at)}
+              </Tag>
+              {config.last_triggered_at && (
+                <Tag>
+                  {t.evolutionLastTriggeredAt}:{" "}
+                  {formatDateTime(config.last_triggered_at)}
                 </Tag>
-                <Tag color="cyan">
-                  {t.evolutionNextRunAt}: {formatDateTime(config.next_run_at)}
-                </Tag>
-                {config.last_triggered_at && (
-                  <Tag>
-                    {t.evolutionLastTriggeredAt}:{" "}
-                    {formatDateTime(config.last_triggered_at)}
-                  </Tag>
+              )}
+              {config.global_langfuse_configured &&
+                !config.trace_source_plugin && (
+                  <Tag color="green">{t.evolutionGlobalLangfuseBadge}</Tag>
                 )}
-                {config.global_langfuse_configured &&
-                  !config.trace_source_plugin && (
-                    <Tag color="green">{t.evolutionGlobalLangfuseBadge}</Tag>
-                  )}
-              </Space>
-            </div>
+            </Space>
+          </div>
 
-            <div className="evolution-config-grid">
-              <label className="evolution-checkbox">
-                <input
-                  type="checkbox"
-                  disabled={isArchivedProject}
-                  checked={config.enabled}
-                  onChange={(e) =>
-                    setConfig((prev) => ({
-                      ...prev,
-                      enabled: e.target.checked,
-                    }))
-                  }
-                />
-                <span>{t.evolutionEnabled}</span>
-              </label>
-
-              <div className="evolution-field">
-                <label htmlFor="evo-trace-plugin">
-                  {t.evolutionTraceSourcePlugin}
-                </label>
-                <select
-                  id="evo-trace-plugin"
-                  disabled={isArchivedProject}
-                  value={config.trace_source_plugin ?? ""}
-                  onChange={(e) => {
-                    const nextPlugin = e.target.value || null;
-                    setConfig((prev) => ({
-                      ...prev,
-                      trace_source_plugin: nextPlugin,
-                      trace_source_parameters:
-                        nextPlugin === prev.trace_source_plugin
-                          ? prev.trace_source_parameters
-                          : {},
-                      trace_source_secrets:
-                        nextPlugin === prev.trace_source_plugin
-                          ? prev.trace_source_secrets
-                          : {},
-                      configured_secrets:
-                        nextPlugin === prev.trace_source_plugin
-                          ? prev.configured_secrets
-                          : [],
-                    }));
-                  }}
-                >
-                  <option value="">{t.evolutionTraceSourceNone}</option>
-                  {plugins.map((plugin) => (
-                    <option key={plugin.id} value={plugin.id}>
-                      {plugin.display_name} ({plugin.id})
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="evolution-field">
-                <label htmlFor="evo-schedule-cron">
-                  {t.evolutionScheduleCron}
-                </label>
-                <input
-                  id="evo-schedule-cron"
-                  type="text"
-                  disabled={isArchivedProject}
-                  placeholder="02:30"
-                  value={config.schedule_cron ?? ""}
-                  onChange={(e) =>
-                    setConfig((prev) => ({
-                      ...prev,
-                      schedule_cron: e.target.value,
-                    }))
-                  }
-                />
-              </div>
-
-              <div className="evolution-field">
-                <label htmlFor="evo-timezone">{t.evolutionTimezone}</label>
-                <input
-                  id="evo-timezone"
-                  type="text"
-                  disabled={isArchivedProject}
-                  value={config.timezone ?? "Asia/Shanghai"}
-                  onChange={(e) =>
-                    setConfig((prev) => ({
-                      ...prev,
-                      timezone: e.target.value,
-                    }))
-                  }
-                />
-              </div>
-
-              <div className="evolution-field">
-                <label htmlFor="evo-max-traces">
-                  {t.evolutionMaxTracesPerRun}
-                </label>
-                <input
-                  id="evo-max-traces"
-                  type="number"
-                  min={1}
-                  max={2000}
-                  disabled={isArchivedProject}
-                  value={config.max_traces_per_run}
-                  onChange={(e) =>
-                    setConfig((prev) => ({
-                      ...prev,
-                      max_traces_per_run: Number(e.target.value) || 200,
-                    }))
-                  }
-                />
-              </div>
-
-              <ProviderModelPair
-                idPrefix="evo-evolver"
-                providerLabel={t.evolutionProviderLabel}
-                modelLabel={t.evolutionModelLabel}
-                defaultLabel={t.evolutionModelDefault}
-                providerId={config.evolution_provider_id}
-                model={config.evolution_model}
-                providers={providers}
+          <div className="evolution-config-grid">
+            <label className="evolution-checkbox">
+              <input
+                type="checkbox"
                 disabled={isArchivedProject}
-                onProviderChange={(next) =>
+                checked={config.enabled}
+                onChange={(e) =>
                   setConfig((prev) => ({
                     ...prev,
-                    evolution_provider_id: next,
-                    evolution_model: null,
+                    enabled: e.target.checked,
                   }))
                 }
-                onModelChange={(next) =>
+              />
+              <span>{t.evolutionEnabled}</span>
+            </label>
+
+            <div className="evolution-field">
+              <label htmlFor="evo-trace-plugin">
+                {t.evolutionTraceSourcePlugin}
+              </label>
+              <select
+                id="evo-trace-plugin"
+                disabled={isArchivedProject}
+                value={config.trace_source_plugin ?? ""}
+                onChange={(e) => {
+                  const nextPlugin = e.target.value || null;
                   setConfig((prev) => ({
                     ...prev,
-                    evolution_model: next,
+                    trace_source_plugin: nextPlugin,
+                    trace_source_parameters:
+                      nextPlugin === prev.trace_source_plugin
+                        ? prev.trace_source_parameters
+                        : {},
+                    trace_source_secrets:
+                      nextPlugin === prev.trace_source_plugin
+                        ? prev.trace_source_secrets
+                        : {},
+                    configured_secrets:
+                      nextPlugin === prev.trace_source_plugin
+                        ? prev.configured_secrets
+                        : [],
+                  }));
+                }}
+              >
+                <option value="">{t.evolutionTraceSourceNone}</option>
+                {plugins.map((plugin) => (
+                  <option key={plugin.id} value={plugin.id}>
+                    {plugin.display_name} ({plugin.id})
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="evolution-field">
+              <label htmlFor="evo-schedule-cron">
+                {t.evolutionScheduleCron}
+              </label>
+              <input
+                id="evo-schedule-cron"
+                type="text"
+                disabled={isArchivedProject}
+                placeholder="02:30"
+                value={config.schedule_cron ?? ""}
+                onChange={(e) =>
+                  setConfig((prev) => ({
+                    ...prev,
+                    schedule_cron: e.target.value,
                   }))
                 }
               />
             </div>
 
-            <p className="field-hint" style={{ marginTop: 8 }}>
-              {t.pullScheduleCronHint}
-            </p>
+            <div className="evolution-field">
+              <label htmlFor="evo-timezone">{t.evolutionTimezone}</label>
+              <input
+                id="evo-timezone"
+                type="text"
+                disabled={isArchivedProject}
+                value={config.timezone ?? "Asia/Shanghai"}
+                onChange={(e) =>
+                  setConfig((prev) => ({
+                    ...prev,
+                    timezone: e.target.value,
+                  }))
+                }
+              />
+            </div>
 
-            {activePlugin &&
-              Object.keys(activeSchema.properties || {}).length > 0 && (
-                <div
-                  className="evolution-config-grid"
-                  style={{ marginTop: 12 }}
-                >
-                  {Object.entries(activeSchema.properties || {}).map(
-                    ([paramKey, field]) => {
-                      const secret = isSecretParam(
-                        paramKey,
-                        field,
-                        activeSecretKeys,
-                      );
-                      const isNumeric =
-                        field.type === "integer" || field.type === "number";
-                      const rawValue = secret
-                        ? (config.trace_source_secrets?.[paramKey] ?? "")
-                        : (config.trace_source_parameters?.[paramKey] ??
-                          field.default ??
-                          "");
-                      const labelText = `${field.title || paramKey}${activeSchema.required?.includes(paramKey) ? " *" : ""}`;
-                      const inputId = `evo-ts-${paramKey}`;
-                      if (field.enum) {
-                        return (
-                          <div className="evolution-field" key={paramKey}>
-                            <label htmlFor={inputId}>{labelText}</label>
-                            <Select
-                              id={inputId}
-                              aria-label={labelText}
-                              disabled={isArchivedProject}
-                              value={
-                                typeof rawValue === "string"
-                                  ? rawValue
-                                  : undefined
-                              }
-                              onChange={(val) =>
-                                setConfig((prev) => ({
-                                  ...prev,
-                                  trace_source_parameters: {
-                                    ...(prev.trace_source_parameters ?? {}),
-                                    [paramKey]: val,
-                                  },
-                                }))
-                              }
-                              options={field.enum.map((opt) => ({
-                                value: opt,
-                                label: String(opt),
-                              }))}
-                            />
-                          </div>
-                        );
-                      }
-                      if (field.type === "boolean") {
-                        return (
-                          <label className="evolution-checkbox" key={paramKey}>
-                            <Checkbox
-                              aria-label={labelText}
-                              disabled={isArchivedProject}
-                              checked={rawValue === true}
-                              onChange={(e) =>
-                                setConfig((prev) => ({
-                                  ...prev,
-                                  trace_source_parameters: {
-                                    ...(prev.trace_source_parameters ?? {}),
-                                    [paramKey]: e.target.checked,
-                                  },
-                                }))
-                              }
-                            >
-                              {labelText}
-                            </Checkbox>
-                          </label>
-                        );
-                      }
+            <div className="evolution-field">
+              <label htmlFor="evo-max-traces">
+                {t.evolutionMaxTracesPerRun}
+              </label>
+              <input
+                id="evo-max-traces"
+                type="number"
+                min={1}
+                max={2000}
+                disabled={isArchivedProject}
+                value={config.max_traces_per_run}
+                onChange={(e) =>
+                  setConfig((prev) => ({
+                    ...prev,
+                    max_traces_per_run: Number(e.target.value) || 200,
+                  }))
+                }
+              />
+            </div>
+
+            <ProviderModelPair
+              idPrefix="evo-evolver"
+              providerLabel={t.evolutionProviderLabel}
+              modelLabel={t.evolutionModelLabel}
+              defaultLabel={t.evolutionModelDefault}
+              providerId={config.evolution_provider_id}
+              model={config.evolution_model}
+              providers={providers}
+              disabled={isArchivedProject}
+              onProviderChange={(next) =>
+                setConfig((prev) => ({
+                  ...prev,
+                  evolution_provider_id: next,
+                  evolution_model: null,
+                }))
+              }
+              onModelChange={(next) =>
+                setConfig((prev) => ({
+                  ...prev,
+                  evolution_model: next,
+                }))
+              }
+            />
+          </div>
+
+          <p className="field-hint" style={{ marginTop: 8 }}>
+            {t.pullScheduleCronHint}
+          </p>
+
+          {activePlugin &&
+            Object.keys(activeSchema.properties || {}).length > 0 && (
+              <div className="evolution-config-grid" style={{ marginTop: 12 }}>
+                {Object.entries(activeSchema.properties || {}).map(
+                  ([paramKey, field]) => {
+                    const secret = isSecretParam(
+                      paramKey,
+                      field,
+                      activeSecretKeys,
+                    );
+                    const isNumeric =
+                      field.type === "integer" || field.type === "number";
+                    const rawValue = secret
+                      ? (config.trace_source_secrets?.[paramKey] ?? "")
+                      : (config.trace_source_parameters?.[paramKey] ??
+                        field.default ??
+                        "");
+                    const labelText = `${field.title || paramKey}${activeSchema.required?.includes(paramKey) ? " *" : ""}`;
+                    const inputId = `evo-ts-${paramKey}`;
+                    if (field.enum) {
                       return (
                         <div className="evolution-field" key={paramKey}>
                           <label htmlFor={inputId}>{labelText}</label>
-                          <Input
+                          <Select
                             id={inputId}
                             aria-label={labelText}
                             disabled={isArchivedProject}
-                            type={
-                              secret
-                                ? "password"
-                                : isNumeric
-                                  ? "number"
-                                  : "text"
+                            value={
+                              typeof rawValue === "string"
+                                ? rawValue
+                                : undefined
                             }
-                            placeholder={field.description}
-                            value={rawValue == null ? "" : String(rawValue)}
-                            onChange={(e) => {
-                              const nextVal = e.target.value;
-                              if (secret) {
-                                setConfig((prev) => ({
-                                  ...prev,
-                                  trace_source_secrets: {
-                                    ...(prev.trace_source_secrets ?? {}),
-                                    [paramKey]: nextVal,
-                                  },
-                                }));
-                              } else {
-                                setConfig((prev) => ({
-                                  ...prev,
-                                  trace_source_parameters: {
-                                    ...(prev.trace_source_parameters ?? {}),
-                                    [paramKey]:
-                                      isNumeric && nextVal !== ""
-                                        ? Number(nextVal)
-                                        : nextVal,
-                                  },
-                                }));
-                              }
-                            }}
+                            onChange={(val) =>
+                              setConfig((prev) => ({
+                                ...prev,
+                                trace_source_parameters: {
+                                  ...(prev.trace_source_parameters ?? {}),
+                                  [paramKey]: val,
+                                },
+                              }))
+                            }
+                            options={field.enum.map((opt) => ({
+                              value: opt,
+                              label: String(opt),
+                            }))}
                           />
                         </div>
                       );
-                    },
-                  )}
-                </div>
-              )}
-
-            {activePlugin && configuredSecretsSet.size > 0 && (
-              <p className="field-hint" style={{ marginTop: 8 }}>
-                {t.pullSecretMaskHint}
-              </p>
+                    }
+                    if (field.type === "boolean") {
+                      return (
+                        <label className="evolution-checkbox" key={paramKey}>
+                          <Checkbox
+                            aria-label={labelText}
+                            disabled={isArchivedProject}
+                            checked={rawValue === true}
+                            onChange={(e) =>
+                              setConfig((prev) => ({
+                                ...prev,
+                                trace_source_parameters: {
+                                  ...(prev.trace_source_parameters ?? {}),
+                                  [paramKey]: e.target.checked,
+                                },
+                              }))
+                            }
+                          >
+                            {labelText}
+                          </Checkbox>
+                        </label>
+                      );
+                    }
+                    return (
+                      <div className="evolution-field" key={paramKey}>
+                        <label htmlFor={inputId}>{labelText}</label>
+                        <Input
+                          id={inputId}
+                          aria-label={labelText}
+                          disabled={isArchivedProject}
+                          type={
+                            secret ? "password" : isNumeric ? "number" : "text"
+                          }
+                          placeholder={field.description}
+                          value={rawValue == null ? "" : String(rawValue)}
+                          onChange={(e) => {
+                            const nextVal = e.target.value;
+                            if (secret) {
+                              setConfig((prev) => ({
+                                ...prev,
+                                trace_source_secrets: {
+                                  ...(prev.trace_source_secrets ?? {}),
+                                  [paramKey]: nextVal,
+                                },
+                              }));
+                            } else {
+                              setConfig((prev) => ({
+                                ...prev,
+                                trace_source_parameters: {
+                                  ...(prev.trace_source_parameters ?? {}),
+                                  [paramKey]:
+                                    isNumeric && nextVal !== ""
+                                      ? Number(nextVal)
+                                      : nextVal,
+                                },
+                              }));
+                            }
+                          }}
+                        />
+                      </div>
+                    );
+                  },
+                )}
+              </div>
             )}
 
-            <div style={{ marginTop: 12 }}>
-              <Button
-                type="primary"
-                autoInsertSpace={false}
+          {activePlugin && configuredSecretsSet.size > 0 && (
+            <p className="field-hint" style={{ marginTop: 8 }}>
+              {t.pullSecretMaskHint}
+            </p>
+          )}
+
+          <div style={{ marginTop: 12 }}>
+            <Button
+              type="primary"
+              autoInsertSpace={false}
+              disabled={isArchivedProject}
+              onClick={() => void saveConfig()}
+              loading={saving}
+            >
+              {t.evolutionSaveConfig}
+            </Button>
+          </div>
+        </section>
+
+        <section className="card section-card">
+          <div className="card-title-row">
+            <h2 className="card-title">{t.evolutionManualSectionTitle}</h2>
+          </div>
+          <div className="evolution-config-grid">
+            <div className="evolution-field">
+              <label htmlFor="evo-trigger-since">{t.evolutionSinceLabel}</label>
+              <input
+                id="evo-trigger-since"
+                aria-label={t.evolutionSinceLabel}
+                type="datetime-local"
                 disabled={isArchivedProject}
-                onClick={() => void saveConfig()}
-                loading={saving}
-              >
-                {t.evolutionSaveConfig}
-              </Button>
+                value={sinceInput}
+                onChange={(e) => setSinceInput(e.target.value)}
+              />
             </div>
+            <div className="evolution-field">
+              <label htmlFor="evo-trigger-until">{t.evolutionUntilLabel}</label>
+              <input
+                id="evo-trigger-until"
+                aria-label={t.evolutionUntilLabel}
+                type="datetime-local"
+                disabled={isArchivedProject}
+                value={untilInput}
+                onChange={(e) => setUntilInput(e.target.value)}
+              />
+            </div>
+            <div className="evolution-field">
+              <label htmlFor="evo-trigger-max">
+                {t.evolutionMaxTracesOverride}
+              </label>
+              <input
+                id="evo-trigger-max"
+                aria-label={t.evolutionMaxTracesOverride}
+                type="number"
+                min={1}
+                max={2000}
+                disabled={isArchivedProject}
+                placeholder={String(config.max_traces_per_run)}
+                value={maxTracesOverride}
+                onChange={(e) => setMaxTracesOverride(e.target.value)}
+              />
+            </div>
+          </div>
+          <div style={{ marginTop: 12 }}>
+            <Button
+              type="primary"
+              autoInsertSpace={false}
+              onClick={() => void triggerRun()}
+              loading={triggering}
+              disabled={isArchivedProject || hasRunning}
+            >
+              {t.triggerEvolution}
+            </Button>
+          </div>
+        </section>
+
+        <section className="card gov-metrics-card">
+          <div className="gov-metrics">
+            <div className="gov-metric">
+              <span className="gov-metric-label">
+                {t.evolutionMetricLatestStatus}
+              </span>
+              <strong>
+                {selectedRun ? runStatusLabel(selectedRun.status, t) : "—"}
+              </strong>
+            </div>
+            <div className="gov-metric">
+              <span className="gov-metric-label">
+                {t.evolutionTracesFetched}
+              </span>
+              <strong>{selectedRun?.traces_fetched ?? 0}</strong>
+            </div>
+            <div className="gov-metric">
+              <span className="gov-metric-label">
+                {t.evolutionProposalsCreated}
+              </span>
+              <strong>{selectedRun?.proposals_created ?? 0}</strong>
+            </div>
+            <div className="gov-metric">
+              <span className="gov-metric-label">
+                {t.evolutionDuplicatesSkipped}
+              </span>
+              <strong>{selectedRun?.duplicates_skipped ?? 0}</strong>
+            </div>
+          </div>
+        </section>
+
+        <div className="gov-split-layout">
+          <section className="card section-card">
+            <div className="card-title-row">
+              <h2 className="card-title">{t.evolutionRunsTitle}</h2>
+              <span className="muted">{runs.length}</span>
+            </div>
+            {runs.length === 0 ? (
+              <div className="empty-state">{t.evolutionEmptyRuns}</div>
+            ) : (
+              <ul className="correction-list">
+                {runs.map((run) => (
+                  <li key={run.id}>
+                    <button
+                      type="button"
+                      className={selectedRun?.id === run.id ? "active" : ""}
+                      onClick={() => setSelectedRunId(run.id)}
+                    >
+                      <span className="mono">
+                        {run.trigger_type === "scheduled" ||
+                        run.trigger_type === "scheduler"
+                          ? t.evolutionTriggerScheduled
+                          : t.evolutionTriggerManual}{" "}
+                        · {formatDateTime(run.created_at)}
+                      </span>
+                      <Space size={4}>
+                        <Tag>
+                          {t.evolutionProposalsCreated}:{" "}
+                          {run.proposals_created ?? 0}
+                        </Tag>
+                        <Tag color={runStatusColor(run.status)}>
+                          {runStatusLabel(run.status, t)}
+                        </Tag>
+                      </Space>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
           </section>
 
           <section className="card section-card">
-            <div className="card-title-row">
-              <h2 className="card-title">{t.evolutionManualSectionTitle}</h2>
-            </div>
-            <div className="evolution-config-grid">
-              <div className="evolution-field">
-                <label htmlFor="evo-trigger-since">
-                  {t.evolutionSinceLabel}
-                </label>
-                <input
-                  id="evo-trigger-since"
-                  aria-label={t.evolutionSinceLabel}
-                  type="datetime-local"
-                  disabled={isArchivedProject}
-                  value={sinceInput}
-                  onChange={(e) => setSinceInput(e.target.value)}
-                />
-              </div>
-              <div className="evolution-field">
-                <label htmlFor="evo-trigger-until">
-                  {t.evolutionUntilLabel}
-                </label>
-                <input
-                  id="evo-trigger-until"
-                  aria-label={t.evolutionUntilLabel}
-                  type="datetime-local"
-                  disabled={isArchivedProject}
-                  value={untilInput}
-                  onChange={(e) => setUntilInput(e.target.value)}
-                />
-              </div>
-              <div className="evolution-field">
-                <label htmlFor="evo-trigger-max">
-                  {t.evolutionMaxTracesOverride}
-                </label>
-                <input
-                  id="evo-trigger-max"
-                  aria-label={t.evolutionMaxTracesOverride}
-                  type="number"
-                  min={1}
-                  max={2000}
-                  disabled={isArchivedProject}
-                  placeholder={String(config.max_traces_per_run)}
-                  value={maxTracesOverride}
-                  onChange={(e) => setMaxTracesOverride(e.target.value)}
-                />
-              </div>
-            </div>
-            <div style={{ marginTop: 12 }}>
-              <Button
-                type="primary"
-                autoInsertSpace={false}
-                onClick={() => void triggerRun()}
-                loading={triggering}
-                disabled={isArchivedProject || hasRunning}
-              >
-                {t.triggerEvolution}
-              </Button>
-            </div>
-          </section>
-
-          <div className="evolution-layout">
-            <section className="card section-card">
-              <div className="card-title-row">
-                <h2 className="card-title">{t.evolutionRunsTitle}</h2>
-                <span className="muted">{runs.length}</span>
-              </div>
-              {runs.length === 0 ? (
-                <div className="empty-state">{t.evolutionEmptyRuns}</div>
-              ) : (
-                <ul className="correction-list">
-                  {runs.map((run) => (
-                    <li key={run.id}>
-                      <button
-                        type="button"
-                        className={selectedRun?.id === run.id ? "active" : ""}
-                        onClick={() => setSelectedRunId(run.id)}
-                      >
-                        <span className="mono">
-                          {run.trigger_type === "scheduled" ||
-                          run.trigger_type === "scheduler"
-                            ? t.evolutionTriggerScheduled
-                            : t.evolutionTriggerManual}{" "}
-                          · {formatDateTime(run.created_at)}
-                        </span>
-                        <Space size={4}>
-                          <Tag>
-                            {t.evolutionProposalsCreated}:{" "}
-                            {run.proposals_created ?? 0}
-                          </Tag>
-                          <Tag color={runStatusColor(run.status)}>
-                            {runStatusLabel(run.status, t)}
-                          </Tag>
-                        </Space>
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </section>
-
-            <section className="card section-card">
-              {selectedRun ? (
-                <div className="stack">
-                  <div className="card-title-row">
-                    <div>
-                      <h2 className="card-title mono">{selectedRun.id}</h2>
-                      <div className="muted">
-                        {formatDateTime(selectedRun.started_at)} →{" "}
-                        {formatDateTime(selectedRun.finished_at)}
-                      </div>
+            {selectedRun ? (
+              <div className="stack">
+                <div className="card-title-row">
+                  <div>
+                    <h2 className="card-title mono">{selectedRun.id}</h2>
+                    <div className="muted">
+                      {formatDateTime(selectedRun.started_at)} →{" "}
+                      {formatDateTime(selectedRun.finished_at)}
                     </div>
-                    <Space size={8} wrap>
-                      {selectedRun.trace_source_plugin && (
-                        <Tag>{selectedRun.trace_source_plugin}</Tag>
-                      )}
-                      <Tag color={runStatusColor(selectedRun.status)}>
-                        {runStatusLabel(selectedRun.status, t)}
-                      </Tag>
-                    </Space>
                   </div>
-
-                  {selectedRun.error && (
-                    <Alert type="error" title={selectedRun.error} showIcon />
-                  )}
-
-                  <div className="discovery-metrics-grid">
-                    <Tag>
-                      {t.evolutionTracesFetched}:{" "}
-                      {selectedRun.traces_fetched ?? 0}
+                  <Space size={8} wrap>
+                    {selectedRun.trace_source_plugin && (
+                      <Tag>{selectedRun.trace_source_plugin}</Tag>
+                    )}
+                    <Tag color={runStatusColor(selectedRun.status)}>
+                      {runStatusLabel(selectedRun.status, t)}
                     </Tag>
-                    <Tag color="blue">
-                      {t.evolutionProposalsCreated}:{" "}
-                      {selectedRun.proposals_created ?? 0}
-                    </Tag>
-                    <Tag>
-                      {t.evolutionDuplicatesSkipped}:{" "}
-                      {selectedRun.duplicates_skipped ?? 0}
-                    </Tag>
-                    <Tag color="orange">
-                      {t.evolutionL1Rejected}: {selectedRun.l1_rejected ?? 0}
-                    </Tag>
-                  </div>
-
-                  {(selectedRun.window_since || selectedRun.window_until) && (
-                    <div className="muted mono">
-                      {t.evolutionWindowLabel}:{" "}
-                      {formatDateTime(selectedRun.window_since)} →{" "}
-                      {formatDateTime(selectedRun.window_until)}
-                    </div>
-                  )}
-
-                  {selectedRun.summary && (
-                    <div className="evolution-round-card">
-                      <strong>{t.evolutionSummaryLabel}</strong>
-                      <div>{selectedRun.summary}</div>
-                    </div>
-                  )}
-
-                  {selectedProposalIds.length > 0 && (
-                    <Space size={8} wrap>
-                      {selectedProposalIds.map((pid) => (
-                        <Button
-                          key={pid}
-                          type="primary"
-                          size="small"
-                          autoInsertSpace={false}
-                          onClick={() => onNavigateCorrections?.(pid)}
-                        >
-                          {selectedProposalIds.length === 1
-                            ? t.viewEvolutionProposal
-                            : `${t.viewEvolutionProposal} (${pid.slice(0, 8)})`}
-                        </Button>
-                      ))}
-                    </Space>
-                  )}
+                  </Space>
                 </div>
-              ) : (
-                <div className="empty-state">{t.evolutionEmptyRuns}</div>
-              )}
-            </section>
-          </div>
-        </>
-      )}
+
+                {selectedRun.error && (
+                  <Alert type="error" title={selectedRun.error} showIcon />
+                )}
+
+                <div className="discovery-metrics-grid">
+                  <Tag>
+                    {t.evolutionTracesFetched}:{" "}
+                    {selectedRun.traces_fetched ?? 0}
+                  </Tag>
+                  <Tag color="blue">
+                    {t.evolutionProposalsCreated}:{" "}
+                    {selectedRun.proposals_created ?? 0}
+                  </Tag>
+                  <Tag>
+                    {t.evolutionDuplicatesSkipped}:{" "}
+                    {selectedRun.duplicates_skipped ?? 0}
+                  </Tag>
+                  <Tag color="orange">
+                    {t.evolutionL1Rejected}: {selectedRun.l1_rejected ?? 0}
+                  </Tag>
+                </div>
+
+                {(selectedRun.window_since || selectedRun.window_until) && (
+                  <div className="muted mono">
+                    {t.evolutionWindowLabel}:{" "}
+                    {formatDateTime(selectedRun.window_since)} →{" "}
+                    {formatDateTime(selectedRun.window_until)}
+                  </div>
+                )}
+
+                {selectedRun.summary && (
+                  <div className="evolution-round-card">
+                    <strong>{t.evolutionSummaryLabel}</strong>
+                    <div>{selectedRun.summary}</div>
+                  </div>
+                )}
+
+                {selectedProposalIds.length > 0 && (
+                  <Space size={8} wrap>
+                    {selectedProposalIds.map((pid) => (
+                      <Button
+                        key={pid}
+                        type="primary"
+                        size="small"
+                        autoInsertSpace={false}
+                        onClick={() => onNavigateCorrections?.(pid)}
+                      >
+                        {selectedProposalIds.length === 1
+                          ? t.viewEvolutionProposal
+                          : `${t.viewEvolutionProposal} (${pid.slice(0, 8)})`}
+                      </Button>
+                    ))}
+                  </Space>
+                )}
+              </div>
+            ) : (
+              <div className="empty-state">{t.evolutionEmptyRuns}</div>
+            )}
+          </section>
+        </div>
+      </>
     </section>
   );
 }

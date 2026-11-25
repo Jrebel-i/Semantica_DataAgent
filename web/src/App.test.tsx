@@ -1110,3 +1110,97 @@ test("skills management route is admin-only", async () => {
   ).toBeTruthy();
   history.replaceState(null, "", "/");
 });
+
+test("知识治理拆分为独立子导航入口并校验权限", async () => {
+  localStorage.setItem("token", "valid-token");
+  history.replaceState(null, "", "/evaluations");
+
+  // Non-admin user gets forbidden on /evaluations and /discovery
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/v1/me") return Response.json({ role: "user" });
+      if (url === "/api/v1/projects") return Response.json([]);
+      return Response.json([]);
+    }),
+  );
+  render(<App />);
+  expect(await screen.findByText("无权限访问")).toBeTruthy();
+  cleanup();
+
+  // Project admin sees 构建与数据 + 知识治理 two sub-groups and can open /evaluations and /discovery
+  history.replaceState(null, "", "/builds");
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/v1/me") return Response.json({ role: "admin" });
+      if (url === "/api/v1/projects")
+        return Response.json([
+          {
+            id: "default",
+            name: "业务数据",
+            type: "warehouse",
+            status: "active",
+            created_at: "2026-01-01T00:00:00Z",
+            my_role: "admin",
+          },
+        ]);
+      if (url === "/healthz") return Response.json({});
+      if (url === "/api/v1/generations")
+        return Response.json({ generations: [] });
+      if (url === "/api/v1/me/dtb-token")
+        return Response.json({ configured: true });
+      if (url.startsWith("/api/v1/projects/default/discovery-config")) {
+        return Response.json({
+          preset: "doris_audit_log",
+          source_table: "__internal_schema.audit_log",
+          sql_column: "stmt",
+          status_column: "state",
+          time_column: "time",
+          database_column: "db",
+          caller_column: "user",
+          dialect_column: null,
+          success_statuses: ["OK"],
+          lookback_days: 7,
+          max_queries: 5000,
+          min_frequency: 3,
+          max_fk_candidates: 20,
+          sample_limit: 1000,
+          min_inclusion_ratio: 0.8,
+          probe_timeout_seconds: 30,
+          probe_concurrency: 2,
+          provider_id: null,
+          model: null,
+          presets: {},
+        });
+      }
+      return Response.json([]);
+    }),
+  );
+  const { container } = render(<App />);
+
+  expect(await screen.findByRole("link", { name: "知识缺口" })).toBeTruthy();
+  expect(screen.getByRole("link", { name: "纠错审批" })).toBeTruthy();
+  expect(screen.getByRole("link", { name: "评测题集" })).toBeTruthy();
+  expect(screen.getByRole("link", { name: "自主演化" })).toBeTruthy();
+  expect(screen.getByRole("link", { name: "冷启动发现" })).toBeTruthy();
+
+  fireEvent.click(screen.getByRole("link", { name: "评测题集" }));
+  expect(
+    await screen.findByRole("heading", { level: 1, name: "评测题集" }),
+  ).toBeTruthy();
+  expect(container.querySelector(".workbench-crumb")?.textContent).toContain(
+    "知识治理 / 评测题集",
+  );
+
+  fireEvent.click(screen.getByRole("link", { name: "冷启动发现" }));
+  expect(
+    await screen.findByRole("heading", { level: 1, name: "冷启动发现" }),
+  ).toBeTruthy();
+  expect(container.querySelector(".workbench-crumb")?.textContent).toContain(
+    "知识治理 / 冷启动发现",
+  );
+  history.replaceState(null, "", "/");
+});

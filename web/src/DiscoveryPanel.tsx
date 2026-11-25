@@ -164,10 +164,12 @@ function CandidateCard({
   candidate,
   t,
   onNavigateCorrections,
+  onNavigateEvaluations,
 }: {
   candidate: DiscoveryCandidate;
   t: Messages;
   onNavigateCorrections?: (proposalId?: string) => void;
+  onNavigateEvaluations?: () => void;
 }) {
   const decisionMeta = candidateDecisionMeta(candidate.decision, t);
   const ev = (candidate.evidence ?? {}) as Record<string, unknown>;
@@ -220,9 +222,23 @@ function CandidateCard({
             </a>
           )}
           {candidate.eval_question_id && (
-            <Tag className="mono">
-              {t.discoveryEvalDraftId}: {candidate.eval_question_id}
-            </Tag>
+            <>
+              <Tag className="mono">
+                {t.discoveryEvalDraftId}: {candidate.eval_question_id}
+              </Tag>
+              {onNavigateEvaluations && (
+                <a
+                  className="discovery-proposal-link"
+                  href="/evaluations"
+                  onClick={(event) => {
+                    event.preventDefault();
+                    onNavigateEvaluations();
+                  }}
+                >
+                  {t.discoveryViewEvaluations}
+                </a>
+              )}
+            </>
           )}
         </Space>
       </div>
@@ -289,6 +305,7 @@ export function DiscoveryPanel({
   providers,
   messages: t,
   onNavigateCorrections,
+  onNavigateEvaluations,
   onNavigatePersonalSettings,
 }: {
   token: string;
@@ -297,6 +314,7 @@ export function DiscoveryPanel({
   providers: Provider[];
   messages: Messages;
   onNavigateCorrections?: (proposalId?: string) => void;
+  onNavigateEvaluations?: () => void;
   onNavigatePersonalSettings?: () => void;
 }) {
   const projectRef = useRef(project);
@@ -1355,7 +1373,36 @@ export function DiscoveryPanel({
         </div>
       </section>
 
-      <div className="evolution-layout">
+      <section className="card gov-metrics-card">
+        <div className="gov-metrics">
+          <div className="gov-metric">
+            <span className="gov-metric-label">
+              {t.discoveryMetricLatestStatus}
+            </span>
+            <strong>
+              {activeRun ? runStatusLabel(activeRun.status, t) : "—"}
+            </strong>
+          </div>
+          <div className="gov-metric">
+            <span className="gov-metric-label">{t.discoveryMetricQueries}</span>
+            <strong>{activeRun?.queries_fetched ?? 0}</strong>
+          </div>
+          <div className="gov-metric">
+            <span className="gov-metric-label">
+              {t.discoveryMetricProposalsCount}
+            </span>
+            <strong>{activeRun?.proposals_created ?? 0}</strong>
+          </div>
+          <div className="gov-metric">
+            <span className="gov-metric-label">
+              {t.discoveryMetricEvalDraftsCount}
+            </span>
+            <strong>{activeRun?.eval_drafts_created ?? 0}</strong>
+          </div>
+        </div>
+      </section>
+
+      <div className="gov-split-layout">
         <section className="card section-card">
           <div className="card-title-row">
             <h2 className="card-title">{t.discoveryRunsTitle}</h2>
@@ -1509,6 +1556,7 @@ export function DiscoveryPanel({
                       candidate={candidate}
                       t={t}
                       onNavigateCorrections={onNavigateCorrections}
+                      onNavigateEvaluations={onNavigateEvaluations}
                     />
                   ))
                 )}

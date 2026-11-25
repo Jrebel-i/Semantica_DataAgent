@@ -9,6 +9,7 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { EvolutionPage } from "./EvolutionPage";
+import { DiscoveryPage } from "./DiscoveryPage";
 import { getMessages } from "./i18n";
 
 beforeEach(() => {
@@ -285,10 +286,9 @@ test("switches presets, saves config, keeps enable_fk_probing & generate_eval_dr
 
   const onNavigateCorrections = vi.fn();
   render(
-    <EvolutionPage
+    <DiscoveryPage
       token="token"
       messages={getMessages("zh")}
-      initialTab="discovery"
       onNavigateCorrections={onNavigateCorrections}
     />,
   );
@@ -429,10 +429,9 @@ test("missing personal DTB token displays alert with /personal-settings link and
 
   const onNavigatePersonalSettings = vi.fn();
   render(
-    <EvolutionPage
+    <DiscoveryPage
       token="token"
       messages={getMessages("zh")}
-      initialTab="discovery"
       onNavigatePersonalSettings={onNavigatePersonalSettings}
     />,
   );
@@ -470,13 +469,7 @@ test("document projects show unsupported notice and archived warehouse projects 
     }),
   );
 
-  render(
-    <EvolutionPage
-      token="token"
-      messages={getMessages("zh")}
-      initialTab="discovery"
-    />,
-  );
+  render(<DiscoveryPage token="token" messages={getMessages("zh")} />);
 
   // Switch to document project
   const projectSelect = await screen.findByLabelText("项目");
@@ -545,13 +538,7 @@ test("project switch discards stale delayed discovery config and run responses f
     }),
   );
 
-  render(
-    <EvolutionPage
-      token="token"
-      messages={getMessages("zh")}
-      initialTab="discovery"
-    />,
-  );
+  render(<DiscoveryPage token="token" messages={getMessages("zh")} />);
 
   // Switch to alpha before default config resolves
   const projectSelect = await screen.findByLabelText("项目");
@@ -632,15 +619,18 @@ test("switching from Self-Evolution tab to Cold-Start Discovery tab loads discov
 
   render(<EvolutionPage token="token" messages={getMessages("zh")} />);
 
-  // Starts on 自主演化
+  // EvolutionPage is standalone without nested 冷启动发现 tab
   expect(
     await screen.findByRole("button", { name: "保存演化配置" }),
   ).toBeTruthy();
+  expect(screen.queryByRole("tab", { name: "冷启动发现" })).toBeNull();
+  cleanup();
 
-  // Switch to 冷启动发现 tab
-  fireEvent.click(screen.getByRole("tab", { name: "冷启动发现" }));
+  // Standalone DiscoveryPage
+  render(<DiscoveryPage token="token" messages={getMessages("zh")} />);
   expect(
     await screen.findByRole("button", { name: "保存发现配置" }),
   ).toBeTruthy();
   expect(screen.getByText("个人 DTB 令牌已就绪")).toBeTruthy();
+  expect(screen.getByText("查询记录")).toBeTruthy();
 });

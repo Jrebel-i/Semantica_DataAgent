@@ -4928,6 +4928,97 @@ button.model-filter-tab:not(.ant-btn)[aria-pressed="true"] {
   margin-bottom: 12px;
 }
 
+/* Knowledge Governance preview-inspired layout & KPI strips */
+.gov-metrics-card {
+  padding: 16px 20px;
+}
+.gov-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+}
+.gov-metric {
+  border-right: 1px solid var(--line-soft);
+  padding-right: 12px;
+  min-width: 0;
+}
+.gov-metric:last-child {
+  border-right: 0;
+  padding-right: 0;
+}
+.gov-metric-label {
+  display: block;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.gov-metric strong {
+  display: block;
+  margin-top: 4px;
+  font-size: 22px;
+  line-height: 1.25;
+  font-weight: 700;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.gov-split-layout {
+  display: grid;
+  grid-template-columns: minmax(290px, 0.85fr) minmax(0, 1.15fr);
+  gap: 16px;
+  align-items: start;
+}
+.gov-split-layout > * {
+  min-width: 0;
+}
+.gov-info-banner {
+  background: var(--accent-bg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+  color: var(--ink-2);
+  margin: 12px 0;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.gov-gap-search {
+  width: 100%;
+  margin-bottom: 10px;
+}
+.gov-list-item-meta {
+  display: block;
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.gov-detail-question {
+  margin: 0 0 8px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.gov-detail-missing {
+  margin: 0 0 10px;
+  color: var(--ink-2);
+  line-height: 1.7;
+  white-space: pre-wrap;
+}
+@media (max-width: 900px) {
+  .gov-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .gov-metric {
+    border-right: 0;
+    padding-right: 0;
+  }
+  .gov-split-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 /* Narrow screens: overlay navigation drawer and full-width content */
 .mobile-topbar {
   display: none;
@@ -5158,7 +5249,8 @@ button.model-filter-tab:not(.ant-btn)[aria-pressed="true"] {
     right: 12px;
     max-height: 200px;
   }
-  .skill-meta-grid {
+  .skill-meta-grid,
+  .gov-metrics {
     grid-template-columns: minmax(0, 1fr);
   }
   .diff-table-split {

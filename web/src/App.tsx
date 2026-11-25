@@ -10,6 +10,8 @@ import {
   theme as antdTheme,
 } from "antd";
 import { CorrectionsPage } from "./CorrectionsPage";
+import { DiscoveryPage } from "./DiscoveryPage";
+import { EvaluationsPage } from "./EvaluationsPage";
 import { EvolutionPage } from "./EvolutionPage";
 import { BuildPage } from "./BuildPage";
 import { getMessages, type Language, type Messages } from "./i18n";
@@ -354,8 +356,10 @@ export function App() {
         "/builds",
         "/source",
         "/corrections",
+        "/evaluations",
         "/knowledge-gaps",
         "/evolution",
+        "/discovery",
       ].includes(path)
     ) {
       return "data";
@@ -427,19 +431,30 @@ export function App() {
       ];
     }
     if (activeGroup === "data") {
+      if (!canManageProject) {
+        return [
+          {
+            title: t.sidebarGovernance,
+            items: [{ path: "/knowledge-gaps", label: t.gapTitle }],
+          },
+        ];
+      }
       return [
         {
           title: t.sidebarDataOps,
           items: [
-            ...(canManageProject
-              ? [
-                  { path: "/builds", label: t.builds },
-                  { path: "/source", label: t.source },
-                  { path: "/corrections", label: t.correctionTitle },
-                  { path: "/knowledge-gaps", label: t.gapTitle },
-                  { path: "/evolution", label: t.evolutionTitle },
-                ]
-              : [{ path: "/knowledge-gaps", label: t.gapTitle }]),
+            { path: "/builds", label: t.builds },
+            { path: "/source", label: t.source },
+          ],
+        },
+        {
+          title: t.sidebarGovernance,
+          items: [
+            { path: "/knowledge-gaps", label: t.gapTitle },
+            { path: "/corrections", label: t.correctionTitle },
+            { path: "/evaluations", label: t.evalQuestionsTab },
+            { path: "/evolution", label: t.evolutionTitle },
+            { path: "/discovery", label: t.discoveryTitle },
           ],
         },
       ];
@@ -492,7 +507,13 @@ export function App() {
     return [];
   })();
 
+  const matchedMiddleGroup = middleGroups.find((group) =>
+    group.items.some(
+      (item) => item.path === path || Boolean(item.matchPaths?.includes(path)),
+    ),
+  );
   const activeGroupLabel =
+    (activeGroup === "data" ? matchedMiddleGroup?.title : undefined) ??
     topRailItems.find((item) => item.id === activeGroup)?.label ??
     settingsItem.label;
   const activePageLabel = (() => {
@@ -530,6 +551,17 @@ export function App() {
           token={token}
           messages={t}
           initialProposalId={correctionProposalId}
+          onNavigateGaps={() => navigate("/knowledge-gaps")}
+        />
+      ) : (
+        <Alert title={t.forbidden} type="warning" />
+      )
+    ) : path === "/evaluations" ? (
+      canManageProject ? (
+        <EvaluationsPage
+          token={token}
+          messages={t}
+          onNavigateDiscovery={() => navigate("/discovery")}
         />
       ) : (
         <Alert title={t.forbidden} type="warning" />
@@ -546,6 +578,24 @@ export function App() {
                 : "/corrections",
             )
           }
+          onNavigatePersonalSettings={() => navigate("/personal-settings")}
+        />
+      ) : (
+        <Alert title={t.forbidden} type="warning" />
+      )
+    ) : path === "/discovery" ? (
+      canManageProject ? (
+        <DiscoveryPage
+          token={token}
+          messages={t}
+          onNavigateCorrections={(proposalId) =>
+            navigate(
+              proposalId
+                ? `/corrections?proposal_id=${encodeURIComponent(proposalId)}`
+                : "/corrections",
+            )
+          }
+          onNavigateEvaluations={() => navigate("/evaluations")}
           onNavigatePersonalSettings={() => navigate("/personal-settings")}
         />
       ) : (
@@ -985,7 +1035,9 @@ export function App() {
                       messages={t}
                       ariaLabel={t.currentProject}
                       includeMemberProjects={role !== "admin" && !projectAdmin}
-                      includeArchived={path === "/evolution"}
+                      includeArchived={
+                        path === "/evolution" || path === "/discovery"
+                      }
                       compact
                     />
                   )}

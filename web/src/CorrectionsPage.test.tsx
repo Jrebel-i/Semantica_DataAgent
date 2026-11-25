@@ -9,6 +9,7 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { CorrectionsPage } from "./CorrectionsPage";
+import { EvaluationsPage } from "./EvaluationsPage";
 import { App } from "./App";
 import { getMessages } from "./i18n";
 
@@ -146,7 +147,9 @@ test("knowledge gaps show question and missing information", async () => {
     }),
   );
   render(<CorrectionsPage token="token" gaps messages={getMessages("en")} />);
-  expect(await screen.findByText("Which metric?")).toBeTruthy();
+  expect((await screen.findAllByText("Which metric?")).length).toBeGreaterThan(
+    0,
+  );
   expect(screen.getByText("Definition")).toBeTruthy();
   expect(urls).toContain("/api/v1/knowledge-gaps?project=default");
 });
@@ -224,6 +227,7 @@ test("confirmed gap exposes follow-up actions and pending gap can be reviewed", 
       ),
     ).toBe(true),
   );
+  fireEvent.click(screen.getByRole("button", { name: /Q2/ }));
   expect(
     screen.getByRole("button", { name: "Propose correction" }),
   ).toBeTruthy();
@@ -279,7 +283,7 @@ test("long gap draft posts bounded description with both contexts while card rem
   fireEvent.click(
     await screen.findByRole("button", { name: "Propose correction" }),
   );
-  expect(screen.getByText(question)).toBeTruthy();
+  expect(screen.getAllByText(question).length).toBeGreaterThan(0);
   expect(screen.getByText(missing)).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Generate draft" }));
   await waitFor(() =>
@@ -351,7 +355,7 @@ test("review conflict refreshes current project and shows conflict", async () =>
   render(<CorrectionsPage token="token" gaps messages={getMessages("zh")} />);
   fireEvent.click(await screen.findByRole("button", { name: "确认缺口" }));
   expect(await screen.findByText(/已被其他人审核/)).toBeTruthy();
-  expect(screen.getByText("不接纳")).toBeTruthy();
+  expect(screen.getAllByText("不接纳").length).toBeGreaterThan(0);
   expect(screen.queryByRole("button", { name: "确认缺口" })).toBeNull();
 });
 
@@ -396,7 +400,7 @@ test("late conflict after switching projects cannot refresh or alert the new pro
   fireEvent.click(await screen.findByRole("button", { name: "Confirm gap" }));
   fireEvent.mouseDown(screen.getByRole("combobox", { name: "Projects" }));
   fireEvent.click(await screen.findByTitle("Other"));
-  expect(await screen.findByText("other")).toBeTruthy();
+  expect((await screen.findAllByText("other")).length).toBeGreaterThan(0);
   await act(async () => resolveReview(Response.json({}, { status: 409 })));
   expect(screen.queryByText(/already reviewed/)).toBeNull();
   expect(
@@ -449,7 +453,9 @@ test("late gaps from a previous project do not reappear after switching", async 
     await screen.findByRole("combobox", { name: "Projects" }),
   );
   fireEvent.click(await screen.findByTitle("Other"));
-  expect(await screen.findByText("New question")).toBeTruthy();
+  expect((await screen.findAllByText("New question")).length).toBeGreaterThan(
+    0,
+  );
   await act(async () => {
     resolveOld(
       Response.json([
@@ -465,7 +471,7 @@ test("late gaps from a previous project do not reappear after switching", async 
     );
   });
   await waitFor(() => expect(screen.queryByText("Old question")).toBeNull());
-  expect(screen.getByText("New question")).toBeTruthy();
+  expect(screen.getAllByText("New question").length).toBeGreaterThan(0);
 });
 
 test("filters correction proposals by status and displays status tags", async () => {
@@ -520,9 +526,9 @@ test("filters correction proposals by status and displays status tags", async ()
   expect(screen.getByRole("button", { name: /document:b/ })).toBeTruthy();
   expect(screen.getByRole("button", { name: /document:c/ })).toBeTruthy();
 
-  expect(screen.getByText("Pending")).toBeTruthy();
-  expect(screen.getByText("Approved")).toBeTruthy();
-  expect(screen.getByText("Rejected")).toBeTruthy();
+  expect(screen.getAllByText("Pending").length).toBeGreaterThan(0);
+  expect(screen.getAllByText("Approved").length).toBeGreaterThan(0);
+  expect(screen.getAllByText("Rejected").length).toBeGreaterThan(0);
 
   fireEvent.click(screen.getByRole("button", { name: "Pending (1)" }));
   expect(screen.getByRole("button", { name: /document:a/ })).toBeTruthy();
@@ -751,16 +757,30 @@ test("manages eval questions tab (confirm, create, delete)", async () => {
     }),
   );
 
-  render(<CorrectionsPage token="token" messages={getMessages("zh")} />);
+  render(
+    <CorrectionsPage
+      token="token"
+      messages={getMessages("zh")}
+      onNavigateGaps={vi.fn()}
+    />,
+  );
+  expect(screen.queryByRole("tab", { name: "评测题集" })).toBeNull();
+  expect(screen.getByText("待审批")).toBeTruthy();
+  cleanup();
 
-  // Eval questions are lazy-loaded when switching tabs
-  expect(calls.some((c) => c.url.startsWith("/api/v1/eval-questions"))).toBe(
-    false,
+  const onNavigateDiscovery = vi.fn();
+  render(
+    <EvaluationsPage
+      token="token"
+      messages={getMessages("zh")}
+      onNavigateDiscovery={onNavigateDiscovery}
+    />,
   );
 
-  fireEvent.click(screen.getByRole("tab", { name: "评测题集" }));
   expect(await screen.findByText("昨日成交订单数是多少？")).toBeTruthy();
-  expect(screen.getByText("待确认")).toBeTruthy();
+  expect(screen.getAllByText("待确认").length).toBeGreaterThan(0);
+  fireEvent.click(screen.getByRole("button", { name: "查看冷启动发现 →" }));
+  expect(onNavigateDiscovery).toHaveBeenCalledTimes(1);
 
   // Confirm draft question
   fireEvent.click(screen.getByRole("button", { name: "确认纳入" }));
@@ -771,7 +791,7 @@ test("manages eval questions tab (confirm, create, delete)", async () => {
       body: { answer_confirmed: true },
     }),
   );
-  expect(await screen.findByText("已确认")).toBeTruthy();
+  expect((await screen.findAllByText("已确认")).length).toBeGreaterThan(0);
 
   // Create new eval question with doris dialect (and confirm spark option is available)
   fireEvent.click(screen.getByRole("button", { name: "新增评测题" }));

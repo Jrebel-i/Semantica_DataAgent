@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert, Button, Checkbox, Switch, Tag, Upload } from "antd";
 import type { components } from "./api";
+import { DiffViewer } from "./DiffViewer";
 import type { Messages } from "./i18n";
+import { safeDecodePath } from "./paths";
 import { ProjectSelector, storedProject, useProjects } from "./ProjectSelector";
 
 type Version = components["schemas"]["SourceHistory"];
@@ -953,7 +955,14 @@ function ProjectSourcePage({
                   {t.sourceCompare}
                 </button>
               </div>
-              {diff && <pre className="diff-block">{diff}</pre>}
+              {diff && (
+                <DiffViewer
+                  diff={diff}
+                  messages={t}
+                  title={safeDecodePath(path)}
+                  defaultMode="split"
+                />
+              )}
             </section>
           ) : (
             <div className="empty-state">{t.sourceSelectFile}</div>
