@@ -21,6 +21,24 @@ POD_STATUS_TIMEOUT_SECONDS = 10
 _NODE_NAME = re.compile(
     r"[a-z0-9](?:[-a-z0-9]*[a-z0-9])?(?:\.[a-z0-9](?:[-a-z0-9]*[a-z0-9])?)*"
 )
+PUBLIC_EGRESS_BLOCKED_V4 = (
+    "0.0.0.0/8",
+    "10.0.0.0/8",
+    "100.64.0.0/10",
+    "127.0.0.0/8",
+    "169.254.0.0/16",
+    "172.16.0.0/12",
+    "192.168.0.0/16",
+    "224.0.0.0/4",
+    "240.0.0.0/4",
+)
+PUBLIC_EGRESS_BLOCKED_V6 = (
+    "::1/128",
+    "fc00::/7",
+    "fe80::/10",
+    "ff00::/8",
+    "::ffff:0:0/96",
+)
 
 # Node ignores default signal dispositions when it runs as PID 1.  Without an
 # explicit handler a normal Pod deletion waits out the 30 second grace period
@@ -80,7 +98,54 @@ def _session_nodes(value: str) -> list[str]:
     return nodes
 
 
-def _firewall(endpoints) -> str:
+def _egress_mode() -> str:
+    mode = os.environ.get("DATAAGENT_SESSION_EGRESS_MODE", "strict").strip()
+    if mode not in ("strict", "public"):
+        raise ValueError("invalid DATAAGENT_SESSION_EGRESS_MODE")
+    return mode
+
+
+def _dns_servers(resolv_conf: str = "/etc/resolv.conf") -> list[str]:
+    configured = os.environ.get("DATAAGENT_SESSION_DNS_SERVERS")
+    servers: list[str] = []
+    if configured is not None:
+        if not configured:
+            raise ValueError("invalid DATAAGENT_SESSION_DNS_SERVERS")
+        for token in configured.split(","):
+            if not token or token.strip() != token:
+                raise ValueError("invalid DATAAGENT_SESSION_DNS_SERVERS")
+            try:
+                ip = str(ipaddress.ip_address(token))
+            except ValueError as exc:
+                raise ValueError("invalid DATAAGENT_SESSION_DNS_SERVERS") from exc
+            if ip not in servers:
+                servers.append(ip)
+    else:
+        try:
+            content = Path(resolv_conf).read_text(encoding="ascii", errors="ignore")
+        except OSError:
+            content = ""
+        for line in content.splitlines():
+            stripped = line.strip()
+            if not stripped.startswith("nameserver"):
+                continue
+            parts = stripped.split()
+            if len(parts) < 2 or parts[0] != "nameserver":
+                continue
+            try:
+                ip = str(ipaddress.ip_address(parts[1]))
+            except ValueError:
+                continue
+            if ip not in servers:
+                servers.append(ip)
+    if not servers:
+        raise ValueError("no DNS servers available for public session egress")
+    return servers
+
+
+def _firewall(
+    endpoints, *, egress_mode: str = "strict", dns_servers: tuple[str, ...] = ()
+) -> str:
     rules = []
     for _, port, addresses in endpoints:
         for address in addresses:
@@ -89,6 +154,24 @@ def _firewall(endpoints) -> str:
             rules.append(
                 f"{command} -A OUTPUT -p tcp -m conntrack --ctorigdst {ip} --dport {port} -j ACCEPT"
             )
+    if egress_mode == "public":
+        for dns in dns_servers:
+            ip = ipaddress.ip_address(dns)
+            command = "iptables" if ip.version == 4 else "ip6tables"
+            rules.append(
+                f"{command} -A OUTPUT -p udp -m conntrack --ctorigdst {ip} --dport 53 -j ACCEPT"
+            )
+            rules.append(
+                f"{command} -A OUTPUT -p tcp -m conntrack --ctorigdst {ip} --dport 53 -j ACCEPT"
+            )
+        for cidr in PUBLIC_EGRESS_BLOCKED_V4:
+            rules.append(f"iptables -A OUTPUT -m conntrack --ctorigdst {cidr} -j DROP")
+            rules.append(f"iptables -A OUTPUT -d {cidr} -j DROP")
+        for cidr in PUBLIC_EGRESS_BLOCKED_V6:
+            rules.append(f"ip6tables -A OUTPUT -m conntrack --ctorigdst {cidr} -j DROP")
+            rules.append(f"ip6tables -A OUTPUT -d {cidr} -j DROP")
+        rules.append("iptables -A OUTPUT -p tcp -j ACCEPT")
+        rules.append("ip6tables -A OUTPUT -p tcp -j ACCEPT")
     return "\n".join(
         [
             "set -eu",
@@ -116,6 +199,8 @@ def build_pod_spec(
         or path.parts[1] in (".", "..")
     ):
         raise ValueError("invalid conversation workspace")
+    egress_mode = _egress_mode()
+    dns_servers = tuple(_dns_servers()) if egress_mode == "public" else ()
     endpoints = [_resolve(model_url), _resolve(mcp_url)]
     aliases = {}
     for host, _, addresses in endpoints:
@@ -137,7 +222,13 @@ def build_pod_spec(
                 "name": "firewall",
                 "image": RUNNER_IMAGE,
                 "command": ["sh", "-ec"],
-                "args": [_firewall(endpoints)],
+                "args": [
+                    _firewall(
+                        endpoints,
+                        egress_mode=egress_mode,
+                        dns_servers=dns_servers,
+                    )
+                ],
                 "securityContext": {
                     "runAsUser": 0,
                     "allowPrivilegeEscalation": False,

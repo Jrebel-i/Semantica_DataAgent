@@ -929,3 +929,94 @@ def test_session_download_rejects_incomplete_archive_before_changing_workspace(
     with pytest.raises((ValueError, OSError)):
         runtime._download()
     assert (tmp_path / "work" / "existing").read_text() == "original"
+
+
+def test_session_firewall_strict_default_blocks_dns_and_public_egress(monkeypatch):
+    monkeypatch.delenv("DATAAGENT_SESSION_EGRESS_MODE", raising=False)
+    monkeypatch.delenv("DATAAGENT_SESSION_DNS_SERVERS", raising=False)
+    script = pod_spec()["spec"]["initContainers"][0]["args"][0]
+    lines = script.splitlines()
+    assert "iptables -P OUTPUT DROP" in lines
+    assert "iptables -A OUTPUT -p tcp -j ACCEPT" not in lines
+    assert not any("--dport 53 -j ACCEPT" in line for line in lines)
+
+
+def test_session_firewall_public_mode_allows_dns_and_public_before_blocking_internal(
+    monkeypatch,
+):
+    from semantica_dataagent.k8s_sandbox import (
+        PUBLIC_EGRESS_BLOCKED_V4,
+        PUBLIC_EGRESS_BLOCKED_V6,
+    )
+
+    monkeypatch.setenv("DATAAGENT_SESSION_EGRESS_MODE", "public")
+    monkeypatch.setenv("DATAAGENT_SESSION_DNS_SERVERS", "10.96.0.10")
+    script = pod_spec()["spec"]["initContainers"][0]["args"][0]
+    lines = script.splitlines()
+
+    mcp_rule = "iptables -A OUTPUT -p tcp -m conntrack --ctorigdst 10.96.0.25 --dport 8000 -j ACCEPT"
+    dns_udp_rule = "iptables -A OUTPUT -p udp -m conntrack --ctorigdst 10.96.0.10 --dport 53 -j ACCEPT"
+    dns_tcp_rule = "iptables -A OUTPUT -p tcp -m conntrack --ctorigdst 10.96.0.10 --dport 53 -j ACCEPT"
+    public_v4_rule = "iptables -A OUTPUT -p tcp -j ACCEPT"
+    public_v6_rule = "ip6tables -A OUTPUT -p tcp -j ACCEPT"
+
+    assert mcp_rule in lines
+    assert dns_udp_rule in lines
+    assert dns_tcp_rule in lines
+    assert public_v4_rule in lines
+    assert public_v6_rule in lines
+
+    ten_drop = "iptables -A OUTPUT -d 10.0.0.0/8 -j DROP"
+    assert lines.index(mcp_rule) < lines.index(ten_drop)
+    assert lines.index(dns_udp_rule) < lines.index(ten_drop)
+    assert lines.index(dns_tcp_rule) < lines.index(ten_drop)
+
+    for cidr in PUBLIC_EGRESS_BLOCKED_V4:
+        ct_drop = f"iptables -A OUTPUT -m conntrack --ctorigdst {cidr} -j DROP"
+        dst_drop = f"iptables -A OUTPUT -d {cidr} -j DROP"
+        assert ct_drop in lines
+        assert dst_drop in lines
+        assert lines.index(ct_drop) < lines.index(public_v4_rule)
+        assert lines.index(dst_drop) < lines.index(public_v4_rule)
+
+    for cidr in PUBLIC_EGRESS_BLOCKED_V6:
+        ct_drop = f"ip6tables -A OUTPUT -m conntrack --ctorigdst {cidr} -j DROP"
+        dst_drop = f"ip6tables -A OUTPUT -d {cidr} -j DROP"
+        assert ct_drop in lines
+        assert dst_drop in lines
+        assert lines.index(ct_drop) < lines.index(public_v6_rule)
+        assert lines.index(dst_drop) < lines.index(public_v6_rule)
+
+
+@pytest.mark.parametrize("mode", ["", "all", "allow-all", "PUBLIC"])
+def test_session_firewall_rejects_invalid_egress_mode(monkeypatch, mode):
+    monkeypatch.setenv("DATAAGENT_SESSION_EGRESS_MODE", mode)
+    with pytest.raises(ValueError, match="DATAAGENT_SESSION_EGRESS_MODE"):
+        pod_spec()
+
+
+@pytest.mark.parametrize("dns", ["", " ", "10.96.0.10,", "not-an-ip", " 10.96.0.10"])
+def test_session_firewall_rejects_invalid_dns_servers(monkeypatch, dns):
+    monkeypatch.setenv("DATAAGENT_SESSION_EGRESS_MODE", "public")
+    monkeypatch.setenv("DATAAGENT_SESSION_DNS_SERVERS", dns)
+    with pytest.raises(ValueError, match="DATAAGENT_SESSION_DNS_SERVERS"):
+        pod_spec()
+
+
+def test_session_firewall_public_mode_reads_resolv_conf_when_dns_env_unset(
+    monkeypatch, tmp_path
+):
+    from semantica_dataagent.k8s_sandbox import _dns_servers
+
+    monkeypatch.delenv("DATAAGENT_SESSION_DNS_SERVERS", raising=False)
+    resolv = tmp_path / "resolv.conf"
+    resolv.write_text(
+        "search default.svc.cluster.local\nnameserver 10.96.0.10\nnameserver 10.96.0.10\n",
+        encoding="ascii",
+    )
+    assert _dns_servers(str(resolv)) == ["10.96.0.10"]
+
+    empty_resolv = tmp_path / "empty.conf"
+    empty_resolv.write_text("search cluster.local\n", encoding="ascii")
+    with pytest.raises(ValueError, match="no DNS servers"):
+        _dns_servers(str(empty_resolv))
