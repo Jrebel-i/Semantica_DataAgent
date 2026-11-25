@@ -1,5 +1,5 @@
 import { createPortal } from "react-dom";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert, Button } from "antd";
 import type { Language, Messages } from "./i18n";
 import { PlusOutlined } from "@ant-design/icons";
@@ -14,6 +14,7 @@ import type {
   ConversationDetail,
   LiveTurn,
   Project,
+  PublishedAgentView,
   Turn,
 } from "./chat/types";
 import { copyText } from "./chat/sse";
@@ -28,10 +29,14 @@ import { ConversationSidebar } from "./chat/ConversationSidebar";
 import { Composer } from "./chat/Composer";
 import { ContextDrawer } from "./chat/ContextDrawer";
 import { CorrectionDraftDrawer } from "./chat/CorrectionDraftDrawer";
-import { ProviderSettings } from "./chat/ProviderSettings";
-import { useProviders } from "./chat/useProviders";
+import { ProviderSettingsPage } from "./chat/ProviderSettings";
+import { isPublishedPair, useProviders } from "./chat/useProviders";
 import { useConversations } from "./chat/useConversations";
-import { rememberProject, storedProject } from "./ProjectSelector";
+import {
+  PROJECT_CHANGE_EVENT,
+  rememberProject,
+  storedProject,
+} from "./ProjectSelector";
 import { useCitations } from "./chat/useCitations";
 import { useAsk } from "./chat/useAsk";
 import { turnFailed } from "./chat/turnEvents";
@@ -85,6 +90,8 @@ export function ChatPage({
     },
     [],
   );
+  const [boundConversation, setBoundConversation] =
+    useState<ConversationDetail | null>(null);
   const [turns, setTurns] = useState<Turn[]>([]);
   const [live, setLive] = useState<LiveTurn | null>(null);
   const [expiredPlans, setExpiredPlans] = useState<string[]>([]);
@@ -138,6 +145,25 @@ export function ChatPage({
     rememberProject(value);
   }
 
+  useEffect(() => {
+    const onProjectChange = (event: Event) => {
+      if (currentConversationId || live) return;
+      const next = (event as CustomEvent<string>).detail;
+      if (!next || next === projectId) return;
+      if (
+        projects.length > 0 &&
+        !projects.some((p) => p.id === next && p.status === "active")
+      ) {
+        return;
+      }
+      setProjectId(next);
+    };
+    window.addEventListener(PROJECT_CHANGE_EVENT, onProjectChange);
+    return () => {
+      window.removeEventListener(PROJECT_CHANGE_EVENT, onProjectChange);
+    };
+  }, [currentConversationId, live, projectId, projects]);
+
   const {
     conversations,
     archivedConversations,
@@ -172,9 +198,18 @@ export function ChatPage({
   });
 
   const {
+    catalogMode,
+    catalogLoaded,
+    catalogAgents,
+    personalDefaults,
+    activeCatalogAgent,
+    noPublishedAgents,
+    missingDefaultPrompt,
+    personalDefaultNotice,
+    personalDefaultError,
+    savingPersonalDefault,
     agents,
     profiles,
-    defaults,
     providers,
     agentId,
     providerId,
@@ -183,29 +218,17 @@ export function ChatPage({
     effortLevels,
     allowedEfforts,
     selectionTouched,
-    providerForm,
-    editingProviderId,
-    providerError,
-    providerNotice,
-    probeResults,
-    probeLoadingModel,
-    probeError,
     activeProvider,
     setAgentId,
     setProviderId,
     setModel,
-    setProviderForm,
     selectAgent,
     selectProvider,
     selectModel,
     selectEffort,
-    loadProviders,
-    editProvider,
-    resetProviderForm,
-    saveProvider,
-    deleteProvider,
-    probeProviderModel,
-    applyProbeResult,
+    resetToNewConversationDefaults,
+    savePersonalDefault,
+    resetPersonalDefault,
   } = useProviders({ token, messages: t, onError: setError });
 
   const visionEnabled =
@@ -327,6 +350,29 @@ export function ChatPage({
     }
   }
 
+  const boundProfile =
+    catalogMode && currentConversationId && boundConversation
+      ? boundConversation.agent_profile_id
+        ? catalogAgents.find((a) => a.id === boundConversation.agent_profile_id)
+        : (catalogAgents.find((a) => a.id === boundConversation.agent) ??
+          catalogAgents.find((a) => a.runner_id === boundConversation.agent))
+      : undefined;
+  const conversationAgentDisabled = Boolean(
+    catalogMode &&
+    catalogLoaded &&
+    currentConversationId &&
+    boundConversation &&
+    !boundProfile,
+  );
+  const conversationModelInvalid = Boolean(
+    catalogMode &&
+    catalogLoaded &&
+    currentConversationId &&
+    boundConversation &&
+    boundProfile &&
+    !isPublishedPair(boundProfile, providerId, model),
+  );
+
   const {
     question,
     setQuestion,
@@ -342,13 +388,20 @@ export function ChatPage({
   } = useAsk({
     token,
     messages: t,
-    agentId,
+    agentId: catalogMode
+      ? (activeCatalogAgent?.runner_id ?? boundConversation?.agent ?? agentId)
+      : agentId,
+    agentProfileId: catalogMode ? activeCatalogAgent?.id : undefined,
     providerId,
     model,
     effort,
     projectId,
     visionEnabled,
     projectArchived,
+    blockedByConversationState:
+      noPublishedAgents ||
+      conversationAgentDisabled ||
+      conversationModelInvalid,
     currentConversationId,
     setCurrentConversationId,
     sending,
@@ -445,17 +498,65 @@ export function ChatPage({
     }
   }
 
+  const reconciledConversationRef = useRef("");
+
+  const reconcileBoundConversation = useCallback(
+    (detail: ConversationDetail, agentsList: PublishedAgentView[]) => {
+      const matched = detail.agent_profile_id
+        ? agentsList.find((a) => a.id === detail.agent_profile_id)
+        : (agentsList.find((a) => a.id === detail.agent) ??
+          agentsList.find((a) => a.runner_id === detail.agent));
+      if (!matched) {
+        setAgentId(detail.agent_profile_id || detail.agent);
+        setProviderId(detail.provider_id);
+        setModel(detail.model);
+        return;
+      }
+      setAgentId(matched.id);
+      if (isPublishedPair(matched, detail.provider_id, detail.model)) {
+        setProviderId(detail.provider_id);
+        setModel(detail.model);
+      } else {
+        setProviderId(matched.providers[0]?.id ?? "");
+        setModel("");
+      }
+    },
+    [setAgentId, setProviderId, setModel],
+  );
+
+  useEffect(() => {
+    if (!catalogMode || !catalogLoaded || !boundConversation) return;
+    if (reconciledConversationRef.current === boundConversation.id) return;
+    reconciledConversationRef.current = boundConversation.id;
+    reconcileBoundConversation(boundConversation, catalogAgents);
+  }, [
+    catalogMode,
+    catalogLoaded,
+    catalogAgents,
+    boundConversation,
+    reconcileBoundConversation,
+  ]);
+
   function applyConversation(detail: ConversationDetail) {
     selectionTouched.current = true;
     if (detail.project_id) {
       setProjectId(detail.project_id);
       rememberProject(detail.project_id);
     }
+    setBoundConversation(detail);
     setCurrentConversationId(detail.id);
     setResumable(detail.resumable !== false);
     setTurns(detail.turns);
     resetCitation();
     setLive(null);
+
+    if (catalogMode && catalogLoaded) {
+      reconciledConversationRef.current = detail.id;
+      reconcileBoundConversation(detail, catalogAgents);
+      return;
+    }
+
+    reconciledConversationRef.current = "";
     setAgentId(detail.agent);
     setProviderId(detail.provider_id);
     setModel(detail.model);
@@ -521,23 +622,10 @@ export function ChatPage({
       id: "",
     };
     setLoadingConversation(false);
-    selectionTouched.current = true;
+    reconciledConversationRef.current = "";
+    setBoundConversation(null);
     setCurrentConversationId("");
-    setAgentId(defaults.agent);
-    const profile = profiles[defaults.agent];
-    const options = providers.filter(
-      (provider) =>
-        !profile?.providers.length || profile.providers.includes(provider.id),
-    );
-    const chosen =
-      options.find((provider) => provider.id === defaults.provider) ??
-      options[0];
-    setProviderId(chosen?.id || "");
-    setModel(
-      chosen?.models.includes(defaults.model)
-        ? defaults.model
-        : chosen?.models[0] || "",
-    );
+    resetToNewConversationDefaults();
     setResumable(true);
     setTurns([]);
     resetCitation();
@@ -705,7 +793,8 @@ export function ChatPage({
                     </span>
                   )}
                   <span>
-                    {agentId} · {activeProvider?.name || providerId || "—"} ·{" "}
+                    {activeCatalogAgent?.name || currentAgent?.name || agentId}{" "}
+                    · {activeProvider?.name || providerId || "—"} ·{" "}
                     {model || "—"}
                   </span>
                 </div>
@@ -737,6 +826,36 @@ export function ChatPage({
                 />
               )}
               {!resumable && <Alert type="info" title={t.sessionExpired} />}
+              {conversationAgentDisabled && (
+                <Alert
+                  className="chat-resumption-banner"
+                  type="warning"
+                  showIcon
+                  title={t.chatDisabledAgentBanner}
+                  action={
+                    <Button
+                      size="small"
+                      type="primary"
+                      onClick={newConversation}
+                    >
+                      {t.chatStartNewConversation}
+                    </Button>
+                  }
+                />
+              )}
+              {!conversationAgentDisabled && conversationModelInvalid && (
+                <Alert
+                  className="chat-resumption-banner"
+                  type="warning"
+                  showIcon
+                  title={t.chatInvalidModelBanner.replace(
+                    "{model}",
+                    boundConversation?.model ||
+                      currentConversation?.model ||
+                      "",
+                  )}
+                />
+              )}
               {loadingConversation && (
                 <p className="muted">{t.loadingConversation}</p>
               )}
@@ -859,6 +978,18 @@ export function ChatPage({
               agentSupportsSkills={agentSupportsSkills}
               onNavigatePersonalSettings={onNavigatePersonalSettings}
               hasError={Boolean(error)}
+              catalogMode={catalogMode}
+              noPublishedAgents={noPublishedAgents}
+              missingDefaultPrompt={missingDefaultPrompt}
+              conversationAgentDisabled={conversationAgentDisabled}
+              personalDefault={agentId ? personalDefaults[agentId] : undefined}
+              personalDefaultNotice={personalDefaultNotice}
+              personalDefaultError={personalDefaultError}
+              savingPersonalDefault={savingPersonalDefault}
+              onSavePersonalDefault={() => void savePersonalDefault()}
+              onResetPersonalDefault={() =>
+                void resetPersonalDefault(Boolean(currentConversationId))
+              }
             />
           </div>
           {citationRef && (
@@ -892,25 +1023,7 @@ export function ChatPage({
         </div>
       )}
       {settingsOnly && (
-        <ProviderSettings
-          messages={t}
-          role={role}
-          providers={providers}
-          providerError={providerError}
-          providerNotice={providerNotice}
-          providerForm={providerForm}
-          setProviderForm={setProviderForm}
-          editingProviderId={editingProviderId}
-          probeResults={probeResults}
-          probeLoadingModel={probeLoadingModel}
-          probeError={probeError}
-          onEditProvider={editProvider}
-          onDeleteProvider={(provider) => void deleteProvider(provider)}
-          onSaveProvider={saveProvider}
-          onResetProviderForm={resetProviderForm}
-          onProbeModel={probeProviderModel}
-          onApplyProbe={applyProbeResult}
-        />
+        <ProviderSettingsPage token={token} role={role} messages={t} />
       )}
     </section>
   );

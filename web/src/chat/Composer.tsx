@@ -6,7 +6,7 @@ import {
   type FormEvent,
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
-import { Button, Input, Select, Tag } from "antd";
+import { Alert, Button, Input, Select, Tag } from "antd";
 import {
   ArrowUpOutlined,
   CheckOutlined,
@@ -23,6 +23,7 @@ import { formatAttachmentSize, type PendingAttachment } from "./attachments";
 import { EFFORT_LEVELS } from "./effort";
 import type {
   Agent,
+  AgentModelPair,
   AvailableSkill,
   Conversation,
   EffortLevel,
@@ -74,6 +75,16 @@ export function Composer({
   agentSupportsSkills = true,
   onNavigatePersonalSettings,
   hasError = false,
+  catalogMode = false,
+  noPublishedAgents = false,
+  missingDefaultPrompt = false,
+  conversationAgentDisabled = false,
+  personalDefault,
+  personalDefaultNotice = "",
+  personalDefaultError = "",
+  savingPersonalDefault = false,
+  onSavePersonalDefault,
+  onResetPersonalDefault,
 }: {
   messages: Messages;
   question: string;
@@ -116,6 +127,16 @@ export function Composer({
   agentSupportsSkills?: boolean;
   onNavigatePersonalSettings?: () => void;
   hasError?: boolean;
+  catalogMode?: boolean;
+  noPublishedAgents?: boolean;
+  missingDefaultPrompt?: boolean;
+  conversationAgentDisabled?: boolean;
+  personalDefault?: AgentModelPair;
+  personalDefaultNotice?: string;
+  personalDefaultError?: string;
+  savingPersonalDefault?: boolean;
+  onSavePersonalDefault?: () => void;
+  onResetPersonalDefault?: () => void;
 }) {
   const fileInput = useRef<HTMLInputElement>(null);
   const imageInput = useRef<HTMLInputElement>(null);
@@ -125,7 +146,11 @@ export function Composer({
   const t = messages;
 
   const composerDisabled =
-    !resumable || projectArchived || Boolean(currentConversation?.archived);
+    !resumable ||
+    projectArchived ||
+    Boolean(currentConversation?.archived) ||
+    conversationAgentDisabled ||
+    noPublishedAgents;
   const slashMatch =
     !composerDisabled && selectedSkill === null
       ? SLASH_COMMAND_RE.exec(question)
@@ -239,6 +264,20 @@ export function Composer({
     (project) => project.status === "active",
   );
   const showProjectSelect = !projectArchived && activeProjects.length > 1;
+  const activeProvidersList = providers.filter(
+    (provider) =>
+      !profiles[agentId]?.providers.length ||
+      profiles[agentId].providers.includes(provider.id),
+  );
+  const showVisibleProviderSelect =
+    catalogMode && activeProvidersList.length > 1;
+  const isCurrentPersonalDefault = Boolean(
+    personalDefault &&
+    providerId &&
+    model &&
+    personalDefault.provider_id === providerId &&
+    personalDefault.model === model,
+  );
   return (
     <div className="chat-composer">
       {emptyConversation && (
@@ -552,27 +591,23 @@ export function Composer({
               </select>
             )}
             <select
-              className="sr-only"
-              tabIndex={-1}
+              className={
+                showVisibleProviderSelect ? "composer-ghost-select" : "sr-only"
+              }
+              tabIndex={showVisibleProviderSelect ? undefined : -1}
               aria-label={t.askProvider}
               value={providerId}
-              disabled={!providers.length}
+              disabled={!providers.length || composerDisabled}
               onChange={(event) => selectProvider(event.target.value)}
             >
               {providers.length === 0 && (
                 <option value="">{t.noProviders}</option>
               )}
-              {providers
-                .filter(
-                  (provider) =>
-                    !profiles[agentId]?.providers.length ||
-                    profiles[agentId].providers.includes(provider.id),
-                )
-                .map((provider) => (
-                  <option key={provider.id} value={provider.id}>
-                    {provider.name}
-                  </option>
-                ))}
+              {activeProvidersList.map((provider) => (
+                <option key={provider.id} value={provider.id}>
+                  {provider.name}
+                </option>
+              ))}
             </select>
             <label>
               <span className="sr-only">{t.askAgent}</span>
@@ -624,8 +659,9 @@ export function Composer({
                 className="composer-select composer-model-select"
                 classNames={{ popup: { root: "composer-select-dropdown" } }}
                 value={model || undefined}
+                placeholder={t.agentProfileSelectModelPlaceholder}
                 onChange={(value) => onModelChange(value)}
-                disabled={!activeProvider}
+                disabled={!activeProvider || composerDisabled}
                 options={modelOptions}
                 popupMatchSelectWidth={false}
                 optionRender={(option) => (
@@ -680,14 +716,83 @@ export function Composer({
             </Button>
           </div>
         </div>
+        {noPublishedAgents && !conversationAgentDisabled && (
+          <Alert type="warning" title={t.chatNoPublishedAgents} />
+        )}
+        {!noPublishedAgents &&
+          missingDefaultPrompt &&
+          !model &&
+          !currentConversationId && (
+            <div className="composer-switch-hint" role="status">
+              {t.chatAgentDefaultMissingPrompt}
+            </div>
+          )}
         {projectArchived && (
           <div className="composer-switch-hint" role="status">
             {t.projectArchivedNotice}
           </div>
         )}
-        {conversationSelectionChanged && (
-          <div className="composer-switch-hint" role="status">
-            {t.nextMessageModel.replace("{model}", model)}
+        {conversationSelectionChanged &&
+          model &&
+          !conversationAgentDisabled && (
+            <div className="composer-switch-hint" role="status">
+              {t.nextMessageModel.replace("{model}", model)}
+            </div>
+          )}
+        {catalogMode && agents.length > 0 && !composerDisabled && (
+          <div className="composer-default-bar">
+            {isCurrentPersonalDefault ? (
+              <>
+                <Tag color="blue">{t.chatPersonalDefaultBadge}</Tag>
+                <Button
+                  type="link"
+                  size="small"
+                  className="composer-default-btn"
+                  htmlType="button"
+                  disabled={savingPersonalDefault}
+                  onClick={onResetPersonalDefault}
+                >
+                  {t.chatResetCompanyDefault}
+                </Button>
+              </>
+            ) : (
+              <>
+                {providerId && model && (
+                  <Button
+                    type="link"
+                    size="small"
+                    className="composer-default-btn"
+                    htmlType="button"
+                    disabled={savingPersonalDefault}
+                    onClick={onSavePersonalDefault}
+                  >
+                    {t.chatSavePersonalDefault}
+                  </Button>
+                )}
+                {personalDefault && (
+                  <Button
+                    type="link"
+                    size="small"
+                    className="composer-default-btn"
+                    htmlType="button"
+                    disabled={savingPersonalDefault}
+                    onClick={onResetPersonalDefault}
+                  >
+                    {t.chatResetCompanyDefault}
+                  </Button>
+                )}
+              </>
+            )}
+            {personalDefaultNotice && (
+              <span role="status" style={{ color: "var(--green)" }}>
+                {personalDefaultNotice}
+              </span>
+            )}
+            {personalDefaultError && (
+              <span role="alert" style={{ color: "var(--red)" }}>
+                {personalDefaultError}
+              </span>
+            )}
           </div>
         )}
       </form>

@@ -360,6 +360,7 @@ def assistant_defaults(
     _: Annotated[str, Depends(current_user)],
 ) -> dict[str, str | None]:
     from .ask_api import _configured
+    from .db import AgentProfile
 
     result = {
         key: _configured(key)
@@ -368,6 +369,26 @@ def assistant_defaults(
     with sessions()() as db:
         row = db.get(Setting, "assistant_agent_profiles")
         result["assistant_agent_profiles"] = row.value if row else None
+        sys_default = (
+            db.query(AgentProfile)
+            .filter(AgentProfile.is_system_default.is_(True))
+            .first()
+        )
+        if (
+            sys_default is not None
+            and (sys_default.default_provider_id or sys_default.default_model)
+            and (
+                (
+                    result["assistant_provider_id"] is None
+                    and result["assistant_model"] is None
+                )
+                or (sys_default.version or 1) > 1
+                or sys_default.id != "pi"
+            )
+        ):
+            result["assistant_agent"] = sys_default.runner_id
+            result["assistant_provider_id"] = sys_default.default_provider_id
+            result["assistant_model"] = sys_default.default_model
     return result
 
 
@@ -851,9 +872,15 @@ from .skill_api import router as skill_router
 
 app.include_router(skill_router)
 
+from .agent_profile_api import router as agent_profile_router
+from .agent_runner_api import router as agent_runner_router
+from .assistant_catalog import router as assistant_catalog_router
 from .provider_api import router as provider_router
 
 app.include_router(provider_router)
+app.include_router(agent_profile_router)
+app.include_router(agent_runner_router)
+app.include_router(assistant_catalog_router)
 
 from .conversation_api import router as conversation_router
 

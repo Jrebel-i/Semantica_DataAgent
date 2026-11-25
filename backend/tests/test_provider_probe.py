@@ -1129,3 +1129,32 @@ def test_probe_does_not_leak_api_key_in_response_or_logs(client, caplog):
     assert SECRET not in response.text
     assert SECRET not in listing.text
     assert SECRET not in caplog.text
+
+
+def test_probe_accepts_long_model_id_up_to_500_chars(client, monkeypatch):
+    import httpx
+
+    from semantica_dataagent import provider_api
+
+    c, token = client
+    long_model = "m-" + ("x" * 250) + "#oai"
+    with _gateway("openai-completions") as (_, base_url):
+        provider_id = _create_provider(
+            c, token, provider_type="openai-completions", base_url=base_url
+        )
+        monkeypatch.setattr(
+            provider_api,
+            "_catalog_transport",
+            httpx.MockTransport(
+                lambda _req: httpx.Response(200, json={"data": [{"id": long_model}]})
+            ),
+        )
+        refreshed = c.post(
+            f"/api/v1/providers/{provider_id}/refresh-models",
+            headers=_headers(token),
+        )
+        assert refreshed.status_code == 200, refreshed.text
+        response = _probe(c, token, provider_id, model=long_model)
+
+    assert response.status_code == 200, response.text
+    assert response.json()["model"] == long_model

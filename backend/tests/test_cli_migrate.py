@@ -67,8 +67,8 @@ def test_migrate_upgrades_from_0016_and_keeps_data(database, capsys):
     assert cli.main(["migrate"]) == 0
 
     output = capsys.readouterr().out
-    assert "0016" in output and "0049" in output
-    assert _schema_version(database) == "0049"
+    assert "0016" in output and "0050" in output
+    assert _schema_version(database) == "0050"
     assert _kept_rows(database) == (("kept token", "admin"), ("kept value",))
 
 
@@ -162,7 +162,7 @@ def test_migrate_backs_up_before_upgrade_and_is_repeatable(database, capsys):
 
     capsys.readouterr()
     assert cli.main(["migrate"]) == 0
-    assert "0049" in capsys.readouterr().out
+    assert "0050" in capsys.readouterr().out
     assert len(_backups(database)) == 1
 
 
@@ -187,14 +187,14 @@ def test_serve_migrates_before_starting(database, capsys, monkeypatch):
 
     assert cli.main(["serve"]) == 0
     assert started == [True]
-    assert _schema_version(database) == "0049"
+    assert _schema_version(database) == "0050"
     assert _kept_rows(database) == (("kept token", "admin"), ("kept value",))
     assert len(_backups(database)) == 1
 
     assert cli.main(["serve"]) == 0
     assert started == [True, True]
     assert len(_backups(database)) == 1
-    assert "0049" in capsys.readouterr().out
+    assert "0050" in capsys.readouterr().out
 
 
 def test_serve_does_not_start_when_migration_fails(database, capsys, monkeypatch):
@@ -215,7 +215,7 @@ def test_init_still_initializes_an_empty_database(database):
     token = cli.initialize()
 
     assert token
-    assert _schema_version(database) == "0049"
+    assert _schema_version(database) == "0050"
     with sqlite3.connect(database) as db:
         row = db.execute("SELECT name, role FROM tokens").fetchone()
     assert row == ("initial admin", "admin")
@@ -240,7 +240,7 @@ def test_serve_upgrades_0023_conversations_and_backs_up(database, monkeypatch):
         )
     monkeypatch.setattr(cli, "_serve", lambda: None)
     assert cli.main(["serve"]) == 0
-    assert _schema_version(database) == "0049"
+    assert _schema_version(database) == "0050"
     with sqlite3.connect(database) as db:
         assert db.execute(
             "SELECT title, pinned_at, archived_at FROM conversations WHERE id='old'"
@@ -310,7 +310,7 @@ def test_migrate_adds_empty_model_capabilities_for_existing_providers(database):
 
     assert cli.main(["migrate"]) == 0
 
-    assert _schema_version(database) == "0049"
+    assert _schema_version(database) == "0050"
     with sqlite3.connect(database) as db:
         columns = {
             row[1] for row in db.execute("PRAGMA table_info(providers)").fetchall()
@@ -432,7 +432,7 @@ def test_master_project_database_upgrades_to_audit_table(database):
 
     assert cli.main(["migrate"]) == 0
 
-    assert _schema_version(database) == "0049"
+    assert _schema_version(database) == "0050"
     with sqlite3.connect(database) as db:
         assert db.execute("SELECT count(*) FROM project_audit").fetchone() == (0,)
         assert (
@@ -461,7 +461,7 @@ def test_project_migration_preserves_existing_data(database):
 
     assert cli.main(["migrate"]) == 0
 
-    assert _schema_version(database) == "0049"
+    assert _schema_version(database) == "0050"
     assert {
         table: _table_rows(database, table, old_columns[table]) for table in OLD_TABLES
     } == before
@@ -509,9 +509,9 @@ def test_empty_database_has_a_single_migration_head(database):
     from alembic.script import ScriptDirectory
 
     config = _config(database)
-    assert ScriptDirectory.from_config(config).get_heads() == ["0049"]
+    assert ScriptDirectory.from_config(config).get_heads() == ["0050"]
     command.upgrade(config, "head")
-    assert _schema_version(database) == "0049"
+    assert _schema_version(database) == "0050"
     with sqlite3.connect(database) as db:
         assert db.execute("SELECT count(*) FROM projects").fetchone() == (1,)
         assert db.execute("SELECT count(*) FROM project_members").fetchone() == (0,)
@@ -553,7 +553,7 @@ def test_migrate_adds_null_effort_for_existing_turns(database):
 
     assert cli.main(["migrate"]) == 0
 
-    assert _schema_version(database) == "0049"
+    assert _schema_version(database) == "0050"
     with sqlite3.connect(database) as db:
         columns = {row[1] for row in db.execute("PRAGMA table_info(turns)").fetchall()}
         assert "effort" in columns
@@ -579,7 +579,7 @@ def test_migrate_backfills_agent_credential_project(database):
             ("credential-digest",),
         ).fetchone()
     assert project == ("default",)
-    assert _schema_version(database) == "0049"
+    assert _schema_version(database) == "0050"
 
 
 def test_migrated_builds_index_is_unique_per_project_and_status(database):
@@ -632,7 +632,7 @@ def test_conversations_gain_the_default_project_when_upgrading(database):
             "FROM conversations WHERE id='old'"
         ).fetchone()
         assert db.execute("SELECT version_num FROM alembic_version").fetchone() == (
-            "0049",
+            "0050",
         )
     assert after == before + ("default",)
 
@@ -703,7 +703,7 @@ def test_migrate_0043_pull_instances_and_idempotency(
     monkeypatch.delenv("DATAAGENT_ENCRYPTION_KEY", raising=False)
 
     cfg = _config(db_path)
-    assert ScriptDirectory.from_config(cfg).get_heads() == ["0049"]
+    assert ScriptDirectory.from_config(cfg).get_heads() == ["0050"]
     command.upgrade(cfg, "0042")
 
     legacy_cipher_default = "fernet-ciphertext-default-do-not-decrypt"
@@ -810,7 +810,7 @@ def test_migrate_0044_unified_evolution_and_downgrade(
     monkeypatch.setenv("DATAAGENT_ENCRYPTION_KEY", Fernet.generate_key().decode())
 
     cfg = _config(db_path)
-    assert ScriptDirectory.from_config(cfg).get_heads() == ["0049"]
+    assert ScriptDirectory.from_config(cfg).get_heads() == ["0050"]
     command.upgrade(cfg, "0043")
 
     with sqlite3.connect(db_path) as db:
@@ -901,7 +901,6 @@ def test_migrate_0045_preserves_existing_records_and_exposes_catalog(database):
     from semantica_dataagent.app import app
     from semantica_dataagent.db import (
         Build,
-        Conversation,
         CorrectionProposal,
         GenerationPointer,
         KnowledgeGeneration,
@@ -918,19 +917,28 @@ def test_migrate_0045_preserves_existing_records_and_exposes_catalog(database):
             (digest(token), "kept", "admin", "kept-id", "2026-01-01"),
         )
         db.execute("INSERT INTO settings (key, value) VALUES (?, ?)", ("kept", "value"))
+        db.execute(
+            "INSERT INTO conversations "
+            "(id, owner_id, project_id, title, agent, provider_id, model, created_at, updated_at, resumable) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                "kept-conversation",
+                "kept-id",
+                "default",
+                "question",
+                "pi",
+                "local",
+                "test",
+                "2026-01-01",
+                "2026-01-01",
+                1,
+            ),
+        )
     with sessions().begin() as db:
         db.add_all(
             [
                 Build(
                     status="succeeded", started_at="2026-01-01T00:00:00Z", counts="{}"
-                ),
-                Conversation(
-                    id="kept-conversation",
-                    owner_id="kept-id",
-                    title="question",
-                    agent="pi",
-                    provider_id="local",
-                    model="test",
                 ),
                 CorrectionProposal(
                     id="kept-proposal",
@@ -957,19 +965,16 @@ def test_migrate_0045_preserves_existing_records_and_exposes_catalog(database):
         "knowledge_generations",
         "generation_pointer",
     )
-    with sqlite3.connect(database) as db:
-        before = {
-            table: db.execute(f"SELECT * FROM {table} ORDER BY rowid").fetchall()
-            for table in tables
-        }
+    old_columns = {table: _table_columns(database, table) for table in tables}
+    before = {
+        table: _table_rows(database, table, old_columns[table]) for table in tables
+    }
     assert cli.main(["migrate"]) == 0
-    assert _schema_version(database) == "0049"
+    assert _schema_version(database) == "0050"
     assert _schema_version(_backups(database)[0]) == "0044"
-    with sqlite3.connect(database) as db:
-        assert {
-            table: db.execute(f"SELECT * FROM {table} ORDER BY rowid").fetchall()
-            for table in tables
-        } == before
+    assert {
+        table: _table_rows(database, table, old_columns[table]) for table in tables
+    } == before
     package = io.BytesIO()
     with zipfile.ZipFile(package, "w") as archive:
         archive.writestr(
@@ -1000,7 +1005,7 @@ def test_migrate_0046_preserves_catalog_and_creates_empty_personal_secrets(datab
             "SELECT name, description, metadata_json, archive, enabled FROM catalog_skills"
         ).fetchall()
     assert cli.main(["migrate"]) == 0
-    assert _schema_version(database) == "0049"
+    assert _schema_version(database) == "0050"
     assert _schema_version(_backups(database)[0]) == "0045"
     with sqlite3.connect(database) as db:
         assert (
@@ -1024,7 +1029,7 @@ def test_migrate_0047_preserves_catalog_and_existing_secret(database):
             ("owner", "default", "kept", "KEY", "synthetic-ciphertext"),
         )
     assert cli.main(["migrate"]) == 0
-    assert _schema_version(database) == "0049"
+    assert _schema_version(database) == "0050"
     with sqlite3.connect(database) as db:
         assert db.execute("SELECT ciphertext FROM skill_secrets").fetchone() == (
             "synthetic-ciphertext",
@@ -1045,7 +1050,7 @@ def test_migrate_0048_adds_null_skill_name_for_existing_turns(database):
             "VALUES ('legacy-conv', 1, '旧问题', 'completed', '旧回答', '[]', '[]', '2026-01-01', 'provider', 'model-a')"
         )
     assert cli.main(["migrate"]) == 0
-    assert _schema_version(database) == "0049"
+    assert _schema_version(database) == "0050"
     with sqlite3.connect(database) as db:
         cols = {row[1] for row in db.execute("PRAGMA table_info(turns)").fetchall()}
         assert "skill_name" in cols
@@ -1090,7 +1095,7 @@ def test_migrate_0049_switches_dtb_to_ai_gateway(database):
         )
 
     assert cli.main(["migrate"]) == 0
-    assert _schema_version(database) == "0049"
+    assert _schema_version(database) == "0050"
 
     with sqlite3.connect(database) as db:
         configs = {
@@ -1149,3 +1154,230 @@ def test_migrate_0049_switches_dtb_to_ai_gateway(database):
         assert inst[0] == "dtb"
         assert inst[1] == "DTB"
         assert json.loads(inst[2])["url"] == "https://dtb.pkfare.io"
+
+
+def test_migrate_0050_agent_profiles_catalog_and_downgrade(database):
+    import json
+
+    from alembic.script import ScriptDirectory
+
+    cfg = _config(database)
+    assert ScriptDirectory.from_config(cfg).get_heads() == ["0050"]
+    command.upgrade(cfg, "0049")
+
+    with sqlite3.connect(database) as db:
+        db.execute(
+            "INSERT INTO providers "
+            "(id, name, type, base_url, api_key, models, model_capabilities, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                "prov-1",
+                "Gateway 1",
+                "anthropic-messages",
+                "https://gw1.example",
+                "enc-key-1",
+                json.dumps(["m-claude-1", "m-claude-2"]),
+                None,
+                "2026-01-01",
+                "2026-01-01",
+            ),
+        )
+        db.execute(
+            "INSERT INTO providers "
+            "(id, name, type, base_url, api_key, models, model_capabilities, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                "prov-2",
+                "Gateway 2",
+                "openai-responses",
+                "https://gw2.example",
+                None,
+                json.dumps(["m-codex-1"]),
+                None,
+                "2026-01-01",
+                "2026-01-01",
+            ),
+        )
+        db.executemany(
+            "INSERT INTO settings (key, value) VALUES (?, ?)",
+            [
+                ("assistant_agent", "claude"),
+                ("assistant_provider_id", "prov-1"),
+                ("assistant_model", "m-claude-1"),
+                (
+                    "assistant_agent_profiles",
+                    json.dumps(
+                        {
+                            "claude": {
+                                "providers": ["prov-1"],
+                                "default_provider": "prov-1",
+                                "default_model": "m-claude-2",
+                            },
+                            "codex": {
+                                "providers": ["prov-2"],
+                                "default_provider": "prov-2",
+                                "default_model": "m-codex-1",
+                            },
+                        }
+                    ),
+                ),
+            ],
+        )
+        db.execute(
+            "INSERT INTO conversations "
+            "(id, owner_id, project_id, title, agent, provider_id, model, created_at, updated_at, resumable) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                "conv-claude",
+                "u1",
+                "default",
+                "历史 Claude 对话",
+                "claude",
+                "prov-1",
+                "m-claude-1",
+                "2026-01-01",
+                "2026-01-01",
+                1,
+            ),
+        )
+        db.execute(
+            "INSERT INTO conversations "
+            "(id, owner_id, project_id, title, agent, provider_id, model, created_at, updated_at, resumable) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                "conv-custom",
+                "u1",
+                "default",
+                "其他运行器对话",
+                "custom-old",
+                "prov-1",
+                "m-claude-1",
+                "2026-01-01",
+                "2026-01-01",
+                1,
+            ),
+        )
+
+    assert cli.main(["migrate"]) == 0
+    assert _schema_version(database) == "0050"
+
+    with sqlite3.connect(database) as db:
+        prov_cols = {
+            row[1] for row in db.execute("PRAGMA table_info(providers)").fetchall()
+        }
+        assert {
+            "catalog_models",
+            "catalog_fetched_at",
+            "catalog_status",
+            "catalog_error",
+        } <= prov_cols
+
+        runners = {
+            row[0]: row[1:]
+            for row in db.execute(
+                "SELECT id, display_name, npm_package, package_version, executable, adapter_id, builtin "
+                "FROM agent_runners"
+            ).fetchall()
+        }
+        assert runners == {
+            "pi": (
+                "pi",
+                "@earendil-works/pi-coding-agent",
+                "1.2.0",
+                "pi",
+                "pi",
+                1,
+            ),
+            "claude": (
+                "Claude",
+                "@anthropic-ai/claude-code",
+                "2.1.318",
+                "claude",
+                "claude",
+                1,
+            ),
+            "codex": (
+                "Codex",
+                "@openai/codex",
+                "0.166.0",
+                "codex",
+                "codex",
+                1,
+            ),
+        }
+
+        profiles = {
+            row[0]: {
+                "name": row[1],
+                "runner_id": row[2],
+                "enabled": row[3],
+                "is_system_default": row[4],
+                "default_provider_id": row[5],
+                "default_model": row[6],
+                "provider_models": json.loads(row[7]),
+                "pending_verification_models": json.loads(row[8]),
+                "version": row[9],
+            }
+            for row in db.execute(
+                "SELECT id, name, runner_id, enabled, is_system_default, "
+                "default_provider_id, default_model, provider_models, "
+                "pending_verification_models, version FROM agent_profiles"
+            ).fetchall()
+        }
+        assert set(profiles) == {"pi", "claude", "codex"}
+        assert profiles["claude"]["is_system_default"] == 1
+        assert profiles["claude"]["default_provider_id"] == "prov-1"
+        assert profiles["claude"]["default_model"] == "m-claude-2"
+        assert profiles["claude"]["provider_models"] == {
+            "prov-1": ["m-claude-1", "m-claude-2"]
+        }
+        assert profiles["claude"]["pending_verification_models"] == {
+            "prov-1": ["m-claude-1", "m-claude-2"]
+        }
+        assert profiles["codex"]["is_system_default"] == 0
+        assert profiles["codex"]["provider_models"] == {"prov-2": ["m-codex-1"]}
+        assert profiles["pi"]["is_system_default"] == 0
+        assert profiles["pi"]["provider_models"] == {
+            "prov-1": ["m-claude-1", "m-claude-2"],
+            "prov-2": ["m-codex-1"],
+        }
+
+        conv_rows = dict(
+            db.execute("SELECT id, agent_profile_id FROM conversations").fetchall()
+        )
+        assert conv_rows == {"conv-claude": "claude", "conv-custom": None}
+
+        tables = {
+            row[0]
+            for row in db.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+        assert "user_agent_defaults" in tables
+
+    command.downgrade(cfg, "0049")
+    assert _schema_version(database) == "0049"
+    with sqlite3.connect(database) as db:
+        tables = {
+            row[0]
+            for row in db.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+        assert not ({"agent_profiles", "user_agent_defaults", "agent_runners"} & tables)
+        prov_cols = {
+            row[1] for row in db.execute("PRAGMA table_info(providers)").fetchall()
+        }
+        assert not (
+            {
+                "catalog_models",
+                "catalog_fetched_at",
+                "catalog_status",
+                "catalog_error",
+            }
+            & prov_cols
+        )
+        conv_cols = {
+            row[1] for row in db.execute("PRAGMA table_info(conversations)").fetchall()
+        }
+        assert "agent_profile_id" not in conv_cols

@@ -12,8 +12,14 @@ import { CorrectionsPage } from "./CorrectionsPage";
 import { App } from "./App";
 import { getMessages } from "./i18n";
 
+let originalGetComputedStyle: PropertyDescriptor | undefined;
+
 beforeEach(() => {
   localStorage.clear();
+  originalGetComputedStyle = Object.getOwnPropertyDescriptor(
+    window,
+    "getComputedStyle",
+  );
   Object.defineProperty(window, "matchMedia", {
     configurable: true,
     value: () => ({
@@ -23,6 +29,11 @@ beforeEach(() => {
       addEventListener() {},
       removeEventListener() {},
     }),
+  });
+  Object.defineProperty(window, "getComputedStyle", {
+    configurable: true,
+    writable: true,
+    value: () => ({ getPropertyValue: () => "" }),
   });
   Object.defineProperty(globalThis, "ResizeObserver", {
     configurable: true,
@@ -37,6 +48,11 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  if (originalGetComputedStyle) {
+    Object.defineProperty(window, "getComputedStyle", originalGetComputedStyle);
+  } else {
+    delete (window as unknown as Record<string, unknown>).getComputedStyle;
+  }
 });
 
 test.each(["approve", "edited", "reject"])(

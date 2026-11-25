@@ -7,6 +7,42 @@ import type { Messages } from "../i18n";
 
 type DraftResponse = components["schemas"]["DraftCorrectionResponse"];
 type Provider = components["schemas"]["ProviderView"];
+type AssistantCatalog = components["schemas"]["AssistantCatalogView"];
+
+function catalogProviders(catalog: AssistantCatalog): Provider[] {
+  const byId = new Map<string, Provider>();
+  for (const agent of catalog.agents ?? []) {
+    for (const item of agent.providers ?? []) {
+      const existing = byId.get(item.id);
+      if (existing) {
+        const seen = new Set(existing.models);
+        for (const modelId of item.models ?? []) {
+          if (!seen.has(modelId)) {
+            seen.add(modelId);
+            existing.models.push(modelId);
+          }
+        }
+        continue;
+      }
+      byId.set(item.id, {
+        id: item.id,
+        name: item.name,
+        type: item.type,
+        base_url: "",
+        models: [...(item.models ?? [])],
+        model_capabilities: item.model_capabilities ?? {},
+        catalog_models: [...(item.models ?? [])],
+        catalog_fetched_at: null,
+        catalog_status: "ok",
+        catalog_error: null,
+        has_api_key: true,
+        created_at: "",
+        updated_at: "",
+      });
+    }
+  }
+  return Array.from(byId.values());
+}
 
 type TargetMode = "auto" | "manual";
 
@@ -88,15 +124,21 @@ export function CorrectionDraftDrawer({
     }
     if (!open) return;
     const controller = new AbortController();
-    fetch("/api/v1/providers", {
+    fetch("/api/v1/assistant-catalog", {
       headers: { Authorization: `Bearer ${token}` },
       signal: controller.signal,
     })
       .then(async (response) => {
         if (!response.ok) return;
-        const data = (await response.json()) as unknown;
-        if (!controller.signal.aborted && Array.isArray(data)) {
-          setProviders(data as Provider[]);
+        const data = (await response.json()) as Partial<AssistantCatalog>;
+        if (!controller.signal.aborted && Array.isArray(data?.agents)) {
+          setProviders(
+            catalogProviders({
+              system_default_profile_id: data.system_default_profile_id ?? null,
+              agents: data.agents,
+              personal_defaults: data.personal_defaults ?? {},
+            }),
+          );
         }
       })
       .catch(() => {

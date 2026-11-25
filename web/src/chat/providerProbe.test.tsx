@@ -17,6 +17,7 @@ setupChatTestEnv();
 const configured = {
   ...provider,
   models: ["model-a", "model-b"],
+  catalog_models: ["model-a", "model-b"],
   model_capabilities: {
     "model-a": {
       description: "带截图问答",
@@ -43,10 +44,7 @@ const result = {
 function fetcherFor(probe: () => Promise<Response>) {
   return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
-    if (url === "/api/v1/agents")
-      return json([{ id: "pi", name: "pi", available: true }]);
     if (url === "/api/v1/providers") return json([configured]);
-    if (url === "/api/v1/conversations") return json([]);
     if (url === `/api/v1/providers/${configured.id}/probe`) return probe();
     if (url === `/api/v1/providers/${configured.id}` && init?.method === "PUT")
       return json(configured);
@@ -64,10 +62,10 @@ async function openEditor(fetcher: ReturnType<typeof vi.fn>) {
       messages={getMessages("zh")}
     />,
   );
-  fireEvent.click(await screen.findByRole("button", { name: "编辑" }));
+  fireEvent.click(await screen.findByRole("button", { name: /编\s*辑/ }));
 }
 
-test("admins probe each model and apply the result before saving", async () => {
+test("admins test each model with usage notice and apply the result before saving", async () => {
   let resolveProbe: (response: Response) => void = () => undefined;
   const pending = new Promise<Response>((resolve) => {
     resolveProbe = resolve;
@@ -75,10 +73,15 @@ test("admins probe each model and apply the result before saving", async () => {
   const fetcher = fetcherFor(() => pending);
   await openEditor(fetcher);
 
-  expect(screen.getByRole("button", { name: "model-a 探测" })).toBeTruthy();
-  expect(screen.getByRole("button", { name: "model-b 探测" })).toBeTruthy();
+  expect(
+    screen.getByText(
+      /单模型测试将向网关发送真实探测请求，可能产生少量调用用量/,
+    ),
+  ).toBeTruthy();
+  expect(screen.getByRole("button", { name: "model-a 测试" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "model-b 测试" })).toBeTruthy();
 
-  fireEvent.click(screen.getByRole("button", { name: "model-a 探测" }));
+  fireEvent.click(screen.getByRole("button", { name: "model-a 测试" }));
   expect((await screen.findByRole("status")).textContent).toContain("探测中");
   await act(async () => {
     resolveProbe(json(result));
@@ -108,6 +111,13 @@ test("admins probe each model and apply the result before saving", async () => {
   expect(JSON.parse(String(probeCall?.[1]?.body))).toEqual({
     model: "model-a",
   });
+
+  // Never calls agent-profiles when probing
+  expect(
+    fetcher.mock.calls.some(([input]) =>
+      String(input).includes("/api/v1/agent-profiles"),
+    ),
+  ).toBe(false);
 
   fireEvent.click(screen.getByRole("button", { name: "model-a 应用探测结果" }));
   expect(
@@ -156,7 +166,7 @@ test.each([
     const fetcher = fetcherFor(async () => json({ ...result, vision, notes }));
     await openEditor(fetcher);
 
-    fireEvent.click(screen.getByRole("button", { name: "model-a 探测" }));
+    fireEvent.click(screen.getByRole("button", { name: "model-a 测试" }));
 
     expect(await screen.findByLabelText("model-a 探测结果")).toBeTruthy();
     expect(
@@ -173,7 +183,7 @@ test("probe errors are shown without changing the form", async () => {
   const fetcher = fetcherFor(async () => new Response("{}", { status: 409 }));
   await openEditor(fetcher);
 
-  fireEvent.click(screen.getByRole("button", { name: "model-a 探测" }));
+  fireEvent.click(screen.getByRole("button", { name: "model-a 测试" }));
 
   expect(
     await screen.findByText("该 provider 正在探测，请稍后重试"),
