@@ -1344,3 +1344,126 @@ def test_upload_allows_ordinary_secret_names(client):
         "FEISHU_APP_SECRET",
     ]
     assert c.post("/api/v1/skills", headers=headers, content=package).status_code == 201
+
+
+def test_flat_root_zip_preview_upload_and_normalized_snapshot(client):
+    from semantica_dataagent import skill_catalog as catalog
+    from semantica_dataagent.auth import Requester
+    from semantica_dataagent.db import Token, digest, sessions
+
+    c, token = client
+    headers = {"Authorization": f"Bearer {token}"}
+    package = archive(
+        {
+            "SKILL.md": (
+                "---\nname: dtb-demo\ndescription: Flat root skill package\n---\nBody\n"
+            ),
+            "scripts/run.py": "print('ok')\n",
+            "references/guide.md": "# Guide\n",
+        }
+    )
+
+    preview = c.post("/api/v1/skills/preview", headers=headers, content=package)
+    assert preview.status_code == 200
+    assert preview.json()["name"] == "dtb-demo"
+    assert preview.json()["description"] == "Flat root skill package"
+
+    uploaded = c.post("/api/v1/skills", headers=headers, content=package)
+    assert uploaded.status_code == 201
+    assert (
+        c.put(
+            "/api/v1/skills/dtb-demo/enabled",
+            headers=headers,
+            json={"enabled": True},
+        ).status_code
+        == 200
+    )
+
+    with sessions()() as db:
+        admin = db.get(Token, digest(token))
+        requester = Requester(id=admin.id, role=admin.role, token=token)
+        snapshot = catalog.resolve_skill(db, requester, "default", "dtb-demo")
+        assert snapshot.name == "dtb-demo"
+        assert dict(snapshot.files) == {
+            "dtb-demo/SKILL.md": (
+                b"---\n"
+                b"name: dtb-demo\n"
+                b"description: Flat root skill package\n"
+                b"---\nBody\n"
+            ),
+            "dtb-demo/references/guide.md": b"# Guide\n",
+            "dtb-demo/scripts/run.py": b"print('ok')\n",
+        }
+
+
+def test_flat_root_and_directory_validation_errors_are_specific(client):
+    c, token = client
+    headers = {"Authorization": f"Bearer {token}"}
+
+    bad_name = archive(
+        {
+            "SKILL.md": "---\nname: Bad_Name\ndescription: Bad\n---\nBody\n",
+            "scripts/run.py": "pass\n",
+        }
+    )
+    resp = c.post("/api/v1/skills/preview", headers=headers, content=bad_name)
+    assert resp.status_code == 422
+    assert resp.json()["detail"] == "Invalid Skill package: Invalid Skill name"
+
+    deep_flat = archive(
+        {
+            "SKILL.md": "---\nname: deep-flat\ndescription: Too deep\n---\nBody\n",
+            "/".join(["d"] * 31) + "/leaf.txt": "x",
+        }
+    )
+    resp = c.post("/api/v1/skills/preview", headers=headers, content=deep_flat)
+    assert resp.status_code == 422
+    assert resp.json()["detail"] == "Invalid Skill package: Archive path too deep"
+
+    hidden_flat = archive(
+        {
+            "SKILL.md": "---\nname: hidden-flat\ndescription: Hidden\n---\nBody\n",
+            ".hidden/secret": "x",
+        }
+    )
+    resp = c.post("/api/v1/skills/preview", headers=headers, content=hidden_flat)
+    assert resp.status_code == 422
+    assert resp.json()["detail"] == "Invalid Skill package: Invalid archive path"
+
+    escape_flat = archive(
+        {
+            "SKILL.md": "---\nname: escape-flat\ndescription: Escape\n---\nBody\n",
+            "../escape": "x",
+        }
+    )
+    resp = c.post("/api/v1/skills/preview", headers=headers, content=escape_flat)
+    assert resp.status_code == 422
+    assert resp.json()["detail"] == "Invalid Skill package: Invalid path"
+
+    multi_dir = archive(
+        {
+            "sample/SKILL.md": "---\nname: sample\ndescription: Sample\n---\nBody\n",
+            "other/extra.txt": "x",
+        }
+    )
+    resp = c.post("/api/v1/skills/preview", headers=headers, content=multi_dir)
+    assert resp.status_code == 422
+    assert (
+        resp.json()["detail"]
+        == "Invalid Skill package: Package must contain one directory or root SKILL.md"
+    )
+
+    reserved = archive(
+        {
+            "SKILL.md": (
+                "---\n"
+                "name: reserved-flat\n"
+                "description: Reserved\n"
+                "secrets: [PATH]\n"
+                "---\nBody\n"
+            )
+        }
+    )
+    resp = c.post("/api/v1/skills/preview", headers=headers, content=reserved)
+    assert resp.status_code == 422
+    assert resp.json()["detail"] == "Invalid Skill package: Invalid secrets"

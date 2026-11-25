@@ -4,7 +4,12 @@ Skill 包是**不可信输入**。上传与启用不会执行包内代码，也�
 
 ## 包格式
 
-请求体为 `application/zip` 的原始字节，不是 multipart。ZIP 的文件须位于唯一的顶层目录，目录名与 `SKILL.md` 中的 `name` 一致；名称只允许小写 ASCII 字母、数字与分隔它们的连字符。根目录必须含 UTF-8 `SKILL.md`，以 YAML frontmatter 声明 `name` 和非空 `description`。可选字段：
+请求体为 `application/zip` 的原始字节，不是 multipart。支持两种包目录布局：
+
+1. **单顶层目录布局**：ZIP 的文件位于唯一的顶层目录 `<name>/`，目录名与 `<name>/SKILL.md` 中的 `name` 一致。
+2. **平铺根目录布局**：ZIP 根目录直接包含 `SKILL.md`（及平铺的 `scripts/`、`references/` 等文件或目录），运行时会自动统一规范挂载在 `<name>/` 目录下（因此同样计入 32 段路径深度与 1024 字符总路径上限）。
+
+`name` 只允许小写 ASCII 字母、数字与分隔它们的连字符。`SKILL.md` 须为 UTF-8，以 YAML frontmatter 声明 `name` 和非空 `description`。可选字段：
 
 ```yaml
 project_types: [warehouse, document] # 缺省为两种

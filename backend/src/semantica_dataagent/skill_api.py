@@ -29,6 +29,7 @@ from .skill_catalog import (
     MAX_PACKAGE_BYTES,
     TRUST_WARNING,
     builtins,
+    format_package_error,
     prepare_skill,
     require_prepared_skill,
     validate_package,
@@ -107,7 +108,7 @@ async def _read_package(request: Request):
     try:
         metadata = await run_in_threadpool(validate_package, bytes(data))
     except ValueError as exc:
-        raise HTTPException(422, "Invalid Skill package") from exc
+        raise HTTPException(422, format_package_error(exc)) from exc
     return bytes(data), metadata
 
 

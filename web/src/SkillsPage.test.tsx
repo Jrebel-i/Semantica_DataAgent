@@ -206,3 +206,42 @@ test("管理员查看内置与上传 Skill、预览上传、启停与确认删�
     expect(screen.queryByText("Inspect Jira tickets")).toBeNull(),
   );
 });
+
+test("上传预览返回 422 时展示服务端具体校验错误信息", async () => {
+  const t = getMessages("zh");
+  const detail =
+    "Invalid Skill package: Package must contain one directory or root SKILL.md";
+
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url === "/api/v1/skills" && method === "GET") {
+        return Response.json([builtinSkill]);
+      }
+      if (url.startsWith("/api/v1/skills/audit")) {
+        return Response.json([]);
+      }
+      if (url === "/api/v1/skills/preview" && method === "POST") {
+        return Response.json({ detail }, { status: 422 });
+      }
+      return new Response("", { status: 404 });
+    }),
+  );
+
+  render(<SkillsPage token="admin-token" messages={t} />);
+  await screen.findByText("dataagent-retrieval");
+
+  const fileInput = screen.getByLabelText(t.skillsSelectZip);
+  const badZip = new File([new Uint8Array([80, 75, 5, 6])], "bad.zip", {
+    type: "application/zip",
+  });
+  Object.defineProperty(badZip, "arrayBuffer", {
+    value: async () => new Uint8Array([80, 75, 5, 6]).buffer,
+  });
+  fireEvent.change(fileInput, { target: { files: [badZip] } });
+
+  await screen.findByText(detail);
+  expect(screen.queryByText(t.skillsPreviewTitle)).toBeNull();
+});

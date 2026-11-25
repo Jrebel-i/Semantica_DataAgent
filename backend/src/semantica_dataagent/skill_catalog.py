@@ -87,6 +87,64 @@ RESERVED_SECRET_PREFIXES = (
 MAX_PACKAGE_BYTES = 20 * 1024 * 1024
 MAX_SKILL_BYTES = 64 * 1024
 TRUST_WARNING = "上传的 Skill 及其调用的工具可能接触调用时提供的密钥，请仅启用和使用可信任的 Skill。"
+SAFE_PACKAGE_ERROR_MESSAGES: dict[str, str] = {
+    msg: msg
+    for msg in (
+        "Upload too large",
+        "Missing ZIP directory",
+        "Ambiguous ZIP directory",
+        "Unsupported ZIP directory",
+        "Invalid ZIP directory",
+        "Unsupported ZIP entry",
+        "Invalid ZIP entry length",
+        "Invalid ZIP extra field",
+        "Unsupported ZIP extra field",
+        "Too many archive entries",
+        "Invalid ZIP entry count",
+        "Directory entry contains data",
+        "Invalid directory header",
+        "Directory header differs from archive",
+        "Invalid directory data descriptor",
+        "Invalid archive entry",
+        "Unsupported archive entry",
+        "Archive path too deep",
+        "Invalid archive path",
+        "Invalid path",
+        "File conflicts with directory",
+        "Archive too large or duplicate path",
+        "Invalid archive",
+        "Package must contain one directory or root SKILL.md",
+        "Invalid package path",
+        "Missing or oversized SKILL.md",
+        "Missing Skill metadata",
+        "Invalid Skill metadata",
+        "Skill metadata too complex",
+        "Invalid or duplicate metadata key",
+        "Invalid Skill name",
+        "Invalid Skill description",
+        "Invalid project types",
+        "Invalid projects",
+        "Invalid secrets",
+        "Invalid dependencies",
+        "Invalid metadata list",
+        "Invalid metadata text",
+    )
+}
+
+
+def format_package_error(exc: ValueError) -> str:
+    """Return a bounded, user-safe 422 message for package validation failures."""
+    reason = SAFE_PACKAGE_ERROR_MESSAGES.get(str(exc))
+    return f"Invalid Skill package: {reason}" if reason else "Invalid Skill package"
+
+
+def normalize_package_files(
+    name: str, files: dict[str, bytes]
+) -> tuple[tuple[str, bytes], ...]:
+    """Return sorted `(relative_path, content)` tuples always nested under `<name>/`."""
+    if "SKILL.md" in files:
+        return tuple(sorted((f"{name}/{path}", data) for path, data in files.items()))
+    return tuple(sorted(files.items()))
 
 
 def is_reserved_secret_name(name: str) -> bool:
@@ -250,6 +308,7 @@ def validate_package(raw: bytes) -> dict:
                 entry.filename.casefold() for entry in entries if not entry.is_dir()
             }
             entry_roots = set()
+            entry_paths: list[str] = []
             for entry in entries:
                 original = entry.orig_filename
                 path = original.rstrip("/") if entry.is_dir() else original
@@ -270,6 +329,7 @@ def validate_package(raw: bytes) -> dict:
                 if entry.is_dir():
                     _validate_directory_entry(raw, archive, entry)
                 seen.add(path.casefold())
+                entry_paths.append(path)
                 parts = path.split("/")
                 if len(parts) > 32:
                     raise ValueError("Archive path too deep")
@@ -291,33 +351,66 @@ def validate_package(raw: bytes) -> dict:
     ) as exc:
         raise ValueError("Invalid archive") from exc
     files = unpack_archive(raw)
-    paths = [path.split("/") for path in files]
-    if not paths or any(len(path) < 2 for path in paths):
-        raise ValueError("Package must contain one directory")
-    roots = {path[0] for path in paths}
-    if len(roots) != 1:
-        raise ValueError("Package must contain one directory")
-    root = next(iter(roots))
-    if entry_roots != {root}:
-        raise ValueError("Package must contain one directory")
-    if not NAME.fullmatch(root) or any(
-        any(part.startswith(".") or len(part) > 255 for part in path) for path in paths
-    ):
-        raise ValueError("Invalid package path")
-    path = root + "/SKILL.md"
-    content = files.get(path)
-    if content is None or len(content) > MAX_SKILL_BYTES:
-        raise ValueError("Missing or oversized SKILL.md")
-    try:
-        text = content.decode("utf-8")
-        match = re.match(r"\A---\r?\n(.*?)\r?\n---\r?\n", text, re.DOTALL)
-        if match is None:
-            raise ValueError("Missing Skill metadata")
-        meta = yaml.load(match.group(1), Loader=_UniqueLoader)
-    except (UnicodeDecodeError, yaml.YAMLError, RecursionError) as exc:
-        raise ValueError("Invalid Skill metadata") from exc
-    if not isinstance(meta, dict) or meta.get("name") != root:
-        raise ValueError("Invalid Skill name")
+    if not files:
+        raise ValueError("Package must contain one directory or root SKILL.md")
+    if "SKILL.md" in files:
+        content = files["SKILL.md"]
+        if len(content) > MAX_SKILL_BYTES:
+            raise ValueError("Missing or oversized SKILL.md")
+        try:
+            text = content.decode("utf-8")
+            match = re.match(r"\A---\r?\n(.*?)\r?\n---\r?\n", text, re.DOTALL)
+            if match is None:
+                raise ValueError("Missing Skill metadata")
+            meta = yaml.load(match.group(1), Loader=_UniqueLoader)
+        except (UnicodeDecodeError, yaml.YAMLError, RecursionError) as exc:
+            raise ValueError("Invalid Skill metadata") from exc
+        if (
+            not isinstance(meta, dict)
+            or not isinstance(meta.get("name"), str)
+            or not NAME.fullmatch(meta["name"])
+        ):
+            raise ValueError("Invalid Skill name")
+        root = meta["name"]
+        for entry_path in entry_paths:
+            if len(root) + 1 + len(entry_path) > 1024:
+                raise ValueError("Invalid archive entry")
+            if len(entry_path.split("/")) + 1 > 32:
+                raise ValueError("Archive path too deep")
+        if any(
+            any(part.startswith(".") or len(part) > 255 for part in path.split("/"))
+            for path in files
+        ):
+            raise ValueError("Invalid package path")
+    else:
+        paths = [path.split("/") for path in files]
+        if any(len(path) < 2 for path in paths):
+            raise ValueError("Package must contain one directory or root SKILL.md")
+        roots = {path[0] for path in paths}
+        if len(roots) != 1:
+            raise ValueError("Package must contain one directory or root SKILL.md")
+        root = next(iter(roots))
+        if entry_roots != {root}:
+            raise ValueError("Package must contain one directory or root SKILL.md")
+        if not NAME.fullmatch(root) or any(
+            any(part.startswith(".") or len(part) > 255 for part in path)
+            for path in paths
+        ):
+            raise ValueError("Invalid package path")
+        path = root + "/SKILL.md"
+        content = files.get(path)
+        if content is None or len(content) > MAX_SKILL_BYTES:
+            raise ValueError("Missing or oversized SKILL.md")
+        try:
+            text = content.decode("utf-8")
+            match = re.match(r"\A---\r?\n(.*?)\r?\n---\r?\n", text, re.DOTALL)
+            if match is None:
+                raise ValueError("Missing Skill metadata")
+            meta = yaml.load(match.group(1), Loader=_UniqueLoader)
+        except (UnicodeDecodeError, yaml.YAMLError, RecursionError) as exc:
+            raise ValueError("Invalid Skill metadata") from exc
+        if not isinstance(meta, dict) or meta.get("name") != root:
+            raise ValueError("Invalid Skill name")
     description = meta.get("description")
     if (
         not isinstance(description, str)
@@ -464,7 +557,7 @@ def _materialize_skill(name, record):
         package = archive
         if validate_package(package) != metadata:
             raise ValueError("Stored metadata differs from package")
-        files = tuple(sorted(unpack_archive(package).items()))
+        files = normalize_package_files(name, unpack_archive(package))
     except (ValueError, TypeError) as exc:
         raise HTTPException(409, "Skill package unavailable") from exc
     if metadata["name"] != name:
