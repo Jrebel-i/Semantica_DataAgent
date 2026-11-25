@@ -33,7 +33,6 @@ export function ConversationSidebar({
   currentConversationId,
   sessionTarget,
   sessionError,
-  sending,
   menuId,
   setMenuId,
   editingId,
@@ -64,7 +63,7 @@ export function ConversationSidebar({
   currentConversationId: string;
   sessionTarget?: HTMLElement | null;
   sessionError: string;
-  sending: boolean;
+  sending?: boolean;
   menuId: string;
   setMenuId: (id: string) => void;
   editingId: string;
@@ -143,12 +142,7 @@ export function ConversationSidebar({
           </select>
         </div>
         {!sessionTarget && (
-          <Button
-            size="small"
-            type="primary"
-            onClick={onNewConversation}
-            disabled={sending}
-          >
+          <Button size="small" type="primary" onClick={onNewConversation}>
             {t.newConversation}
           </Button>
         )}
@@ -206,7 +200,6 @@ export function ConversationSidebar({
                         onClick={() => {
                           void onOpenConversation(conversation.id);
                         }}
-                        disabled={sending}
                       >
                         {conversation.pinned && (
                           <PushpinFilled aria-hidden="true" />

@@ -16,6 +16,13 @@ import type {
 } from "./types";
 import { readErrorDetail } from "../httpErrors";
 
+export const ASSISTANT_CATALOG_CHANGE_EVENT =
+  "dataagent:assistant-catalog-changed";
+
+export function notifyAssistantCatalogChanged() {
+  window.dispatchEvent(new CustomEvent(ASSISTANT_CATALOG_CHANGE_EVENT));
+}
+
 export function isPublishedPair(
   profile: PublishedAgentView | undefined,
   providerId: string,
@@ -91,10 +98,16 @@ export function useProviders({
   token,
   messages,
   onError,
+  refreshKey = 0,
+  active = true,
+  hasBoundConversation = false,
 }: {
   token: string;
   messages: Messages;
   onError: (message: string) => void;
+  refreshKey?: number;
+  active?: boolean;
+  hasBoundConversation?: boolean;
 }) {
   const t = messages;
   const selectionTouched = useRef(false);
@@ -123,13 +136,40 @@ export function useProviders({
   const [model, setModel] = useState("");
   const [effort, setEffort] = useState<EffortLevel | "">("");
 
+  const selectionRef = useRef({
+    agentId: "pi",
+    providerId: "",
+    model: "",
+    hasBoundConversation: false,
+  });
+  selectionRef.current = {
+    agentId,
+    providerId,
+    model,
+    hasBoundConversation,
+  };
+
   const applyCatalogSnapshot = useCallback(
     (data: AssistantCatalogView, preserveSelection: boolean) => {
       setCatalog(data);
       setCatalogMode(true);
       setCatalogLoaded(true);
 
-      if (preserveSelection) return;
+      if (preserveSelection) {
+        const current = selectionRef.current;
+        if (current.hasBoundConversation) return;
+        const currentProfile = data.agents.find(
+          (a) => a.id === current.agentId,
+        );
+        if (
+          current.agentId &&
+          current.providerId &&
+          current.model &&
+          isPublishedPair(currentProfile, current.providerId, current.model)
+        ) {
+          return;
+        }
+      }
 
       const targetProfile =
         (data.system_default_profile_id
@@ -267,6 +307,36 @@ export function useProviders({
     const controller = new AbortController();
     void refreshCatalog(controller.signal);
     return () => controller.abort();
+  }, [refreshCatalog]);
+
+  const prevActiveRef = useRef(active);
+  const prevRefreshKeyRef = useRef(refreshKey);
+  useEffect(() => {
+    const becameActive = !prevActiveRef.current && active;
+    const refreshChanged = prevRefreshKeyRef.current !== refreshKey;
+    prevActiveRef.current = active;
+    prevRefreshKeyRef.current = refreshKey;
+    if (!becameActive && !refreshChanged) return;
+    const controller = new AbortController();
+    void refreshCatalog(controller.signal);
+    return () => controller.abort();
+  }, [active, refreshKey, refreshCatalog]);
+
+  useEffect(() => {
+    let controller: AbortController | null = null;
+    const onCatalogChanged = () => {
+      controller?.abort();
+      controller = new AbortController();
+      void refreshCatalog(controller.signal);
+    };
+    window.addEventListener(ASSISTANT_CATALOG_CHANGE_EVENT, onCatalogChanged);
+    return () => {
+      controller?.abort();
+      window.removeEventListener(
+        ASSISTANT_CATALOG_CHANGE_EVENT,
+        onCatalogChanged,
+      );
+    };
   }, [refreshCatalog]);
 
   useEffect(() => {

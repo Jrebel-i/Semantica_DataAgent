@@ -1005,6 +1005,7 @@ export function App() {
                     language={lang}
                     onChangeLanguage={changeLanguage}
                     refreshKey={refreshKey}
+                    active={isChat}
                     sessionTarget={sessionTarget}
                     newTarget={newTarget}
                     initialConversationId={conversationId}

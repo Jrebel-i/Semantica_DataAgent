@@ -64,6 +64,7 @@ export function ChatPage({
   onNavigateKnowledge,
   onNavigatePersonalSettings,
   refreshKey = 0,
+  active = true,
 }: {
   token: string;
   role: string;
@@ -78,6 +79,7 @@ export function ChatPage({
   language?: Language;
   onChangeLanguage?: () => void;
   refreshKey?: number;
+  active?: boolean;
 }) {
   const askSequence = useRef(0);
   const deepLinkLoaded = useRef("");
@@ -229,7 +231,14 @@ export function ChatPage({
     resetToNewConversationDefaults,
     savePersonalDefault,
     resetPersonalDefault,
-  } = useProviders({ token, messages: t, onError: setError });
+  } = useProviders({
+    token,
+    messages: t,
+    onError: setError,
+    refreshKey,
+    active,
+    hasBoundConversation: Boolean(currentConversationId),
+  });
 
   const visionEnabled =
     activeProvider?.model_capabilities?.[model]?.vision ?? false;
@@ -380,6 +389,7 @@ export function ChatPage({
     chooseClarification,
     canAsk,
     executePlan,
+    abortAsk,
     attachments,
     attachmentError,
     addAttachments,
@@ -458,6 +468,7 @@ export function ChatPage({
   }
 
   async function openConversation(id: string, fromDeepLink = false) {
+    abortAsk();
     conversationAbort.current?.abort();
     const controller = new AbortController();
     conversationAbort.current = controller;
@@ -615,6 +626,7 @@ export function ChatPage({
   }, [initialConversationId, token, currentConversationId]);
 
   function newConversation() {
+    abortAsk();
     conversationAbort.current?.abort();
     conversationAbort.current = null;
     conversationLoad.current = {
@@ -694,7 +706,6 @@ export function ChatPage({
                   newConversation();
                   onNavigateChat?.();
                 }}
-                disabled={sending}
               >
                 {t.newConversation}
               </Button>,
@@ -730,6 +741,7 @@ export function ChatPage({
                 onNewConversation={newConversation}
                 onOpenConversation={(id) => {
                   onNavigateChat?.();
+                  if (id === currentConversationId && sending) return;
                   void openConversation(id);
                 }}
                 onPatchConversation={(id, patch) =>
@@ -770,6 +782,7 @@ export function ChatPage({
               onNewConversation={newConversation}
               onOpenConversation={(id) => {
                 onNavigateChat?.();
+                if (id === currentConversationId && sending) return;
                 void openConversation(id);
               }}
               onPatchConversation={(id, patch) =>

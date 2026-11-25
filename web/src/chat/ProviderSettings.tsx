@@ -7,6 +7,7 @@ import { EFFORT_LEVELS, PROVIDER_TYPES } from "./types";
 import type { EffortLevel, Provider, ProviderProbeResult } from "./types";
 import type { Messages } from "../i18n";
 import { readErrorDetail } from "../httpErrors";
+import { notifyAssistantCatalogChanged } from "./useProviders";
 
 export type ProviderModelCapabilityForm = {
   description: string;
@@ -221,6 +222,7 @@ export function ProviderSettingsPage({
       }
       const feedback = catalogStatusFeedback(updated, t);
       if (feedback) setCatalogNotice(feedback);
+      notifyAssistantCatalogChanged();
     } catch {
       setCatalogNotice({
         type: "error",
@@ -332,6 +334,7 @@ export function ProviderSettingsPage({
       }
       const saved = (await response.json()) as Provider;
       setProviderNotice(t.providerSaved);
+      notifyAssistantCatalogChanged();
       await loadProviders();
       if (!editingProviderId && saved?.id) {
         editProvider(saved);
@@ -362,6 +365,7 @@ export function ProviderSettingsPage({
       );
       if (!response.ok) throw new Error();
       if (editingProviderId === provider.id) resetProviderForm();
+      notifyAssistantCatalogChanged();
       await loadProviders();
     } catch {
       setProviderError(t.providerError);

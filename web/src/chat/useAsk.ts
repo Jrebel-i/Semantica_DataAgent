@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { MutableRefObject, Dispatch, SetStateAction } from "react";
 import type { FormEvent } from "react";
 import type { Messages } from "../i18n";
@@ -86,6 +86,21 @@ export function useAsk({
   const [question, setQuestion] = useState("");
   const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
   const [attachmentError, setAttachmentError] = useState("");
+  const askAbort = useRef<AbortController | null>(null);
+
+  const abortAsk = useCallback(() => {
+    askSequence.current += 1;
+    askAbort.current?.abort();
+    askAbort.current = null;
+    setSending(false);
+  }, [askSequence, setSending]);
+
+  useEffect(
+    () => () => {
+      askAbort.current?.abort();
+    },
+    [],
+  );
 
   function addAttachments(files: File[]) {
     setAttachmentError("");
@@ -115,6 +130,10 @@ export function useAsk({
 
   async function executePlan(turn: Turn, plan: QueryPlan) {
     if (sending || !currentConversationId) return;
+    askAbort.current?.abort();
+    const controller = new AbortController();
+    askAbort.current = controller;
+    const sequence = ++askSequence.current;
     setSending(true);
     setError("");
     setTurns((current) =>
@@ -128,8 +147,10 @@ export function useAsk({
         {
           method: "POST",
           headers: { Authorization: `Bearer ${token}` },
+          signal: controller.signal,
         },
       );
+      if (sequence !== askSequence.current) return;
       if (!response.ok) {
         const body = (await response.json().catch(() => null)) as {
           detail?: string;
@@ -142,6 +163,7 @@ export function useAsk({
         throw new Error(body?.detail || t.askError);
       }
       await readSse(response, (name, data) => {
+        if (sequence !== askSequence.current) return;
         if (name === "query_result") {
           setTurns((current) =>
             current.map((item) => {
@@ -177,8 +199,10 @@ export function useAsk({
           );
         }
       });
+      if (sequence !== askSequence.current) return;
       await openConversation(currentConversationId);
     } catch (caught) {
+      if (sequence !== askSequence.current || controller.signal.aborted) return;
       const message = caught instanceof Error ? caught.message : t.askError;
       setError(message);
       setTurns((current) =>
@@ -187,7 +211,12 @@ export function useAsk({
         ),
       );
     } finally {
-      setSending(false);
+      if (askAbort.current === controller) {
+        askAbort.current = null;
+      }
+      if (sequence === askSequence.current) {
+        setSending(false);
+      }
     }
   }
 
@@ -218,6 +247,9 @@ export function useAsk({
       return false;
     const submittedSkillName = selectedSkill?.name ?? null;
     selectionTouched.current = true;
+    askAbort.current?.abort();
+    const controller = new AbortController();
+    askAbort.current = controller;
     const sequence = ++askSequence.current;
     let conversationId = currentConversationId;
     let requestAccepted = false;
@@ -260,6 +292,7 @@ export function useAsk({
           method: "POST",
           headers: { Authorization: `Bearer ${token}` },
           body: form,
+          signal: controller.signal,
         });
       } else {
         response = await fetch("/api/v1/conversations/ask", {
@@ -269,8 +302,10 @@ export function useAsk({
             "Content-Type": "application/json",
           },
           body: JSON.stringify(fields),
+          signal: controller.signal,
         });
       }
+      if (sequence !== askSequence.current) return requestAccepted;
       if (!response.ok) {
         const body = (await response.json().catch(() => null)) as {
           detail?: string;
@@ -286,6 +321,7 @@ export function useAsk({
         clearSelectedSkill?.();
       }
       await readSse(response, (name, data) => {
+        if (sequence !== askSequence.current) return;
         if (
           name === "conversation" &&
           typeof data.conversation_id === "string"
@@ -330,12 +366,17 @@ export function useAsk({
           }));
         }
       });
+      if (sequence !== askSequence.current) return requestAccepted;
       await refreshConversations();
+      if (sequence !== askSequence.current) return requestAccepted;
       if (conversationId) {
         await loadCompletedConversation(conversationId, sequence);
       }
       return true;
     } catch (caught) {
+      if (sequence !== askSequence.current || controller.signal.aborted) {
+        return requestAccepted;
+      }
       const message = caught instanceof Error ? caught.message : t.askError;
       setError(message);
       updateLive((current) => ({
@@ -345,7 +386,12 @@ export function useAsk({
       }));
       return requestAccepted;
     } finally {
-      setSending(false);
+      if (askAbort.current === controller) {
+        askAbort.current = null;
+      }
+      if (sequence === askSequence.current) {
+        setSending(false);
+      }
     }
   }
 
@@ -402,6 +448,7 @@ export function useAsk({
     chooseClarification,
     canAsk,
     executePlan,
+    abortAsk,
     attachments,
     attachmentError,
     addAttachments,

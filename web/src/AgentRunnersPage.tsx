@@ -4,6 +4,7 @@ import { Alert, Button, Input, Table, Tag } from "antd";
 import type { Messages } from "./i18n";
 import type { AgentRunnerCreate, AgentRunnerView } from "./chat/types";
 import { readErrorDetail } from "./httpErrors";
+import { notifyAssistantCatalogChanged } from "./chat/useProviders";
 
 const STATUS_COLORS: Record<AgentRunnerView["status"], string> = {
   available: "green",
@@ -109,6 +110,7 @@ export function AgentRunnersPage({
       setExecutable("");
       setAdapterId("");
       setNotice(t.runnerRegisteredNotice);
+      notifyAssistantCatalogChanged();
       await loadRunners();
     } catch {
       setSubmitError(t.runnerRegisterError);

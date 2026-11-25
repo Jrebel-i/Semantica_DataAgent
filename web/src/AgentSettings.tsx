@@ -9,6 +9,7 @@ import {
 } from "@ant-design/icons";
 import { modelProtocol } from "./agentProfiles";
 import type { Messages } from "./i18n";
+import { notifyAssistantCatalogChanged } from "./chat/useProviders";
 import type {
   AgentProfileCreate,
   AgentProfileUpdate,
@@ -535,6 +536,7 @@ export function AgentProfilesPage({
 
       setNotice(t.agentProfileSaved);
       setEditingKey(null);
+      notifyAssistantCatalogChanged();
       await loadAll();
     } catch {
       setErrorMsg(t.operationFailed);
@@ -565,6 +567,7 @@ export function AgentProfilesPage({
       }
       setConfirmDeleteId("");
       setNotice(t.agentProfileDeleted);
+      notifyAssistantCatalogChanged();
       await loadAll();
     } catch {
       setErrorMsg(t.operationFailed);

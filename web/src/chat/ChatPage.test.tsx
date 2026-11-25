@@ -12,6 +12,7 @@ import {
 import { ChatPage } from "../ChatPage";
 import { getMessages } from "../i18n";
 import { PROJECT_CHANGE_EVENT } from "../ProjectSelector";
+import { notifyAssistantCatalogChanged } from "./useProviders";
 import {
   composerSelectText,
   conversationFetcher,
@@ -1317,4 +1318,178 @@ test("提问请求返回 422 时保留并恢复用户输入草稿", async () => 
     (await screen.findAllByText("Selected model is not published")).length,
   ).toBeGreaterThanOrEqual(1);
   await waitFor(() => expect(textarea.value).toBe("请帮我统计月活"));
+});
+
+test("目录初始为空后通过设置变更事件与切回对话页自动刷新并选中默认 Agent", async () => {
+  const messages = getMessages("zh");
+  const populatedCatalog = {
+    system_default_profile_id: "pi",
+    agents: [
+      {
+        id: "pi",
+        name: "pi",
+        runner_id: "pi",
+        is_system_default: true,
+        default_provider_id: "prov-1",
+        default_model: "m1#claude",
+        effort_levels: [],
+        supports_skills: true,
+        providers: [
+          {
+            id: "prov-1",
+            name: "公司网关",
+            type: "anthropic-messages",
+            models: ["m1#claude"],
+            model_capabilities: {},
+          },
+        ],
+      },
+    ],
+    personal_defaults: {},
+  };
+  let currentCatalog: {
+    system_default_profile_id: string | null;
+    agents: typeof populatedCatalog.agents;
+    personal_defaults: Record<string, never>;
+  } = {
+    system_default_profile_id: null,
+    agents: [],
+    personal_defaults: {},
+  };
+
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/v1/assistant-catalog") return json(currentCatalog);
+      if (url === "/api/v1/conversations") return json([]);
+      if (url === "/api/v1/conversations?archived=true") return json([]);
+      if (url === "/api/v1/projects") return json([]);
+      return new Response("", { status: 404 });
+    }),
+  );
+
+  const { rerender } = render(
+    <ChatPage token="token" role="admin" messages={messages} active={true} />,
+  );
+
+  expect(await screen.findByText(/暂无已发布的可用 Agent 或模型/)).toBeTruthy();
+
+  currentCatalog = populatedCatalog;
+  await act(async () => {
+    notifyAssistantCatalogChanged();
+  });
+
+  await waitFor(() =>
+    expect(screen.queryByText(/暂无已发布的可用 Agent 或模型/)).toBeNull(),
+  );
+  expect(screen.getByText(/pi · 公司网关 · m1#claude/)).toBeTruthy();
+
+  // Also verify active false -> true triggers refresh
+  rerender(
+    <ChatPage token="token" role="admin" messages={messages} active={false} />,
+  );
+  rerender(
+    <ChatPage token="token" role="admin" messages={messages} active={true} />,
+  );
+  await waitFor(() =>
+    expect(screen.getByText(/pi · 公司网关 · m1#claude/)).toBeTruthy(),
+  );
+});
+
+test("对话回答进行中时仍可点击其他历史会话或新对话并中止旧请求", async () => {
+  const messages = getMessages("zh");
+  const convA = {
+    id: "conv-a",
+    project_id: "default",
+    project_name: "业务数据",
+    title: "会话 A",
+    agent: "pi",
+    provider_id: "provider-1",
+    model: "model-1",
+    created_at: "2026-11-05T00:00:00Z",
+    updated_at: "2026-11-05T00:00:00Z",
+    turn_count: 1,
+    resumable: true,
+    pinned: false,
+    archived: false,
+  };
+  const convB = {
+    ...convA,
+    id: "conv-b",
+    title: "会话 B",
+  };
+  let askSignal: AbortSignal | undefined;
+
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/v1/projects") return json([]);
+      if (url === "/api/v1/agents")
+        return json([{ id: "pi", available: true }]);
+      if (url === "/api/v1/providers") return json([provider]);
+      if (url === "/api/v1/conversations") return json([convA, convB]);
+      if (url === "/api/v1/conversations?archived=true") return json([]);
+      if (url === "/api/v1/conversations/conv-b") {
+        return json({
+          ...convB,
+          turns: [
+            {
+              id: 1,
+              sequence: 1,
+              question: "B的问题",
+              status: "completed",
+              answer: "B的回答",
+              sql: [],
+              citations: [],
+              error: null,
+              started_at: "2026-11-05T00:00:00Z",
+              finished_at: "2026-11-05T00:00:01Z",
+              events: [],
+            },
+          ],
+        });
+      }
+      if (url === "/api/v1/conversations/ask" && init?.method === "POST") {
+        askSignal = init.signal ?? undefined;
+        return new Promise<Response>((_resolve, reject) => {
+          init.signal?.addEventListener("abort", () => {
+            reject(new DOMException("Aborted", "AbortError"));
+          });
+        });
+      }
+      return new Response("", { status: 404 });
+    }),
+  );
+
+  render(<ChatPage token="token" role="user" messages={messages} />);
+  const textarea = (await screen.findByLabelText(
+    "问题",
+  )) as HTMLTextAreaElement;
+  fireEvent.change(textarea, { target: { value: "慢查询" } });
+  const submitBtn = screen.getByRole("button", {
+    name: /提\s*问/,
+  }) as HTMLButtonElement;
+  await waitFor(() => expect(submitBtn.disabled).toBe(false));
+  fireEvent.click(submitBtn);
+
+  // While sending, sidebar conversation B and new conversation remain enabled
+  const convBButton = (await screen.findByRole("button", {
+    name: "会话 B",
+  })) as HTMLButtonElement;
+  const newConvButton = screen.getByRole("button", {
+    name: "新对话",
+  }) as HTMLButtonElement;
+  expect(convBButton.disabled).toBe(false);
+  expect(newConvButton.disabled).toBe(false);
+
+  // Switching to 会话 B aborts the in-flight ask and loads B cleanly
+  fireEvent.click(convBButton);
+  await waitFor(() => expect(askSignal?.aborted).toBe(true));
+  expect(await screen.findByText("B的回答")).toBeTruthy();
+
+  // Clicking 新对话 also stays enabled and resets to empty state
+  fireEvent.click(newConvButton);
+  expect(screen.queryByText("B的回答")).toBeNull();
 });
