@@ -199,7 +199,10 @@ export function useAsk({
     selectedSkill && (!selectedSkill.ready || !agentSupportsSkills),
   );
 
-  async function submitPrompt(prompt: string, files: PendingAttachment[] = []) {
+  async function submitPrompt(
+    prompt: string,
+    files: PendingAttachment[] = [],
+  ): Promise<boolean> {
     const trimmed = prompt.trim();
     if (
       !trimmed ||
@@ -212,11 +215,12 @@ export function useAsk({
       skillBlocked ||
       archivedConversations.some((row) => row.id === currentConversationId)
     )
-      return;
+      return false;
     const submittedSkillName = selectedSkill?.name ?? null;
     selectionTouched.current = true;
     const sequence = ++askSequence.current;
     let conversationId = currentConversationId;
+    let requestAccepted = false;
     resetCitation();
     setSending(true);
     setError("");
@@ -273,6 +277,7 @@ export function useAsk({
         } | null;
         throw new Error(body?.detail || t.askError);
       }
+      requestAccepted = true;
       if (files.length > 0) {
         files.forEach(releaseAttachment);
         setAttachments([]);
@@ -329,6 +334,7 @@ export function useAsk({
       if (conversationId) {
         await loadCompletedConversation(conversationId, sequence);
       }
+      return true;
     } catch (caught) {
       const message = caught instanceof Error ? caught.message : t.askError;
       setError(message);
@@ -337,6 +343,7 @@ export function useAsk({
         status: "failed",
         error: message,
       }));
+      return requestAccepted;
     } finally {
       setSending(false);
     }
@@ -344,11 +351,16 @@ export function useAsk({
 
   function ask(event: FormEvent) {
     event.preventDefault();
+    const rawQuestion = question;
     const prompt = question.trim();
     const files = attachments;
     setQuestion("");
     setAttachmentError("");
-    void submitPrompt(prompt, files);
+    void submitPrompt(prompt, files).then((accepted) => {
+      if (!accepted) {
+        setQuestion((current) => (current ? current : rawQuestion));
+      }
+    });
   }
 
   function chooseClarification(

@@ -75,8 +75,6 @@ const messages = {
     providersSettingsNav: "供应商与模型",
     agentRunnersNav: "Agent 运行器",
     agentRunnersHint: "查看运行镜像中的内置运行器与适配器就绪状态。",
-    agentRunnersPlaceholderNote:
-      "运行器登记与详细状态管理将在后续版本提供；当前可通过 Agent 配置查看可用运行器。",
     runnerColumn: "运行器",
     runnerStatusColumn: "状态",
     runnerAvailable: "可用",
@@ -1195,8 +1193,6 @@ const messages = {
     agentRunnersNav: "Agent runners",
     agentRunnersHint:
       "Inspect built-in container runners and backend adapter readiness.",
-    agentRunnersPlaceholderNote:
-      "Runner registration and detailed status management will arrive in a follow-up update; available runners can currently be managed under Agent configuration.",
     runnerColumn: "Runner",
     runnerStatusColumn: "Status",
     runnerAvailable: "Available",

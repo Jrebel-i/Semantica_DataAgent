@@ -70,7 +70,10 @@ def test_openapi_declares_every_time_field_as_datetime():
 
 
 def test_rest_time_fields_have_utc_offset(client, monkeypatch):
+    from semantica_dataagent import agent_runner
     from semantica_dataagent.db import (
+        AgentProfile,
+        AgentRunnerRecord,
         Build,
         Conversation,
         CorrectionProposal,
@@ -91,9 +94,18 @@ def test_rest_time_fields_have_utc_offset(client, monkeypatch):
         SkillAudit,
         Token,
         Turn,
+        UserAgentDefault,
         digest,
         sessions,
     )
+
+    class ReadyRunner:
+        agent_id = "pi"
+
+        def available(self):
+            return True
+
+    monkeypatch.setitem(agent_runner.RUNNERS, "pi", ReadyRunner())
 
     c, admin_token = client
     headers = {"Authorization": f"Bearer {admin_token}"}
@@ -163,7 +175,42 @@ def test_rest_time_fields_have_utc_offset(client, monkeypatch):
                     type="openai-completions",
                     base_url="http://127.0.0.1:1",
                     models='["model"]',
+                    catalog_models='["model"]',
+                    catalog_fetched_at=datetime(2026, 1, 1),
+                    catalog_status="ok",
                     created_at=datetime(2026, 1, 1),
+                    updated_at=datetime(2026, 1, 1),
+                ),
+                AgentRunnerRecord(
+                    id="time-runner",
+                    display_name="Time Runner",
+                    npm_package="@org/time",
+                    package_version="1.0.0",
+                    executable="time-runner",
+                    adapter_id="pi",
+                    builtin=False,
+                    created_at=datetime(2026, 1, 1),
+                    updated_at=datetime(2026, 1, 1),
+                ),
+                AgentProfile(
+                    id="time-profile",
+                    name="Time Profile",
+                    runner_id="pi",
+                    enabled=True,
+                    is_system_default=False,
+                    default_provider_id="provider",
+                    default_model="model",
+                    provider_models='{"provider": ["model"]}',
+                    pending_verification_models="{}",
+                    version=1,
+                    created_at=datetime(2026, 1, 1),
+                    updated_at=datetime(2026, 1, 1),
+                ),
+                UserAgentDefault(
+                    owner_id=owner.id,
+                    agent_profile_id="time-profile",
+                    provider_id="provider",
+                    model="model",
                     updated_at=datetime(2026, 1, 1),
                 ),
                 Conversation(
@@ -390,6 +437,14 @@ def test_rest_time_fields_have_utc_offset(client, monkeypatch):
         json={"status": "confirmed"},
     )
     assert gap_reviewed.status_code == 200, gap_reviewed.text
+    me_default_get = c.get("/api/v1/me/agent-defaults/time-profile", headers=headers)
+    assert me_default_get.status_code == 200, me_default_get.text
+    me_default_put = c.put(
+        "/api/v1/me/agent-defaults/time-profile",
+        headers=headers,
+        json={"provider_id": "provider", "model": "model"},
+    )
+    assert me_default_put.status_code == 200, me_default_put.text
     payloads = {
         "token_issued": issued.json(),
         "tokens": c.get("/api/v1/tokens", headers=headers).json(),
@@ -410,6 +465,13 @@ def test_rest_time_fields_have_utc_offset(client, monkeypatch):
         ).json(),
         "generations": c.get("/api/v1/generations", headers=headers).json(),
         "providers": c.get("/api/v1/providers", headers=headers).json(),
+        "agent_profiles": c.get("/api/v1/agent-profiles", headers=headers).json(),
+        "agent_profile": c.get(
+            "/api/v1/agent-profiles/time-profile", headers=headers
+        ).json(),
+        "agent_runners": c.get("/api/v1/agent-runners", headers=headers).json(),
+        "personal_agent_default_get": me_default_get.json(),
+        "personal_agent_default_put": me_default_put.json(),
         "conversations": c.get("/api/v1/conversations", headers=headers).json(),
         "conversation": c.get(
             "/api/v1/conversations/conversation", headers=headers
@@ -450,6 +512,7 @@ def test_rest_time_fields_have_utc_offset(client, monkeypatch):
         if (problems := utc_failures(payload))
     }
     assert not failures, f"time fields without UTC offset: {failures}"
+    assert payloads["providers"][0]["catalog_fetched_at"] == "2026-01-01T00:00:00Z"
     assert "fallback_reason" in payloads["build"]
     assert payloads["pull_instance_trigger"]["instance_id"] == "time-inst"
     assert payloads["pull_instance_trigger"]["warnings"] == ["dim_x carry-forward"]

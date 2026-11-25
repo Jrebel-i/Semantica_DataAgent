@@ -2,6 +2,8 @@
 
 import json
 import os
+import re
+import time
 import uuid
 from datetime import UTC, datetime
 from typing import Annotated, Literal
@@ -13,7 +15,8 @@ from pydantic import BaseModel, Field
 
 from .agent_runner import ProviderConfig, list_agents
 from .api_time import UtcDatetime
-from .auth import admin, current_user
+from .audit_log import record_audit_event
+from .auth import Requester, admin, current_requester, current_user
 from .crypto import decrypt, encrypt
 from .db import AgentProfile, Provider, sessions
 from .provider_probe import (
@@ -101,7 +104,7 @@ class ProviderView(BaseModel):
 
 
 class ProviderProbeRequest(BaseModel):
-    model: str = Field(min_length=1, max_length=200)
+    model: str = Field(min_length=1, max_length=500)
 
 
 class ProbeEffortResult(BaseModel):
@@ -234,7 +237,7 @@ def agents(_: Annotated[str, Depends(current_user)]):
 
 
 @router.get("/api/v1/providers", response_model=list[ProviderView])
-def providers(_: Annotated[str, Depends(current_user)]):
+def providers(_: Annotated[str, Depends(admin)]):
     with sessions()() as db:
         return [
             view(row) for row in db.query(Provider).order_by(Provider.name, Provider.id)
@@ -278,10 +281,16 @@ def _catalog_headers(provider: ProviderConfig) -> dict[str, str]:
     return headers
 
 
+_BEARER_TOKEN_RE = re.compile(r"(?i)\bBearer\s+\S+")
+_SK_TOKEN_RE = re.compile(r"\bsk-[A-Za-z0-9._-]{4,}")
+
+
 def _sanitize_error(message: str, secret: str) -> str:
     cleaned = " ".join(message.split())
     if secret:
         cleaned = cleaned.replace(secret, "***")
+    cleaned = _BEARER_TOKEN_RE.sub("Bearer ***", cleaned)
+    cleaned = _SK_TOKEN_RE.sub("***", cleaned)
     return cleaned[:200]
 
 
@@ -341,6 +350,7 @@ def _fetch_provider_catalog(
 ) -> tuple[str, list[str] | None, str | None]:
     secret = provider.api_key or ""
     timeout = _catalog_timeout_seconds()
+    deadline = time.monotonic() + timeout
     url = _catalog_url(provider)
     headers = _catalog_headers(provider)
     try:
@@ -353,12 +363,16 @@ def _fetch_provider_catalog(
             ) as client,
             client.stream("GET", url, headers=headers) as response,
         ):
+            if time.monotonic() > deadline:
+                return "timeout", None, "Request timed out"
             status = response.status_code
             if 300 <= status < 400:
                 return "error", None, "Redirects are not allowed"
             chunks: list[bytes] = []
             total = 0
             for chunk in response.iter_bytes():
+                if time.monotonic() > deadline:
+                    return "timeout", None, "Request timed out"
                 total += len(chunk)
                 if total > MAX_CATALOG_BYTES:
                     return "error", None, "Catalog response exceeds size limit"
@@ -419,7 +433,11 @@ def _clear_pending_verification_for_provider(db, provider_id: str) -> None:
 @router.post(
     "/api/v1/providers/{provider_id}/refresh-models", response_model=ProviderView
 )
-def refresh_provider_models(provider_id: str, _: Annotated[str, Depends(admin)]):
+def refresh_provider_models(
+    provider_id: str,
+    _: Annotated[str, Depends(admin)],
+    actor: Annotated[Requester, Depends(current_requester)],
+):
     with sessions()() as db:
         row = db.get(Provider, provider_id)
         if row is None:
@@ -442,7 +460,18 @@ def refresh_provider_models(provider_id: str, _: Annotated[str, Depends(admin)])
             row.catalog_fetched_at = now
             _clear_pending_verification_for_provider(db, provider_id)
         db.flush()
-        return view(row)
+        result = view(row)
+    record_audit_event(
+        actor=actor,
+        action="provider.refresh_models",
+        target_type="provider",
+        target_id=provider_id,
+        details={
+            "catalog_status": status,
+            "model_count": len(catalog_models) if catalog_models is not None else None,
+        },
+    )
+    return result
 
 
 @router.post("/api/v1/providers/{provider_id}/probe", response_model=ProviderProbeView)
@@ -474,7 +503,11 @@ def probe_provider(
 
 
 @router.post("/api/v1/providers", response_model=ProviderView, status_code=201)
-def create_provider(body: ProviderCreate, _: Annotated[str, Depends(admin)]):
+def create_provider(
+    body: ProviderCreate,
+    _: Annotated[str, Depends(admin)],
+    actor: Annotated[Requester, Depends(current_requester)],
+):
     now = datetime.now(UTC)
     models = _validate_models(body.models, allow_empty=True)
     capabilities = _validate_capabilities(body.model_capabilities or {}, models)
@@ -492,12 +525,23 @@ def create_provider(body: ProviderCreate, _: Annotated[str, Depends(admin)]):
     with sessions().begin() as db:
         db.add(row)
         db.flush()
-        return view(row)
+        result = view(row)
+    record_audit_event(
+        actor=actor,
+        action="provider.create",
+        target_type="provider",
+        target_id=result.id,
+        details={"type": result.type, "has_api_key": result.has_api_key},
+    )
+    return result
 
 
 @router.put("/api/v1/providers/{provider_id}", response_model=ProviderView)
 def update_provider(
-    provider_id: str, body: ProviderUpdate, _: Annotated[str, Depends(admin)]
+    provider_id: str,
+    body: ProviderUpdate,
+    _: Annotated[str, Depends(admin)],
+    actor: Annotated[Requester, Depends(current_requester)],
 ):
     with sessions().begin() as db:
         row = db.get(Provider, provider_id)
@@ -533,13 +577,34 @@ def update_provider(
             row.api_key = encrypt(body.api_key) if body.api_key else None
         row.updated_at = datetime.now(UTC)
         db.flush()
-        return view(row)
+        result = view(row)
+    record_audit_event(
+        actor=actor,
+        action="provider.update",
+        target_type="provider",
+        target_id=provider_id,
+        details={
+            "fields": sorted(k for k in body.model_fields_set if k != "api_key"),
+            "api_key_updated": "api_key" in body.model_fields_set,
+        },
+    )
+    return result
 
 
 @router.delete("/api/v1/providers/{provider_id}", status_code=204)
-def delete_provider(provider_id: str, _: Annotated[str, Depends(admin)]):
+def delete_provider(
+    provider_id: str,
+    _: Annotated[str, Depends(admin)],
+    actor: Annotated[Requester, Depends(current_requester)],
+):
     with sessions().begin() as db:
         row = db.get(Provider, provider_id)
         if row is None:
             raise HTTPException(404, "Provider not found")
         db.delete(row)
+    record_audit_event(
+        actor=actor,
+        action="provider.delete",
+        target_type="provider",
+        target_id=provider_id,
+    )

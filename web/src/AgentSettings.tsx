@@ -212,14 +212,7 @@ export function AgentProfilesPage({
     setDefaultProviderId(profile.default_provider_id ?? "");
     setDefaultModel(profile.default_model ?? "");
     setVersion(profile.version);
-    setProviderFilter(
-      providers.length === 1
-        ? providers[0].id
-        : profile.default_provider_id &&
-            providersById.has(profile.default_provider_id)
-          ? "__all__"
-          : "__all__",
-    );
+    setProviderFilter(providers.length === 1 ? providers[0].id : "__all__");
     setPickedOnly(false);
     setSearchQuery("");
     setErrorMsg("");
@@ -469,8 +462,19 @@ export function AgentProfilesPage({
 
     const effectiveDefaultProvider = defaultProviderId.trim() || null;
     const effectiveDefaultModel = defaultModel.trim() || null;
+    const activeDefaultRemoved = Boolean(
+      editingProfile?.default_provider_id &&
+      editingProfile?.default_model &&
+      !(providerModels[editingProfile.default_provider_id] ?? []).includes(
+        editingProfile.default_model,
+      ),
+    );
 
-    if (enabled && (!effectiveDefaultProvider || !effectiveDefaultModel)) {
+    if (
+      enabled &&
+      (!effectiveDefaultProvider || !effectiveDefaultModel) &&
+      !activeDefaultRemoved
+    ) {
       setErrorMsg(t.agentProfileDefaultRequired);
       return;
     }

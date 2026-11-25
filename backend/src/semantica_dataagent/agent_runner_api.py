@@ -11,7 +11,8 @@ from sqlalchemy import text
 
 from .agent_runner import get_runner
 from .api_time import UtcDatetime
-from .auth import admin
+from .audit_log import record_audit_event
+from .auth import Requester, admin, current_requester
 from .db import AgentRunnerRecord, sessions
 
 router = APIRouter()
@@ -154,7 +155,11 @@ def list_agent_runners(_: Annotated[str, Depends(admin)]):
 
 
 @router.post("/api/v1/agent-runners", response_model=AgentRunnerView, status_code=201)
-def create_agent_runner(body: AgentRunnerCreate, _: Annotated[str, Depends(admin)]):
+def create_agent_runner(
+    body: AgentRunnerCreate,
+    _: Annotated[str, Depends(admin)],
+    actor: Annotated[Requester, Depends(current_requester)],
+):
     now = datetime.now(UTC)
     with sessions().begin() as db:
         db.execute(text("BEGIN IMMEDIATE"))
@@ -174,12 +179,26 @@ def create_agent_runner(body: AgentRunnerCreate, _: Annotated[str, Depends(admin
         )
         db.add(row)
         db.flush()
-        return runner_view(row)
+        result = runner_view(row)
+    record_audit_event(
+        actor=actor,
+        action="agent_runner.register",
+        target_type="agent_runner",
+        target_id=result.id,
+        details={
+            "adapter_id": result.adapter_id,
+            "package_version": result.package_version,
+        },
+    )
+    return result
 
 
 @router.put("/api/v1/agent-runners/{runner_id}", response_model=AgentRunnerView)
 def update_agent_runner(
-    runner_id: str, body: AgentRunnerUpdate, _: Annotated[str, Depends(admin)]
+    runner_id: str,
+    body: AgentRunnerUpdate,
+    _: Annotated[str, Depends(admin)],
+    actor: Annotated[Requester, Depends(current_requester)],
 ):
     with sessions().begin() as db:
         db.execute(text("BEGIN IMMEDIATE"))
@@ -200,4 +219,12 @@ def update_agent_runner(
             row.status_override = body.status_override
         row.updated_at = datetime.now(UTC)
         db.flush()
-        return runner_view(row)
+        result = runner_view(row)
+    record_audit_event(
+        actor=actor,
+        action="agent_runner.update",
+        target_type="agent_runner",
+        target_id=result.id,
+        details={"fields": sorted(body.model_fields_set)},
+    )
+    return result

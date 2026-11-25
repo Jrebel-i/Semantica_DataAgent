@@ -1051,3 +1051,133 @@ def test_migrated_pending_verification_blocked_until_catalog_refresh(
             },
         )
         assert bad_ask.status_code == 422
+
+
+def test_personal_default_mutations_emit_structured_audit(client, monkeypatch, caplog):
+    import logging
+
+    from semantica_dataagent import agent_runner
+    from semantica_dataagent.db import Token, digest, sessions
+
+    c, admin_token, member_token, _ = client
+    monkeypatch.setitem(agent_runner.RUNNERS, "claude", StubRunner("claude", ok=True))
+
+    with sessions()() as db:
+        member_id = db.get(Token, digest(member_token)).id
+
+    secret = "sk-personal-default-audit-secret"
+    prov = _create_catalog_provider(
+        c,
+        admin_token,
+        monkeypatch,
+        name="Audit Personal GW",
+        models=["m-1#claude"],
+        api_key=secret,
+    )
+    pid = prov["id"]
+    prof = c.post(
+        "/api/v1/agent-profiles",
+        headers=_headers(admin_token),
+        json={
+            "name": "Audit Personal Agent",
+            "runner_id": "claude",
+            "enabled": True,
+            "default_provider_id": pid,
+            "default_model": "m-1#claude",
+            "provider_models": {pid: ["m-1#claude"]},
+        },
+    )
+    assert prof.status_code == 201, prof.text
+    prof_id = prof.json()["id"]
+
+    caplog.set_level(logging.INFO, logger="semantica_dataagent.audit")
+    put_resp = c.put(
+        f"/api/v1/me/agent-defaults/{prof_id}",
+        headers=_headers(member_token),
+        json={"provider_id": pid, "model": "m-1#claude"},
+    )
+    assert put_resp.status_code == 200, put_resp.text
+
+    del_resp = c.delete(
+        f"/api/v1/me/agent-defaults/{prof_id}",
+        headers=_headers(member_token),
+    )
+    assert del_resp.status_code == 204, del_resp.text
+
+    events = [
+        getattr(rec, "audit", None)
+        or json.loads(rec.getMessage().removeprefix("audit "))
+        for rec in caplog.records
+        if rec.name == "semantica_dataagent.audit"
+    ]
+    seen = {(e["actor"], e["action"], e["target_type"], e["target_id"]) for e in events}
+    expected = {
+        (
+            member_id,
+            "personal_default.put",
+            "user_agent_default",
+            f"{member_id}:{prof_id}",
+        ),
+        (
+            member_id,
+            "personal_default.delete",
+            "user_agent_default",
+            f"{member_id}:{prof_id}",
+        ),
+    }
+    assert expected.issubset(seen), f"missing audit events: {expected - seen}"
+    assert secret not in caplog.text
+
+
+def test_ask_choices_translates_assistant_resolution_error(client, monkeypatch):
+    from semantica_dataagent import agent_runner, ask_api, provider_api
+    from semantica_dataagent.mcp_contract import ToolInvalidInput, ToolUnavailable
+
+    c, admin_token, _, _ = client
+    monkeypatch.setitem(agent_runner.RUNNERS, "claude", StubRunner("claude", ok=True))
+
+    created = c.post(
+        "/api/v1/providers",
+        headers=_headers(admin_token),
+        json={
+            "name": "Choices GW",
+            "type": "anthropic-messages",
+            "base_url": "https://choices.example.test",
+            "api_key": "sk-choices",
+        },
+    )
+    pid = created.json()["id"]
+    monkeypatch.setattr(
+        provider_api,
+        "_catalog_transport",
+        httpx.MockTransport(
+            lambda _req: httpx.Response(200, json={"data": [{"id": "m-1#claude"}]})
+        ),
+    )
+    assert (
+        c.post(
+            f"/api/v1/providers/{pid}/refresh-models", headers=_headers(admin_token)
+        ).status_code
+        == 200
+    )
+
+    # Enable catalog governance; seeded 'pi' runner is unavailable -> 503 -> ToolUnavailable
+    prof = c.post(
+        "/api/v1/agent-profiles",
+        headers=_headers(admin_token),
+        json={
+            "name": "Disabled Only",
+            "runner_id": "claude",
+            "enabled": False,
+            "provider_models": {pid: ["m-1#claude"]},
+        },
+    )
+    assert prof.status_code == 201, prof.text
+
+    with pytest.raises(ToolUnavailable):
+        ask_api._choices()
+
+    # When 'pi' runner IS available but system default has no published models -> 422 -> ToolInvalidInput
+    monkeypatch.setitem(agent_runner.RUNNERS, "pi", StubRunner("pi", ok=True))
+    with pytest.raises(ToolInvalidInput):
+        ask_api._choices()

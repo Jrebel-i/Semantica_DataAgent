@@ -77,10 +77,19 @@ def _legacy_choices(db) -> tuple[str, str, str]:
     return agent_id, provider.id, model
 
 
+def _resolve_target_for_mcp(db, **kwargs):
+    try:
+        return resolve_assistant_target(db, **kwargs)
+    except AssistantResolutionError as exc:
+        if exc.status_code == 503:
+            raise ToolUnavailable(exc.message) from None
+        raise ToolInvalidInput(exc.message) from None
+
+
 def _choices() -> tuple[str, str, str]:
     with sessions()() as db:
         if is_catalog_governed(db):
-            resolved = resolve_assistant_target(db, owner_id=None)
+            resolved = _resolve_target_for_mcp(db, owner_id=None)
             return resolved.agent_id, resolved.provider.id, resolved.model
         return _legacy_choices(db)
 
@@ -114,27 +123,22 @@ def _start_turn(
             sequence = 1
 
         governed = is_catalog_governed(db)
-        try:
-            if governed or conversation is not None:
-                resolved = resolve_assistant_target(
-                    db,
-                    owner_id=owner_id,
-                    conversation=conversation,
-                )
-            else:
-                agent_id, provider_id, model = _legacy_choices(db)
-                resolved = resolve_assistant_target(
-                    db,
-                    owner_id=owner_id,
-                    conversation=None,
-                    agent=agent_id,
-                    provider_id=provider_id,
-                    model=model,
-                )
-        except AssistantResolutionError as exc:
-            if exc.status_code == 503:
-                raise ToolUnavailable(exc.message) from None
-            raise ToolInvalidInput(exc.message) from None
+        if governed or conversation is not None:
+            resolved = _resolve_target_for_mcp(
+                db,
+                owner_id=owner_id,
+                conversation=conversation,
+            )
+        else:
+            agent_id, provider_id, model = _legacy_choices(db)
+            resolved = _resolve_target_for_mcp(
+                db,
+                owner_id=owner_id,
+                conversation=None,
+                agent=agent_id,
+                provider_id=provider_id,
+                model=model,
+            )
 
         agent_id = resolved.agent_id
         provider = resolved.provider

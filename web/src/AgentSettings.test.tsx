@@ -387,3 +387,57 @@ test("edit agent locks runner, shows missing_models badge, and handles 409 confl
   fireEvent.click(screen.getByRole("button", { name: "刷新最新配置" }));
   expect(await screen.findByText("v5")).toBeTruthy();
 });
+
+test("unchecking active default model submits to backend and surfaces 409 affected_defaults instead of client-side block", async () => {
+  let putCalls = 0;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/v1/agent-profiles") return Response.json(PROFILES);
+      if (
+        url === "/api/v1/agent-profiles/agent-daily" &&
+        init?.method === "PUT"
+      ) {
+        putCalls += 1;
+        return Response.json(
+          {
+            detail: {
+              message: "Cannot remove active default model without replacement",
+              affected_defaults: [
+                {
+                  kind: "system_default",
+                  profile_id: "agent-daily",
+                  profile_name: "日常助手",
+                  provider_id: "prov-1",
+                  model: "glm-5.3-flash#claude",
+                },
+              ],
+            },
+          },
+          { status: 409 },
+        );
+      }
+      if (url === "/api/v1/agent-runners") return Response.json(RUNNERS);
+      if (url === "/api/v1/providers") return Response.json(PROVIDERS);
+      return new Response("", { status: 404 });
+    }),
+  );
+
+  render(<AgentSettings token="token" messages={getMessages("zh")} />);
+  const editButtons = await screen.findAllByRole("button", { name: "编辑" });
+  fireEvent.click(editButtons[0]);
+
+  // Uncheck the active default model itself
+  const defaultCheckbox = screen.getByLabelText(
+    "公司网关 glm-5.3-flash#claude",
+  ) as HTMLInputElement;
+  expect(defaultCheckbox.checked).toBe(true);
+  fireEvent.click(defaultCheckbox);
+
+  fireEvent.click(screen.getByRole("button", { name: "保存 Agent" }));
+  expect(
+    await screen.findByText(/以下默认配置正在使用将被撤下或停用的选项/),
+  ).toBeTruthy();
+  expect(putCalls).toBe(1);
+});
