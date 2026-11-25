@@ -4,7 +4,7 @@ import uuid
 from datetime import UTC, datetime
 from threading import Lock
 
-from sqlalchemy import Index, LargeBinary, create_engine, event
+from sqlalchemy import Index, LargeBinary, create_engine, event, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
 
@@ -231,6 +231,62 @@ class Provider(Base):
     api_key: Mapped[str | None]
     models: Mapped[str]
     model_capabilities: Mapped[str | None]
+    catalog_models: Mapped[str | None]
+    catalog_fetched_at: Mapped[datetime | None]
+    catalog_status: Mapped[str | None]
+    catalog_error: Mapped[str | None]
+    created_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC))
+    updated_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC))
+
+
+class AgentProfile(Base):
+    __tablename__ = "agent_profiles"
+    __table_args__ = (
+        Index(
+            "uq_agent_profiles_system_default",
+            "is_system_default",
+            unique=True,
+            sqlite_where=text("is_system_default = 1"),
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(primary_key=True, default=lambda: uuid.uuid4().hex)
+    name: Mapped[str] = mapped_column(unique=True)
+    runner_id: Mapped[str]
+    enabled: Mapped[bool] = mapped_column(default=True, server_default="1")
+    is_system_default: Mapped[bool] = mapped_column(default=False, server_default="0")
+    default_provider_id: Mapped[str | None]
+    default_model: Mapped[str | None]
+    provider_models: Mapped[str] = mapped_column(default="{}", server_default="{}")
+    pending_verification_models: Mapped[str] = mapped_column(
+        default="{}", server_default="{}"
+    )
+    version: Mapped[int] = mapped_column(default=1, server_default="1")
+    created_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC))
+    updated_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC))
+
+
+class UserAgentDefault(Base):
+    __tablename__ = "user_agent_defaults"
+
+    owner_id: Mapped[str] = mapped_column(primary_key=True)
+    agent_profile_id: Mapped[str] = mapped_column(primary_key=True)
+    provider_id: Mapped[str]
+    model: Mapped[str]
+    updated_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC))
+
+
+class AgentRunnerRecord(Base):
+    __tablename__ = "agent_runners"
+
+    id: Mapped[str] = mapped_column(primary_key=True)
+    display_name: Mapped[str]
+    npm_package: Mapped[str]
+    package_version: Mapped[str]
+    executable: Mapped[str]
+    adapter_id: Mapped[str]
+    status_override: Mapped[str | None]
+    builtin: Mapped[bool] = mapped_column(default=False, server_default="0")
     created_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC))
     updated_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC))
 
@@ -242,6 +298,7 @@ class Conversation(Base):
     project_id: Mapped[str] = mapped_column(default="default", server_default="default")
     title: Mapped[str]
     agent: Mapped[str]
+    agent_profile_id: Mapped[str | None]
     provider_id: Mapped[str]
     model: Mapped[str]
     created_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(UTC))

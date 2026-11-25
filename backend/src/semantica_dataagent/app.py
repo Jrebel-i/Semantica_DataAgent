@@ -851,9 +851,13 @@ from .skill_api import router as skill_router
 
 app.include_router(skill_router)
 
+from .agent_profile_api import router as agent_profile_router
+from .agent_runner_api import router as agent_runner_router
 from .provider_api import router as provider_router
 
 app.include_router(provider_router)
+app.include_router(agent_profile_router)
+app.include_router(agent_runner_router)
 
 from .conversation_api import router as conversation_router
 
