@@ -13,7 +13,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 from .agent_types import ephemeral_tar_bytes, validated_ephemeral_files
 
-IMAGE = "semantica-dataagent-agent-runner:1.2.0"
+IMAGE = "semantica-dataagent-agent-runner:1.2.2"
 LABEL = "com.semantica-dataagent.agent=1"
 OWNER = "com.semantica-dataagent.owner"
 RELAY = r"""const net = require('net');

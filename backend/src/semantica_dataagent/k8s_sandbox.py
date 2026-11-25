@@ -14,7 +14,7 @@ from .failure_diagnostics import (
     safe_session_stage,
 )
 
-RUNNER_IMAGE = "172.16.242.124:31640/dataagent-agent-runner:1.2.1"
+RUNNER_IMAGE = "172.16.242.124:31640/dataagent-agent-runner:1.2.2"
 SESSION_LABEL = "app.kubernetes.io/component=agent-session"
 POD_STATUS_TIMEOUT_SECONDS = 10
 

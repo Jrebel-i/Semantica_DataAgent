@@ -309,7 +309,7 @@ MCP 工具的参数 schema 必须自包含，不含任何层级的 `$ref` 或 `$
 
 ## 在线 agent 容器
 
-构建镜像：`docker build -t semantica-dataagent-agent-runner:1.2.0 deploy/agent-runner`。默认使用 Docker 沙箱；仅在可信的开发环境排障时设置 `DATAAGENT_AGENT_MODE=local`，此模式没有文件和网络隔离。容器的 CPU 和内存默认分别为 2 核和 2g，可用 `DATAAGENT_AGENT_CPUS`、`DATAAGENT_AGENT_MEMORY` 配置。
+构建镜像：`docker build -t semantica-dataagent-agent-runner:1.2.2 deploy/agent-runner`。默认使用 Docker 沙箱；仅在可信的开发环境排障时设置 `DATAAGENT_AGENT_MODE=local`，此模式没有文件和网络隔离。容器的 CPU 和内存默认分别为 2 核和 2g，可用 `DATAAGENT_AGENT_CPUS`、`DATAAGENT_AGENT_MEMORY` 配置。
 
 Docker Desktop / WSL 下，agent 只连接 internal 网络；同一网络中的专用中继仅转发到当前 provider 和 MCP 的两个目标地址。中继还连接 Docker bridge，并把配置中的宿主机 loopback 地址转换为 `host.docker.internal`；所以 WSL mirrored 网络中的 `127.0.0.1:3425` 和后端监听端口可由中继访问。两端 URL 的路径保留，HTTPS 保留原主机名以验证证书。不要把容器连接到普通 bridge 或挂载其他宿主机路径。
 

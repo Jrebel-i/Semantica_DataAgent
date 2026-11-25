@@ -5,7 +5,12 @@ RUN npm install --global --omit=dev @earendil-works/pi-coding-agent@1.2.0 \
     @openai/codex@0.166.0 \
     && npm cache clean --force
 
-RUN apt-get update && apt-get install -y --no-install-recommends iptables \
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    iptables \
+    ca-certificates \
+    curl \
+    python3 \
+    python-is-python3 \
     && find /var/lib/apt/lists -mindepth 1 -delete
 
 WORKDIR /workspace
