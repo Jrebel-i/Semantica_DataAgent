@@ -1,9 +1,18 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { Alert, Space, Typography, ConfigProvider, Button } from "antd";
+import {
+  Alert,
+  Button,
+  ConfigProvider,
+  Space,
+  Table,
+  Tag,
+  Typography,
+  theme as antdTheme,
+} from "antd";
 import { CorrectionsPage } from "./CorrectionsPage";
 import { EvolutionPage } from "./EvolutionPage";
 import { BuildPage } from "./BuildPage";
-import { getMessages, type Language } from "./i18n";
+import { getMessages, type Language, type Messages } from "./i18n";
 import { ChatPage } from "./ChatPage";
 import { KnowledgePage } from "./KnowledgePage";
 import { SearchPage } from "./SearchPage";
@@ -20,16 +29,36 @@ import { AgentSettings } from "./AgentSettings";
 import { PlatformSettings } from "./PlatformSettings";
 import { SkillsPage } from "./SkillsPage";
 import {
+  ProjectSelector,
+  loadProjects,
+  storedProject,
+} from "./ProjectSelector";
+import type { components } from "./api";
+import {
+  CommentOutlined,
   DatabaseOutlined,
   FolderOpenOutlined,
   LogoutOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
-  SearchOutlined,
   SettingOutlined,
   SyncOutlined,
   UserOutlined,
 } from "@ant-design/icons";
+
+type PrimaryGroupId = "chat" | "knowledge" | "data" | "projects" | "settings";
+type ThemeMode = "system" | "light" | "dark";
+
+interface SubNavItem {
+  path: string;
+  label: string;
+  matchPaths?: string[];
+}
+
+interface SubNavGroup {
+  title?: string;
+  items: SubNavItem[];
+}
 
 function formatGenerationTime(value: string | null | undefined) {
   if (!value) return "";
@@ -52,10 +81,144 @@ function conversationIdFromPath(pathname: string) {
   }
 }
 
+function matchMediaQuery(query: string): MediaQueryList | null {
+  try {
+    return window.matchMedia(query);
+  } catch {
+    return null;
+  }
+}
+
+function useMediaMatches(queryText: string) {
+  const [matches, setMatches] = useState(
+    () => matchMediaQuery(queryText)?.matches ?? false,
+  );
+  useEffect(() => {
+    const query = matchMediaQuery(queryText);
+    if (!query) return;
+    const onChange = (event: MediaQueryListEvent) => setMatches(event.matches);
+    setMatches(query.matches);
+    if (query.addEventListener) query.addEventListener("change", onChange);
+    else query.addListener(onChange);
+    return () => {
+      if (query.removeEventListener)
+        query.removeEventListener("change", onChange);
+      else query.removeListener(onChange);
+    };
+  }, [queryText]);
+  return matches;
+}
+
+function AgentRunnersPlaceholder({
+  token,
+  messages: t,
+  onNavigateAgentConfig,
+}: {
+  token: string;
+  messages: Messages;
+  onNavigateAgentConfig: () => void;
+}) {
+  const [agents, setAgents] = useState<components["schemas"]["AgentView"][]>(
+    [],
+  );
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let active = true;
+    setLoading(true);
+    void fetch("/api/v1/agents", {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then((response) => (response.ok ? response.json() : []))
+      .then((rows: unknown) => {
+        if (active) {
+          setAgents(
+            Array.isArray(rows)
+              ? (rows as components["schemas"]["AgentView"][])
+              : [],
+          );
+          setLoading(false);
+        }
+      })
+      .catch(() => {
+        if (active) {
+          setAgents([]);
+          setLoading(false);
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, [token]);
+
+  return (
+    <section className="stack admin-page">
+      <div className="page-header">
+        <div>
+          <h1 className="page-title">{t.agentRunnersNav}</h1>
+          <p className="page-subtitle">{t.agentRunnersHint}</p>
+        </div>
+        <div className="page-actions">
+          <Button type="primary" onClick={onNavigateAgentConfig}>
+            {t.goToAgentConfig}
+          </Button>
+        </div>
+      </div>
+      <Alert type="info" title={t.agentRunnersPlaceholderNote} />
+      <div className="card section-card token-table-card">
+        <Table
+          rowKey="id"
+          loading={loading}
+          pagination={false}
+          dataSource={agents}
+          columns={[
+            { title: t.runnerColumn, dataIndex: "name", key: "name" },
+            {
+              title: "ID",
+              dataIndex: "id",
+              key: "id",
+              render: (id: string) => <code>{id}</code>,
+            },
+            {
+              title: t.runnerStatusColumn,
+              dataIndex: "available",
+              key: "available",
+              render: (available: boolean) => (
+                <Tag color={available ? "green" : "default"}>
+                  {available ? t.runnerAvailable : t.runnerUnavailable}
+                </Tag>
+              ),
+            },
+          ]}
+        />
+      </div>
+    </section>
+  );
+}
+
 export function App() {
   const [lang, setLang] = useState<Language>(() =>
     localStorage.getItem("language") === "en" ? "en" : "zh",
   );
+  const [themeMode, setThemeMode] = useState<ThemeMode>(() => {
+    try {
+      const saved = localStorage.getItem("theme");
+      if (saved === "light" || saved === "dark") return saved;
+    } catch {
+      /* Storage may be unavailable. */
+    }
+    return "system";
+  });
+  const systemDark = useMediaMatches("(prefers-color-scheme: dark)");
+  const isDark = themeMode === "dark" || (themeMode === "system" && systemDark);
+  useEffect(() => {
+    if (themeMode === "system") {
+      document.documentElement.removeAttribute("data-theme");
+    } else {
+      document.documentElement.setAttribute("data-theme", themeMode);
+    }
+  }, [themeMode]);
+
   const [token, setToken] = useState(() => localStorage.getItem("token") || "");
   const [loggedIn, setLoggedIn] = useState(false);
   const [role, setRole] = useState("");
@@ -65,21 +228,31 @@ export function App() {
     try {
       return localStorage.getItem("navigationExpanded") !== "false";
     } catch {
-      return false;
+      return true;
     }
   });
-  const [narrow, setNarrow] = useState(() => {
-    try {
-      return window.matchMedia("(max-width: 768px)").matches;
-    } catch {
-      return false;
-    }
-  });
+  const [mediumExpanded, setMediumExpanded] = useState(false);
+  const narrow = useMediaMatches("(max-width: 768px)");
+  const medium = useMediaMatches("(min-width: 769px) and (max-width: 1024px)");
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const navigationExpanded = narrow ? drawerOpen : expanded;
+
+  useEffect(() => {
+    if (!narrow) setDrawerOpen(false);
+  }, [narrow]);
+
+  const middleExpanded = narrow
+    ? drawerOpen
+    : medium
+      ? mediumExpanded
+      : expanded;
+  const navigationExpanded = narrow ? drawerOpen : middleExpanded;
   const toggleNavigation = () => {
     if (narrow) {
       setDrawerOpen((value) => !value);
+      return;
+    }
+    if (medium) {
+      setMediumExpanded((value) => !value);
       return;
     }
     setExpanded((value) => {
@@ -91,33 +264,14 @@ export function App() {
       return !value;
     });
   };
-  useEffect(() => {
-    let query: MediaQueryList;
-    try {
-      query = window.matchMedia("(max-width: 768px)");
-    } catch {
-      return;
-    }
-    const onChange = (event: MediaQueryListEvent) => {
-      setNarrow(event.matches);
-      if (!event.matches) setDrawerOpen(false);
-    };
-    setNarrow(query.matches);
-    if (query.addEventListener) query.addEventListener("change", onChange);
-    else query.addListener(onChange);
-    return () => {
-      if (query.removeEventListener)
-        query.removeEventListener("change", onChange);
-      else query.removeListener(onChange);
-    };
-  }, []);
+
   const [sessionTarget, setSessionTarget] = useState<HTMLDivElement | null>(
     null,
   );
   const [newTarget, setNewTarget] = useState<HTMLDivElement | null>(null);
-  const [managementOpen, setManagementOpen] = useState(false);
   const [personalOpen, setPersonalOpen] = useState(false);
   const [path, setPath] = useState(window.location.pathname);
+  const [globalProject, setGlobalProject] = useState(storedProject);
   const [correctionProposalId, setCorrectionProposalId] = useState<
     string | null
   >(null);
@@ -131,6 +285,7 @@ export function App() {
   const [projectAdmin, setProjectAdmin] = useState(false);
   const [projectMember, setProjectMember] = useState(false);
   const t = getMessages(lang);
+
   const authenticate = useCallback(async (value: string) => {
     try {
       const response = await fetch("/api/v1/me", {
@@ -160,39 +315,32 @@ export function App() {
       setError("error");
     }
   }, []);
+
   useEffect(() => {
     if (token) void authenticate(token);
   }, [authenticate, token]);
+
   useEffect(() => {
     if (!loggedIn || !token) return;
-    const headers = { Authorization: `Bearer ${token}` };
-    void fetch("/api/v1/projects", { headers })
-      .then((r) => (r.ok ? r.json() : Promise.reject()))
-      .then(
-        (
-          projects: {
-            id: string;
-            my_role: "admin" | "member";
-          }[],
-        ) => {
-          setProjectAdmin(
-            projects.some((project) => project.my_role === "admin"),
-          );
-          setProjectMember(
-            projects.some((project) => project.my_role === "member"),
-          );
-        },
-      )
-      .catch(() => {
-        setProjectAdmin(false);
-        setProjectMember(false);
-      });
+    let active = true;
+    void loadProjects(token).then((projects) => {
+      if (!active) return;
+      setProjectAdmin(projects.some((project) => project.my_role === "admin"));
+      setProjectMember(
+        projects.some((project) => project.my_role === "member"),
+      );
+    });
+    return () => {
+      active = false;
+    };
   }, [loggedIn, refreshKey, token]);
+
   useEffect(() => {
     const onPop = () => setPath(window.location.pathname);
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
   }, []);
+
   const refresh = useCallback(async () => {
     try {
       const response = await fetch("/healthz");
@@ -203,6 +351,7 @@ export function App() {
       setError("error");
     }
   }, []);
+
   useEffect(() => {
     if (loggedIn) {
       void refresh();
@@ -234,11 +383,23 @@ export function App() {
         .catch(() => setDtbConfigured(null));
     }
   }, [loggedIn, refresh, token, path]);
+
   const changeLanguage = () => {
     const next = lang === "zh" ? "en" : "zh";
     localStorage.setItem("language", next);
     setLang(next);
   };
+
+  const toggleTheme = () => {
+    const next: ThemeMode = isDark ? "light" : "dark";
+    try {
+      localStorage.setItem("theme", next);
+    } catch {
+      /* Storage may be unavailable. */
+    }
+    setThemeMode(next);
+  };
+
   const logout = () => {
     localStorage.removeItem("token");
     setToken("");
@@ -257,116 +418,181 @@ export function App() {
     history.pushState(null, "", next);
     setPath(nextPath || "/");
     setDrawerOpen(false);
+    setPersonalOpen(false);
   };
+
   const canManageProject = role === "admin" || projectAdmin;
-  const navigation: {
-    path: string;
-    label: string;
-    icon: ReactNode;
-    activePaths?: string[];
-  }[] = [
-    { path: "/search", label: t.sidebarSearch, icon: <SearchOutlined /> },
-    {
-      path: "/knowledge",
-      label: t.sidebarKnowledge,
-      icon: <DatabaseOutlined />,
-    },
-    ...(!canManageProject && projectMember
-      ? [
-          {
-            path: "/knowledge-gaps",
-            label: t.gapTitle,
-            icon: <DatabaseOutlined />,
-          },
-        ]
-      : []),
-    ...(canManageProject
-      ? [
-          {
-            path: "/builds",
-            label: t.sidebarDataOps,
-            icon: <SyncOutlined />,
-            activePaths: [
-              "/builds",
-              "/source",
-              "/corrections",
-              "/evolution",
-              "/knowledge-gaps",
-            ],
-          },
-          {
-            path: "/projects",
-            label: t.sidebarProjects,
-            icon: <FolderOpenOutlined />,
-          },
-        ]
-      : []),
-    ...(role === "admin"
-      ? [
-          {
-            path: "/config",
-            label: t.sidebarSystemConfig,
-            icon: <SettingOutlined />,
-            activePaths: ["/config", "/plugins", "/skills", "/tokens"],
-          },
-        ]
-      : []),
-  ];
-  const management = [
-    { path: "/builds", label: t.builds },
-    { path: "/source", label: t.source },
-    { path: "/corrections", label: t.correctionTitle },
-    { path: "/evolution", label: t.evolutionTitle },
-    { path: "/config", label: t.workbenchConfig },
-    { path: "/plugins", label: t.plugins },
-    { path: "/skills", label: t.skills },
-    { path: "/tokens", label: t.tokens },
-    { path: "/projects", label: t.projects },
-    { path: "/mcp-access", label: t.mcpAccess },
-    { path: "/status", label: t.status },
-  ];
-  const subNavigation = (() => {
+  const canViewProjects = role === "admin" || projectAdmin || projectMember;
+
+  const isChat = path === "/" || path === "/chat" || path.startsWith("/chat/");
+  const activeGroup: PrimaryGroupId = (() => {
+    if (isChat) return "chat";
+    if (
+      path === "/knowledge" ||
+      path === "/search" ||
+      (path === "/knowledge-gaps" && !canManageProject)
+    ) {
+      return "knowledge";
+    }
     if (
       [
         "/builds",
         "/source",
         "/corrections",
-        "/evolution",
         "/knowledge-gaps",
+        "/evolution",
       ].includes(path)
-    )
+    ) {
+      return "data";
+    }
+    if (path === "/projects") return "projects";
+    return "settings";
+  })();
+
+  const topRailItems: {
+    id: PrimaryGroupId;
+    path: string;
+    label: string;
+    icon: ReactNode;
+  }[] = [
+    {
+      id: "chat",
+      path: "/chat",
+      label: t.sidebarChat,
+      icon: <CommentOutlined />,
+    },
+    {
+      id: "knowledge",
+      path: "/knowledge",
+      label: t.sidebarKnowledge,
+      icon: <DatabaseOutlined />,
+    },
+    ...(canManageProject
+      ? [
+          {
+            id: "data" as const,
+            path: "/builds",
+            label: t.sidebarDataOps,
+            icon: <SyncOutlined />,
+          },
+        ]
+      : []),
+    ...(canViewProjects
+      ? [
+          {
+            id: "projects" as const,
+            path: "/projects",
+            label: t.sidebarProjectsNav,
+            icon: <FolderOpenOutlined />,
+          },
+        ]
+      : []),
+  ];
+
+  const settingsItem = {
+    id: "settings" as const,
+    path: role === "admin" ? "/config" : "/personal-settings",
+    label: t.sidebarSettings,
+    icon: <SettingOutlined />,
+  };
+
+  const middleGroups: SubNavGroup[] = (() => {
+    if (activeGroup === "knowledge") {
       return [
-        ...(canManageProject
-          ? [
-              { path: "/builds", label: t.builds },
-              { path: "/source", label: t.source },
-              { path: "/corrections", label: t.correctionTitle },
-              { path: "/evolution", label: t.evolutionTitle },
-            ]
-          : []),
-        { path: "/knowledge-gaps", label: t.gapTitle },
+        {
+          title: t.sidebarKnowledge,
+          items: [
+            { path: "/knowledge", label: t.knowledge },
+            { path: "/search", label: t.searchDebug },
+            ...(!canManageProject && projectMember
+              ? [{ path: "/knowledge-gaps", label: t.gapTitle }]
+              : []),
+          ],
+        },
       ];
-    if (
-      ["/config", "/plugins", "/skills", "/tokens"].includes(path) &&
-      role === "admin"
-    )
+    }
+    if (activeGroup === "data") {
       return [
-        { path: "/config", label: t.workbenchConfig },
+        {
+          title: t.sidebarDataOps,
+          items: [
+            ...(canManageProject
+              ? [
+                  { path: "/builds", label: t.builds },
+                  { path: "/source", label: t.source },
+                  { path: "/corrections", label: t.correctionTitle },
+                  { path: "/knowledge-gaps", label: t.gapTitle },
+                  { path: "/evolution", label: t.evolutionTitle },
+                ]
+              : [{ path: "/knowledge-gaps", label: t.gapTitle }]),
+          ],
+        },
+      ];
+    }
+    if (activeGroup === "projects") {
+      return [
+        {
+          title: t.projectManagement,
+          items: [{ path: "/projects", label: t.sidebarProjects }],
+        },
+      ];
+    }
+    if (activeGroup === "settings") {
+      return [
         ...(role === "admin"
           ? [
-              { path: "/plugins", label: t.plugins },
-              { path: "/skills", label: t.skills },
-              { path: "/tokens", label: t.tokens },
+              {
+                title: t.settingsGroupAgents,
+                items: [
+                  {
+                    path: "/agent-settings",
+                    label: t.agentSettings,
+                    matchPaths: ["/agent-settings", "/agents", "/config"],
+                  },
+                  { path: "/providers", label: t.providersSettingsNav },
+                  { path: "/agent-runners", label: t.agentRunnersNav },
+                ],
+              },
+              {
+                title: t.settingsGroupPlatform,
+                items: [
+                  { path: "/platform", label: t.platformSettings },
+                  { path: "/plugins", label: t.plugins },
+                  { path: "/skills", label: t.skills },
+                  { path: "/tokens", label: t.tokens },
+                  { path: "/status", label: t.statusPage },
+                ],
+              },
             ]
           : []),
+        {
+          title: t.settingsGroupPersonal,
+          items: [
+            { path: "/personal-settings", label: t.personalSettings },
+            { path: "/mcp-access", label: t.mcpAccess },
+          ],
+        },
       ];
-    if (path === "/personal-settings" || path === "/mcp-access")
-      return [
-        { path: "/personal-settings", label: t.personalSettings },
-        { path: "/mcp-access", label: t.mcpAccess },
-      ];
+    }
     return [];
   })();
+
+  const activeGroupLabel =
+    topRailItems.find((item) => item.id === activeGroup)?.label ??
+    settingsItem.label;
+  const activePageLabel = (() => {
+    if (isChat) return t.chat;
+    for (const group of middleGroups) {
+      for (const item of group.items) {
+        if (item.path === path || item.matchPaths?.includes(path)) {
+          return item.label;
+        }
+      }
+    }
+    if (path === "/status") return t.statusPage;
+    return t.statusPage;
+  })();
+
   const generationName = generation?.name ?? "";
   const shortGeneration = generationName
     ? generationName.length > 8
@@ -378,8 +604,8 @@ export function App() {
     ? `${shortGeneration} · ${generationTime}`
     : shortGeneration;
   const conversationId = conversationIdFromPath(path);
-  const isChat = path === "/chat" || path === "/" || path.startsWith("/chat/");
   const isFill = path === "/knowledge";
+
   const content =
     path === "/knowledge-gaps" ? (
       <CorrectionsPage token={token} gaps messages={t} />
@@ -410,7 +636,7 @@ export function App() {
       ) : (
         <Alert title={t.forbidden} type="warning" />
       )
-    ) : path === "/chat" || path === "/" ? null : path === "/builds" ? (
+    ) : isChat ? null : path === "/builds" ? (
       canManageProject ? (
         <BuildPage token={token} messages={t} />
       ) : (
@@ -436,6 +662,34 @@ export function App() {
       ) : (
         <Alert title={t.forbidden} type="warning" />
       )
+    ) : path === "/agent-settings" || path === "/agents" ? (
+      role === "admin" ? (
+        <AgentSettings token={token} messages={t} />
+      ) : (
+        <Alert title={t.forbidden} type="warning" />
+      )
+    ) : path === "/providers" ? (
+      role === "admin" ? (
+        <ChatPage token={token} role={role} messages={t} settingsOnly />
+      ) : (
+        <Alert title={t.forbidden} type="warning" />
+      )
+    ) : path === "/agent-runners" ? (
+      role === "admin" ? (
+        <AgentRunnersPlaceholder
+          token={token}
+          messages={t}
+          onNavigateAgentConfig={() => navigate("/agent-settings")}
+        />
+      ) : (
+        <Alert title={t.forbidden} type="warning" />
+      )
+    ) : path === "/platform" ? (
+      role === "admin" ? (
+        <PlatformSettings token={token} messages={t} />
+      ) : (
+        <Alert title={t.forbidden} type="warning" />
+      )
     ) : path === "/plugins" ? (
       role === "admin" ? (
         <PluginsPage token={token} messages={t} />
@@ -455,7 +709,7 @@ export function App() {
         <Alert title={t.forbidden} type="warning" />
       )
     ) : path === "/projects" ? (
-      role === "admin" || projectAdmin || projectMember ? (
+      canViewProjects ? (
         <ProjectsPage
           token={token}
           messages={t}
@@ -487,29 +741,54 @@ export function App() {
       />
     );
 
-  return (
-    <ConfigProvider
-      theme={{
+  const antThemeConfig = isDark
+    ? {
+        algorithm: antdTheme.darkAlgorithm,
         token: {
-          colorPrimary: "#D97757",
-          colorInfo: "#D97757",
-          colorLink: "#D97757",
-          colorText: "#30302E",
-          colorTextSecondary: "#6F6B64",
-          colorBorder: "#DEDBD2",
-          colorBgLayout: "#FAF9F5",
+          colorPrimary: "#A9BCFF",
+          colorInfo: "#A9BCFF",
+          colorLink: "#A9BCFF",
+          colorText: "#EDF1F8",
+          colorTextSecondary: "#A9B5C6",
+          colorBorder: "#394557",
+          colorBgLayout: "#151B24",
+          colorBgContainer: "#202733",
           borderRadius: 10,
           controlHeight: 38,
           fontFamily: "var(--font-sans)",
           fontSize: 14,
         },
         components: {
-          Table: { cellPaddingBlock: 8, headerBg: "#F5F3ED" },
+          Table: { cellPaddingBlock: 8, headerBg: "#262F3C" },
           Button: { primaryShadow: "none" },
-          Tabs: { itemSelectedColor: "#D97757", inkBarColor: "#D97757" },
+          Tabs: { itemSelectedColor: "#A9BCFF", inkBarColor: "#A9BCFF" },
         },
-      }}
-    >
+      }
+    : {
+        algorithm: antdTheme.defaultAlgorithm,
+        token: {
+          colorPrimary: "#315AC7",
+          colorInfo: "#315AC7",
+          colorLink: "#315AC7",
+          colorText: "#202733",
+          colorTextSecondary: "#627083",
+          colorBorder: "#DCE2EA",
+          colorBgLayout: "#EEF1F5",
+          colorBgContainer: "#FFFFFF",
+          borderRadius: 10,
+          controlHeight: 38,
+          fontFamily: "var(--font-sans)",
+          fontSize: 14,
+        },
+        components: {
+          Table: { cellPaddingBlock: 8, headerBg: "#F7F8FA" },
+          Button: { primaryShadow: "none" },
+          Tabs: { itemSelectedColor: "#315AC7", inkBarColor: "#315AC7" },
+        },
+      };
+
+  return (
+    <ConfigProvider theme={antThemeConfig}>
       <main className="app-shell">
         {error && (
           <Alert
@@ -541,6 +820,7 @@ export function App() {
                   onClick={() => setDrawerOpen(true)}
                 />
                 <span className="mobile-brand">Semantica</span>
+                <span className="mobile-crumb">{activePageLabel}</span>
               </div>
             )}
             {narrow && drawerOpen && (
@@ -551,209 +831,265 @@ export function App() {
                 onClick={() => setDrawerOpen(false)}
               />
             )}
-            <nav
+            <div
               className={`side-nav ${navigationExpanded ? "expanded" : ""}${
                 narrow
                   ? ` side-nav--drawer${drawerOpen ? " side-nav--drawer-open" : ""}`
                   : ""
               }`}
-              aria-label={t.navigation}
               aria-hidden={narrow && !drawerOpen ? true : undefined}
             >
-              <div className="side-heading">
-                {navigationExpanded && (
-                  <div className="side-brand">Semantica</div>
-                )}
-                <Button
-                  type="text"
-                  className="nav-toggle"
-                  aria-label={
-                    navigationExpanded
-                      ? t.collapseNavigation
-                      : t.expandNavigation
-                  }
-                  title={
-                    navigationExpanded
-                      ? t.collapseNavigation
-                      : t.expandNavigation
-                  }
-                  onClick={toggleNavigation}
-                >
-                  {navigationExpanded ? (
-                    <MenuFoldOutlined />
-                  ) : (
-                    <MenuUnfoldOutlined />
-                  )}
-                </Button>
-              </div>
-              <div ref={setNewTarget} />
-              {navigation.map((item) => (
-                <a
-                  key={item.path}
-                  className="nav-item"
-                  href={item.path}
-                  aria-current={
-                    item.activePaths?.includes(path) ||
-                    path === item.path ||
-                    (path === "/" && item.path === "/chat")
-                      ? "page"
-                      : undefined
-                  }
-                  title={item.label}
-                  onClick={(event) => {
-                    event.preventDefault();
-                    navigate(item.path);
-                  }}
-                >
-                  <span aria-hidden="true">{item.icon}</span>
-                  <span>{item.label}</span>
-                </a>
-              ))}
-              <div ref={setSessionTarget} className="sidebar-sessions" />
-              <div className="personal-menu">
-                {personalOpen && (
-                  <div className="account-popover">
+              <aside className="primary-rail" aria-label={t.primaryNavigation}>
+                <div className="rail-logo" title="Semantica">
+                  S
+                </div>
+                <div className="rail-items">
+                  {topRailItems.map((item) => (
                     <a
-                      className="nav-item"
-                      href="/personal-settings"
+                      key={item.id}
+                      className="nav-item rail-item"
+                      href={item.path}
                       aria-current={
-                        path === "/personal-settings" ? "page" : undefined
+                        activeGroup === item.id ? "page" : undefined
                       }
-                      title={t.personalSettings}
+                      title={item.label}
                       onClick={(event) => {
                         event.preventDefault();
-                        navigate("/personal-settings");
+                        navigate(item.path);
                       }}
                     >
-                      <span aria-hidden="true">
-                        <UserOutlined />
+                      <span className="rail-icon" aria-hidden="true">
+                        {item.icon}
                       </span>
-                      <span>{t.personalSettings}</span>
+                      <span className="rail-label">{item.label}</span>
                     </a>
-                    {role !== "admin" && projectAdmin && (
-                      <a
-                        className="nav-item"
-                        href="/projects"
-                        aria-current={path === "/projects" ? "page" : undefined}
-                        onClick={(event) => {
-                          event.preventDefault();
-                          navigate("/projects");
-                          setPersonalOpen(false);
-                        }}
-                      >
-                        {t.projectManagement}
-                      </a>
-                    )}
-                    {role === "admin" && (
-                      <>
+                  ))}
+                </div>
+                <div className="rail-bottom">
+                  <a
+                    className="nav-item rail-item"
+                    href={settingsItem.path}
+                    aria-current={
+                      activeGroup === "settings" ? "page" : undefined
+                    }
+                    title={settingsItem.label}
+                    onClick={(event) => {
+                      event.preventDefault();
+                      navigate(settingsItem.path);
+                    }}
+                  >
+                    <span className="rail-icon" aria-hidden="true">
+                      {settingsItem.icon}
+                    </span>
+                    <span className="rail-label">{settingsItem.label}</span>
+                  </a>
+                  <div className="personal-menu">
+                    {personalOpen && (
+                      <div className="account-popover">
+                        <div className="account-popover-head">
+                          <span className="account-name">
+                            {userName}
+                            <small>{role}</small>
+                          </span>
+                        </div>
+                        <a
+                          className="nav-item"
+                          href="/personal-settings"
+                          aria-current={
+                            path === "/personal-settings" ? "page" : undefined
+                          }
+                          title={t.personalSettings}
+                          onClick={(event) => {
+                            event.preventDefault();
+                            navigate("/personal-settings");
+                          }}
+                        >
+                          <span aria-hidden="true">
+                            <UserOutlined />
+                          </span>
+                          <span>{t.personalSettings}</span>
+                        </a>
                         <Button
                           type="text"
-                          className="nav-item management-toggle"
-                          aria-label={t.management}
-                          aria-expanded={managementOpen}
-                          onClick={() => setManagementOpen(!managementOpen)}
+                          className="nav-item"
+                          onClick={toggleTheme}
                         >
-                          {t.management}
-                          <span className="management-caret" aria-hidden="true">
-                            ›
-                          </span>
+                          {isDark ? t.themeSwitchLight : t.themeSwitchDark}
                         </Button>
-                        {managementOpen && (
-                          <div className="management-links">
-                            {management.map((item) => (
+                        <Button
+                          type="text"
+                          className="nav-item"
+                          onClick={changeLanguage}
+                        >
+                          {lang === "zh" ? "English" : "中文"}
+                        </Button>
+                        <Button
+                          type="text"
+                          className="nav-item"
+                          onClick={() => {
+                            void refresh();
+                            setRefreshKey((value) => value + 1);
+                          }}
+                        >
+                          {t.refresh}
+                        </Button>
+                        <Button
+                          type="text"
+                          className="nav-item"
+                          aria-label={t.logout}
+                          title={t.logout}
+                          icon={<LogoutOutlined />}
+                          onClick={logout}
+                        >
+                          {t.logout}
+                        </Button>
+                      </div>
+                    )}
+                    <Button
+                      type="text"
+                      className="nav-item account-toggle"
+                      icon={<UserOutlined />}
+                      title={t.accountMenu}
+                      aria-label={t.accountMenu}
+                      aria-expanded={personalOpen}
+                      onClick={() => setPersonalOpen((value) => !value)}
+                    />
+                  </div>
+                </div>
+              </aside>
+
+              <aside
+                className={`context-pane${
+                  !narrow && !middleExpanded ? " context-pane--collapsed" : ""
+                }`}
+                aria-label={t.contextNavigation}
+              >
+                <div className="context-pane-head">
+                  <div className="context-pane-heading">
+                    <h2 className="context-pane-title">{activeGroupLabel}</h2>
+                    <span className="context-pane-subtitle">
+                      {t.workspaceSubtitle}
+                    </span>
+                  </div>
+                  {narrow && (
+                    <Button
+                      type="text"
+                      size="small"
+                      className="nav-toggle"
+                      aria-label={t.collapseNavigation}
+                      title={t.collapseNavigation}
+                      onClick={() => setDrawerOpen(false)}
+                    >
+                      <MenuFoldOutlined />
+                    </Button>
+                  )}
+                </div>
+                <div className="context-pane-body">
+                  <div
+                    ref={setNewTarget}
+                    className="context-new-chat"
+                    hidden={!isChat}
+                  />
+                  <div
+                    ref={setSessionTarget}
+                    className="sidebar-sessions"
+                    hidden={!isChat}
+                  />
+                  {!isChat && (
+                    <nav className="context-subnav" aria-label={t.navigation}>
+                      {middleGroups.map((group, groupIndex) => (
+                        <div
+                          key={group.title ?? groupIndex}
+                          className="context-nav-group"
+                        >
+                          {group.title && (
+                            <div className="context-group-label">
+                              {group.title}
+                            </div>
+                          )}
+                          {group.items.map((item) => {
+                            const active =
+                              path === item.path ||
+                              Boolean(item.matchPaths?.includes(path));
+                            return (
                               <a
                                 key={item.path}
                                 href={item.path}
-                                className="nav-item"
-                                aria-current={
-                                  path === item.path ? "page" : undefined
-                                }
+                                className="context-nav-link"
+                                aria-current={active ? "page" : undefined}
                                 onClick={(event) => {
                                   event.preventDefault();
                                   navigate(item.path);
-                                  setManagementOpen(false);
-                                  setPersonalOpen(false);
                                 }}
                               >
                                 {item.label}
                               </a>
-                            ))}
-                          </div>
-                        )}
-                      </>
-                    )}
-                    <Button
-                      type="text"
-                      className="nav-item"
-                      onClick={changeLanguage}
-                    >
-                      {lang === "zh" ? "English" : "中文"}
-                    </Button>
-                    <Button
-                      type="text"
-                      className="nav-item"
-                      onClick={() => {
-                        void refresh();
-                        setRefreshKey((value) => value + 1);
-                      }}
-                    >
-                      {t.refresh}
-                    </Button>
-                    <Button
-                      type="text"
-                      className="nav-item"
-                      aria-label={t.logout}
-                      title={t.logout}
-                      icon={<LogoutOutlined />}
-                      onClick={logout}
-                    >
-                      {navigationExpanded && t.logout}
-                    </Button>
-                  </div>
-                )}
-                <Button
-                  type="text"
-                  className="nav-item account-toggle"
-                  icon={<UserOutlined />}
-                  aria-label={t.accountMenu}
-                  aria-expanded={personalOpen}
-                  onClick={() => {
-                    if (!personalOpen) setManagementOpen(false);
-                    setPersonalOpen(!personalOpen);
-                  }}
-                >
-                  {navigationExpanded && (
-                    <span className="account-name">
-                      {userName}
-                      <small>{role}</small>
-                    </span>
+                            );
+                          })}
+                        </div>
+                      ))}
+                    </nav>
                   )}
-                </Button>
-              </div>
-            </nav>
+                </div>
+              </aside>
+            </div>
+
             <div className="workspace-content">
+              <header className="workbench-topbar">
+                <div className="workbench-topbar-left">
+                  {!narrow && (
+                    <Button
+                      type="text"
+                      size="small"
+                      className="nav-toggle"
+                      aria-label={
+                        middleExpanded
+                          ? t.collapseNavigation
+                          : t.expandNavigation
+                      }
+                      title={
+                        middleExpanded
+                          ? t.collapseNavigation
+                          : t.expandNavigation
+                      }
+                      onClick={toggleNavigation}
+                    >
+                      {middleExpanded ? (
+                        <MenuFoldOutlined />
+                      ) : (
+                        <MenuUnfoldOutlined />
+                      )}
+                    </Button>
+                  )}
+                  <nav className="workbench-crumb" aria-label={t.breadcrumb}>
+                    <span>{activeGroupLabel}</span>
+                    <span className="workbench-crumb-sep" aria-hidden="true">
+                      {" / "}
+                    </span>
+                    <strong>{activePageLabel}</strong>
+                  </nav>
+                </div>
+                <div className="workbench-topbar-right">
+                  {canViewProjects && (
+                    <ProjectSelector
+                      token={token}
+                      value={globalProject}
+                      onChange={setGlobalProject}
+                      messages={t}
+                      ariaLabel={t.currentProject}
+                      includeMemberProjects={role !== "admin" && !projectAdmin}
+                      includeArchived={path === "/evolution"}
+                      compact
+                    />
+                  )}
+                </div>
+              </header>
+
               <div
                 className={`page-content${isChat ? " page-content--chat" : ""}${
                   isFill ? " page-content--fill" : ""
                 }`}
               >
-                {subNavigation.length > 0 && (
-                  <nav className="sub-nav" aria-label={t.navigation}>
-                    {subNavigation.map((item) => (
-                      <a
-                        key={item.path}
-                        href={item.path}
-                        aria-current={path === item.path ? "page" : undefined}
-                        onClick={(event) => {
-                          event.preventDefault();
-                          navigate(item.path);
-                        }}
-                      >
-                        {item.label}
-                      </a>
-                    ))}
-                  </nav>
-                )}
                 <div className="chat-page-host" hidden={!isChat}>
                   <ChatPage
                     token={token}
@@ -779,6 +1115,7 @@ export function App() {
                     content
                   ))}
               </div>
+
               {role === "admin" && (
                 <footer className="status-bar">
                   {Object.entries(health || {}).map(([name, value]) => (
