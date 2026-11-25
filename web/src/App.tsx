@@ -25,7 +25,9 @@ import { TokensPage } from "./TokensPage";
 import { ProjectsPage } from "./ProjectsPage";
 import { PersonalSettingsPage } from "./PersonalSettingsPage";
 import { McpAccessPage } from "./McpAccessPage";
-import { AgentSettings } from "./AgentSettings";
+import { AgentProfilesPage } from "./AgentSettings";
+import { AgentRunnersPage } from "./AgentRunnersPage";
+import { ProviderSettingsPage } from "./chat/ProviderSettings";
 import { PlatformSettings } from "./PlatformSettings";
 import { SkillsPage } from "./SkillsPage";
 import {
@@ -107,93 +109,6 @@ function useMediaMatches(queryText: string) {
     };
   }, [queryText]);
   return matches;
-}
-
-function AgentRunnersPlaceholder({
-  token,
-  messages: t,
-  onNavigateAgentConfig,
-}: {
-  token: string;
-  messages: Messages;
-  onNavigateAgentConfig: () => void;
-}) {
-  const [agents, setAgents] = useState<components["schemas"]["AgentView"][]>(
-    [],
-  );
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    let active = true;
-    setLoading(true);
-    void fetch("/api/v1/agents", {
-      headers: { Authorization: `Bearer ${token}` },
-    })
-      .then((response) => (response.ok ? response.json() : []))
-      .then((rows: unknown) => {
-        if (active) {
-          setAgents(
-            Array.isArray(rows)
-              ? (rows as components["schemas"]["AgentView"][])
-              : [],
-          );
-          setLoading(false);
-        }
-      })
-      .catch(() => {
-        if (active) {
-          setAgents([]);
-          setLoading(false);
-        }
-      });
-    return () => {
-      active = false;
-    };
-  }, [token]);
-
-  return (
-    <section className="stack admin-page">
-      <div className="page-header">
-        <div>
-          <h1 className="page-title">{t.agentRunnersNav}</h1>
-          <p className="page-subtitle">{t.agentRunnersHint}</p>
-        </div>
-        <div className="page-actions">
-          <Button type="primary" onClick={onNavigateAgentConfig}>
-            {t.goToAgentConfig}
-          </Button>
-        </div>
-      </div>
-      <Alert type="info" title={t.agentRunnersPlaceholderNote} />
-      <div className="card section-card token-table-card">
-        <Table
-          rowKey="id"
-          loading={loading}
-          pagination={false}
-          dataSource={agents}
-          columns={[
-            { title: t.runnerColumn, dataIndex: "name", key: "name" },
-            {
-              title: "ID",
-              dataIndex: "id",
-              key: "id",
-              render: (id: string) => <code>{id}</code>,
-            },
-            {
-              title: t.runnerStatusColumn,
-              dataIndex: "available",
-              key: "available",
-              render: (available: boolean) => (
-                <Tag color={available ? "green" : "default"}>
-                  {available ? t.runnerAvailable : t.runnerUnavailable}
-                </Tag>
-              ),
-            },
-          ]}
-        />
-      </div>
-    </section>
-  );
 }
 
 export function App() {
@@ -491,7 +406,7 @@ export function App() {
 
   const settingsItem = {
     id: "settings" as const,
-    path: role === "admin" ? "/config" : "/personal-settings",
+    path: role === "admin" ? "/agents" : "/personal-settings",
     label: t.sidebarSettings,
     icon: <SettingOutlined />,
   };
@@ -545,9 +460,9 @@ export function App() {
                 title: t.settingsGroupAgents,
                 items: [
                   {
-                    path: "/agent-settings",
+                    path: "/agents",
                     label: t.agentSettings,
-                    matchPaths: ["/agent-settings", "/agents", "/config"],
+                    matchPaths: ["/agents", "/agent-settings", "/config"],
                   },
                   { path: "/providers", label: t.providersSettingsNav },
                   { path: "/agent-runners", label: t.agentRunnersNav },
@@ -652,34 +567,26 @@ export function App() {
       ) : (
         <Alert title={t.forbidden} type="warning" />
       )
-    ) : path === "/config" ? (
+    ) : path === "/config" ||
+      path === "/agent-settings" ||
+      path === "/agents" ? (
       role === "admin" ? (
-        <>
-          <AgentSettings token={token} messages={t} />
-          <PlatformSettings token={token} messages={t} />
-          <ChatPage token={token} role={role} messages={t} settingsOnly />
-        </>
-      ) : (
-        <Alert title={t.forbidden} type="warning" />
-      )
-    ) : path === "/agent-settings" || path === "/agents" ? (
-      role === "admin" ? (
-        <AgentSettings token={token} messages={t} />
+        <AgentProfilesPage token={token} messages={t} />
       ) : (
         <Alert title={t.forbidden} type="warning" />
       )
     ) : path === "/providers" ? (
       role === "admin" ? (
-        <ChatPage token={token} role={role} messages={t} settingsOnly />
+        <ProviderSettingsPage token={token} role={role} messages={t} />
       ) : (
         <Alert title={t.forbidden} type="warning" />
       )
     ) : path === "/agent-runners" ? (
       role === "admin" ? (
-        <AgentRunnersPlaceholder
+        <AgentRunnersPage
           token={token}
           messages={t}
-          onNavigateAgentConfig={() => navigate("/agent-settings")}
+          onNavigateAgentConfig={() => navigate("/agents")}
         />
       ) : (
         <Alert title={t.forbidden} type="warning" />

@@ -2,6 +2,20 @@ import type { components, paths } from "../api";
 import type { TableDetail } from "../tableDetail";
 
 export type Agent = components["schemas"]["AgentView"];
+export type AgentProfileView = components["schemas"]["AgentProfileView"];
+export type AgentProfileCreate = components["schemas"]["AgentProfileCreate"];
+export type AgentProfileUpdate = components["schemas"]["AgentProfileUpdate"];
+export type AgentRunnerView = components["schemas"]["AgentRunnerView"];
+export type AgentRunnerCreate = components["schemas"]["AgentRunnerCreate"];
+export type AgentRunnerUpdate = components["schemas"]["AgentRunnerUpdate"];
+export type AssistantCatalogView =
+  components["schemas"]["AssistantCatalogView"];
+export type PublishedAgentView = components["schemas"]["PublishedAgentView"];
+export type PublishedProviderView =
+  components["schemas"]["PublishedProviderView"];
+export type AgentModelPair = components["schemas"]["AgentModelPair"];
+export type UserAgentDefaultView =
+  components["schemas"]["UserAgentDefaultView"];
 export type Provider = components["schemas"]["ProviderView"];
 export type ModelCapability = components["schemas"]["ModelCapability"];
 export type EffortLevel = NonNullable<ModelCapability["effort_levels"]>[number];

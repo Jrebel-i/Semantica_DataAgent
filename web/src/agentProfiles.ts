@@ -4,6 +4,21 @@ export type AgentProfile = {
   default_model: string;
 };
 export type AgentProfiles = Record<string, AgentProfile>;
+export type ModelProtocol = "Claude" | "Codex" | "OpenAI" | "unknown";
+
+export function modelProtocol(modelId: string): ModelProtocol {
+  const idx = modelId.lastIndexOf("#");
+  if (idx === -1) return "unknown";
+  const suffix = modelId
+    .slice(idx + 1)
+    .trim()
+    .toLowerCase();
+  if (suffix === "claude") return "Claude";
+  if (suffix === "codex") return "Codex";
+  if (suffix === "oai") return "OpenAI";
+  return "unknown";
+}
+
 export function parseAgentProfiles(
   value: string | null | undefined,
 ): AgentProfiles {

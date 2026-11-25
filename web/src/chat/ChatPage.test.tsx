@@ -883,3 +883,191 @@ test("加载对话超过超时时间时自动中止并提示重试", async () =>
     vi.useRealTimers();
   }
 });
+
+test("历史对话模型下线时保留用户输入草稿与历史记录并提示重新选择", async () => {
+  const messages = getMessages("zh");
+  const catalog = {
+    system_default_profile_id: "claude-daily",
+    agents: [
+      {
+        id: "claude-daily",
+        name: "Claude · 日常助手",
+        runner_id: "claude",
+        is_system_default: true,
+        default_provider_id: "prov-1",
+        default_model: "valid-model#claude",
+        effort_levels: [],
+        supports_skills: false,
+        providers: [
+          {
+            id: "prov-1",
+            name: "公司网关",
+            type: "anthropic-messages",
+            models: ["valid-model#claude"],
+            model_capabilities: {},
+          },
+        ],
+      },
+    ],
+    personal_defaults: {},
+  };
+  const conv = {
+    id: "conv-retired-model",
+    project_id: "default",
+    project_name: "业务数据",
+    title: "旧模型会话",
+    agent: "claude",
+    agent_profile_id: "claude-daily",
+    provider_id: "prov-1",
+    model: "retired-model#claude",
+    created_at: "2026-11-05T00:00:00Z",
+    updated_at: "2026-11-05T00:00:00Z",
+    turn_count: 1,
+    resumable: true,
+    pinned: false,
+    archived: false,
+  };
+  const detail = {
+    ...conv,
+    turns: [
+      {
+        id: 1,
+        sequence: 1,
+        question: "历史问题",
+        status: "completed",
+        answer: "历史回答内容",
+        sql: [],
+        citations: [],
+        error: null,
+        started_at: "2026-11-05T00:00:00Z",
+        finished_at: "2026-11-05T00:00:01Z",
+        events: [],
+      },
+    ],
+  };
+
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/v1/assistant-catalog") return json(catalog);
+      if (url === "/api/v1/conversations") return json([conv]);
+      if (url === "/api/v1/conversations?archived=true") return json([]);
+      if (url === "/api/v1/conversations/conv-retired-model")
+        return json(detail);
+      if (url === "/api/v1/projects") return json([]);
+      return new Response("", { status: 404 });
+    }),
+  );
+
+  render(<ChatPage token="token" role="user" messages={messages} />);
+
+  // User types a draft before opening the historical conversation
+  const textarea = (await screen.findByLabelText(
+    "问题",
+  )) as HTMLTextAreaElement;
+  fireEvent.change(textarea, { target: { value: "保留我的草稿" } });
+
+  fireEvent.click(await screen.findByRole("button", { name: "旧模型会话" }));
+  expect(await screen.findByText("历史回答内容")).toBeTruthy();
+  expect(
+    await screen.findByText(/原对话使用的模型「retired-model#claude」已下线/),
+  ).toBeTruthy();
+  expect(textarea.value).toBe("保留我的草稿");
+  expect(
+    (screen.getByRole("button", { name: /提\s*问/ }) as HTMLButtonElement)
+      .disabled,
+  ).toBe(true);
+});
+
+test("历史对话绑定的 Agent 已停用时只读展示历史记录并引导新开对话", async () => {
+  const messages = getMessages("zh");
+  const catalog = {
+    system_default_profile_id: "claude-daily",
+    agents: [
+      {
+        id: "claude-daily",
+        name: "Claude · 日常助手",
+        runner_id: "claude",
+        is_system_default: true,
+        default_provider_id: "prov-1",
+        default_model: "valid-model#claude",
+        effort_levels: [],
+        supports_skills: false,
+        providers: [
+          {
+            id: "prov-1",
+            name: "公司网关",
+            type: "anthropic-messages",
+            models: ["valid-model#claude"],
+            model_capabilities: {},
+          },
+        ],
+      },
+    ],
+    personal_defaults: {},
+  };
+  const conv = {
+    id: "conv-disabled-agent",
+    project_id: "default",
+    project_name: "业务数据",
+    title: "停用 Agent 会话",
+    agent: "codex",
+    agent_profile_id: "codex-disabled",
+    provider_id: "prov-1",
+    model: "gpt-6.2-sol#codex",
+    created_at: "2026-11-05T00:00:00Z",
+    updated_at: "2026-11-05T00:00:00Z",
+    turn_count: 1,
+    resumable: true,
+    pinned: false,
+    archived: false,
+  };
+  const detail = {
+    ...conv,
+    turns: [
+      {
+        id: 1,
+        sequence: 1,
+        question: "旧问",
+        status: "completed",
+        answer: "旧答仍然可读",
+        sql: [],
+        citations: [],
+        error: null,
+        started_at: "2026-11-05T00:00:00Z",
+        finished_at: "2026-11-05T00:00:01Z",
+        events: [],
+      },
+    ],
+  };
+
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/v1/assistant-catalog") return json(catalog);
+      if (url === "/api/v1/conversations") return json([conv]);
+      if (url === "/api/v1/conversations?archived=true") return json([]);
+      if (url === "/api/v1/conversations/conv-disabled-agent")
+        return json(detail);
+      if (url === "/api/v1/projects") return json([]);
+      return new Response("", { status: 404 });
+    }),
+  );
+
+  render(<ChatPage token="token" role="user" messages={messages} />);
+  fireEvent.click(
+    await screen.findByRole("button", { name: "停用 Agent 会话" }),
+  );
+  expect(await screen.findByText("旧答仍然可读")).toBeTruthy();
+  expect(
+    await screen.findByText(/原对话绑定的 Agent 已停用或暂无可用模型/),
+  ).toBeTruthy();
+  expect(
+    (screen.getByRole("button", { name: /提\s*问/ }) as HTMLButtonElement)
+      .disabled,
+  ).toBe(true);
+  fireEvent.click(screen.getByRole("button", { name: "新开对话" }));
+  expect(screen.queryByText(/原对话绑定的 Agent 已停用/)).toBeNull();
+});

@@ -24,12 +24,14 @@ export function useAsk({
   token,
   messages: t,
   agentId,
+  agentProfileId,
   providerId,
   model,
   effort,
   projectId,
   visionEnabled,
   projectArchived,
+  blockedByConversationState = false,
   currentConversationId,
   setCurrentConversationId,
   sending,
@@ -53,12 +55,14 @@ export function useAsk({
   token: string;
   messages: Messages;
   agentId: string;
+  agentProfileId?: string;
   providerId: string;
   model: string;
   effort: EffortLevel | "";
   projectId: string;
   visionEnabled: boolean;
   projectArchived: boolean;
+  blockedByConversationState?: boolean;
   currentConversationId: string;
   setCurrentConversationId: Dispatch<SetStateAction<string>>;
   sending: boolean;
@@ -204,6 +208,7 @@ export function useAsk({
       sending ||
       !resumable ||
       projectArchived ||
+      blockedByConversationState ||
       skillBlocked ||
       archivedConversations.some((row) => row.id === currentConversationId)
     )
@@ -228,6 +233,7 @@ export function useAsk({
       const fields: Record<string, string> = {
         question: prompt,
         agent: agentId,
+        ...(agentProfileId ? { agent_profile_id: agentProfileId } : {}),
         provider_id: providerId,
         model,
         ...(projectId ? { project: projectId } : {}),
@@ -369,6 +375,7 @@ export function useAsk({
     model &&
     !sending &&
     resumable &&
+    !blockedByConversationState &&
     !skillBlocked &&
     !(attachments.some((item) => item.isImage) && !visionEnabled) &&
     !projectArchived &&
