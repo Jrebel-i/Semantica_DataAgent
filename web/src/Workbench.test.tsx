@@ -40,39 +40,85 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function stubViewport(initialMatches: boolean) {
-  const listeners = new Set<(event: MediaQueryListEvent) => void>();
-  const media = {
+function stubViewport(initialMatches: boolean, initialMediumMatches = false) {
+  const narrowListeners = new Set<(event: MediaQueryListEvent) => void>();
+  const mediumListeners = new Set<(event: MediaQueryListEvent) => void>();
+  const narrowMedia = {
     matches: initialMatches,
     media: "(max-width: 768px)",
     addListener(listener: (event: MediaQueryListEvent) => void) {
-      listeners.add(listener);
+      narrowListeners.add(listener);
     },
     removeListener(listener: (event: MediaQueryListEvent) => void) {
-      listeners.delete(listener);
+      narrowListeners.delete(listener);
     },
     addEventListener(
       _type: string,
       listener: (event: MediaQueryListEvent) => void,
     ) {
-      listeners.add(listener);
+      narrowListeners.add(listener);
     },
     removeEventListener(
       _type: string,
       listener: (event: MediaQueryListEvent) => void,
     ) {
-      listeners.delete(listener);
+      narrowListeners.delete(listener);
     },
+  };
+  const mediumMedia = {
+    matches: initialMediumMatches,
+    media: "(min-width: 769px) and (max-width: 1024px)",
+    addListener(listener: (event: MediaQueryListEvent) => void) {
+      mediumListeners.add(listener);
+    },
+    removeListener(listener: (event: MediaQueryListEvent) => void) {
+      mediumListeners.delete(listener);
+    },
+    addEventListener(
+      _type: string,
+      listener: (event: MediaQueryListEvent) => void,
+    ) {
+      mediumListeners.add(listener);
+    },
+    removeEventListener(
+      _type: string,
+      listener: (event: MediaQueryListEvent) => void,
+    ) {
+      mediumListeners.delete(listener);
+    },
+  };
+  const darkMedia = {
+    matches: false,
+    media: "(prefers-color-scheme: dark)",
+    addListener() {},
+    removeListener() {},
+    addEventListener() {},
+    removeEventListener() {},
   };
   Object.defineProperty(window, "matchMedia", {
     writable: true,
-    value: () => media,
+    value: (query: string) => {
+      if (query.includes("1024px")) return mediumMedia;
+      if (query.includes("prefers-color-scheme")) return darkMedia;
+      return narrowMedia;
+    },
   });
   return {
     setMatches(matches: boolean) {
-      media.matches = matches;
-      const event = { matches, media: media.media } as MediaQueryListEvent;
-      listeners.forEach((listener) => listener(event));
+      narrowMedia.matches = matches;
+      const event = {
+        matches,
+        media: narrowMedia.media,
+      } as MediaQueryListEvent;
+      narrowListeners.forEach((listener) => listener(event));
+    },
+    setMediumMatches(matches: boolean) {
+      mediumMedia.matches = matches;
+      const event = {
+        matches,
+        media: mediumMedia.media,
+      } as MediaQueryListEvent;
+      mediumListeners.forEach((listener) => listener(event));
     },
   };
 }
@@ -93,36 +139,54 @@ function mockNarrowFetch(conversations: object[] = []) {
   );
 }
 
-test("工作台提供独立的问答、知识、构建与审批和配置入口", async () => {
+test("工作台三栏壳层提供独立的问答、知识、构建与数据、项目和设置入口", async () => {
   localStorage.setItem("token", "admin");
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url: string) => {
       if (url === "/api/v1/me") return Response.json({ role: "admin" });
       if (url === "/healthz") return Response.json({});
-      return Response.json({});
+      if (url === "/api/v1/generations")
+        return Response.json({ generations: [] });
+      if (url === "/api/v1/settings") return Response.json({});
+      return Response.json([]);
     }),
   );
-  render(<App />);
+  const { container } = render(<App />);
   expect(await screen.findByRole("button", { name: "新对话" })).toBeTruthy();
+  expect(container.querySelector(".primary-rail")).not.toBeNull();
+  expect(container.querySelector(".context-pane")).not.toBeNull();
+  expect(container.querySelector(".workbench-topbar")).not.toBeNull();
+
+  expect(screen.getByRole("link", { name: "对话" })).toBeTruthy();
   expect(screen.getByRole("link", { name: "知识库" })).toBeTruthy();
-  fireEvent.click(screen.getByRole("button", { name: "用户菜单" }));
-  const management = screen.getByRole("button", { name: "管理" });
-  expect(management.getAttribute("aria-expanded")).toBe("false");
-  expect(screen.queryByRole("link", { name: "构建记录" })).toBeNull();
-  fireEvent.click(management);
-  expect(management.getAttribute("aria-expanded")).toBe("true");
-  expect(screen.getByRole("link", { name: "构建记录" })).toBeTruthy();
-  expect(screen.getByRole("link", { name: "配置" })).toBeTruthy();
-  fireEvent.click(screen.getByRole("button", { name: "用户菜单" }));
-  fireEvent.click(screen.getByRole("button", { name: "用户菜单" }));
-  expect(
-    screen.getByRole("button", { name: "管理" }).getAttribute("aria-expanded"),
-  ).toBe("false");
-  expect(screen.queryByRole("link", { name: "构建记录" })).toBeNull();
+  expect(screen.getByRole("link", { name: "构建与数据" })).toBeTruthy();
+  expect(screen.getByRole("link", { name: "项目" })).toBeTruthy();
+  expect(screen.getByRole("link", { name: "设置" })).toBeTruthy();
+
+  fireEvent.click(screen.getByRole("link", { name: "构建与数据" }));
+  expect(await screen.findByRole("link", { name: "构建记录" })).toBeTruthy();
+  expect(screen.getByRole("link", { name: "源文件" })).toBeTruthy();
+  expect(screen.getByRole("link", { name: "纠错审批" })).toBeTruthy();
+  expect(screen.getByRole("link", { name: "知识缺口" })).toBeTruthy();
+  expect(screen.getByRole("link", { name: "自主演化" })).toBeTruthy();
+
+  fireEvent.click(screen.getByRole("link", { name: "设置" }));
+  expect(await screen.findByText("Agent 与模型")).toBeTruthy();
+  expect(screen.getByText("系统与平台")).toBeTruthy();
+  expect(screen.getByText("个人与接入")).toBeTruthy();
+  expect(screen.getByRole("link", { name: "Agent 配置" })).toBeTruthy();
+  expect(screen.getByRole("link", { name: "供应商与模型" })).toBeTruthy();
+  expect(screen.getByRole("link", { name: "Agent 运行器" })).toBeTruthy();
+  expect(screen.getByRole("link", { name: "平台设置" })).toBeTruthy();
+  expect(screen.getByRole("link", { name: "插件配置" })).toBeTruthy();
+  expect(screen.getByRole("link", { name: "Skill 管理" })).toBeTruthy();
+  expect(screen.getByRole("link", { name: "令牌管理" })).toBeTruthy();
+  expect(screen.getByRole("link", { name: "个人设置" })).toBeTruthy();
+  expect(screen.getByRole("link", { name: "MCP 接入" })).toBeTruthy();
 });
 
-test("普通用户只能看到问答、知识和个人设置，导航展开状态可恢复", async () => {
+test("普通用户只能看到问答、知识和个人设置，中栏折叠状态可恢复", async () => {
   localStorage.setItem("token", "user");
   vi.stubGlobal(
     "fetch",
@@ -132,7 +196,8 @@ test("普通用户只能看到问答、知识和个人设置，导航展开状�
         url === "/api/v1/agents" ||
         url === "/api/v1/providers" ||
         url === "/api/v1/conversations" ||
-        url === "/api/v1/conversations?archived=true"
+        url === "/api/v1/conversations?archived=true" ||
+        url === "/api/v1/projects"
       )
         return Response.json([]);
       return Response.json({});
@@ -141,11 +206,18 @@ test("普通用户只能看到问答、知识和个人设置，导航展开状�
   render(<App />);
   expect(await screen.findByRole("button", { name: "新对话" })).toBeTruthy();
   expect(screen.getByRole("link", { name: "知识库" })).toBeTruthy();
-  fireEvent.click(screen.getByRole("button", { name: "用户菜单" }));
-  expect(screen.getByRole("link", { name: "个人设置" })).toBeTruthy();
-  expect(screen.queryByRole("button", { name: "管理" })).toBeNull();
+  expect(screen.getByRole("link", { name: "设置" })).toBeTruthy();
+  expect(screen.queryByRole("link", { name: "构建与数据" })).toBeNull();
+  expect(screen.queryByRole("link", { name: "项目" })).toBeNull();
+
+  fireEvent.click(screen.getByRole("link", { name: "设置" }));
+  expect(await screen.findByRole("link", { name: "个人设置" })).toBeTruthy();
+  expect(screen.getByRole("link", { name: "MCP 接入" })).toBeTruthy();
+  expect(screen.queryByText("Agent 与模型")).toBeNull();
+  expect(screen.queryByText("系统与平台")).toBeNull();
   expect(screen.queryByRole("link", { name: "构建记录" })).toBeNull();
-  expect(screen.queryByRole("link", { name: "配置" })).toBeNull();
+  expect(screen.queryByRole("link", { name: "Agent 配置" })).toBeNull();
+
   fireEvent.click(screen.getByRole("button", { name: "收起导航" }));
   expect(localStorage.getItem("navigationExpanded")).toBe("false");
   expect(screen.getByRole("button", { name: "展开导航" })).toBeTruthy();
@@ -180,6 +252,8 @@ test("侧栏会话可从搜索页切换且只加载一次列表", async () => {
   });
   vi.stubGlobal("fetch", fetcher);
   render(<App />);
+  expect(await screen.findByRole("link", { name: "检索调试" })).toBeTruthy();
+  fireEvent.click(screen.getByRole("link", { name: "对话" }));
   fireEvent.click(await screen.findByRole("button", { name: "第二个会话" }));
   expect(
     await screen.findByText("第二个会话", {
@@ -376,12 +450,136 @@ test("项目管理员可通过侧栏一键进入构建与数据及项目列表",
   const buildsShortcut = await screen.findByRole("link", {
     name: "构建与数据",
   });
-  expect(screen.getByRole("link", { name: "项目列表" })).toBeTruthy();
-  expect(screen.queryByRole("link", { name: "系统设置" })).toBeNull();
+  expect(screen.getByRole("link", { name: "项目" })).toBeTruthy();
+  expect(screen.queryByRole("link", { name: "Agent 配置" })).toBeNull();
 
   fireEvent.click(buildsShortcut);
   expect(
     await screen.findByRole("heading", { level: 1, name: "构建记录" }),
   ).toBeTruthy();
   expect(await screen.findByRole("link", { name: "源文件" })).toBeTruthy();
+});
+
+test("中屏(769-1024px)支持中栏收起与展开，顶部栏展示面包屑与全局项目选择", async () => {
+  localStorage.setItem("token", "pa-token");
+  history.replaceState(null, "", "/knowledge");
+  stubViewport(false, true);
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/v1/me") return Response.json({ role: "user" });
+      if (url === "/api/v1/projects")
+        return Response.json([
+          {
+            id: "alpha",
+            name: "Alpha 主题域",
+            type: "warehouse",
+            status: "active",
+            created_at: "2026-01-01T00:00:00Z",
+            my_role: "admin",
+          },
+        ]);
+      if (
+        url.startsWith("/api/v1/categories") ||
+        url.startsWith("/api/v1/tables")
+      )
+        return Response.json([]);
+      return Response.json([]);
+    }),
+  );
+  const { container } = render(<App />);
+
+  expect(await screen.findByLabelText("当前项目")).toBeTruthy();
+  expect(container.querySelector(".workbench-crumb")?.textContent).toContain(
+    "知识库 / 知识浏览",
+  );
+  expect(container.querySelector(".context-pane")?.className).toContain(
+    "context-pane--collapsed",
+  );
+
+  fireEvent.click(screen.getByRole("button", { name: "展开导航" }));
+  expect(container.querySelector(".context-pane")?.className).not.toContain(
+    "context-pane--collapsed",
+  );
+  fireEvent.click(screen.getByRole("button", { name: "收起导航" }));
+  expect(container.querySelector(".context-pane")?.className).toContain(
+    "context-pane--collapsed",
+  );
+});
+
+test("用户菜单支持浅色/深色主题切换并同步 data-theme", async () => {
+  localStorage.setItem("token", "user");
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) => {
+      if (url === "/api/v1/me") return Response.json({ role: "user" });
+      if (url === "/api/v1/projects") return Response.json([]);
+      return Response.json([]);
+    }),
+  );
+  render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: "用户菜单" }));
+  fireEvent.click(screen.getByRole("button", { name: "深色主题" }));
+  expect(document.documentElement.getAttribute("data-theme")).toBe("dark");
+  expect(localStorage.getItem("theme")).toBe("dark");
+
+  fireEvent.click(screen.getByRole("button", { name: "浅色主题" }));
+  expect(document.documentElement.getAttribute("data-theme")).toBe("light");
+  expect(localStorage.getItem("theme")).toBe("light");
+  document.documentElement.removeAttribute("data-theme");
+});
+
+test("顶部全局项目选择器可切换并同步当前页面项目", async () => {
+  localStorage.setItem("token", "pa-token");
+  history.replaceState(null, "", "/search");
+  const searchedProjects: string[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/v1/me") return Response.json({ role: "user" });
+      if (url === "/api/v1/projects")
+        return Response.json([
+          {
+            id: "alpha",
+            name: "Alpha 主题域",
+            type: "warehouse",
+            status: "active",
+            created_at: "2026-01-01T00:00:00Z",
+            my_role: "admin",
+          },
+          {
+            id: "beta",
+            name: "Beta 文档库",
+            type: "document",
+            status: "active",
+            created_at: "2026-01-02T00:00:00Z",
+            my_role: "admin",
+          },
+        ]);
+      if (url.startsWith("/api/v1/categories")) {
+        searchedProjects.push(url);
+        return Response.json([]);
+      }
+      return Response.json([]);
+    }),
+  );
+  render(<App />);
+  const globalSelector = await screen.findByRole("combobox", {
+    name: "当前项目",
+  });
+  await vi.waitFor(() =>
+    expect(searchedProjects.some((url) => url.includes("project=alpha"))).toBe(
+      true,
+    ),
+  );
+  fireEvent.mouseDown(globalSelector);
+  fireEvent.click(await screen.findByTitle("Beta 文档库"));
+  await vi.waitFor(() =>
+    expect(searchedProjects.some((url) => url.includes("project=beta"))).toBe(
+      true,
+    ),
+  );
+  expect(localStorage.getItem("dataagent.project")).toBe("beta");
 });

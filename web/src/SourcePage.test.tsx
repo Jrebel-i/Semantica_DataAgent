@@ -555,9 +555,7 @@ test("browses source history and compares versions", async () => {
   });
   vi.stubGlobal("fetch", fetcher);
   render(<App />);
-  fireEvent.click(await screen.findByRole("button", { name: "用户菜单" }));
-  fireEvent.click(await screen.findByRole("button", { name: "管理" }));
-  fireEvent.click(await screen.findByRole("link", { name: "构建记录" }));
+  fireEvent.click(await screen.findByRole("link", { name: "构建与数据" }));
   fireEvent.click(await screen.findByRole("link", { name: "源文件" }));
   fireEvent.click(await screen.findByRole("button", { name: "a.md" }));
   expect(await screen.findByText("current content")).toBeTruthy();

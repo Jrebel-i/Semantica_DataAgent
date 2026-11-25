@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Select } from "antd";
 import type { components } from "./api";
 import type { Messages } from "./i18n";
@@ -6,6 +6,7 @@ import type { Messages } from "./i18n";
 export type Project = components["schemas"]["ProjectView"];
 
 export const PROJECT_STORAGE_KEY = "dataagent.project";
+export const PROJECT_CHANGE_EVENT = "dataagent:project-change";
 
 const pendingProjects = new Map<string, Promise<Project[]>>();
 
@@ -65,6 +66,13 @@ export function rememberProject(project: string) {
   } catch {
     // Private browsing may reject storage; the page still works for this visit.
   }
+  try {
+    window.dispatchEvent(
+      new CustomEvent(PROJECT_CHANGE_EVENT, { detail: project }),
+    );
+  } catch {
+    // Ignore when CustomEvent is unavailable.
+  }
 }
 
 export function ProjectSelector({
@@ -74,6 +82,8 @@ export function ProjectSelector({
   messages: t,
   includeMemberProjects = false,
   includeArchived = false,
+  ariaLabel,
+  compact = false,
 }: {
   token: string;
   value: string;
@@ -81,6 +91,8 @@ export function ProjectSelector({
   messages: Messages;
   includeMemberProjects?: boolean;
   includeArchived?: boolean;
+  ariaLabel?: string;
+  compact?: boolean;
 }) {
   const { projects, loaded } = useProjects(token);
   const available = includeArchived
@@ -93,23 +105,47 @@ export function ProjectSelector({
       ? projects.filter((row) => row.status === "active")
       : manageableProjects(projects);
 
+  const valueRef = useRef(value);
+  valueRef.current = value;
+
   useEffect(() => {
     if (!loaded || available.length === 0) return;
     if (available.some((row) => row.id === value)) return;
     const next = available[0].id;
-    rememberProject(next);
+    valueRef.current = next;
     onChange(next);
+    rememberProject(next);
   }, [available, loaded, onChange, value]);
 
+  useEffect(() => {
+    const onProjectChange = (event: Event) => {
+      const next = (event as CustomEvent<string>).detail;
+      if (!next || next === valueRef.current) return;
+      if (available.some((row) => row.id === next)) {
+        valueRef.current = next;
+        onChange(next);
+      }
+    };
+    window.addEventListener(PROJECT_CHANGE_EVENT, onProjectChange);
+    return () => {
+      window.removeEventListener(PROJECT_CHANGE_EVENT, onProjectChange);
+    };
+  }, [available, onChange]);
+
+  const labelText = ariaLabel ?? t.projects;
+
   return (
-    <label className="project-selector">
-      <span className="muted">{t.projects}</span>
+    <label
+      className={`project-selector${compact ? " project-selector--compact" : ""}`}
+    >
+      {!compact && <span className="muted">{labelText}</span>}
       <Select
-        aria-label={t.projects}
+        aria-label={labelText}
         value={value}
         onChange={(project) => {
-          rememberProject(project);
+          valueRef.current = project;
           onChange(project);
+          rememberProject(project);
         }}
         options={available.map((project) => ({
           value: project.id,
@@ -119,7 +155,7 @@ export function ProjectSelector({
               ? `${project.name} (${t.archived})`
               : project.name,
         }))}
-        style={{ minWidth: 180 }}
+        style={{ minWidth: compact ? 164 : 180 }}
       />
     </label>
   );

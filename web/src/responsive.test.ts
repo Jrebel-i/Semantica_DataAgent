@@ -136,4 +136,45 @@ describe("narrow screen layout", () => {
     expect(desktop).toContain(".discovery-candidate-card");
     expect(desktop).toContain(".discovery-evidence-card");
   });
+
+  test("three-pane shell fills 100vw x 100dvh without fixed max-width or outer margins", () => {
+    expect(css).not.toMatch(/max-width:\s*1600px/);
+    expect(css).toMatch(
+      /\.app-shell\s*\{[^}]*width:\s*100vw;[^}]*height:\s*100dvh;/,
+    );
+    expect(css).toMatch(/body\s*\{[^}]*margin:\s*0;/);
+    expect(css).toMatch(/\.primary-rail\s*\{[^}]*width:\s*64px;/);
+    expect(css).toMatch(/\.context-pane\s*\{[^}]*width:\s*236px;/);
+    expect(css).toMatch(
+      /\.context-pane\.context-pane--collapsed\s*\{[^}]*width:\s*0;/,
+    );
+    expect(css).toMatch(/\.workspace-content\s*\{[^}]*min-width:\s*0;/);
+  });
+
+  test("medium screen (769px-1024px) narrows and allows collapsing the middle pane", () => {
+    const mediumMatch = css.match(
+      /@media\s*\(min-width:\s*769px\)\s*and\s*\(max-width:\s*1024px\)\s*\{([\s\S]*?)\n\}/,
+    );
+    expect(mediumMatch).not.toBeNull();
+    const medium = mediumMatch?.[1] ?? "";
+    expect(medium).toContain(".primary-rail");
+    expect(medium).toContain(".context-pane");
+  });
+
+  test("theme tokens define cool neutral light and dark palettes", () => {
+    expect(css).toMatch(/--bg:\s*#eef1f5;/i);
+    expect(css).toMatch(/--panel:\s*#ffffff;/i);
+    expect(css).toMatch(/--sub:\s*#f7f8fa;/i);
+    expect(css).toMatch(/--text:\s*#202733;/i);
+    expect(css).toMatch(/--muted:\s*#627083;/i);
+    expect(css).toMatch(/--line:\s*#dce2ea;/i);
+    expect(css).toMatch(/--accent:\s*#315ac7;/i);
+    expect(css).toMatch(/--accent-bg:\s*#edf2ff;/i);
+    expect(css).toMatch(
+      /:root\[data-theme="dark"\]\s*\{[^}]*--bg:\s*#151b24;/i,
+    );
+    expect(css).toMatch(
+      /@media\s*\(prefers-color-scheme:\s*dark\)\s*\{\s*:root:not\(\[data-theme="light"\]\)\s*\{[^}]*--bg:\s*#151b24;/i,
+    );
+  });
 });
