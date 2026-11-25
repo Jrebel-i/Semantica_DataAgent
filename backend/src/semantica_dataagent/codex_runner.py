@@ -30,6 +30,7 @@ from .agent_plugin import (
     request_secrets,
     result_summary,
     supported_image_attachments,
+    uploaded_skills_for_turn,
     write_json,
 )
 from .mcp_context import CONVERSATION_HEADER, TURN_HEADER
@@ -191,10 +192,18 @@ class CodexRunner:
             command += ["resume", thread]
         async with turn:
             stage_root: str | None = None
-            if request.skill is not None and request.skill.source == "upload":
-                stage_root = await turn.stage_ephemeral_files(request.skill.files)
+            upload_skills = uploaded_skills_for_turn(request)
+            if upload_skills:
+                staged_files = tuple(
+                    entry for item in upload_skills for entry in item.files
+                )
+                stage_root = await turn.stage_ephemeral_files(staged_files)
             effective_prompt = build_skill_prompt(
-                request.prompt, request.skill, stage_root
+                request.prompt,
+                request.skill,
+                stage_root,
+                mounted_skills=upload_skills,
+                injected_secrets=tuple(sorted(request.skill_secrets)),
             )
             command.append(effective_prompt)
             if images:

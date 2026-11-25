@@ -76,6 +76,7 @@ class AgentTurnRequest:
     project_type: str = "warehouse"
     attachments: tuple[AttachmentInput, ...] = ()
     skill: Any | None = None
+    mounted_skills: tuple[Any, ...] = ()
     skill_secrets: dict[str, str] = field(default_factory=dict)
 
 

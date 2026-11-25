@@ -28,6 +28,7 @@ from .agent_plugin import (
     request_secrets,
     result_summary,
     truncate,
+    uploaded_skills_for_turn,
     write_json,
 )
 from .agent_types import AgentEvent, AgentTurnRequest
@@ -249,11 +250,20 @@ class PiRunner:
             command.extend(["--thinking", thinking])
         async with turn:
             stage_root: str | None = None
-            if request.skill is not None and request.skill.source == "upload":
-                stage_root = await turn.stage_ephemeral_files(request.skill.files)
-                command.extend(["--skill", f"{stage_root}/{request.skill.name}"])
+            upload_skills = uploaded_skills_for_turn(request)
+            if upload_skills:
+                staged_files = tuple(
+                    entry for item in upload_skills for entry in item.files
+                )
+                stage_root = await turn.stage_ephemeral_files(staged_files)
+                for item in upload_skills:
+                    command.extend(["--skill", f"{stage_root}/{item.name}"])
             effective_prompt = build_skill_prompt(
-                request.prompt, request.skill, stage_root
+                request.prompt,
+                request.skill,
+                stage_root,
+                mounted_skills=upload_skills,
+                injected_secrets=tuple(sorted(request.skill_secrets)),
             )
             if sandboxed:
                 command[command.index(str(sessions))] = "/sessions"

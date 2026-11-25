@@ -47,7 +47,8 @@ Runner 必须在块内完成运行和清理，不能缓存、复制或序列化�
 
 ## 对话调用与多 Runner 映射（#323）
 
-- `GET /api/v1/agents` 返回 `supports_skills` 布尔字段，标明 Runner 是否声明支持 Skill 显式调用（`pi`、`claude`、`codex` 均返回 `true`）。
-- `POST /api/v1/conversations/ask` 与 `POST /api/v1/conversations/ask-with-attachments` 接受可选结构化字段 `skill_name`。在创建运行轮次前重新校验 Runner 能力、项目权限与归档状态、Skill 启用与类型/项目匹配，以及当前用户在该项目下的个人密钥；不支持的 Runner 返回 422，缺少个人密钥返回 409，无权或已停用返回 404，均不会创建遗留轮次。
+- `GET /api/v1/agents` 返回 `supports_skills` 布尔字段，标明 Runner 是否声明支持 Skill 调用（`pi`、`claude`、`codex` 均返回 `true`）。
+- `POST /api/v1/conversations/ask` 与 `POST /api/v1/conversations/ask-with-attachments` 对支持 Skill 的 Runner 每轮都会默认检查当前项目下已启用且有权限的上传扩展 Skill，临时解包挂载至沙箱只读目录，并注入已配置就绪的个人密钥；若某个默认挂载 Skill 尚未配置齐个人密钥，则仅跳过注入该 Skill 密钥，不阻塞普通对话。
+- 前端输入区选择 `/<skill>` 传入可选结构化字段 `skill_name` 时，仅作为提示 Agent 优先参考对应 Skill 的说明文（不一定强制执行），并在前端显示 `/<skill>` 轮次徽章；若显式指定 `skill_name`，在创建轮次前仍严格校验 Runner 能力（不支持返回 422）、启用与项目权限（无权/停用返回 404）及该 Skill 的个人密钥就绪状态（缺钥返回 409）。
 - 扩展 Skill 文件包仅单轮解包至不会回传持久工作区的临时隔离目录（容器内 `/tmp/sda-skill-*`，本地为 `0o700` 临时目录并在结束时删除），禁止写入 `/workspace` 或 `/sessions`。
-- 扩展 Skill 正文与路径仅在用户消息层按**不可信输入**提示注入，严禁写入系统指令（`--append-system-prompt`、`developer_instructions`）；`PiRunner` 通过 `--skill <stage_root>/<name>` 显式加载，`ClaudeRunner` 通过 `--add-dir <stage_root>` 开放单轮只读目录访问，`CodexRunner` 通过临时路径读取；个人密钥仅通过进程环境变量注入，全部纳入 `request_secrets`、Runner `stderr` 清洗及 Langfuse 遥测脱敏，SQL 确认执行后的结果解读轮不重复注入个人密钥。
+- 扩展 Skill 正文与路径仅在用户消息层按**不可信输入**提示注入，严禁写入系统指令（`--append-system-prompt`、`developer_instructions`）；`PiRunner` 通过多个 `--skill <stage_root>/<name>` 自动发现加载，`ClaudeRunner` 通过 `--add-dir <stage_root>` 开放单轮只读目录访问，`CodexRunner` 通过临时路径按需读取；个人密钥仅通过进程环境变量注入，全部纳入 `request_secrets`、Runner `stderr` 清洗及 Langfuse 遥测脱敏，SQL 确认执行后的结果解读轮不重复注入个人密钥。

@@ -666,3 +666,217 @@ def test_confirm_query_does_not_reinject_skill_or_secrets(client, monkeypatch):
     assert len(seen_requests) == 2
     assert seen_requests[1].skill is None
     assert seen_secrets_during_run[1] == {}
+
+
+@pytest.mark.parametrize("agent_id", ["pi", "claude", "codex"])
+def test_enabled_project_skills_mount_by_default_without_slash_hint(
+    client, tmp_path, monkeypatch, agent_id
+):
+    c, token = client
+    headers = {"Authorization": f"Bearer {token}"}
+    provider_id = _setup_provider(c, token)
+    secret_value = "ambient-jira-secret-456"
+
+    _upload_and_enable(
+        c,
+        token,
+        {
+            "alpha-helper/SKILL.md": (
+                "---\n"
+                "name: alpha-helper\n"
+                "description: Ready ambient helper\n"
+                "secrets: [JIRA_TOKEN]\n"
+                "---\nALPHA BODY MARKER\n"
+            ),
+            "alpha-helper/scripts/run.py": "print('alpha')\n",
+        },
+        name="alpha-helper",
+    )
+    assert (
+        c.put(
+            "/api/v1/skills/alpha-helper/secrets/JIRA_TOKEN?project=default",
+            headers=headers,
+            json={"value": secret_value},
+        ).status_code
+        == 204
+    )
+
+    # Another enabled skill whose secret is NOT configured must still mount files
+    # without blocking normal chat turns with 409.
+    _upload_and_enable(
+        c,
+        token,
+        {
+            "beta-unconfigured/SKILL.md": (
+                "---\n"
+                "name: beta-unconfigured\n"
+                "description: Ambient skill without secret yet\n"
+                "secrets: [MISSING_KEY]\n"
+                "---\nBETA BODY MARKER\n"
+            ),
+            "beta-unconfigured/scripts/tool.py": "print('beta')\n",
+        },
+        name="beta-unconfigured",
+    )
+
+    # Disabled skill must NOT be mounted.
+    assert (
+        c.post(
+            "/api/v1/skills",
+            headers=headers,
+            content=archive(
+                {
+                    "gamma-disabled/SKILL.md": (
+                        "---\n"
+                        "name: gamma-disabled\n"
+                        "description: Disabled skill\n"
+                        "---\nGAMMA BODY\n"
+                    )
+                }
+            ),
+        ).status_code
+        == 201
+    )
+
+    capture_dir = tmp_path / f"cap-ambient-{agent_id}"
+    script = _mock_script(tmp_path, agent_id, capture_dir)
+    if agent_id == "pi":
+        runner = PiRunner(binary=str(script))
+    elif agent_id == "claude":
+        runner = ClaudeRunner(binary=str(script))
+    else:
+        runner = CodexRunner(binary=str(script))
+    monkeypatch.setitem(agent_runner.RUNNERS, agent_id, runner)
+
+    response = c.post(
+        "/api/v1/conversations/ask",
+        headers=headers,
+        json={
+            "question": "Continue checking the query without re-selecting /skill",
+            "agent": agent_id,
+            "provider_id": provider_id,
+            "model": "model-a",
+            "project": "default",
+        },
+    )
+    assert response.status_code == 200
+    assert secret_value not in response.text
+    assert "[redacted]" in response.text
+
+    record = json.loads((capture_dir / "record.json").read_text(encoding="utf-8"))
+    assert record["env"]["JIRA_TOKEN"] == secret_value
+    assert "alpha-helper/SKILL.md" in record["prompt"]
+    assert "beta-unconfigured/SKILL.md" in record["prompt"]
+    assert "gamma-disabled" not in record["prompt"]
+    assert "JIRA_TOKEN" in record["prompt"]
+    assert "MISSING_KEY" not in record["prompt"]
+    assert secret_value not in record["prompt"]
+    if agent_id == "pi":
+        skill_args = [
+            record["argv"][i + 1]
+            for i, arg in enumerate(record["argv"])
+            if arg == "--skill"
+        ]
+        assert any(arg.endswith("/alpha-helper") for arg in skill_args)
+        assert any(arg.endswith("/beta-unconfigured") for arg in skill_args)
+        assert not any("gamma-disabled" in arg for arg in skill_args)
+    elif agent_id == "claude":
+        assert "BETA BODY MARKER" in record["staged_text"] or (
+            "--add-dir" in record["argv"]
+        )
+
+    conv_id = next(
+        line.split("data: ", 1)[1]
+        for line in response.text.splitlines()
+        if line.startswith("data: ") and '"conversation_id"' in line
+    )
+    cid = json.loads(conv_id)["conversation_id"]
+    detail = c.get(f"/api/v1/conversations/{cid}", headers=headers).json()
+    assert detail["turns"][0]["skill_name"] is None
+
+
+def test_multiturn_followup_without_slash_keeps_mounted_skills(
+    client, tmp_path, monkeypatch
+):
+    c, token = client
+    headers = {"Authorization": f"Bearer {token}"}
+    provider_id = _setup_provider(c, token)
+    _upload_and_enable(
+        c,
+        token,
+        {
+            "dtb-demo/SKILL.md": (
+                "---\n"
+                "name: dtb-demo\n"
+                "description: DTB query skill\n"
+                "secrets: [GATEWAY_KEY]\n"
+                "---\nDTB BODY\n"
+            ),
+            "dtb-demo/scripts/run.py": "print('run')\n",
+        },
+        name="dtb-demo",
+    )
+    assert (
+        c.put(
+            "/api/v1/skills/dtb-demo/secrets/GATEWAY_KEY?project=default",
+            headers=headers,
+            json={"value": "gw-secret-val"},
+        ).status_code
+        == 204
+    )
+
+    seen: list[AgentTurnRequest] = []
+
+    class CaptureTurnRunner:
+        agent_id = "pi"
+        effort_levels = ()
+        supports_skills = True
+
+        def available(self):
+            return True
+
+        async def run(self, request):
+            from semantica_dataagent.agent_types import AgentEvent
+
+            seen.append(request)
+            yield AgentEvent(DONE, {"text": "ok", "sql": [], "citations": []})
+
+    monkeypatch.setitem(agent_runner.RUNNERS, "pi", CaptureTurnRunner())
+
+    first = c.post(
+        "/api/v1/conversations/ask",
+        headers=headers,
+        json={
+            "question": "Run with hint",
+            "agent": "pi",
+            "provider_id": provider_id,
+            "model": "model-a",
+            "project": "default",
+            "skill_name": "dtb-demo",
+        },
+    )
+    assert first.status_code == 200
+    cid = next(
+        json.loads(line.split("data: ", 1)[1])["conversation_id"]
+        for line in first.text.splitlines()
+        if line.startswith("data: ") and '"conversation_id"' in line
+    )
+
+    followup = c.post(
+        "/api/v1/conversations/ask",
+        headers=headers,
+        json={
+            "conversation_id": cid,
+            "question": "Try again now",
+            "agent": "pi",
+            "provider_id": provider_id,
+            "model": "model-a",
+            "project": "default",
+        },
+    )
+    assert followup.status_code == 200
+    assert len(seen) == 2
+    assert seen[0].skill is not None and seen[0].skill.name == "dtb-demo"
+    assert seen[1].skill is None
+    assert [s.name for s in seen[1].mounted_skills] == ["dtb-demo"]
+    assert "dtb-demo/scripts/run.py" in dict(seen[1].mounted_skills[0].files)

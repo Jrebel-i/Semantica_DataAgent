@@ -6,6 +6,7 @@ installation. Callers must revalidate project access before using a package.
 
 import io
 import json
+import logging
 import re
 import stat
 import struct
@@ -21,6 +22,8 @@ from .db import CatalogSkill, CatalogSkillProject, Token, digest, sessions
 from .project_api import active_skill_project, require_skill_project
 from .skill import SKILLS, read_skill, skill_description, skill_name
 from .source_directory import relative, unpack_archive
+
+logger = logging.getLogger(__name__)
 
 NAME = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*\Z")
 SECRET = re.compile(r"[A-Z][A-Z0-9_]{0,63}\Z")
@@ -475,6 +478,7 @@ class SkillSnapshot:
     secrets: tuple[str, ...]
     files: tuple[tuple[str, bytes], ...]
     builtin_content: str | None
+    description: str = ""
 
 
 def resolve_skill(db, requester, project_id, name):
@@ -551,7 +555,14 @@ def _authorized_record(
 def _materialize_skill(name, record):
     source, generation, metadata_json, archive = record
     if source == "builtin":
-        return SkillSnapshot(name, "builtin", (), (), read_skill(generation))
+        return SkillSnapshot(
+            name,
+            "builtin",
+            (),
+            (),
+            read_skill(generation),
+            skill_description(generation),
+        )
     try:
         metadata = json.loads(metadata_json)
         package = archive
@@ -562,7 +573,107 @@ def _materialize_skill(name, record):
         raise HTTPException(409, "Skill package unavailable") from exc
     if metadata["name"] != name:
         raise HTTPException(404, "Skill not available")
-    return SkillSnapshot(name, "upload", tuple(metadata["secrets"]), files, None)
+    return SkillSnapshot(
+        name,
+        "upload",
+        tuple(metadata["secrets"]),
+        files,
+        None,
+        str(metadata.get("description") or ""),
+    )
+
+
+def _project_upload_skills_query(
+    requester, project_id, project_type, *, contents: bool
+):
+    types = func.json_each(CatalogSkill.metadata_json, "$.project_types").table_valued(
+        "value"
+    )
+    type_allowed = exists(
+        select(1).select_from(types).where(types.c.value == project_type)
+    )
+    project_allowed = exists().where(
+        CatalogSkillProject.skill_name == CatalogSkill.name,
+        CatalogSkillProject.project_id == project_id,
+    )
+    columns = (
+        (
+            CatalogSkill.name,
+            CatalogSkill.generation,
+            CatalogSkill.metadata_json,
+            CatalogSkill.archive,
+        )
+        if contents
+        else (CatalogSkill.name, CatalogSkill.generation)
+    )
+    return (
+        select(*columns)
+        .where(
+            CatalogSkill.enabled.is_(True),
+            active_skill_project(requester, project_id, project_type),
+            type_allowed,
+            or_(
+                func.json_array_length(
+                    func.json_extract(CatalogSkill.metadata_json, "$.projects")
+                )
+                == 0,
+                project_allowed,
+            ),
+        )
+        .order_by(CatalogSkill.name)
+    )
+
+
+def prepare_project_skills(requester, project_id):
+    """Load and validate all enabled upload Skills available to the caller in one project."""
+    records: list[tuple[str, int, str, bytes]] = []
+    with sessions()() as db:
+        require_personal_identity(db, requester)
+        project_type = require_skill_project(db, requester, project_id)
+        for row in db.execute(
+            _project_upload_skills_query(
+                requester, project_id, project_type, contents=True
+            )
+        ):
+            records.append(
+                (row.name, row.generation, row.metadata_json, bytes(row.archive))
+            )
+    snapshots: list[SkillSnapshot] = []
+    versions: list[tuple[str, int]] = []
+    for skill_id, generation, metadata_json, archive in records:
+        try:
+            snap = _materialize_skill(
+                skill_id, ("upload", generation, metadata_json, archive)
+            )
+        except HTTPException:
+            logger.warning("Skipping invalid stored skill package: %s", skill_id)
+            continue
+        snapshots.append(snap)
+        versions.append((skill_id, generation))
+    return (project_type, tuple(versions)), tuple(snapshots)
+
+
+def require_prepared_project_skills(db, requester, project_id, expected_state):
+    """Recheck authorized upload Skills under write lock and return still-valid names."""
+    require_personal_identity(db, requester)
+    expected_type, expected_versions = expected_state
+    project_type = require_skill_project(db, requester, project_id)
+    if project_type != expected_type:
+        return set()
+    expected_map = dict(expected_versions)
+    current = {
+        row.name: row.generation
+        for row in db.execute(
+            _project_upload_skills_query(
+                requester, project_id, project_type, contents=False
+            )
+        )
+    }
+    return {
+        skill_id
+        for skill_id, gen in expected_map.items()
+        if current.get(skill_id) == gen
+    }
 
 
 def prepare_skill(requester, project_id, name):

@@ -51,7 +51,7 @@ from .project_api import accessible_projects, resolve_project_scope
 from .provider_api import EFFORT_LEVELS, EffortLevel, provider_config
 from .query_api import query_requester
 from .skill_catalog import NAME as SKILL_NAME_RE
-from .skill_secrets import skill_run_secrets
+from .skill_secrets import project_skill_run_secrets
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -759,11 +759,12 @@ async def _start_turn(
 
     secret_stack = contextlib.ExitStack()
     skill_snapshot = None
+    mounted_skills: tuple = ()
     skill_secrets: dict[str, str] = {}
     try:
-        if body.skill_name is not None:
-            skill_snapshot, skill_secrets = secret_stack.enter_context(
-                skill_run_secrets(requester, project_id, body.skill_name)
+        if bool(getattr(expected_runner, "supports_skills", False)):
+            skill_snapshot, mounted_skills, skill_secrets = secret_stack.enter_context(
+                project_skill_run_secrets(requester, project_id, body.skill_name)
             )
         with sessions().begin() as db:
             db.execute(text("BEGIN IMMEDIATE"))
@@ -874,6 +875,7 @@ async def _start_turn(
             project_type=project_type,
             attachments=tuple(attachments),
             skill=skill_snapshot,
+            mounted_skills=mounted_skills,
             skill_secrets=skill_secrets,
         )
         return StreamingResponse(
