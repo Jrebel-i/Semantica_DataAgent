@@ -4,6 +4,78 @@
  */
 
 export interface paths {
+    "/api/v1/agent-profiles": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Agent Profiles */
+        get: operations["list_agent_profiles_api_v1_agent_profiles_get"];
+        put?: never;
+        /** Create Agent Profile */
+        post: operations["create_agent_profile_api_v1_agent_profiles_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/agent-profiles/{profile_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Agent Profile */
+        get: operations["get_agent_profile_api_v1_agent_profiles__profile_id__get"];
+        /** Update Agent Profile */
+        put: operations["update_agent_profile_api_v1_agent_profiles__profile_id__put"];
+        post?: never;
+        /** Delete Agent Profile */
+        delete: operations["delete_agent_profile_api_v1_agent_profiles__profile_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/agent-runners": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Agent Runners */
+        get: operations["list_agent_runners_api_v1_agent_runners_get"];
+        put?: never;
+        /** Create Agent Runner */
+        post: operations["create_agent_runner_api_v1_agent_runners_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/agent-runners/{runner_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Update Agent Runner */
+        put: operations["update_agent_runner_api_v1_agent_runners__runner_id__put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/agents": {
         parameters: {
             query?: never;
@@ -13,6 +85,23 @@ export interface paths {
         };
         /** Agents */
         get: operations["agents_api_v1_agents_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/assistant-catalog": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Assistant Catalog */
+        get: operations["get_assistant_catalog_api_v1_assistant_catalog_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -540,6 +629,25 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/me/agent-defaults/{agent_profile_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Personal Agent Default */
+        get: operations["get_personal_agent_default_api_v1_me_agent_defaults__agent_profile_id__get"];
+        /** Put Personal Agent Default */
+        put: operations["put_personal_agent_default_api_v1_me_agent_defaults__agent_profile_id__put"];
+        post?: never;
+        /** Delete Personal Agent Default */
+        delete: operations["delete_personal_agent_default_api_v1_me_agent_defaults__agent_profile_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/me/dtb-token": {
         parameters: {
             query?: never;
@@ -1060,6 +1168,23 @@ export interface paths {
         put?: never;
         /** Probe Provider */
         post: operations["probe_provider_api_v1_providers__provider_id__probe_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/providers/{provider_id}/refresh-models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Refresh Provider Models */
+        post: operations["refresh_provider_models_api_v1_providers__provider_id__refresh_models_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1652,6 +1777,174 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** AgentModelPair */
+        AgentModelPair: {
+            /** Model */
+            model: string;
+            /** Provider Id */
+            provider_id: string;
+        };
+        /** AgentProfileCreate */
+        AgentProfileCreate: {
+            /** Default Model */
+            default_model?: string | null;
+            /** Default Provider Id */
+            default_provider_id?: string | null;
+            /**
+             * Enabled
+             * @default true
+             */
+            enabled: boolean;
+            /**
+             * Is System Default
+             * @default false
+             */
+            is_system_default: boolean;
+            /** Name */
+            name: string;
+            /** Provider Models */
+            provider_models?: {
+                [key: string]: string[];
+            };
+            /** Runner Id */
+            runner_id: string;
+        };
+        /** AgentProfileUpdate */
+        AgentProfileUpdate: {
+            /** Default Model */
+            default_model?: string | null;
+            /** Default Provider Id */
+            default_provider_id?: string | null;
+            /** Enabled */
+            enabled?: boolean | null;
+            /** Is System Default */
+            is_system_default?: boolean | null;
+            /** Name */
+            name?: string | null;
+            /** Provider Models */
+            provider_models?: {
+                [key: string]: string[];
+            } | null;
+            /** Runner Id */
+            runner_id?: string | null;
+            /** Version */
+            version: number;
+        };
+        /** AgentProfileView */
+        AgentProfileView: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Default Model */
+            default_model: string | null;
+            /** Default Provider Id */
+            default_provider_id: string | null;
+            /** Enabled */
+            enabled: boolean;
+            /** Id */
+            id: string;
+            /** Is System Default */
+            is_system_default: boolean;
+            /** Missing Models */
+            missing_models: {
+                [key: string]: string[];
+            };
+            /** Name */
+            name: string;
+            /** Pending Verification */
+            pending_verification: {
+                [key: string]: string[];
+            };
+            /** Provider Models */
+            provider_models: {
+                [key: string]: string[];
+            };
+            /** Runner Available */
+            runner_available: boolean;
+            /** Runner Id */
+            runner_id: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /** Version */
+            version: number;
+        };
+        /** AgentRunnerCreate */
+        AgentRunnerCreate: {
+            /** Adapter Id */
+            adapter_id: string;
+            /** Display Name */
+            display_name: string;
+            /** Executable */
+            executable: string;
+            /** Id */
+            id: string;
+            /** Npm Package */
+            npm_package: string;
+            /** Package Version */
+            package_version: string;
+            /** Status Override */
+            status_override?: ("pending_build" | "building" | "image_deployed" | "failed") | null;
+        };
+        /** AgentRunnerUpdate */
+        AgentRunnerUpdate: {
+            /** Adapter Id */
+            adapter_id?: string | null;
+            /** Display Name */
+            display_name?: string | null;
+            /** Executable */
+            executable?: string | null;
+            /** Npm Package */
+            npm_package?: string | null;
+            /** Package Version */
+            package_version?: string | null;
+            /** Status Override */
+            status_override?: ("pending_build" | "building" | "image_deployed" | "failed") | null;
+        };
+        /** AgentRunnerView */
+        AgentRunnerView: {
+            /** Adapter Id */
+            adapter_id: string;
+            /** Adapter Registered */
+            adapter_registered: boolean;
+            /** Available */
+            available: boolean;
+            /** Builtin */
+            builtin: boolean;
+            /** Cli Deployed */
+            cli_deployed: boolean;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Display Name */
+            display_name: string;
+            /** Executable */
+            executable: string;
+            /** Id */
+            id: string;
+            /** Npm Package */
+            npm_package: string;
+            /** Package Version */
+            package_version: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "available" | "pending_build" | "building" | "image_deployed" | "adapter_missing" | "failed";
+            /** Status Override */
+            status_override: string | null;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
         /** AgentView */
         AgentView: {
             /** Available */
@@ -1697,6 +1990,8 @@ export interface components {
         AskRequest: {
             /** Agent */
             agent?: string | null;
+            /** Agent Profile Id */
+            agent_profile_id?: string | null;
             /** Conversation Id */
             conversation_id?: string | null;
             /** Effort */
@@ -1711,6 +2006,17 @@ export interface components {
             question: string;
             /** Skill Name */
             skill_name?: string | null;
+        };
+        /** AssistantCatalogView */
+        AssistantCatalogView: {
+            /** Agents */
+            agents: components["schemas"]["PublishedAgentView"][];
+            /** Personal Defaults */
+            personal_defaults: {
+                [key: string]: components["schemas"]["AgentModelPair"];
+            };
+            /** System Default Profile Id */
+            system_default_profile_id: string | null;
         };
         /** AutoBuildUpdate */
         AutoBuildUpdate: {
@@ -1767,6 +2073,8 @@ export interface components {
         Body_ask_with_attachments_api_v1_conversations_ask_with_attachments_post: {
             /** Agent */
             agent?: string | null;
+            /** Agent Profile Id */
+            agent_profile_id?: string | null;
             /** Attachments */
             attachments?: string[] | null;
             /** Conversation Id */
@@ -1869,6 +2177,8 @@ export interface components {
         ConversationDetail: {
             /** Agent */
             agent: string;
+            /** Agent Profile Id */
+            agent_profile_id?: string | null;
             /** Archived */
             archived: boolean;
             /**
@@ -1915,6 +2225,8 @@ export interface components {
         ConversationView: {
             /** Agent */
             agent: string;
+            /** Agent Profile Id */
+            agent_profile_id?: string | null;
             /** Archived */
             archived: boolean;
             /**
@@ -3390,7 +3702,7 @@ export interface components {
                 [key: string]: components["schemas"]["ModelCapability"];
             } | null;
             /** Models */
-            models: string[];
+            models?: string[];
             /** Name */
             name: string;
             /**
@@ -3438,6 +3750,14 @@ export interface components {
         ProviderView: {
             /** Base Url */
             base_url: string;
+            /** Catalog Error */
+            catalog_error?: string | null;
+            /** Catalog Fetched At */
+            catalog_fetched_at?: string | null;
+            /** Catalog Models */
+            catalog_models?: string[];
+            /** Catalog Status */
+            catalog_status?: string | null;
             /**
              * Created At
              * Format: date-time
@@ -3462,6 +3782,45 @@ export interface components {
              * Format: date-time
              */
             updated_at: string;
+        };
+        /** PublishedAgentView */
+        PublishedAgentView: {
+            /** Default Model */
+            default_model: string | null;
+            /** Default Provider Id */
+            default_provider_id: string | null;
+            /** Effort Levels */
+            effort_levels?: ("low" | "medium" | "high" | "extra" | "max")[];
+            /** Id */
+            id: string;
+            /** Is System Default */
+            is_system_default: boolean;
+            /** Name */
+            name: string;
+            /** Providers */
+            providers: components["schemas"]["PublishedProviderView"][];
+            /** Runner Id */
+            runner_id: string;
+            /**
+             * Supports Skills
+             * @default false
+             */
+            supports_skills: boolean;
+        };
+        /** PublishedProviderView */
+        PublishedProviderView: {
+            /** Id */
+            id: string;
+            /** Model Capabilities */
+            model_capabilities: {
+                [key: string]: components["schemas"]["ModelCapability"];
+            };
+            /** Models */
+            models: string[];
+            /** Name */
+            name: string;
+            /** Type */
+            type: string;
         };
         /** PullInstanceCreate */
         PullInstanceCreate: {
@@ -4109,6 +4468,20 @@ export interface components {
             /** Status */
             status: string;
         };
+        /** UserAgentDefaultView */
+        UserAgentDefaultView: {
+            /** Agent Profile Id */
+            agent_profile_id: string;
+            /** Model */
+            model: string;
+            /** Provider Id */
+            provider_id: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
         /** ValidationError */
         ValidationError: {
             /** Context */
@@ -4131,6 +4504,242 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    list_agent_profiles_api_v1_agent_profiles_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentProfileView"][];
+                };
+            };
+        };
+    };
+    create_agent_profile_api_v1_agent_profiles_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AgentProfileCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentProfileView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_agent_profile_api_v1_agent_profiles__profile_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                profile_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentProfileView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_agent_profile_api_v1_agent_profiles__profile_id__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                profile_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AgentProfileUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentProfileView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_agent_profile_api_v1_agent_profiles__profile_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                profile_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_agent_runners_api_v1_agent_runners_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentRunnerView"][];
+                };
+            };
+        };
+    };
+    create_agent_runner_api_v1_agent_runners_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AgentRunnerCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentRunnerView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_agent_runner_api_v1_agent_runners__runner_id__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                runner_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AgentRunnerUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentRunnerView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     agents_api_v1_agents_get: {
         parameters: {
             query?: never;
@@ -4147,6 +4756,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AgentView"][];
+                };
+            };
+        };
+    };
+    get_assistant_catalog_api_v1_assistant_catalog_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AssistantCatalogView"];
                 };
             };
         };
@@ -5400,6 +6029,101 @@ export interface operations {
                     "application/json": {
                         [key: string]: string;
                     };
+                };
+            };
+        };
+    };
+    get_personal_agent_default_api_v1_me_agent_defaults__agent_profile_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_profile_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserAgentDefaultView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    put_personal_agent_default_api_v1_me_agent_defaults__agent_profile_id__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_profile_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AgentModelPair"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserAgentDefaultView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_personal_agent_default_api_v1_me_agent_defaults__agent_profile_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_profile_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -6886,6 +7610,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ProviderProbeView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    refresh_provider_models_api_v1_providers__provider_id__refresh_models_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                provider_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProviderView"];
                 };
             };
             /** @description Validation Error */

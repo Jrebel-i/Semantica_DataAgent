@@ -990,3 +990,197 @@ test("缺少个人密钥时提示并阻止发送，融合式输入框去除内�
   expect(composerBoxCss).toContain("border-radius: 22px;");
   expect(composerBoxCss).toContain("background: var(--composer-bg);");
 });
+
+test("从 assistant-catalog 加载已发布命名 Agent、按个人默认→公司默认→空缺提示预选并支持保存与恢复默认", async () => {
+  const catalog = {
+    system_default_profile_id: "claude-daily",
+    agents: [
+      {
+        id: "claude-daily",
+        name: "Claude · 日常助手",
+        runner_id: "claude",
+        is_system_default: true,
+        default_provider_id: "prov-1",
+        default_model: "glm-5.3-flash#claude",
+        effort_levels: ["low", "medium", "high"],
+        supports_skills: true,
+        providers: [
+          {
+            id: "prov-1",
+            name: "公司网关",
+            type: "anthropic-messages",
+            models: ["glm-5.3-flash#claude", "qwen3.8-flash#claude"],
+            model_capabilities: {
+              "glm-5.3-flash#claude": {
+                description: "",
+                vision: false,
+                effort_levels: ["low", "medium", "high"],
+              },
+              "qwen3.8-flash#claude": {
+                description: "",
+                vision: false,
+                effort_levels: ["low", "medium"],
+              },
+            },
+          },
+        ],
+      },
+      {
+        id: "claude-longdoc",
+        name: "Claude · 长文档",
+        runner_id: "claude",
+        is_system_default: false,
+        default_provider_id: "prov-1",
+        default_model: "qwen3.8-flash#claude",
+        effort_levels: ["medium", "high"],
+        supports_skills: true,
+        providers: [
+          {
+            id: "prov-1",
+            name: "公司网关",
+            type: "anthropic-messages",
+            models: ["qwen3.8-flash#claude"],
+            model_capabilities: {},
+          },
+        ],
+      },
+      {
+        id: "codex-no-default",
+        name: "Codex · 无默认",
+        runner_id: "codex",
+        is_system_default: false,
+        default_provider_id: null,
+        default_model: null,
+        effort_levels: [],
+        supports_skills: false,
+        providers: [
+          {
+            id: "prov-2",
+            name: "代码网关",
+            type: "openai-responses",
+            models: ["gpt-6.2-sol#codex"],
+            model_capabilities: {},
+          },
+        ],
+      },
+    ],
+    personal_defaults: {
+      "claude-daily": {
+        provider_id: "prov-1",
+        model: "qwen3.8-flash#claude",
+      },
+    },
+  };
+
+  const calls: { url: string; method?: string; body?: unknown }[] = [];
+  const fetcher = vi.fn(
+    async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      calls.push({
+        url,
+        method: init?.method,
+        body: init?.body ? JSON.parse(String(init.body)) : undefined,
+      });
+      if (url === "/api/v1/assistant-catalog") return json(catalog);
+      if (url === "/api/v1/conversations") return json([]);
+      if (url === "/api/v1/conversations?archived=true") return json([]);
+      if (url === "/api/v1/projects") return json([]);
+      if (
+        url === "/api/v1/me/agent-defaults/claude-longdoc" &&
+        init?.method === "PUT"
+      ) {
+        return json({
+          agent_profile_id: "claude-longdoc",
+          provider_id: "prov-1",
+          model: "qwen3.8-flash#claude",
+          updated_at: "2026-11-25T00:00:00Z",
+        });
+      }
+      if (
+        url === "/api/v1/me/agent-defaults/claude-daily" &&
+        init?.method === "DELETE"
+      ) {
+        return new Response(null, { status: 204 });
+      }
+      if (url === "/api/v1/conversations/ask" && init?.method === "POST") {
+        return new Response(sse, {
+          headers: { "Content-Type": "text/event-stream" },
+        });
+      }
+      return new Response("", { status: 404 });
+    },
+  );
+  vi.stubGlobal("fetch", fetcher);
+
+  render(<ChatPage token="token" role="user" messages={getMessages("zh")} />);
+
+  // System default profile is preselected, and personal default overrides company default
+  await screen.findByRole("option", { name: "Claude · 日常助手" });
+  expect(screen.getByRole("option", { name: "Claude · 长文档" })).toBeTruthy();
+  expect((screen.getByLabelText("Agent") as HTMLSelectElement).value).toBe(
+    "claude-daily",
+  );
+  expect(composerSelectText("模型")).toBe("qwen3.8-flash#claude");
+  expect(screen.getByText("个人默认")).toBeTruthy();
+
+  // Reset personal default -> reverts to company default glm-5.3-flash#claude
+  fireEvent.click(screen.getByRole("button", { name: "恢复公司默认" }));
+  await waitFor(() =>
+    expect(composerSelectText("模型")).toBe("glm-5.3-flash#claude"),
+  );
+  expect(
+    calls.some(
+      (c) =>
+        c.url === "/api/v1/me/agent-defaults/claude-daily" &&
+        c.method === "DELETE",
+    ),
+  ).toBe(true);
+
+  // Switch to another profile sharing the same runner -> preselects company default & can save personal default
+  fireEvent.change(screen.getByLabelText("Agent"), {
+    target: { value: "claude-longdoc" },
+  });
+  expect(composerSelectText("模型")).toBe("qwen3.8-flash#claude");
+  fireEvent.click(screen.getByRole("button", { name: "设为个人默认" }));
+  await waitFor(() =>
+    expect(
+      calls.some(
+        (c) =>
+          c.url === "/api/v1/me/agent-defaults/claude-longdoc" &&
+          c.method === "PUT" &&
+          JSON.stringify(c.body) ===
+            JSON.stringify({
+              provider_id: "prov-1",
+              model: "qwen3.8-flash#claude",
+            }),
+      ),
+    ).toBe(true),
+  );
+
+  // Switch to profile with no personal or company default -> prompts explicitly instead of silently picking
+  fireEvent.change(screen.getByLabelText("Agent"), {
+    target: { value: "codex-no-default" },
+  });
+  expect(await screen.findByText(/当前 Agent 暂无有效默认模型/)).toBeTruthy();
+
+  // Sending with a manually chosen model includes agent_profile_id + runner_id
+  await chooseComposerOption("模型", /^gpt-6\.2-sol#codex/);
+  fireEvent.change(screen.getByLabelText("问题"), {
+    target: { value: "查订单" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: /提\s*问/ }));
+  await waitFor(() =>
+    expect(
+      calls.some(
+        (c) => c.url === "/api/v1/conversations/ask" && c.method === "POST",
+      ),
+    ).toBe(true),
+  );
+  const askCall = calls.find((c) => c.url === "/api/v1/conversations/ask");
+  expect(askCall?.body).toMatchObject({
+    agent_profile_id: "codex-no-default",
+    agent: "codex",
+    provider_id: "prov-2",
+    model: "gpt-6.2-sol#codex",
+  });
+});

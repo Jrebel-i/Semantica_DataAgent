@@ -5047,6 +5047,8 @@ button.composer-project-chip:not(.ant-btn):disabled {
     padding: 10px 12px;
   }
   .composer-slash-popover {
+    left: 12px;
+    right: 12px;
     max-height: 200px;
   }
   .skill-meta-grid {
@@ -5055,4 +5057,111 @@ button.composer-project-chip:not(.ant-btn):disabled {
   .diff-table-split {
     min-width: 680px;
   }
+}
+
+/* Agent & Model governance pages (#331) */
+.model-id-wrap {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.model-id-cell {
+  display: flex;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.model-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+.model-toolbar-search {
+  flex: 1 1 220px;
+  min-width: 180px;
+}
+.model-filter-tabs {
+  display: inline-flex;
+  gap: 3px;
+  padding: 3px;
+  border-radius: 8px;
+  background: var(--sub);
+  border: 1px solid var(--line);
+}
+button.model-filter-tab:not(.ant-btn) {
+  min-height: 28px;
+  padding: 4px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+}
+button.model-filter-tab:not(.ant-btn)[aria-pressed="true"] {
+  background: var(--panel);
+  color: var(--accent);
+  font-weight: 600;
+}
+.model-bulk-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.model-catalog-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+}
+.model-catalog-table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+  font-size: 13px;
+}
+.model-catalog-table th,
+.model-catalog-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line-soft);
+  vertical-align: middle;
+}
+.model-catalog-table th {
+  background: var(--sub);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+.model-catalog-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+.model-catalog-table tbody tr.selected {
+  background: var(--accent-bg);
+}
+.model-copy-btn.ant-btn {
+  padding-inline: 6px;
+  height: 22px;
+  font-size: 11.5px;
+}
+.composer-default-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--line-soft);
+  font-size: 12px;
+  color: var(--muted);
+}
+.composer-default-btn.ant-btn {
+  height: 24px;
+  padding: 0 8px;
+  font-size: 12px;
+}
+.chat-resumption-banner {
+  margin-bottom: 12px;
 }

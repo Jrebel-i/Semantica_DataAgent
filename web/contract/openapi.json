@@ -1,6 +1,569 @@
 {
   "components": {
     "schemas": {
+      "AgentModelPair": {
+        "properties": {
+          "model": {
+            "maxLength": 500,
+            "minLength": 1,
+            "pattern": "\\S",
+            "title": "Model",
+            "type": "string"
+          },
+          "provider_id": {
+            "maxLength": 200,
+            "minLength": 1,
+            "pattern": "\\S",
+            "title": "Provider Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "provider_id",
+          "model"
+        ],
+        "title": "AgentModelPair",
+        "type": "object"
+      },
+      "AgentProfileCreate": {
+        "properties": {
+          "default_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Model"
+          },
+          "default_provider_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Provider Id"
+          },
+          "enabled": {
+            "default": true,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "is_system_default": {
+            "default": false,
+            "title": "Is System Default",
+            "type": "boolean"
+          },
+          "name": {
+            "maxLength": 200,
+            "minLength": 1,
+            "pattern": "\\S",
+            "title": "Name",
+            "type": "string"
+          },
+          "provider_models": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "title": "Provider Models",
+            "type": "object"
+          },
+          "runner_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "\\S",
+            "title": "Runner Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "runner_id"
+        ],
+        "title": "AgentProfileCreate",
+        "type": "object"
+      },
+      "AgentProfileUpdate": {
+        "properties": {
+          "default_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Model"
+          },
+          "default_provider_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Provider Id"
+          },
+          "enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enabled"
+          },
+          "is_system_default": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is System Default"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "minLength": 1,
+                "pattern": "\\S",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "provider_models": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider Models"
+          },
+          "runner_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Runner Id"
+          },
+          "version": {
+            "minimum": 1.0,
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version"
+        ],
+        "title": "AgentProfileUpdate",
+        "type": "object"
+      },
+      "AgentProfileView": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "default_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Model"
+          },
+          "default_provider_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Provider Id"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "is_system_default": {
+            "title": "Is System Default",
+            "type": "boolean"
+          },
+          "missing_models": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "title": "Missing Models",
+            "type": "object"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "pending_verification": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "title": "Pending Verification",
+            "type": "object"
+          },
+          "provider_models": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "title": "Provider Models",
+            "type": "object"
+          },
+          "runner_available": {
+            "title": "Runner Available",
+            "type": "boolean"
+          },
+          "runner_id": {
+            "title": "Runner Id",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "runner_id",
+          "enabled",
+          "is_system_default",
+          "default_provider_id",
+          "default_model",
+          "provider_models",
+          "missing_models",
+          "pending_verification",
+          "runner_available",
+          "version",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "AgentProfileView",
+        "type": "object"
+      },
+      "AgentRunnerCreate": {
+        "properties": {
+          "adapter_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "title": "Adapter Id",
+            "type": "string"
+          },
+          "display_name": {
+            "maxLength": 200,
+            "minLength": 1,
+            "pattern": "\\S",
+            "title": "Display Name",
+            "type": "string"
+          },
+          "executable": {
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
+            "title": "Executable",
+            "type": "string"
+          },
+          "id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+            "title": "Id",
+            "type": "string"
+          },
+          "npm_package": {
+            "maxLength": 200,
+            "minLength": 1,
+            "pattern": "^(?:@[a-z0-9-~][a-z0-9-._~]*/)?[a-z0-9-~][a-z0-9-._~]*$",
+            "title": "Npm Package",
+            "type": "string"
+          },
+          "package_version": {
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^\\d+\\.\\d+\\.\\d+(?:-[A-Za-z0-9.-]+)?$",
+            "title": "Package Version",
+            "type": "string"
+          },
+          "status_override": {
+            "anyOf": [
+              {
+                "enum": [
+                  "pending_build",
+                  "building",
+                  "image_deployed",
+                  "failed"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status Override"
+          }
+        },
+        "required": [
+          "id",
+          "display_name",
+          "npm_package",
+          "package_version",
+          "executable",
+          "adapter_id"
+        ],
+        "title": "AgentRunnerCreate",
+        "type": "object"
+      },
+      "AgentRunnerUpdate": {
+        "properties": {
+          "adapter_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "minLength": 1,
+                "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Adapter Id"
+          },
+          "display_name": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "minLength": 1,
+                "pattern": "\\S",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
+          },
+          "executable": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Executable"
+          },
+          "npm_package": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "minLength": 1,
+                "pattern": "^(?:@[a-z0-9-~][a-z0-9-._~]*/)?[a-z0-9-~][a-z0-9-._~]*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Npm Package"
+          },
+          "package_version": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "minLength": 1,
+                "pattern": "^\\d+\\.\\d+\\.\\d+(?:-[A-Za-z0-9.-]+)?$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Package Version"
+          },
+          "status_override": {
+            "anyOf": [
+              {
+                "enum": [
+                  "pending_build",
+                  "building",
+                  "image_deployed",
+                  "failed"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status Override"
+          }
+        },
+        "title": "AgentRunnerUpdate",
+        "type": "object"
+      },
+      "AgentRunnerView": {
+        "properties": {
+          "adapter_id": {
+            "title": "Adapter Id",
+            "type": "string"
+          },
+          "adapter_registered": {
+            "title": "Adapter Registered",
+            "type": "boolean"
+          },
+          "available": {
+            "title": "Available",
+            "type": "boolean"
+          },
+          "builtin": {
+            "title": "Builtin",
+            "type": "boolean"
+          },
+          "cli_deployed": {
+            "title": "Cli Deployed",
+            "type": "boolean"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "display_name": {
+            "title": "Display Name",
+            "type": "string"
+          },
+          "executable": {
+            "title": "Executable",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "npm_package": {
+            "title": "Npm Package",
+            "type": "string"
+          },
+          "package_version": {
+            "title": "Package Version",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "available",
+              "pending_build",
+              "building",
+              "image_deployed",
+              "adapter_missing",
+              "failed"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "status_override": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status Override"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "display_name",
+          "npm_package",
+          "package_version",
+          "executable",
+          "adapter_id",
+          "status_override",
+          "builtin",
+          "cli_deployed",
+          "adapter_registered",
+          "available",
+          "status",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "AgentRunnerView",
+        "type": "object"
+      },
       "AgentView": {
         "properties": {
           "available": {
@@ -193,6 +756,17 @@
             ],
             "title": "Agent"
           },
+          "agent_profile_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Profile Id"
+          },
           "conversation_id": {
             "anyOf": [
               {
@@ -278,6 +852,42 @@
           "question"
         ],
         "title": "AskRequest",
+        "type": "object"
+      },
+      "AssistantCatalogView": {
+        "properties": {
+          "agents": {
+            "items": {
+              "$ref": "#/components/schemas/PublishedAgentView"
+            },
+            "title": "Agents",
+            "type": "array"
+          },
+          "personal_defaults": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/AgentModelPair"
+            },
+            "title": "Personal Defaults",
+            "type": "object"
+          },
+          "system_default_profile_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "System Default Profile Id"
+          }
+        },
+        "required": [
+          "system_default_profile_id",
+          "agents",
+          "personal_defaults"
+        ],
+        "title": "AssistantCatalogView",
         "type": "object"
       },
       "AutoBuildUpdate": {
@@ -425,6 +1035,17 @@
               }
             ],
             "title": "Agent"
+          },
+          "agent_profile_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Profile Id"
           },
           "attachments": {
             "anyOf": [
@@ -745,6 +1366,17 @@
             "title": "Agent",
             "type": "string"
           },
+          "agent_profile_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Profile Id"
+          },
           "archived": {
             "title": "Archived",
             "type": "boolean"
@@ -866,6 +1498,17 @@
           "agent": {
             "title": "Agent",
             "type": "string"
+          },
+          "agent_profile_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Profile Id"
           },
           "archived": {
             "title": "Archived",
@@ -4956,7 +5599,6 @@
             "items": {
               "type": "string"
             },
-            "minItems": 1,
             "title": "Models",
             "type": "array"
           },
@@ -4975,8 +5617,7 @@
         },
         "required": [
           "name",
-          "base_url",
-          "models"
+          "base_url"
         ],
         "title": "ProviderCreate",
         "type": "object"
@@ -5116,6 +5757,47 @@
             "title": "Base Url",
             "type": "string"
           },
+          "catalog_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Catalog Error"
+          },
+          "catalog_fetched_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Catalog Fetched At"
+          },
+          "catalog_models": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Catalog Models",
+            "type": "array"
+          },
+          "catalog_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Catalog Status"
+          },
           "created_at": {
             "format": "date-time",
             "title": "Created At",
@@ -5169,6 +5851,124 @@
           "updated_at"
         ],
         "title": "ProviderView",
+        "type": "object"
+      },
+      "PublishedAgentView": {
+        "properties": {
+          "default_model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Model"
+          },
+          "default_provider_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Provider Id"
+          },
+          "effort_levels": {
+            "items": {
+              "enum": [
+                "low",
+                "medium",
+                "high",
+                "extra",
+                "max"
+              ],
+              "type": "string"
+            },
+            "title": "Effort Levels",
+            "type": "array"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "is_system_default": {
+            "title": "Is System Default",
+            "type": "boolean"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "providers": {
+            "items": {
+              "$ref": "#/components/schemas/PublishedProviderView"
+            },
+            "title": "Providers",
+            "type": "array"
+          },
+          "runner_id": {
+            "title": "Runner Id",
+            "type": "string"
+          },
+          "supports_skills": {
+            "default": false,
+            "title": "Supports Skills",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "runner_id",
+          "is_system_default",
+          "default_provider_id",
+          "default_model",
+          "providers"
+        ],
+        "title": "PublishedAgentView",
+        "type": "object"
+      },
+      "PublishedProviderView": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "model_capabilities": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ModelCapability"
+            },
+            "title": "Model Capabilities",
+            "type": "object"
+          },
+          "models": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Models",
+            "type": "array"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "type": {
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "type",
+          "models",
+          "model_capabilities"
+        ],
+        "title": "PublishedProviderView",
         "type": "object"
       },
       "PullInstanceCreate": {
@@ -7095,6 +7895,35 @@
         "title": "TurnView",
         "type": "object"
       },
+      "UserAgentDefaultView": {
+        "properties": {
+          "agent_profile_id": {
+            "title": "Agent Profile Id",
+            "type": "string"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "provider_id": {
+            "title": "Provider Id",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "agent_profile_id",
+          "provider_id",
+          "model",
+          "updated_at"
+        ],
+        "title": "UserAgentDefaultView",
+        "type": "object"
+      },
       "ValidationError": {
         "properties": {
           "ctx": {
@@ -7149,6 +7978,327 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/v1/agent-profiles": {
+      "get": {
+        "operationId": "list_agent_profiles_api_v1_agent_profiles_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AgentProfileView"
+                  },
+                  "title": "Response List Agent Profiles Api V1 Agent Profiles Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Agent Profiles"
+      },
+      "post": {
+        "operationId": "create_agent_profile_api_v1_agent_profiles_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentProfileCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProfileView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Agent Profile"
+      }
+    },
+    "/api/v1/agent-profiles/{profile_id}": {
+      "delete": {
+        "operationId": "delete_agent_profile_api_v1_agent_profiles__profile_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "profile_id",
+            "required": true,
+            "schema": {
+              "title": "Profile Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Delete Agent Profile"
+      },
+      "get": {
+        "operationId": "get_agent_profile_api_v1_agent_profiles__profile_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "profile_id",
+            "required": true,
+            "schema": {
+              "title": "Profile Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProfileView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Agent Profile"
+      },
+      "put": {
+        "operationId": "update_agent_profile_api_v1_agent_profiles__profile_id__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "profile_id",
+            "required": true,
+            "schema": {
+              "title": "Profile Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentProfileUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProfileView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Update Agent Profile"
+      }
+    },
+    "/api/v1/agent-runners": {
+      "get": {
+        "operationId": "list_agent_runners_api_v1_agent_runners_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AgentRunnerView"
+                  },
+                  "title": "Response List Agent Runners Api V1 Agent Runners Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Agent Runners"
+      },
+      "post": {
+        "operationId": "create_agent_runner_api_v1_agent_runners_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentRunnerCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentRunnerView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Agent Runner"
+      }
+    },
+    "/api/v1/agent-runners/{runner_id}": {
+      "put": {
+        "operationId": "update_agent_runner_api_v1_agent_runners__runner_id__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "runner_id",
+            "required": true,
+            "schema": {
+              "title": "Runner Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentRunnerUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentRunnerView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Update Agent Runner"
+      }
+    },
     "/api/v1/agents": {
       "get": {
         "operationId": "agents_api_v1_agents_get",
@@ -7174,6 +8324,29 @@
           }
         ],
         "summary": "Agents"
+      }
+    },
+    "/api/v1/assistant-catalog": {
+      "get": {
+        "operationId": "get_assistant_catalog_api_v1_assistant_catalog_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssistantCatalogView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Assistant Catalog"
       }
     },
     "/api/v1/assistant-defaults": {
@@ -9397,6 +10570,137 @@
           }
         ],
         "summary": "Me"
+      }
+    },
+    "/api/v1/me/agent-defaults/{agent_profile_id}": {
+      "delete": {
+        "operationId": "delete_personal_agent_default_api_v1_me_agent_defaults__agent_profile_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agent_profile_id",
+            "required": true,
+            "schema": {
+              "title": "Agent Profile Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Delete Personal Agent Default"
+      },
+      "get": {
+        "operationId": "get_personal_agent_default_api_v1_me_agent_defaults__agent_profile_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agent_profile_id",
+            "required": true,
+            "schema": {
+              "title": "Agent Profile Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserAgentDefaultView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Personal Agent Default"
+      },
+      "put": {
+        "operationId": "put_personal_agent_default_api_v1_me_agent_defaults__agent_profile_id__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agent_profile_id",
+            "required": true,
+            "schema": {
+              "title": "Agent Profile Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentModelPair"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserAgentDefaultView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Put Personal Agent Default"
       }
     },
     "/api/v1/me/dtb-token": {
@@ -11665,6 +12969,50 @@
           }
         ],
         "summary": "Probe Provider"
+      }
+    },
+    "/api/v1/providers/{provider_id}/refresh-models": {
+      "post": {
+        "operationId": "refresh_provider_models_api_v1_providers__provider_id__refresh_models_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "provider_id",
+            "required": true,
+            "schema": {
+              "title": "Provider Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProviderView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Refresh Provider Models"
       }
     },
     "/api/v1/puller-plugins": {

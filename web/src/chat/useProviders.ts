@@ -1,5 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import type { FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { parseAgentProfiles, type AgentProfiles } from "../agentProfiles";
 import type { Messages } from "../i18n";
 import {
@@ -7,14 +6,86 @@ import {
   defaultEffort,
   modelEffortLevels,
 } from "./effort";
-import type { ProviderForm } from "./ProviderSettings";
-import { EFFORT_LEVELS } from "./types";
 import type {
   Agent,
+  AgentModelPair,
+  AssistantCatalogView,
   EffortLevel,
   Provider,
-  ProviderProbeResult,
+  PublishedAgentView,
 } from "./types";
+import { readErrorDetail } from "../httpErrors";
+
+export function isPublishedPair(
+  profile: PublishedAgentView | undefined,
+  providerId: string,
+  model: string,
+): boolean {
+  if (!profile || !providerId || !model) return false;
+  return profile.providers.some(
+    (p) => p.id === providerId && p.models.includes(model),
+  );
+}
+
+function toProviderView(
+  published: PublishedAgentView["providers"][number],
+): Provider {
+  return {
+    id: published.id,
+    name: published.name,
+    type: published.type,
+    base_url: "",
+    models: published.models,
+    model_capabilities: published.model_capabilities,
+    catalog_models: published.models,
+    catalog_fetched_at: null,
+    catalog_status: "ok",
+    catalog_error: null,
+    has_api_key: true,
+    created_at: "",
+    updated_at: "",
+  };
+}
+
+function resolveCatalogSelection(
+  profile: PublishedAgentView | undefined,
+  personalDefaults: Record<string, AgentModelPair>,
+): {
+  providerId: string;
+  model: string;
+  missingDefaultPrompt: boolean;
+} {
+  if (!profile) {
+    return { providerId: "", model: "", missingDefaultPrompt: true };
+  }
+  const personal = personalDefaults[profile.id];
+  if (
+    personal &&
+    isPublishedPair(profile, personal.provider_id, personal.model)
+  ) {
+    return {
+      providerId: personal.provider_id,
+      model: personal.model,
+      missingDefaultPrompt: false,
+    };
+  }
+  if (
+    profile.default_provider_id &&
+    profile.default_model &&
+    isPublishedPair(profile, profile.default_provider_id, profile.default_model)
+  ) {
+    return {
+      providerId: profile.default_provider_id,
+      model: profile.default_model,
+      missingDefaultPrompt: false,
+    };
+  }
+  return {
+    providerId: profile.providers[0]?.id ?? "",
+    model: "",
+    missingDefaultPrompt: true,
+  };
+}
 
 export function useProviders({
   token,
@@ -26,94 +97,109 @@ export function useProviders({
   onError: (message: string) => void;
 }) {
   const t = messages;
-  const [agents, setAgents] = useState<Agent[]>([]);
-  const [profiles, setProfiles] = useState<AgentProfiles>({});
   const selectionTouched = useRef(false);
-  const [defaults, setDefaults] = useState({
+
+  // Catalog mode state (#329/#331)
+  const [catalogMode, setCatalogMode] = useState(false);
+  const [catalogLoaded, setCatalogLoaded] = useState(false);
+  const [catalog, setCatalog] = useState<AssistantCatalogView | null>(null);
+  const [missingDefaultPrompt, setMissingDefaultPrompt] = useState(false);
+  const [personalDefaultNotice, setPersonalDefaultNotice] = useState("");
+  const [personalDefaultError, setPersonalDefaultError] = useState("");
+  const [savingPersonalDefault, setSavingPersonalDefault] = useState(false);
+
+  // Legacy fallback state (for backward-compatible tests/environments)
+  const [legacyAgents, setLegacyAgents] = useState<Agent[]>([]);
+  const [legacyProfiles, setLegacyProfiles] = useState<AgentProfiles>({});
+  const [legacyDefaults, setLegacyDefaults] = useState({
     agent: "pi",
     provider: "",
     model: "",
   });
-  const [providers, setProviders] = useState<Provider[]>([]);
+  const [legacyProviders, setLegacyProviders] = useState<Provider[]>([]);
+
   const [agentId, setAgentId] = useState("pi");
   const [providerId, setProviderId] = useState("");
   const [model, setModel] = useState("");
   const [effort, setEffort] = useState<EffortLevel | "">("");
-  const [providerForm, setProviderForm] = useState<ProviderForm>({
-    name: "",
-    type: "anthropic-messages",
-    base_url: "",
-    api_key: "",
-    models: "",
-    model_capabilities: {},
-  });
-  const [editingProviderId, setEditingProviderId] = useState("");
-  const [providerError, setProviderError] = useState("");
-  const [providerNotice, setProviderNotice] = useState("");
-  const [probeResults, setProbeResults] = useState<
-    Record<string, ProviderProbeResult>
-  >({});
-  const [probeLoadingModel, setProbeLoadingModel] = useState("");
-  const [probeError, setProbeError] = useState("");
 
-  const loadProviders = useCallback(async () => {
-    try {
-      const response = await fetch("/api/v1/providers", {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (!response.ok) throw new Error();
-      const data = (await response.json()) as Provider[];
-      setProviders(data);
-      setProviderId((current) => current || data[0]?.id || "");
-      setModel((current) => current || data[0]?.models[0] || "");
-    } catch {
-      setProviderError(t.providerError);
-    }
-  }, [token, t.providerError]);
+  const applyCatalogSnapshot = useCallback(
+    (data: AssistantCatalogView, preserveSelection: boolean) => {
+      setCatalog(data);
+      setCatalogMode(true);
+      setCatalogLoaded(true);
 
-  useEffect(() => {
-    const controller = new AbortController();
-    Promise.all([
-      fetch("/api/v1/agents", {
-        headers: { Authorization: `Bearer ${token}` },
-        signal: controller.signal,
-      }),
-      fetch("/api/v1/providers", {
-        headers: { Authorization: `Bearer ${token}` },
-        signal: controller.signal,
-      }),
-    ])
-      .then(async ([agentsResponse, providersResponse]) => {
+      if (preserveSelection) return;
+
+      const targetProfile =
+        (data.system_default_profile_id
+          ? data.agents.find((a) => a.id === data.system_default_profile_id)
+          : undefined) ??
+        data.agents.find((a) => a.is_system_default) ??
+        data.agents[0];
+
+      if (!targetProfile) {
+        setAgentId("");
+        setProviderId("");
+        setModel("");
+        setMissingDefaultPrompt(false);
+        return;
+      }
+
+      const resolved = resolveCatalogSelection(
+        targetProfile,
+        data.personal_defaults,
+      );
+      setAgentId(targetProfile.id);
+      setProviderId(resolved.providerId);
+      setModel(resolved.model);
+      setMissingDefaultPrompt(resolved.missingDefaultPrompt);
+    },
+    [],
+  );
+
+  const loadLegacy = useCallback(
+    async (signal: AbortSignal) => {
+      try {
+        const [agentsResponse, providersResponse] = await Promise.all([
+          fetch("/api/v1/agents", {
+            headers: { Authorization: `Bearer ${token}` },
+            signal,
+          }),
+          fetch("/api/v1/providers", {
+            headers: { Authorization: `Bearer ${token}` },
+            signal,
+          }),
+        ]);
         if (!agentsResponse.ok || !providersResponse.ok) throw new Error();
         const agentRows = (await agentsResponse.json()) as Agent[];
         const providerRows = (await providersResponse.json()) as Provider[];
-        if (!Array.isArray(agentRows) || !Array.isArray(providerRows))
+        if (!Array.isArray(agentRows) || !Array.isArray(providerRows)) {
           throw new Error("Invalid agent or provider list");
-        setAgents(agentRows);
+        }
+        setLegacyAgents(agentRows);
         const available = agentRows.find((agent) => agent.available);
-        if (available && !selectionTouched.current)
+        if (available && !selectionTouched.current) {
           setAgentId((current) =>
             agentRows.some((agent) => agent.id === current && agent.available)
               ? current
               : available.id,
           );
-        setProviders(providerRows);
+        }
+        setLegacyProviders(providerRows);
         setProviderId((current) => current || providerRows[0]?.id || "");
         setModel((current) => current || providerRows[0]?.models[0] || "");
-      })
-      .catch(() => {
-        if (!controller.signal.aborted) onError(t.askError);
-      });
-    return () => controller.abort();
-  }, [token, t.askError, onError]);
+      } catch {
+        if (!signal.aborted) onError(t.askError);
+      }
 
-  useEffect(() => {
-    void fetch("/api/v1/assistant-defaults", {
-      headers: { Authorization: `Bearer ${token}` },
-    })
-      .then(async (response) => {
-        if (!response.ok) return;
-        const data = (await response.json()) as {
+      try {
+        const defaultsResponse = await fetch("/api/v1/assistant-defaults", {
+          headers: { Authorization: `Bearer ${token}` },
+          signal,
+        });
+        if (!defaultsResponse.ok) return;
+        const data = (await defaultsResponse.json()) as {
           assistant_agent?: string | null;
           assistant_provider_id?: string | null;
           assistant_model?: string | null;
@@ -122,7 +208,7 @@ export function useProviders({
         const parsedProfiles = parseAgentProfiles(
           data.assistant_agent_profiles,
         );
-        setProfiles(parsedProfiles);
+        setLegacyProfiles(parsedProfiles);
         const agent = data.assistant_agent || "pi";
         const profile = parsedProfiles[agent];
         const next = {
@@ -131,33 +217,140 @@ export function useProviders({
             profile?.default_provider || data.assistant_provider_id || "",
           model: profile?.default_model || data.assistant_model || "",
         };
-        setDefaults(next);
+        setLegacyDefaults(next);
         if (!selectionTouched.current) {
           setAgentId(next.agent);
           if (next.provider) setProviderId(next.provider);
           if (next.model) setModel(next.model);
         }
-      })
-      .catch(() => {});
-  }, [token]);
+      } catch {
+        /* Optional defaults endpoint */
+      }
+    },
+    [token, t.askError, onError],
+  );
+
+  const refreshCatalog = useCallback(
+    async (signal?: AbortSignal) => {
+      try {
+        const res = await fetch("/api/v1/assistant-catalog", {
+          headers: { Authorization: `Bearer ${token}` },
+          signal,
+        });
+        if (res.ok) {
+          const data = (await res.json()) as Partial<AssistantCatalogView>;
+          if (data && Array.isArray(data.agents)) {
+            applyCatalogSnapshot(
+              {
+                system_default_profile_id:
+                  data.system_default_profile_id ?? null,
+                agents: data.agents,
+                personal_defaults: data.personal_defaults ?? {},
+              },
+              selectionTouched.current,
+            );
+            return;
+          }
+        }
+      } catch {
+        if (signal?.aborted) return;
+      }
+      if (!signal?.aborted) {
+        const controller = new AbortController();
+        await loadLegacy(signal ?? controller.signal);
+      }
+    },
+    [token, applyCatalogSnapshot, loadLegacy],
+  );
 
   useEffect(() => {
-    if (selectionTouched.current || !providers.length) return;
-    const profile = profiles[defaults.agent];
-    const options = providers.filter(
+    const controller = new AbortController();
+    void refreshCatalog(controller.signal);
+    return () => controller.abort();
+  }, [refreshCatalog]);
+
+  useEffect(() => {
+    if (catalogMode || selectionTouched.current || !legacyProviders.length) {
+      return;
+    }
+    const profile = legacyProfiles[legacyDefaults.agent];
+    const options = legacyProviders.filter(
       (provider) =>
         !profile?.providers.length || profile.providers.includes(provider.id),
     );
     const chosen =
-      options.find((provider) => provider.id === defaults.provider) ??
+      options.find((provider) => provider.id === legacyDefaults.provider) ??
       options[0];
     setProviderId(chosen?.id || "");
     setModel(
-      chosen?.models.includes(defaults.model)
-        ? defaults.model
+      chosen?.models.includes(legacyDefaults.model)
+        ? legacyDefaults.model
         : chosen?.models[0] || "",
     );
-  }, [providers, profiles, defaults]);
+  }, [catalogMode, legacyProviders, legacyProfiles, legacyDefaults]);
+
+  const catalogAgents = useMemo(() => catalog?.agents ?? [], [catalog]);
+  const personalDefaults = useMemo(
+    () => catalog?.personal_defaults ?? {},
+    [catalog],
+  );
+  const activeCatalogAgent = useMemo(
+    () => catalogAgents.find((item) => item.id === agentId),
+    [catalogAgents, agentId],
+  );
+
+  const agents: Agent[] = useMemo(() => {
+    if (!catalogMode) return legacyAgents;
+    return catalogAgents.map((profile) => ({
+      id: profile.id,
+      name: profile.name,
+      available: true,
+      effort_levels: profile.effort_levels ?? [],
+      supports_skills: profile.supports_skills ?? false,
+    }));
+  }, [catalogMode, catalogAgents, legacyAgents]);
+
+  const profiles: AgentProfiles = useMemo(() => {
+    if (!catalogMode) return legacyProfiles;
+    return Object.fromEntries(
+      catalogAgents.map((profile) => [
+        profile.id,
+        {
+          providers: profile.providers.map((p) => p.id),
+          default_provider: profile.default_provider_id ?? "",
+          default_model: profile.default_model ?? "",
+        },
+      ]),
+    );
+  }, [catalogMode, catalogAgents, legacyProfiles]);
+
+  const providers: Provider[] = useMemo(() => {
+    if (!catalogMode) return legacyProviders;
+    if (!activeCatalogAgent) return [];
+    return activeCatalogAgent.providers.map(toProviderView);
+  }, [catalogMode, activeCatalogAgent, legacyProviders]);
+
+  const defaults = useMemo(() => {
+    if (!catalogMode || !catalog) return legacyDefaults;
+    const defaultProfile =
+      (catalog.system_default_profile_id
+        ? catalog.agents.find((a) => a.id === catalog.system_default_profile_id)
+        : undefined) ??
+      catalog.agents.find((a) => a.is_system_default) ??
+      catalog.agents[0];
+    if (!defaultProfile) {
+      return { agent: "", provider: "", model: "" };
+    }
+    const resolved = resolveCatalogSelection(
+      defaultProfile,
+      catalog.personal_defaults,
+    );
+    return {
+      agent: defaultProfile.id,
+      provider: resolved.providerId,
+      model: resolved.model,
+    };
+  }, [catalogMode, catalog, legacyDefaults]);
 
   const activeProvider = providers.find((item) => item.id === providerId);
   const effortLevels = modelEffortLevels(activeProvider, model);
@@ -179,9 +372,24 @@ export function useProviders({
 
   function selectAgent(value: string) {
     selectionTouched.current = true;
+    setPersonalDefaultNotice("");
+    setPersonalDefaultError("");
     setAgentId(value);
-    const profile = profiles[value];
-    const options = providers.filter(
+
+    if (catalogMode && catalog) {
+      const targetProfile = catalog.agents.find((a) => a.id === value);
+      const resolved = resolveCatalogSelection(
+        targetProfile,
+        catalog.personal_defaults,
+      );
+      setProviderId(resolved.providerId);
+      setModel(resolved.model);
+      setMissingDefaultPrompt(resolved.missingDefaultPrompt);
+      return;
+    }
+
+    const profile = legacyProfiles[value];
+    const options = legacyProviders.filter(
       (provider) =>
         !profile?.providers.length || profile.providers.includes(provider.id),
     );
@@ -198,6 +406,8 @@ export function useProviders({
 
   function selectProvider(value: string) {
     selectionTouched.current = true;
+    setPersonalDefaultNotice("");
+    setPersonalDefaultError("");
     setProviderId(value);
     const provider = providers.find((item) => item.id === value);
     setModel(provider?.models[0] || "");
@@ -205,178 +415,177 @@ export function useProviders({
 
   function selectModel(value: string) {
     selectionTouched.current = true;
+    setPersonalDefaultNotice("");
+    setPersonalDefaultError("");
     setModel(value);
+    if (value) setMissingDefaultPrompt(false);
   }
 
   function selectEffort(value: EffortLevel | "") {
     setEffort(value);
   }
 
-  function editProvider(provider: Provider) {
-    setEditingProviderId(provider.id);
-    setProviderForm({
-      name: provider.name,
-      type: provider.type,
-      base_url: provider.base_url,
-      api_key: "",
-      models: provider.models.join(", "),
-      model_capabilities: Object.fromEntries(
-        provider.models.map((model) => {
-          const capability = provider.model_capabilities?.[model];
-          return [
-            model,
-            {
-              description: capability?.description ?? "",
-              vision: capability?.vision ?? false,
-              effort_levels: [...(capability?.effort_levels ?? [])],
-            },
-          ];
-        }),
-      ),
-    });
-    setProviderError("");
-    setProviderNotice("");
-    setProbeResults({});
-    setProbeLoadingModel("");
-    setProbeError("");
-  }
-
-  function resetProviderForm() {
-    setEditingProviderId("");
-    setProviderForm({
-      name: "",
-      type: "anthropic-messages",
-      base_url: "",
-      api_key: "",
-      models: "",
-      model_capabilities: {},
-    });
-    setProbeResults({});
-    setProbeLoadingModel("");
-    setProbeError("");
-  }
-
-  async function probeProviderModel(providerId: string, model: string) {
-    if (!providerId) return;
-    setProbeError("");
-    setProbeLoadingModel(model);
-    try {
-      const response = await fetch(`/api/v1/providers/${providerId}/probe`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ model }),
-      });
-      if (response.status === 409) {
-        setProbeError(t.providerProbeBusy);
+  function resetToNewConversationDefaults() {
+    selectionTouched.current = true;
+    setPersonalDefaultNotice("");
+    setPersonalDefaultError("");
+    if (catalogMode && catalog) {
+      const targetProfile =
+        (catalog.system_default_profile_id
+          ? catalog.agents.find(
+              (a) => a.id === catalog.system_default_profile_id,
+            )
+          : undefined) ??
+        catalog.agents.find((a) => a.is_system_default) ??
+        catalog.agents[0];
+      if (!targetProfile) {
+        setAgentId("");
+        setProviderId("");
+        setModel("");
+        setMissingDefaultPrompt(false);
         return;
       }
-      if (!response.ok) throw new Error();
-      const data = (await response.json()) as ProviderProbeResult;
-      setProbeResults((current) => ({ ...current, [model]: data }));
-    } catch {
-      setProbeError(t.providerProbeFailed);
-    } finally {
-      setProbeLoadingModel("");
+      const resolved = resolveCatalogSelection(
+        targetProfile,
+        catalog.personal_defaults,
+      );
+      setAgentId(targetProfile.id);
+      setProviderId(resolved.providerId);
+      setModel(resolved.model);
+      setMissingDefaultPrompt(resolved.missingDefaultPrompt);
+      return;
     }
+
+    setAgentId(legacyDefaults.agent);
+    const profile = legacyProfiles[legacyDefaults.agent];
+    const options = legacyProviders.filter(
+      (provider) =>
+        !profile?.providers.length || profile.providers.includes(provider.id),
+    );
+    const chosen =
+      options.find((provider) => provider.id === legacyDefaults.provider) ??
+      options[0];
+    setProviderId(chosen?.id || "");
+    setModel(
+      chosen?.models.includes(legacyDefaults.model)
+        ? legacyDefaults.model
+        : chosen?.models[0] || "",
+    );
   }
 
-  function applyProbeResult(model: string) {
-    const result = probeResults[model];
-    if (!result) return;
-    setProviderForm((current) => ({
-      ...current,
-      model_capabilities: {
-        ...current.model_capabilities,
-        [model]: {
-          ...(current.model_capabilities[model] ?? {
-            description: "",
-            vision: false,
-            effort_levels: [],
-          }),
-          vision: result.vision === "yes",
-          effort_levels: EFFORT_LEVELS.filter(
-            (level) => result.effort[level] === "yes",
-          ),
-        },
-      },
-    }));
-  }
-
-  async function saveProvider(event: FormEvent) {
-    event.preventDefault();
-    setProviderError("");
-    setProviderNotice("");
-    const models = providerForm.models
-      .split(",")
-      .map((item) => item.trim())
-      .filter(Boolean);
-    const payload: Record<string, unknown> = {
-      name: providerForm.name.trim(),
-      type: providerForm.type,
-      base_url: providerForm.base_url.trim(),
-      models,
-      model_capabilities: Object.fromEntries(
-        models.map((model) => {
-          const capability = providerForm.model_capabilities[model];
-          return [
-            model,
-            {
-              description: capability?.description ?? "",
-              vision: capability?.vision ?? false,
-              effort_levels: capability?.effort_levels ?? [],
-            },
-          ];
-        }),
-      ),
-    };
-    if (providerForm.api_key.trim()) payload.api_key = providerForm.api_key;
+  async function savePersonalDefault() {
+    if (!catalogMode || !agentId || !providerId || !model) return;
+    setSavingPersonalDefault(true);
+    setPersonalDefaultNotice("");
+    setPersonalDefaultError("");
     try {
       const response = await fetch(
-        editingProviderId
-          ? `/api/v1/providers/${editingProviderId}`
-          : "/api/v1/providers",
+        `/api/v1/me/agent-defaults/${encodeURIComponent(agentId)}`,
         {
-          method: editingProviderId ? "PUT" : "POST",
+          method: "PUT",
           headers: {
             Authorization: `Bearer ${token}`,
             "Content-Type": "application/json",
           },
-          body: JSON.stringify(payload),
+          body: JSON.stringify({ provider_id: providerId, model }),
         },
       );
-      if (!response.ok) throw new Error();
-      resetProviderForm();
-      setProviderNotice(t.providerSaved);
-      await loadProviders();
+      if (!response.ok) {
+        const detail = await readErrorDetail(
+          response,
+          t.chatPersonalDefaultError,
+        );
+        setPersonalDefaultError(detail);
+        return;
+      }
+      setCatalog((prev) =>
+        prev
+          ? {
+              ...prev,
+              personal_defaults: {
+                ...prev.personal_defaults,
+                [agentId]: { provider_id: providerId, model },
+              },
+            }
+          : prev,
+      );
+      setPersonalDefaultNotice(t.chatPersonalDefaultSaved);
     } catch {
-      setProviderError(t.providerError);
+      setPersonalDefaultError(t.chatPersonalDefaultError);
+    } finally {
+      setSavingPersonalDefault(false);
     }
   }
 
-  async function deleteProvider(provider: Provider) {
-    if (!window.confirm(t.providerDeleteConfirm)) return;
-    setProviderError("");
+  async function resetPersonalDefault(isExistingConversation: boolean) {
+    if (!catalogMode || !agentId) return;
+    setSavingPersonalDefault(true);
+    setPersonalDefaultNotice("");
+    setPersonalDefaultError("");
     try {
-      const response = await fetch(`/api/v1/providers/${provider.id}`, {
-        method: "DELETE",
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (!response.ok) throw new Error();
-      if (providerId === provider.id) {
-        setProviderId("");
-        setModel("");
+      const response = await fetch(
+        `/api/v1/me/agent-defaults/${encodeURIComponent(agentId)}`,
+        {
+          method: "DELETE",
+          headers: { Authorization: `Bearer ${token}` },
+        },
+      );
+      if (!response.ok) {
+        const detail = await readErrorDetail(
+          response,
+          t.chatPersonalDefaultError,
+        );
+        setPersonalDefaultError(detail);
+        return;
       }
-      if (editingProviderId === provider.id) resetProviderForm();
-      await loadProviders();
+      setCatalog((prev) => {
+        if (!prev) return prev;
+        const nextPersonal = { ...prev.personal_defaults };
+        delete nextPersonal[agentId];
+        return { ...prev, personal_defaults: nextPersonal };
+      });
+      if (!isExistingConversation && activeCatalogAgent) {
+        const hasCompanyDefault =
+          activeCatalogAgent.default_provider_id &&
+          activeCatalogAgent.default_model &&
+          isPublishedPair(
+            activeCatalogAgent,
+            activeCatalogAgent.default_provider_id,
+            activeCatalogAgent.default_model,
+          );
+        if (hasCompanyDefault) {
+          setProviderId(activeCatalogAgent.default_provider_id!);
+          setModel(activeCatalogAgent.default_model!);
+          setMissingDefaultPrompt(false);
+        } else {
+          setProviderId(activeCatalogAgent.providers[0]?.id ?? "");
+          setModel("");
+          setMissingDefaultPrompt(true);
+        }
+      }
+      setPersonalDefaultNotice(t.chatPersonalDefaultReset);
     } catch {
-      setProviderError(t.providerError);
+      setPersonalDefaultError(t.chatPersonalDefaultError);
+    } finally {
+      setSavingPersonalDefault(false);
     }
   }
+
+  const noPublishedAgents =
+    catalogMode && catalogLoaded && catalogAgents.length === 0;
 
   return {
+    catalogMode,
+    catalogLoaded,
+    catalog,
+    catalogAgents,
+    personalDefaults,
+    activeCatalogAgent,
+    noPublishedAgents,
+    missingDefaultPrompt,
+    personalDefaultNotice,
+    personalDefaultError,
+    savingPersonalDefault,
     agents,
     profiles,
     defaults,
@@ -388,28 +597,18 @@ export function useProviders({
     effortLevels,
     allowedEfforts,
     selectionTouched,
-    providerForm,
-    editingProviderId,
-    providerError,
-    providerNotice,
-    probeResults,
-    probeLoadingModel,
-    probeError,
     activeProvider,
     setAgentId,
     setProviderId,
     setModel,
-    setProviderForm,
+    setMissingDefaultPrompt,
     selectAgent,
     selectProvider,
     selectModel,
     selectEffort,
-    loadProviders,
-    editProvider,
-    resetProviderForm,
-    saveProvider,
-    deleteProvider,
-    probeProviderModel,
-    applyProbeResult,
+    refreshCatalog,
+    resetToNewConversationDefaults,
+    savePersonalDefault,
+    resetPersonalDefault,
   };
 }
