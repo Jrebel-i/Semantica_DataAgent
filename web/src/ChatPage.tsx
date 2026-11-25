@@ -1,5 +1,5 @@
 import { createPortal } from "react-dom";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert, Button } from "antd";
 import type { Language, Messages } from "./i18n";
 import { PlusOutlined } from "@ant-design/icons";
@@ -14,6 +14,7 @@ import type {
   ConversationDetail,
   LiveTurn,
   Project,
+  PublishedAgentView,
   Turn,
 } from "./chat/types";
 import { copyText } from "./chat/sse";
@@ -31,7 +32,11 @@ import { CorrectionDraftDrawer } from "./chat/CorrectionDraftDrawer";
 import { ProviderSettingsPage } from "./chat/ProviderSettings";
 import { isPublishedPair, useProviders } from "./chat/useProviders";
 import { useConversations } from "./chat/useConversations";
-import { rememberProject, storedProject } from "./ProjectSelector";
+import {
+  PROJECT_CHANGE_EVENT,
+  rememberProject,
+  storedProject,
+} from "./ProjectSelector";
 import { useCitations } from "./chat/useCitations";
 import { useAsk } from "./chat/useAsk";
 import { turnFailed } from "./chat/turnEvents";
@@ -139,6 +144,25 @@ export function ChatPage({
     setProjectId(value);
     rememberProject(value);
   }
+
+  useEffect(() => {
+    const onProjectChange = (event: Event) => {
+      if (currentConversationId || live) return;
+      const next = (event as CustomEvent<string>).detail;
+      if (!next || next === projectId) return;
+      if (
+        projects.length > 0 &&
+        !projects.some((p) => p.id === next && p.status === "active")
+      ) {
+        return;
+      }
+      setProjectId(next);
+    };
+    window.addEventListener(PROJECT_CHANGE_EVENT, onProjectChange);
+    return () => {
+      window.removeEventListener(PROJECT_CHANGE_EVENT, onProjectChange);
+    };
+  }, [currentConversationId, live, projectId, projects]);
 
   const {
     conversations,
@@ -474,24 +498,14 @@ export function ChatPage({
     }
   }
 
-  function applyConversation(detail: ConversationDetail) {
-    selectionTouched.current = true;
-    if (detail.project_id) {
-      setProjectId(detail.project_id);
-      rememberProject(detail.project_id);
-    }
-    setBoundConversation(detail);
-    setCurrentConversationId(detail.id);
-    setResumable(detail.resumable !== false);
-    setTurns(detail.turns);
-    resetCitation();
-    setLive(null);
+  const reconciledConversationRef = useRef("");
 
-    if (catalogMode) {
+  const reconcileBoundConversation = useCallback(
+    (detail: ConversationDetail, agentsList: PublishedAgentView[]) => {
       const matched = detail.agent_profile_id
-        ? catalogAgents.find((a) => a.id === detail.agent_profile_id)
-        : (catalogAgents.find((a) => a.id === detail.agent) ??
-          catalogAgents.find((a) => a.runner_id === detail.agent));
+        ? agentsList.find((a) => a.id === detail.agent_profile_id)
+        : (agentsList.find((a) => a.id === detail.agent) ??
+          agentsList.find((a) => a.runner_id === detail.agent));
       if (!matched) {
         setAgentId(detail.agent_profile_id || detail.agent);
         setProviderId(detail.provider_id);
@@ -506,9 +520,43 @@ export function ChatPage({
         setProviderId(matched.providers[0]?.id ?? "");
         setModel("");
       }
+    },
+    [setAgentId, setProviderId, setModel],
+  );
+
+  useEffect(() => {
+    if (!catalogMode || !catalogLoaded || !boundConversation) return;
+    if (reconciledConversationRef.current === boundConversation.id) return;
+    reconciledConversationRef.current = boundConversation.id;
+    reconcileBoundConversation(boundConversation, catalogAgents);
+  }, [
+    catalogMode,
+    catalogLoaded,
+    catalogAgents,
+    boundConversation,
+    reconcileBoundConversation,
+  ]);
+
+  function applyConversation(detail: ConversationDetail) {
+    selectionTouched.current = true;
+    if (detail.project_id) {
+      setProjectId(detail.project_id);
+      rememberProject(detail.project_id);
+    }
+    setBoundConversation(detail);
+    setCurrentConversationId(detail.id);
+    setResumable(detail.resumable !== false);
+    setTurns(detail.turns);
+    resetCitation();
+    setLive(null);
+
+    if (catalogMode && catalogLoaded) {
+      reconciledConversationRef.current = detail.id;
+      reconcileBoundConversation(detail, catalogAgents);
       return;
     }
 
+    reconciledConversationRef.current = "";
     setAgentId(detail.agent);
     setProviderId(detail.provider_id);
     setModel(detail.model);
@@ -574,6 +622,7 @@ export function ChatPage({
       id: "",
     };
     setLoadingConversation(false);
+    reconciledConversationRef.current = "";
     setBoundConversation(null);
     setCurrentConversationId("");
     resetToNewConversationDefaults();

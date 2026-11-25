@@ -795,3 +795,344 @@ def test_migrated_pending_verification_resolves_after_refresh_models(
         assert body["provider_models"] == {"p-old": ["kept-model", "removed-model"]}
         assert body["pending_verification"] == {}
         assert body["missing_models"] == {"p-old": ["removed-model"]}
+
+
+def test_providers_list_requires_admin(client):
+    c, admin_token, user_token = client
+    created = c.post(
+        "/api/v1/providers",
+        headers=_headers(admin_token),
+        json={
+            "name": "Hidden Catalog GW",
+            "type": "openai-completions",
+            "base_url": "https://gateway.example.test",
+            "api_key": "sk-admin-only",
+            "models": ["secret-unpublished-model"],
+        },
+    )
+    assert created.status_code == 201, created.text
+
+    assert c.get("/api/v1/providers").status_code == 401
+    member_resp = c.get("/api/v1/providers", headers=_headers(user_token))
+    assert member_resp.status_code == 403, member_resp.text
+
+    admin_resp = c.get("/api/v1/providers", headers=_headers(admin_token))
+    assert admin_resp.status_code == 200
+    assert len(admin_resp.json()) == 1
+
+
+def test_governance_mutations_emit_structured_audit_without_secrets(
+    client, monkeypatch, caplog
+):
+    import json
+    import logging
+
+    from semantica_dataagent import agent_runner, provider_api
+    from semantica_dataagent.db import Token, digest, sessions
+
+    c, admin_token, _ = client
+    with sessions()() as db:
+        admin_id = db.get(Token, digest(admin_token)).id
+
+    class ReadyRunner:
+        agent_id = "claude"
+
+        def available(self):
+            return True
+
+    monkeypatch.setitem(agent_runner.RUNNERS, "claude", ReadyRunner())
+    caplog.set_level(logging.INFO, logger="semantica_dataagent.audit")
+
+    secret_1 = "sk-audit-secret-initial"
+    secret_2 = "sk-audit-secret-rotated"
+    upstream_marker = "UPSTREAM_RAW_BODY_MARKER"
+
+    created_p = c.post(
+        "/api/v1/providers",
+        headers=_headers(admin_token),
+        json={
+            "name": "Audit GW",
+            "type": "openai-completions",
+            "base_url": "https://audit.example.test",
+            "api_key": secret_1,
+        },
+    )
+    assert created_p.status_code == 201, created_p.text
+    pid = created_p.json()["id"]
+
+    updated_p = c.put(
+        f"/api/v1/providers/{pid}",
+        headers=_headers(admin_token),
+        json={"name": "Audit GW 2", "api_key": secret_2},
+    )
+    assert updated_p.status_code == 200, updated_p.text
+
+    monkeypatch.setattr(
+        provider_api,
+        "_catalog_transport",
+        httpx.MockTransport(
+            lambda _req: httpx.Response(
+                200,
+                json={
+                    "data": [{"id": "m-audit#claude"}],
+                    "upstream_debug": upstream_marker,
+                },
+            )
+        ),
+    )
+    refreshed_p = c.post(
+        f"/api/v1/providers/{pid}/refresh-models",
+        headers=_headers(admin_token),
+    )
+    assert refreshed_p.status_code == 200, refreshed_p.text
+
+    created_prof = c.post(
+        "/api/v1/agent-profiles",
+        headers=_headers(admin_token),
+        json={
+            "name": "Audit Profile",
+            "runner_id": "claude",
+            "enabled": True,
+            "default_provider_id": pid,
+            "default_model": "m-audit#claude",
+            "provider_models": {pid: ["m-audit#claude"]},
+        },
+    )
+    assert created_prof.status_code == 201, created_prof.text
+    prof_id = created_prof.json()["id"]
+
+    updated_prof = c.put(
+        f"/api/v1/agent-profiles/{prof_id}",
+        headers=_headers(admin_token),
+        json={"name": "Audit Profile Updated", "version": 1},
+    )
+    assert updated_prof.status_code == 200, updated_prof.text
+
+    assert (
+        c.delete(
+            f"/api/v1/agent-profiles/{prof_id}", headers=_headers(admin_token)
+        ).status_code
+        == 204
+    )
+
+    created_runner = c.post(
+        "/api/v1/agent-runners",
+        headers=_headers(admin_token),
+        json={
+            "id": "audit-runner",
+            "display_name": "Audit Runner",
+            "npm_package": "@org/audit-runner",
+            "package_version": "1.0.0",
+            "executable": "audit-runner",
+            "adapter_id": "audit-runner",
+        },
+    )
+    assert created_runner.status_code == 201, created_runner.text
+
+    updated_runner = c.put(
+        "/api/v1/agent-runners/audit-runner",
+        headers=_headers(admin_token),
+        json={"display_name": "Audit Runner v2", "status_override": "building"},
+    )
+    assert updated_runner.status_code == 200, updated_runner.text
+
+    assert (
+        c.delete(f"/api/v1/providers/{pid}", headers=_headers(admin_token)).status_code
+        == 204
+    )
+
+    events = []
+    for rec in caplog.records:
+        if rec.name != "semantica_dataagent.audit":
+            continue
+        payload = getattr(rec, "audit", None)
+        if payload is None:
+            payload = json.loads(rec.getMessage().removeprefix("audit "))
+        events.append(payload)
+
+    seen = {(e["actor"], e["action"], e["target_type"], e["target_id"]) for e in events}
+    expected = {
+        (admin_id, "provider.create", "provider", pid),
+        (admin_id, "provider.update", "provider", pid),
+        (admin_id, "provider.refresh_models", "provider", pid),
+        (admin_id, "provider.delete", "provider", pid),
+        (admin_id, "agent_profile.create", "agent_profile", prof_id),
+        (admin_id, "agent_profile.update", "agent_profile", prof_id),
+        (admin_id, "agent_profile.delete", "agent_profile", prof_id),
+        (admin_id, "agent_runner.register", "agent_runner", "audit-runner"),
+        (admin_id, "agent_runner.update", "agent_runner", "audit-runner"),
+    }
+    assert expected.issubset(seen), f"missing audit events: {expected - seen}"
+    assert secret_1 not in caplog.text
+    assert secret_2 not in caplog.text
+    assert upstream_marker not in caplog.text
+
+
+def test_unchecking_active_default_while_clearing_default_returns_409(
+    client, monkeypatch
+):
+    from semantica_dataagent import agent_runner, provider_api
+
+    c, admin_token, _ = client
+
+    class ReadyRunner:
+        agent_id = "claude"
+
+        def available(self):
+            return True
+
+    monkeypatch.setitem(agent_runner.RUNNERS, "claude", ReadyRunner())
+    created_p = c.post(
+        "/api/v1/providers",
+        headers=_headers(admin_token),
+        json={
+            "name": "Default Guard GW",
+            "type": "openai-completions",
+            "base_url": "https://guard.example.test",
+            "api_key": "sk-guard",
+        },
+    )
+    assert created_p.status_code == 201, created_p.text
+    pid = created_p.json()["id"]
+    monkeypatch.setattr(
+        provider_api,
+        "_catalog_transport",
+        httpx.MockTransport(
+            lambda _req: httpx.Response(
+                200,
+                json={"data": [{"id": "m-old#claude"}, {"id": "m-new#claude"}]},
+            )
+        ),
+    )
+    assert (
+        c.post(
+            f"/api/v1/providers/{pid}/refresh-models", headers=_headers(admin_token)
+        ).status_code
+        == 200
+    )
+
+    prof = c.post(
+        "/api/v1/agent-profiles",
+        headers=_headers(admin_token),
+        json={
+            "name": "Default Guard Agent",
+            "runner_id": "claude",
+            "enabled": True,
+            "default_provider_id": pid,
+            "default_model": "m-old#claude",
+            "provider_models": {pid: ["m-old#claude", "m-new#claude"]},
+        },
+    )
+    assert prof.status_code == 201, prof.text
+    prof_id = prof.json()["id"]
+
+    # Clearing default_model to null (or "") while removing active default must return 409 affected_defaults
+    cleared_null = c.put(
+        f"/api/v1/agent-profiles/{prof_id}",
+        headers=_headers(admin_token),
+        json={
+            "provider_models": {pid: ["m-new#claude"]},
+            "default_provider_id": pid,
+            "default_model": None,
+            "version": 1,
+        },
+    )
+    assert cleared_null.status_code == 409, cleared_null.text
+    assert (
+        cleared_null.json()["detail"]["affected_defaults"][0]["model"] == "m-old#claude"
+    )
+
+    cleared_empty = c.put(
+        f"/api/v1/agent-profiles/{prof_id}",
+        headers=_headers(admin_token),
+        json={
+            "provider_models": {pid: ["m-new#claude"]},
+            "default_provider_id": "",
+            "default_model": "",
+            "version": 1,
+        },
+    )
+    assert cleared_empty.status_code == 409, cleared_empty.text
+    assert (
+        cleared_empty.json()["detail"]["affected_defaults"][0]["model"]
+        == "m-old#claude"
+    )
+
+    # Supplying a DIFFERENT valid replacement succeeds with 200
+    replaced = c.put(
+        f"/api/v1/agent-profiles/{prof_id}",
+        headers=_headers(admin_token),
+        json={
+            "provider_models": {pid: ["m-new#claude"]},
+            "default_provider_id": pid,
+            "default_model": "m-new#claude",
+            "version": 1,
+        },
+    )
+    assert replaced.status_code == 200, replaced.text
+
+
+def test_refresh_models_masks_bearer_and_sk_tokens_and_enforces_deadline(
+    client, monkeypatch
+):
+    from semantica_dataagent import provider_api
+
+    c, admin_token, _ = client
+    created_p = c.post(
+        "/api/v1/providers",
+        headers=_headers(admin_token),
+        json={
+            "name": "Redaction GW",
+            "type": "openai-completions",
+            "base_url": "https://redact.example.test",
+            "api_key": "sk-configured-key",
+        },
+    )
+    assert created_p.status_code == 201, created_p.text
+    pid = created_p.json()["id"]
+
+    monkeypatch.setattr(
+        provider_api,
+        "_catalog_transport",
+        httpx.MockTransport(
+            lambda _req: httpx.Response(
+                401,
+                json={
+                    "error": {
+                        "message": "Invalid token Bearer upstream-jwt-999 or sk-upstream-other-1234"
+                    }
+                },
+            )
+        ),
+    )
+    failed = c.post(
+        f"/api/v1/providers/{pid}/refresh-models", headers=_headers(admin_token)
+    )
+    assert failed.status_code == 200
+    err = failed.json()["catalog_error"] or ""
+    assert "upstream-jwt-999" not in err
+    assert "sk-upstream-other-1234" not in err
+    assert "Bearer ***" in err
+
+    # Wall-clock deadline across chunked streaming response
+    clock = [100.0]
+
+    class SlowStream(httpx.SyncByteStream):
+        def __iter__(self):
+            yield b'{"data": ['
+            clock[0] += 2.0
+            yield b'{"id": "m-slow"}'
+            yield b"]}"
+
+    monkeypatch.setenv("DATAAGENT_PROVIDER_CATALOG_TIMEOUT_SECONDS", "1.0")
+    monkeypatch.setattr(provider_api.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(
+        provider_api,
+        "_catalog_transport",
+        httpx.MockTransport(lambda _req: httpx.Response(200, stream=SlowStream())),
+    )
+    timed_out = c.post(
+        f"/api/v1/providers/{pid}/refresh-models", headers=_headers(admin_token)
+    )
+    assert timed_out.status_code == 200
+    assert timed_out.json()["catalog_status"] == "timeout"

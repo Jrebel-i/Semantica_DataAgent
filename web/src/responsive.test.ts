@@ -135,6 +135,10 @@ describe("narrow screen layout", () => {
     expect(desktop).toContain("text-overflow: ellipsis;");
     expect(desktop).toContain(".discovery-candidate-card");
     expect(desktop).toContain(".discovery-evidence-card");
+    expect(desktop).toContain(".model-catalog-table-wrap");
+    expect(desktop).toContain(".composer-default-bar");
+    expect(narrow).not.toContain(".model-catalog-table-wrap");
+    expect(narrow).not.toContain(".composer-default-bar");
   });
 
   test("three-pane shell fills 100vw x 100dvh without fixed max-width or outer margins", () => {

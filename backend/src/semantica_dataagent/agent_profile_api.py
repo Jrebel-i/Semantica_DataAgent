@@ -14,7 +14,8 @@ from sqlalchemy import text
 from .agent_runner import get_runner
 from .agent_runner_api import is_runner_available
 from .api_time import UtcDatetime
-from .auth import admin
+from .audit_log import record_audit_event
+from .auth import Requester, admin, current_requester
 from .db import (
     AgentProfile,
     AgentRunnerRecord,
@@ -270,7 +271,11 @@ def get_agent_profile(profile_id: str, _: Annotated[str, Depends(admin)]):
 
 
 @router.post("/api/v1/agent-profiles", response_model=AgentProfileView, status_code=201)
-def create_agent_profile(body: AgentProfileCreate, _: Annotated[str, Depends(admin)]):
+def create_agent_profile(
+    body: AgentProfileCreate,
+    _: Annotated[str, Depends(admin)],
+    actor: Annotated[Requester, Depends(current_requester)],
+):
     name = body.name.strip()
     runner_id = body.runner_id.strip()
     now = datetime.now(UTC)
@@ -321,12 +326,27 @@ def create_agent_profile(body: AgentProfileCreate, _: Annotated[str, Depends(adm
         )
         db.add(row)
         db.flush()
-        return _profile_view(db, row, providers_by_id)
+        result = _profile_view(db, row, providers_by_id)
+    record_audit_event(
+        actor=actor,
+        action="agent_profile.create",
+        target_type="agent_profile",
+        target_id=result.id,
+        details={
+            "runner_id": result.runner_id,
+            "enabled": result.enabled,
+            "is_system_default": result.is_system_default,
+        },
+    )
+    return result
 
 
 @router.put("/api/v1/agent-profiles/{profile_id}", response_model=AgentProfileView)
 def update_agent_profile(
-    profile_id: str, body: AgentProfileUpdate, _: Annotated[str, Depends(admin)]
+    profile_id: str,
+    body: AgentProfileUpdate,
+    _: Annotated[str, Depends(admin)],
+    actor: Annotated[Requester, Depends(current_requester)],
 ):
     with sessions().begin() as db:
         db.execute(text("BEGIN IMMEDIATE"))
@@ -398,13 +418,19 @@ def update_agent_profile(
             )
 
         old_dpid, old_dmodel = row.default_provider_id, row.default_model
-        if (
+        old_default_removed = bool(
             old_dpid
             and old_dmodel
             and old_dmodel in old_pm.get(old_dpid, [])
             and old_dmodel not in new_pm.get(old_dpid, [])
-            and (new_dpid, new_dmodel) == (old_dpid, old_dmodel)
-        ):
+        )
+        has_valid_replacement = bool(
+            new_dpid
+            and new_dmodel
+            and (new_dpid, new_dmodel) != (old_dpid, old_dmodel)
+            and new_dmodel in new_pm.get(new_dpid, [])
+        )
+        if old_default_removed and not has_valid_replacement:
             affected = [
                 {
                     "kind": "profile_default",
@@ -466,11 +492,27 @@ def update_agent_profile(
         row.version += 1
         row.updated_at = datetime.now(UTC)
         db.flush()
-        return _profile_view(db, row, providers_by_id)
+        result = _profile_view(db, row, providers_by_id)
+    record_audit_event(
+        actor=actor,
+        action="agent_profile.update",
+        target_type="agent_profile",
+        target_id=result.id,
+        details={
+            "version": result.version,
+            "enabled": result.enabled,
+            "is_system_default": result.is_system_default,
+        },
+    )
+    return result
 
 
 @router.delete("/api/v1/agent-profiles/{profile_id}", status_code=204)
-def delete_agent_profile(profile_id: str, _: Annotated[str, Depends(admin)]):
+def delete_agent_profile(
+    profile_id: str,
+    _: Annotated[str, Depends(admin)],
+    actor: Annotated[Requester, Depends(current_requester)],
+):
     with sessions().begin() as db:
         db.execute(text("BEGIN IMMEDIATE"))
         row = db.get(AgentProfile, profile_id)
@@ -496,3 +538,9 @@ def delete_agent_profile(profile_id: str, _: Annotated[str, Depends(admin)]):
             UserAgentDefault.agent_profile_id == profile_id
         ).delete(synchronize_session=False)
         db.delete(row)
+    record_audit_event(
+        actor=actor,
+        action="agent_profile.delete",
+        target_type="agent_profile",
+        target_id=profile_id,
+    )

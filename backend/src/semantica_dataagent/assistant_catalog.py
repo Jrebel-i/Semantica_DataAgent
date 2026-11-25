@@ -16,6 +16,7 @@ from .agent_profile_api import _catalog_set, _parse_model_map
 from .agent_runner import get_runner
 from .agent_runner_api import is_runner_available
 from .api_time import UtcDatetime
+from .audit_log import record_audit_event
 from .auth import Requester, current_requester
 from .db import (
     AgentProfile,
@@ -708,12 +709,24 @@ def put_personal_agent_default(
             row.model = model
             row.updated_at = now
         db.flush()
-        return UserAgentDefaultView(
+        result = UserAgentDefaultView(
             agent_profile_id=row.agent_profile_id,
             provider_id=row.provider_id,
             model=row.model,
             updated_at=row.updated_at,
         )
+    record_audit_event(
+        actor=requester,
+        action="personal_default.put",
+        target_type="user_agent_default",
+        target_id=f"{requester.id}:{agent_profile_id}",
+        details={
+            "agent_profile_id": agent_profile_id,
+            "provider_id": provider_id,
+            "model": model,
+        },
+    )
+    return result
 
 
 @router.delete(
@@ -724,6 +737,7 @@ def delete_personal_agent_default(
     agent_profile_id: str,
     requester: Annotated[Requester, Depends(current_requester)],
 ):
+    existed = False
     with sessions().begin() as db:
         db.execute(text("BEGIN IMMEDIATE"))
         profile = db.get(AgentProfile, agent_profile_id)
@@ -731,4 +745,15 @@ def delete_personal_agent_default(
             raise HTTPException(404, "Agent profile not found")
         row = db.get(UserAgentDefault, (requester.id, agent_profile_id))
         if row is not None:
+            existed = True
             db.delete(row)
+    record_audit_event(
+        actor=requester,
+        action="personal_default.delete",
+        target_type="user_agent_default",
+        target_id=f"{requester.id}:{agent_profile_id}",
+        details={
+            "agent_profile_id": agent_profile_id,
+            "existed": existed,
+        },
+    )

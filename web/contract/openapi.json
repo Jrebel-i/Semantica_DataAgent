@@ -5625,7 +5625,7 @@
       "ProviderProbeRequest": {
         "properties": {
           "model": {
-            "maxLength": 200,
+            "maxLength": 500,
             "minLength": 1,
             "title": "Model",
             "type": "string"

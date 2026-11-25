@@ -190,20 +190,6 @@ export function Composer({
     };
     document.addEventListener("mousedown", handleMouseDown);
     document.addEventListener("keydown", handleKeyDown);
-    const activeProvidersList = providers.filter(
-      (provider) =>
-        !profiles[agentId]?.providers.length ||
-        profiles[agentId].providers.includes(provider.id),
-    );
-    const showVisibleProviderSelect =
-      catalogMode && activeProvidersList.length > 1;
-    const isCurrentPersonalDefault = Boolean(
-      personalDefault &&
-      providerId &&
-      model &&
-      personalDefault.provider_id === providerId &&
-      personalDefault.model === model,
-    );
     return () => {
       document.removeEventListener("mousedown", handleMouseDown);
       document.removeEventListener("keydown", handleKeyDown);

@@ -11,6 +11,7 @@ import {
 } from "@testing-library/react";
 import { ChatPage } from "../ChatPage";
 import { getMessages } from "../i18n";
+import { PROJECT_CHANGE_EVENT } from "../ProjectSelector";
 import {
   composerSelectText,
   conversationFetcher,
@@ -1070,4 +1071,250 @@ test("历史对话绑定的 Agent 已停用时只读展示历史记录并引导�
   ).toBe(true);
   fireEvent.click(screen.getByRole("button", { name: "新开对话" }));
   expect(screen.queryByText(/原对话绑定的 Agent 已停用/)).toBeNull();
+});
+
+test("openConversation 早于 assistant-catalog 返回时在目录就绪后对齐 agentProfileId 与模型列表", async () => {
+  const messages = getMessages("zh");
+  const catalog = {
+    system_default_profile_id: "claude-daily",
+    agents: [
+      {
+        id: "claude-daily",
+        name: "Claude · 日常助手",
+        runner_id: "claude",
+        is_system_default: true,
+        default_provider_id: "prov-1",
+        default_model: "valid-model#claude",
+        effort_levels: [],
+        supports_skills: false,
+        providers: [
+          {
+            id: "prov-1",
+            name: "公司网关",
+            type: "anthropic-messages",
+            models: ["valid-model#claude"],
+            model_capabilities: {},
+          },
+        ],
+      },
+    ],
+    personal_defaults: {},
+  };
+  const conv = {
+    id: "conv-race",
+    project_id: "default",
+    project_name: "业务数据",
+    title: "竞态会话",
+    agent: "claude",
+    agent_profile_id: "claude-daily",
+    provider_id: "prov-1",
+    model: "valid-model#claude",
+    created_at: "2026-11-05T00:00:00Z",
+    updated_at: "2026-11-05T00:00:00Z",
+    turn_count: 1,
+    resumable: true,
+    pinned: false,
+    archived: false,
+  };
+  const detail = {
+    ...conv,
+    turns: [
+      {
+        id: 1,
+        sequence: 1,
+        question: "历史问",
+        status: "completed",
+        answer: "历史答",
+        sql: [],
+        citations: [],
+        error: null,
+        started_at: "2026-11-05T00:00:00Z",
+        finished_at: "2026-11-05T00:00:01Z",
+        events: [],
+      },
+    ],
+  };
+
+  let resolveCatalog!: (resp: Response) => void;
+  const catalogPromise = new Promise<Response>((resolve) => {
+    resolveCatalog = resolve;
+  });
+  let askBody: Record<string, unknown> | null = null;
+
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/v1/assistant-catalog") return catalogPromise;
+      if (url === "/api/v1/conversations") return json([conv]);
+      if (url === "/api/v1/conversations?archived=true") return json([]);
+      if (url === "/api/v1/conversations/conv-race") return json(detail);
+      if (url === "/api/v1/projects") return json([]);
+      if (url === "/api/v1/conversations/ask" && init?.method === "POST") {
+        askBody = JSON.parse(String(init.body)) as Record<string, unknown>;
+        return new Response(
+          'event: done\ndata: {"text":"新答","sql":[],"citations":[]}\n\n',
+          { status: 200, headers: { "Content-Type": "text/event-stream" } },
+        );
+      }
+      return new Response("", { status: 404 });
+    }),
+  );
+
+  render(
+    <ChatPage
+      token="token"
+      role="user"
+      messages={messages}
+      initialConversationId="conv-race"
+    />,
+  );
+
+  // Conversation detail loads before assistant-catalog resolves
+  expect(await screen.findByText("历史答")).toBeTruthy();
+
+  // Now resolve assistant-catalog
+  await act(async () => {
+    resolveCatalog(json(catalog));
+  });
+
+  const textarea = (await screen.findByLabelText(
+    "问题",
+  )) as HTMLTextAreaElement;
+  fireEvent.change(textarea, { target: { value: "追问一次" } });
+  const submitBtn = screen.getByRole("button", {
+    name: /提\s*问/,
+  }) as HTMLButtonElement;
+  await waitFor(() => expect(submitBtn.disabled).toBe(false));
+  fireEvent.click(submitBtn);
+
+  await waitFor(() => expect(askBody).not.toBeNull());
+  expect(askBody).toMatchObject({
+    agent: "claude",
+    agent_profile_id: "claude-daily",
+    provider_id: "prov-1",
+    model: "valid-model#claude",
+  });
+});
+
+test("响应顶栏 PROJECT_CHANGE_EVENT 同步项目，已有对话时不覆盖绑定项目", async () => {
+  const messages = getMessages("zh");
+  const projects = [
+    {
+      id: "default",
+      name: "业务数据",
+      type: "warehouse",
+      status: "active",
+      my_role: "admin",
+    },
+    {
+      id: "proj-2",
+      name: "财务分析",
+      type: "warehouse",
+      status: "active",
+      my_role: "admin",
+    },
+  ];
+  const conv = {
+    ...conversationRow("conv-bound", "已绑定对话"),
+    project_id: "default",
+    project_name: "业务数据",
+  };
+  const askProjects: unknown[] = [];
+
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/v1/projects") return json(projects);
+      if (url === "/api/v1/agents")
+        return json([{ id: "pi", available: true }]);
+      if (url === "/api/v1/providers") return json([provider]);
+      if (url === "/api/v1/conversations") return json([conv]);
+      if (url === "/api/v1/conversations?archived=true") return json([]);
+      if (url === "/api/v1/conversations/conv-bound")
+        return json({ ...conv, turns: [] });
+      if (url.startsWith("/api/v1/skills/available")) return json([]);
+      if (url === "/api/v1/conversations/ask" && init?.method === "POST") {
+        const parsed = JSON.parse(String(init.body)) as Record<string, unknown>;
+        askProjects.push(parsed.project);
+        return new Response(
+          'event: done\ndata: {"text":"ok","sql":[],"citations":[]}\n\n',
+          { status: 200, headers: { "Content-Type": "text/event-stream" } },
+        );
+      }
+      return new Response("", { status: 404 });
+    }),
+  );
+
+  render(<ChatPage token="token" role="admin" messages={messages} />);
+  await screen.findByText(/业务数据 · /);
+
+  // New conversation syncs with top-bar PROJECT_CHANGE_EVENT
+  await act(async () => {
+    window.dispatchEvent(
+      new CustomEvent(PROJECT_CHANGE_EVENT, { detail: "proj-2" }),
+    );
+  });
+  expect(await screen.findByText(/财务分析 · /)).toBeTruthy();
+
+  const textarea = screen.getByLabelText("问题") as HTMLTextAreaElement;
+  fireEvent.change(textarea, { target: { value: "查财务" } });
+  const submitBtn = screen.getByRole("button", {
+    name: /提\s*问/,
+  }) as HTMLButtonElement;
+  await waitFor(() => expect(submitBtn.disabled).toBe(false));
+  fireEvent.click(submitBtn);
+  await waitFor(() => expect(askProjects).toEqual(["proj-2"]));
+
+  // Open existing conversation bound to default -> PROJECT_CHANGE_EVENT must not override
+  fireEvent.click(await screen.findByRole("button", { name: "已绑定对话" }));
+  await waitFor(() =>
+    expect(screen.getAllByText("业务数据").length).toBeGreaterThanOrEqual(1),
+  );
+  await act(async () => {
+    window.dispatchEvent(
+      new CustomEvent(PROJECT_CHANGE_EVENT, { detail: "proj-2" }),
+    );
+  });
+  expect(screen.queryByText(/财务分析 · /)).toBeNull();
+});
+
+test("提问请求返回 422 时保留并恢复用户输入草稿", async () => {
+  const messages = getMessages("zh");
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/v1/projects") return json([]);
+      if (url === "/api/v1/agents")
+        return json([{ id: "pi", available: true }]);
+      if (url === "/api/v1/providers") return json([provider]);
+      if (url === "/api/v1/conversations") return json([]);
+      if (url === "/api/v1/conversations?archived=true") return json([]);
+      if (url === "/api/v1/conversations/ask" && init?.method === "POST") {
+        return Response.json(
+          { detail: "Selected model is not published" },
+          { status: 422 },
+        );
+      }
+      return new Response("", { status: 404 });
+    }),
+  );
+
+  render(<ChatPage token="token" role="user" messages={messages} />);
+  const textarea = (await screen.findByLabelText(
+    "问题",
+  )) as HTMLTextAreaElement;
+  fireEvent.change(textarea, { target: { value: "请帮我统计月活" } });
+  const submitBtn = screen.getByRole("button", {
+    name: /提\s*问/,
+  }) as HTMLButtonElement;
+  await waitFor(() => expect(submitBtn.disabled).toBe(false));
+  fireEvent.click(submitBtn);
+
+  expect(
+    (await screen.findAllByText("Selected model is not published")).length,
+  ).toBeGreaterThanOrEqual(1);
+  await waitFor(() => expect(textarea.value).toBe("请帮我统计月活"));
 });

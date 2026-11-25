@@ -37,19 +37,31 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-const providers = [
-  {
-    id: "prov-1",
-    name: "OpenAI",
-    type: "openai-completions",
-    base_url: "https://api.example.com",
-    models: ["gpt-4.1", "gpt-4.1-mini"],
-    model_capabilities: {},
-    has_api_key: true,
-    created_at: "2026-01-01T00:00:00Z",
-    updated_at: "2026-01-01T00:00:00Z",
-  },
-];
+const catalogResponse = {
+  system_default_profile_id: "agent-1",
+  agents: [
+    {
+      id: "agent-1",
+      name: "日常助手",
+      runner_id: "claude",
+      is_system_default: true,
+      default_provider_id: "prov-1",
+      default_model: "gpt-4.1",
+      effort_levels: [],
+      supports_skills: false,
+      providers: [
+        {
+          id: "prov-1",
+          name: "OpenAI",
+          type: "openai-completions",
+          models: ["gpt-4.1", "gpt-4.1-mini"],
+          model_capabilities: {},
+        },
+      ],
+    },
+  ],
+  personal_defaults: {},
+};
 
 test("auto-target mode drafts without pre-selected target, switches provider/model, and shows new-file badge & diff", async () => {
   const requests: { url: string; method?: string; body?: unknown }[] = [];
@@ -58,7 +70,12 @@ test("auto-target mode drafts without pre-selected target, switches provider/mod
     vi.fn(async (input: string, init?: RequestInit) => {
       const body = init?.body ? JSON.parse(String(init.body)) : undefined;
       requests.push({ url: input, method: init?.method, body });
-      if (input === "/api/v1/providers") return Response.json(providers);
+      if (input === "/api/v1/assistant-catalog") {
+        return Response.json(catalogResponse);
+      }
+      if (input === "/api/v1/providers") {
+        return new Response("Forbidden", { status: 403 });
+      }
       if (input === "/api/v1/corrections/draft") {
         return Response.json({
           target: "document:knowledge/metrics/refund_rate.md",
@@ -128,6 +145,7 @@ test("auto-target mode drafts without pre-selected target, switches provider/mod
   expect(
     within(dialog).getByText(/目标文件:\s*knowledge\/metrics\/refund_rate\.md/),
   ).toBeTruthy();
+  expect(requests.some((r) => r.url === "/api/v1/providers")).toBe(false);
 });
 
 test("503 llm_unavailable displays actionable notice and lets user switch to manual edit without concatenating raw prose", async () => {
@@ -137,7 +155,13 @@ test("503 llm_unavailable displays actionable notice and lets user switch to man
     vi.fn(async (input: string, init?: RequestInit) => {
       const body = init?.body ? JSON.parse(String(init.body)) : undefined;
       requests.push({ url: input, method: init?.method, body });
-      if (input === "/api/v1/providers") return Response.json([]);
+      if (input === "/api/v1/assistant-catalog") {
+        return Response.json({
+          system_default_profile_id: null,
+          agents: [],
+          personal_defaults: {},
+        });
+      }
       if (input === "/api/v1/corrections/draft") {
         return Response.json(
           {
