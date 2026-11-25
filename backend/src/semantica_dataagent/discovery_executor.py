@@ -70,16 +70,16 @@ class DiscoverySqlValidationError(DiscoveryExecutionError):
 
 
 class DiscoveryTokenMissingError(DiscoveryExecutionError):
-    """Raised when the triggering caller has not configured a personal DTB token."""
+    """Raised when the triggering caller has not configured a personal DTB / AI Gov Dev Key."""
 
-    def __init__(self, detail: str = "请先在个人设置中保存 DTB token"):
+    def __init__(self, detail: str = "请先在个人设置中保存 DTB / AI Gov Dev Key"):
         super().__init__(detail, status_code=400, category="missing_token")
 
 
 class DiscoveryAuthenticationError(DiscoveryExecutionError):
-    """Raised when the caller's personal DTB token is rejected or expired (401)."""
+    """Raised when the caller's personal DTB / AI Gov Dev Key is rejected or expired (401)."""
 
-    def __init__(self, detail: str = "DTB token 失效，请在个人设置中更新"):
+    def __init__(self, detail: str = "DTB / AI Gov Dev Key 失效，请在个人设置中更新"):
         super().__init__(detail, status_code=401, category="authentication")
 
 
@@ -423,7 +423,7 @@ def require_personal_dtb_token(owner_id: str) -> str:
         token = decrypt(secret.encrypted_token)
     except Exception:  # noqa: BLE001 - never expose crypto internals
         raise DiscoveryTokenMissingError(
-            "个人 DTB token 无法解密，请重新保存"
+            "个人 DTB / AI Gov Dev Key 无法解密，请重新保存"
         ) from None
     if not token:
         raise DiscoveryTokenMissingError()

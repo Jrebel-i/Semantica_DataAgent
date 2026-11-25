@@ -10,6 +10,7 @@ import {
   within,
 } from "@testing-library/react";
 import { ChatPage } from "../ChatPage";
+import { Composer } from "./Composer";
 import { getMessages } from "../i18n";
 import {
   conversationFetcher,
@@ -991,7 +992,7 @@ test("缺少个人密钥时提示并阻止发送，融合式输入框去除内�
   expect(composerBoxCss).toContain("background: var(--composer-bg);");
 });
 
-test("从 assistant-catalog 加载已发布命名 Agent、按个人默认→公司默认→空缺提示预选并支持保存与恢复默认", async () => {
+test("从 assistant-catalog 加载已发布命名 Agent 并按个人默认→公司默认→空缺提示预选，且不显示个人/公司默认操作栏", async () => {
   const catalog = {
     system_default_profile_id: "claude-daily",
     agents: [
@@ -1121,41 +1122,15 @@ test("从 assistant-catalog 加载已发布命名 Agent、按个人默认→公�
     "claude-daily",
   );
   expect(composerSelectText("模型")).toBe("qwen3.8-flash#claude");
-  expect(screen.getByText("个人默认")).toBeTruthy();
+  expect(screen.queryByText("个人默认")).toBeNull();
+  expect(screen.queryByRole("button", { name: "恢复公司默认" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "设为个人默认" })).toBeNull();
 
-  // Reset personal default -> reverts to company default glm-5.3-flash#claude
-  fireEvent.click(screen.getByRole("button", { name: "恢复公司默认" }));
-  await waitFor(() =>
-    expect(composerSelectText("模型")).toBe("glm-5.3-flash#claude"),
-  );
-  expect(
-    calls.some(
-      (c) =>
-        c.url === "/api/v1/me/agent-defaults/claude-daily" &&
-        c.method === "DELETE",
-    ),
-  ).toBe(true);
-
-  // Switch to another profile sharing the same runner -> preselects company default & can save personal default
+  // Switch to another profile sharing the same runner -> preselects company default
   fireEvent.change(screen.getByLabelText("Agent"), {
     target: { value: "claude-longdoc" },
   });
   expect(composerSelectText("模型")).toBe("qwen3.8-flash#claude");
-  fireEvent.click(screen.getByRole("button", { name: "设为个人默认" }));
-  await waitFor(() =>
-    expect(
-      calls.some(
-        (c) =>
-          c.url === "/api/v1/me/agent-defaults/claude-longdoc" &&
-          c.method === "PUT" &&
-          JSON.stringify(c.body) ===
-            JSON.stringify({
-              provider_id: "prov-1",
-              model: "qwen3.8-flash#claude",
-            }),
-      ),
-    ).toBe(true),
-  );
 
   // Switch to profile with no personal or company default -> prompts explicitly instead of silently picking
   fireEvent.change(screen.getByLabelText("Agent"), {
@@ -1183,4 +1158,79 @@ test("从 assistant-catalog 加载已发布命名 Agent、按个人默认→公�
     provider_id: "prov-2",
     model: "gpt-6.2-sol#codex",
   });
+});
+
+test("输入框按 Enter 发送消息，按 Alt+Enter 换行不发送", async () => {
+  const onAsk = vi.fn((event: { preventDefault: () => void }) => {
+    event.preventDefault();
+  });
+  let value = "第一行";
+  const setQuestion = vi.fn((next: string) => {
+    value = next;
+  });
+  const typedProvider = { ...provider, model_capabilities: {} };
+  const baseProps = {
+    messages: getMessages("zh"),
+    setQuestion,
+    onAsk,
+    resumable: true,
+    currentConversationId: "",
+    projectArchived: false,
+    emptyConversation: true,
+    projects: [
+      {
+        id: "default",
+        name: "业务数据",
+        status: "active" as const,
+        type: "warehouse" as const,
+        my_role: "admin" as const,
+        created_at: "2026-11-05T00:00:00Z",
+      },
+    ],
+    projectId: "default",
+    selectProject: vi.fn(),
+    projectLocked: false,
+    agents: [
+      {
+        id: "pi",
+        name: "pi",
+        available: true,
+        effort_levels: [],
+        supports_skills: false,
+      },
+    ],
+    agentId: "pi",
+    selectAgent: vi.fn(),
+    profiles: {},
+    providers: [typedProvider],
+    providerId: "provider-1",
+    selectProvider: vi.fn(),
+    model: "model-1",
+    activeProvider: typedProvider,
+    onModelChange: vi.fn(),
+    effort: "" as const,
+    effortLevels: [],
+    allowedEfforts: [],
+    onEffortChange: vi.fn(),
+    canAsk: true,
+    conversationSelectionChanged: false,
+    attachments: [],
+    attachmentError: "",
+    addAttachments: vi.fn(),
+    removeAttachment: vi.fn(),
+    visionEnabled: false,
+  };
+
+  const { rerender } = render(<Composer {...baseProps} question={value} />);
+
+  const textarea = screen.getByLabelText("问题") as HTMLTextAreaElement;
+  textarea.setSelectionRange(value.length, value.length);
+  fireEvent.keyDown(textarea, { key: "Enter", altKey: true });
+  expect(onAsk).not.toHaveBeenCalled();
+  expect(setQuestion).toHaveBeenCalledWith("第一行\n");
+
+  rerender(<Composer {...baseProps} question={"第一行\n第二行"} />);
+
+  fireEvent.keyDown(screen.getByLabelText("问题"), { key: "Enter" });
+  expect(onAsk).toHaveBeenCalledTimes(1);
 });

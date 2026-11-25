@@ -498,7 +498,7 @@ def test_strict_credential_separation_never_borrows_pull_instance_secret(
         json={},
     )
     assert exec_resp.status_code == 400, exec_resp.text
-    assert "DTB token" in exec_resp.text
+    assert "Dev Key" in exec_resp.text
 
     # 2. Sampling must fail with ToolInvalidInput (missing personal token)
     monkeypatch.setattr(
@@ -518,7 +518,7 @@ def test_strict_credential_separation_never_borrows_pull_instance_secret(
     with bind_mcp_context(req, project_id=proj_a):
         with pytest.raises(sample_api.ToolInvalidInput) as sample_exc:
             asyncio.run(sample_api.sample_table_data("shop.orders", project_id=proj_a))
-        assert "DTB token" in str(sample_exc.value)
+        assert "Dev Key" in str(sample_exc.value)
 
     # 3. Discovery executor must fail with 400 DiscoveryTokenMissingError
     with pytest.raises(discovery_executor.DiscoveryTokenMissingError) as disc_exc:

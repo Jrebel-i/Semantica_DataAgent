@@ -308,7 +308,7 @@ def test_sample_without_dtb_token_is_invalid_input(client, table_metadata):
         result = call(client, "sample_table_data", {"table": "shop.orders"})
         assert result.isError
         assert result.structuredContent["code"] == "invalid_input"
-        assert "DTB token" in result.structuredContent["message"]
+        assert "Dev Key" in result.structuredContent["message"]
         assert not fake.calls
         c, headers, _ = client
         audit = c.get("/api/v1/query-audit", headers=headers).json()
@@ -327,7 +327,7 @@ def test_sample_dtb_401_is_invalid_input(client, table_metadata):
         result = call(client, "sample_table_data", {"table": "shop.orders"})
         assert result.isError
         assert result.structuredContent["code"] == "invalid_input"
-        assert "token" in result.structuredContent["message"].lower()
+        assert "dev key" in result.structuredContent["message"].lower()
     finally:
         fake.close()
 
@@ -371,7 +371,7 @@ def test_sample_without_token_or_partition_reports_missing_token(client, fact_me
         result = call(client, "sample_table_data", {"table": "dm.sales_fact"})
         assert result.isError
         assert result.structuredContent["code"] == "invalid_input"
-        assert "DTB token" in result.structuredContent["message"]
+        assert "Dev Key" in result.structuredContent["message"]
         assert not fake.calls
     finally:
         fake.close()

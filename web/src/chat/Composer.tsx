@@ -204,28 +204,54 @@ export function Composer({
   }
 
   function handleTextKeyDown(event: ReactKeyboardEvent<HTMLTextAreaElement>) {
-    if (!slashOpen) return;
-    if (event.key === "Escape") {
-      event.preventDefault();
-      setSlashDismissed(true);
+    if (slashOpen) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setSlashDismissed(true);
+        return;
+      }
+      if (!filteredSkills.length) return;
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        setActiveIndex((idx) => (idx + 1) % filteredSkills.length);
+      } else if (event.key === "ArrowUp") {
+        event.preventDefault();
+        setActiveIndex(
+          (idx) => (idx - 1 + filteredSkills.length) % filteredSkills.length,
+        );
+      } else if (
+        (event.key === "Enter" && !event.shiftKey) ||
+        event.key === "Tab"
+      ) {
+        event.preventDefault();
+        const chosen = filteredSkills[activeIndex] ?? filteredSkills[0];
+        if (chosen) chooseSkill(chosen);
+      }
       return;
     }
-    if (!filteredSkills.length) return;
-    if (event.key === "ArrowDown") {
+
+    if (event.nativeEvent.isComposing || event.keyCode === 229) return;
+    if (event.key !== "Enter") return;
+
+    if (event.altKey) {
       event.preventDefault();
-      setActiveIndex((idx) => (idx + 1) % filteredSkills.length);
-    } else if (event.key === "ArrowUp") {
+      const target = event.currentTarget;
+      const start = target.selectionStart ?? question.length;
+      const end = target.selectionEnd ?? question.length;
+      const nextValue = `${question.slice(0, start)}\n${question.slice(end)}`;
+      setQuestion(nextValue);
+      window.requestAnimationFrame(() => {
+        target.selectionStart = start + 1;
+        target.selectionEnd = start + 1;
+      });
+      return;
+    }
+
+    if (!event.shiftKey && !event.ctrlKey && !event.metaKey) {
       event.preventDefault();
-      setActiveIndex(
-        (idx) => (idx - 1 + filteredSkills.length) % filteredSkills.length,
-      );
-    } else if (
-      (event.key === "Enter" && !event.shiftKey) ||
-      event.key === "Tab"
-    ) {
-      event.preventDefault();
-      const chosen = filteredSkills[activeIndex] ?? filteredSkills[0];
-      if (chosen) chooseSkill(chosen);
+      if (canAsk) {
+        event.currentTarget.form?.requestSubmit();
+      }
     }
   }
 
@@ -271,13 +297,6 @@ export function Composer({
   );
   const showVisibleProviderSelect =
     catalogMode && activeProvidersList.length > 1;
-  const isCurrentPersonalDefault = Boolean(
-    personalDefault &&
-    providerId &&
-    model &&
-    personalDefault.provider_id === providerId &&
-    personalDefault.model === model,
-  );
   return (
     <div className="chat-composer">
       {emptyConversation && (
@@ -739,62 +758,6 @@ export function Composer({
               {t.nextMessageModel.replace("{model}", model)}
             </div>
           )}
-        {catalogMode && agents.length > 0 && !composerDisabled && (
-          <div className="composer-default-bar">
-            {isCurrentPersonalDefault ? (
-              <>
-                <Tag color="blue">{t.chatPersonalDefaultBadge}</Tag>
-                <Button
-                  type="link"
-                  size="small"
-                  className="composer-default-btn"
-                  htmlType="button"
-                  disabled={savingPersonalDefault}
-                  onClick={onResetPersonalDefault}
-                >
-                  {t.chatResetCompanyDefault}
-                </Button>
-              </>
-            ) : (
-              <>
-                {providerId && model && (
-                  <Button
-                    type="link"
-                    size="small"
-                    className="composer-default-btn"
-                    htmlType="button"
-                    disabled={savingPersonalDefault}
-                    onClick={onSavePersonalDefault}
-                  >
-                    {t.chatSavePersonalDefault}
-                  </Button>
-                )}
-                {personalDefault && (
-                  <Button
-                    type="link"
-                    size="small"
-                    className="composer-default-btn"
-                    htmlType="button"
-                    disabled={savingPersonalDefault}
-                    onClick={onResetPersonalDefault}
-                  >
-                    {t.chatResetCompanyDefault}
-                  </Button>
-                )}
-              </>
-            )}
-            {personalDefaultNotice && (
-              <span role="status" style={{ color: "var(--green)" }}>
-                {personalDefaultNotice}
-              </span>
-            )}
-            {personalDefaultError && (
-              <span role="alert" style={{ color: "var(--red)" }}>
-                {personalDefaultError}
-              </span>
-            )}
-          </div>
-        )}
       </form>
       {emptyConversation && (
         <div className="chat-examples">

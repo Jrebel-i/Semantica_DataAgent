@@ -401,7 +401,7 @@ def _runtime(user: Requester, project_id: str | None = None):
     with sessions()() as db:
         secret = db.get(PersonalDtbToken, user.id)
     if secret is None:
-        raise ToolInvalidInput("请先在个人设置中保存 DTB token")
+        raise ToolInvalidInput("请先在个人设置中保存 DTB / AI Gov Dev Key")
     return plugin, config, decrypt(secret.encrypted_token)
 
 
@@ -421,7 +421,9 @@ async def _run_sql(
             key = await executor.submit(sql, limit)
             result = await executor.wait(key)
     except ExecutorAuthenticationError as exc:
-        raise ToolInvalidInput("DTB token 无效，请在个人设置中更新") from exc
+        raise ToolInvalidInput(
+            str(exc) or "DTB / AI Gov Dev Key 无效，请在个人设置中更新"
+        ) from exc
     except TimeoutError as exc:
         raise ToolUnavailable(timeout_message) from exc
     except ExecutorError as exc:

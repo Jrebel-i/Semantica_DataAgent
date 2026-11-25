@@ -686,7 +686,7 @@ async def _execute(
             raise HTTPException(410, "查询确认已过期")
         secret = db.get(PersonalDtbToken, user.id)
         if secret is None:
-            raise HTTPException(400, "请先在个人设置中保存 DTB token")
+            raise HTTPException(400, "请先在个人设置中保存 DTB / AI Gov Dev Key")
         token = decrypt(secret.encrypted_token)
         sql = row.sql
         claimed = db.execute(
@@ -747,7 +747,10 @@ async def _execute(
         elif executor_stage == "poll":
             stage = "wait"
         raise _annotate_query_failure(
-            HTTPException(401, "DTB token 失效，请在个人设置中更新"),
+            HTTPException(
+                401,
+                str(exc) or "DTB / AI Gov Dev Key 失效，请在个人设置中更新",
+            ),
             stage,
             category,
         ) from None
@@ -1334,7 +1337,7 @@ async def download(
                 )
             secret = db.get(PersonalDtbToken, user.id)
             if secret is None:
-                raise HTTPException(400, "请先在个人设置中保存 DTB token")
+                raise HTTPException(400, "请先在个人设置中保存 DTB / AI Gov Dev Key")
             key, token = row.query_key, decrypt(secret.encrypted_token)
     if denial is not None:
         _audit_download(
