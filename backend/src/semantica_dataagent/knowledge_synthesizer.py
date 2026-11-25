@@ -18,7 +18,9 @@ import httpx
 from cryptography.fernet import InvalidToken
 
 from . import knowledge, project_context, provider_probe
+from .agent_profile_api import _catalog_set
 from .agent_types import ProviderConfig
+from .assistant_catalog import is_catalog_governed, resolve_system_default_llm
 from .crypto import decrypt
 from .db import (
     CorrectionProposal,
@@ -187,19 +189,29 @@ def resolve_llm_provider(
         system_model = _configured_system_setting(
             db, "assistant_model", "DATAAGENT_ASK_MODEL"
         )
+        governed = is_catalog_governed(db)
 
         row: Provider | None = None
         used_fallback_provider = False
+        chosen_model: str | None = None
         if configured_pid:
             row = db.get(Provider, configured_pid)
             if row is None and explicit_pid:
                 return None
         if row is None and not explicit_pid:
-            if system_pid:
-                row = db.get(Provider, system_pid)
-            if row is None:
-                row = db.query(Provider).order_by(Provider.name, Provider.id).first()
-                used_fallback_provider = row is not None
+            if governed:
+                resolved_sys = resolve_system_default_llm(db)
+                if resolved_sys is None:
+                    return None
+                row, chosen_model = resolved_sys
+            else:
+                if system_pid:
+                    row = db.get(Provider, system_pid)
+                if row is None:
+                    row = (
+                        db.query(Provider).order_by(Provider.name, Provider.id).first()
+                    )
+                    used_fallback_provider = row is not None
 
         if row is None or not row.base_url:
             return None
@@ -211,14 +223,28 @@ def resolve_llm_provider(
         except ValueError:
             models = []
 
-        if configured_model:
-            chosen_model = configured_model
-        elif system_model and (not models or system_model in models):
-            chosen_model = system_model
-        elif used_fallback_provider:
-            chosen_model = models[0] if models else ""
-        else:
-            chosen_model = models[0] if models else ""
+        catalog = _catalog_set(row)
+        if chosen_model is None:
+            if configured_model:
+                if catalog is not None and configured_model not in catalog:
+                    return None
+                chosen_model = configured_model
+            elif catalog is not None:
+                resolved_sys = resolve_system_default_llm(db)
+                if (
+                    resolved_sys is not None
+                    and resolved_sys[0].id == row.id
+                    and resolved_sys[1] in catalog
+                ):
+                    chosen_model = resolved_sys[1]
+                else:
+                    chosen_model = next((m for m in models if m in catalog), "")
+            elif system_model and (not models or system_model in models):
+                chosen_model = system_model
+            elif used_fallback_provider:
+                chosen_model = models[0] if models else ""
+            else:
+                chosen_model = models[0] if models else ""
         if not chosen_model:
             return None
 

@@ -25,8 +25,14 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, text
 
 from .agent_plugin import build_attachment_prompt
-from .agent_runner import DONE, ERROR, AgentEvent, AgentTurnRequest, get_runner
+from .agent_runner import DONE, ERROR, AgentEvent, AgentTurnRequest
 from .api_time import UtcDatetime
+from .assistant_catalog import (
+    AssistantResolutionError,
+    preview_runner_for_request,
+    resolve_assistant_target,
+    resolve_runner_adapter,
+)
 from .attachments import (
     AttachmentLimitError,
     AttachmentStorageError,
@@ -59,6 +65,7 @@ logger = logging.getLogger(__name__)
 
 class AskRequest(BaseModel):
     question: str = Field(min_length=1, max_length=20000, pattern=r"\S")
+    agent_profile_id: str | None = None
     agent: str | None = None
     provider_id: str | None = None
     model: str | None = None
@@ -116,6 +123,7 @@ class ConversationView(BaseModel):
     project_name: str
     title: str
     agent: str
+    agent_profile_id: str | None = None
     provider_id: str
     model: str
     created_at: UtcDatetime
@@ -360,6 +368,7 @@ def _view(row: Conversation, turn_count: int, project_name: str) -> Conversation
         project_name=project_name,
         title=row.title,
         agent=row.agent,
+        agent_profile_id=row.agent_profile_id,
         provider_id=row.provider_id,
         model=row.model,
         created_at=row.created_at,
@@ -650,20 +659,6 @@ def _agent_allowed_providers(db, agent_id: str) -> set[str] | None:
     return allowed or None
 
 
-def _validate_agent_provider(db, agent_id: str, provider_id: str, model: str):
-    provider = db.get(Provider, provider_id)
-    if provider is None:
-        raise HTTPException(404, "Provider not found")
-    allowed = _agent_allowed_providers(db, agent_id)
-    if allowed is not None and provider_id not in allowed:
-        raise HTTPException(
-            422, "Provider is not available for this conversation's agent"
-        )
-    if model not in json.loads(provider.models):
-        raise HTTPException(422, "Model is not configured for this provider")
-    return provider
-
-
 def _model_effort_levels(provider: Provider, model: str) -> set[str]:
     if not provider.model_capabilities:
         return set()
@@ -736,22 +731,33 @@ async def _start_turn(
                 raise HTTPException(
                     409, "Conversation session expired and cannot be resumed"
                 )
-            if body.agent is not None and body.agent != existing.agent:
-                raise HTTPException(409, "Start a new conversation to change agent")
+            try:
+                _expected_agent_id, expected_runner = preview_runner_for_request(
+                    db,
+                    conversation=existing,
+                    agent_profile_id=body.agent_profile_id,
+                    agent=body.agent,
+                )
+            except AssistantResolutionError as exc:
+                raise HTTPException(exc.status_code, exc.message) from None
             bound_project = existing.project_id
-            expected_agent_id = existing.agent
         if body.project is not None and body.project != bound_project:
             raise HTTPException(409, "对话已绑定其它项目，请新建对话")
         scope = resolve_project_scope(bound_project, requester)
     else:
-        expected_agent_id = body.agent or "pi"
+        with sessions()() as db:
+            try:
+                _expected_agent_id, expected_runner = preview_runner_for_request(
+                    db,
+                    agent_profile_id=body.agent_profile_id,
+                    agent=body.agent,
+                )
+            except AssistantResolutionError as exc:
+                raise HTTPException(exc.status_code, exc.message) from None
         scope = resolve_project_scope(body.project, requester)
     project_id = scope.project_id
     project_type = getattr(scope, "project_type", "warehouse") or "warehouse"
 
-    expected_runner = get_runner(expected_agent_id)
-    if expected_runner is None:
-        raise HTTPException(422, "Unknown agent")
     if body.skill_name is not None and not bool(
         getattr(expected_runner, "supports_skills", False)
     ):
@@ -768,6 +774,7 @@ async def _start_turn(
             )
         with sessions().begin() as db:
             db.execute(text("BEGIN IMMEDIATE"))
+            conversation: Conversation | None = None
             if body.conversation_id:
                 conversation = db.get(Conversation, body.conversation_id)
                 if conversation is None or conversation.owner_id != requester.id:
@@ -778,11 +785,6 @@ async def _start_turn(
                     )
                 if conversation.project_id != project_id:
                     raise HTTPException(409, "对话已绑定其它项目，请新建对话")
-                if body.agent is not None and body.agent != conversation.agent:
-                    raise HTTPException(409, "Start a new conversation to change agent")
-                agent_id = conversation.agent
-                provider_id = body.provider_id or conversation.provider_id
-                model = body.model or conversation.model
                 sequence = (
                     db.query(func.max(Turn.sequence))
                     .filter(Turn.conversation_id == conversation.id)
@@ -790,17 +792,46 @@ async def _start_turn(
                     or 0
                 ) + 1
             else:
-                if not body.provider_id or not body.model:
-                    raise HTTPException(422, "provider_id and model are required")
-                agent_id = body.agent or "pi"
-                provider_id = body.provider_id
-                model = body.model
+                sequence = 1
+
+            try:
+                resolved = resolve_assistant_target(
+                    db,
+                    owner_id=requester.id,
+                    conversation=conversation,
+                    agent_profile_id=body.agent_profile_id,
+                    agent=body.agent,
+                    provider_id=body.provider_id,
+                    model=body.model,
+                    legacy_allowed_providers=_agent_allowed_providers,
+                    check_runner_available=False,
+                )
+            except AssistantResolutionError as exc:
+                raise HTTPException(exc.status_code, exc.message) from None
+
+            agent_id = resolved.agent_id
+            agent_profile_id = resolved.agent_profile_id
+            provider = resolved.provider
+            provider_id = provider.id
+            model = resolved.model
+            runner = resolved.runner
+            if body.skill_name is not None and not bool(
+                getattr(runner, "supports_skills", False)
+            ):
+                raise HTTPException(422, "当前 Agent Runner 不支持调用 Skill")
+            _validate_effort(provider, model, runner, body.effort)
+            _reject_images_for_text_model(provider, model, staged)
+            if not resolved.runner_available:
+                raise HTTPException(503, "Agent runtime is not installed")
+
+            if conversation is None:
                 conversation = Conversation(
                     id=uuid.uuid4().hex,
                     owner_id=requester.id,
                     project_id=project_id,
                     title=body.question.strip()[:100],
                     agent=agent_id,
+                    agent_profile_id=agent_profile_id,
                     provider_id=provider_id,
                     model=model,
                     created_at=now,
@@ -808,23 +839,16 @@ async def _start_turn(
                 )
                 db.add(conversation)
                 db.flush()
-                sequence = 1
-            provider = _validate_agent_provider(db, agent_id, provider_id, model)
-            runner = get_runner(agent_id)
-            if runner is None:
-                raise HTTPException(422, "Unknown agent")
-            if body.skill_name is not None and not bool(
-                getattr(runner, "supports_skills", False)
-            ):
-                raise HTTPException(422, "当前 Agent Runner 不支持调用 Skill")
-            _validate_effort(provider, model, runner, body.effort)
-            _reject_images_for_text_model(provider, model, staged)
-            if not runner.available():
-                raise HTTPException(503, "Agent runtime is not installed")
-            conversation.agent = agent_id
-            conversation.provider_id = provider_id
-            conversation.model = model
-            conversation.updated_at = now
+            else:
+                conversation.agent = agent_id
+                if (
+                    conversation.agent_profile_id is None
+                    and agent_profile_id is not None
+                ):
+                    conversation.agent_profile_id = agent_profile_id
+                conversation.provider_id = provider_id
+                conversation.model = model
+                conversation.updated_at = now
             turn = Turn(
                 conversation_id=conversation.id,
                 provider_id=provider_id,
@@ -915,6 +939,7 @@ async def ask_with_attachments(
     requester: Annotated[Requester, Depends(current_requester)],
     question: Annotated[str, Form(min_length=1, max_length=20000, pattern=r"\S")],
     attachments: Annotated[list[UploadFile] | None, File()] = None,
+    agent_profile_id: Annotated[str | None, Form()] = None,
     agent: Annotated[str | None, Form()] = None,
     provider_id: Annotated[str | None, Form()] = None,
     model: Annotated[str | None, Form()] = None,
@@ -926,6 +951,7 @@ async def ask_with_attachments(
     try:
         body = AskRequest(
             question=question,
+            agent_profile_id=agent_profile_id,
             agent=agent,
             provider_id=provider_id,
             model=model,
@@ -974,7 +1000,7 @@ async def confirm_query(
         plans = db.query(TurnEvent).filter_by(turn_id=turn_id, type="query_plan").all()
         if not any(json.loads(event.data).get("id") == query_id for event in plans):
             raise HTTPException(404, "查询计划不存在")
-        runner = get_runner(conversation.agent)
+        runner = resolve_runner_adapter(db, conversation.agent)
         provider_id = turn.provider_id or conversation.provider_id
         provider = db.get(Provider, provider_id)
         if runner is None or not runner.available() or provider is None:
