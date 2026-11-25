@@ -184,7 +184,18 @@ export function conversationFetcher(
 }
 
 export function setupChatTestEnv() {
+  let originalGetComputedStyle: PropertyDescriptor | undefined;
+
   beforeEach(() => {
+    originalGetComputedStyle = Object.getOwnPropertyDescriptor(
+      window,
+      "getComputedStyle",
+    );
+    Object.defineProperty(window, "getComputedStyle", {
+      configurable: true,
+      writable: true,
+      value: () => ({ getPropertyValue: () => "" }),
+    });
     vi.stubGlobal(
       "ResizeObserver",
       class {
@@ -205,6 +216,15 @@ export function setupChatTestEnv() {
     clearTableDetailCache();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+    if (originalGetComputedStyle) {
+      Object.defineProperty(
+        window,
+        "getComputedStyle",
+        originalGetComputedStyle,
+      );
+    } else {
+      delete (window as unknown as Record<string, unknown>).getComputedStyle;
+    }
     Object.defineProperty(navigator, "clipboard", {
       configurable: true,
       value: undefined,
