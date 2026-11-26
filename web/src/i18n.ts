@@ -483,6 +483,7 @@ const messages = {
     sourceStatusUnknownHeading: "尚未构建知识库",
     sourceLatestCommit: "来源版本",
     sourceEmptyHint: "从左侧选择源文件查看内容或版本变化。",
+    sourceDownloadFile: "下载",
     autoBuild: "自动构建",
     sourceStatusPending: "待构建（约 {seconds} 秒后开始）",
     sourceStatusPendingNoTime: "待构建",
@@ -1701,6 +1702,7 @@ const messages = {
     sourceLatestCommit: "Source commit",
     sourceEmptyHint:
       "Select a source file on the left to inspect its contents or history.",
+    sourceDownloadFile: "Download",
     autoBuild: "Auto build",
     sourceStatusPending: "Pending build (starts in about {seconds}s)",
     sourceStatusPendingNoTime: "Pending build",

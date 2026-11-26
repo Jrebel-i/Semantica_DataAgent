@@ -127,6 +127,9 @@ function FileTree({
               className={activePath === fullPath ? "active" : undefined}
               onClick={() => open(fullPath)}
             >
+              <span className="source-file-icon" aria-hidden="true">
+                ▤
+              </span>
               {name}
             </button>
           </li>
@@ -702,9 +705,9 @@ function ProjectSourcePage({
       {success && <Alert type="success" title={`${t.uploaded}: ${success}`} />}
 
       <div className="source-layout">
-        <section className="card section-card">
-          <div className="card-title-row">
-            <h2 className="card-title">
+        <section className="card section-card source-tree-card">
+          <div className="source-tree-toolbar">
+            <h2 className="card-title" style={{ margin: 0 }}>
               {t.sourceBrowse}{" "}
               <span className="muted" style={{ fontWeight: 400, fontSize: 13 }}>
                 (
@@ -733,7 +736,7 @@ function ProjectSourcePage({
               </Button>
             </div>
           </div>
-          <div className="stack" style={{ marginBottom: 12 }}>
+          <div className="stack" style={{ marginBottom: 10 }}>
             <input
               aria-label={t.sourceFilterFiles}
               placeholder={t.sourceFilterFiles}
@@ -754,7 +757,7 @@ function ProjectSourcePage({
 
         <div className="source-stack">
           {path ? (
-            <section className="card section-card">
+            <section className="card section-card source-reader-card">
               <div className="card-title-row">
                 <div>
                   <h2 className="card-title">{fileBasename}</h2>
@@ -766,6 +769,15 @@ function ProjectSourcePage({
                   <Button onClick={() => setHistoryOpen(true)}>
                     {t.sourceHistoryModal}
                   </Button>
+                  {!binary && (
+                    <a
+                      className="ant-btn ant-btn-default"
+                      href={`data:text/plain;charset=utf-8,${encodeURIComponent(content)}`}
+                      download={fileBasename}
+                    >
+                      {t.sourceDownloadFile}
+                    </a>
+                  )}
                 </div>
               </div>
 
@@ -818,7 +830,12 @@ function ProjectSourcePage({
               )}
             </section>
           ) : (
-            <div className="empty-state">{t.sourceEmptyHint}</div>
+            <section className="card section-card source-reader-empty">
+              <div className="source-reader-empty-inner">
+                <div style={{ fontSize: 28, opacity: 0.45 }}>▤</div>
+                <div>{t.sourceEmptyHint}</div>
+              </div>
+            </section>
           )}
         </div>
       </div>
