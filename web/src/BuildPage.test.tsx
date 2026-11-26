@@ -110,8 +110,9 @@ test("shows queue state, logs, stats and triggers both build types", async () =>
   );
   render(<BuildPage token="token" messages={getMessages("zh")} />);
   expect((await screen.findAllByText("排队中")).length).toBeGreaterThan(0);
-  expect(await screen.findByText("full build queued")).toBeTruthy();
   expect(await screen.findByText("新增文件")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "执行日志" }));
+  expect(await screen.findByText("full build queued")).toBeTruthy();
   expect(await screen.findByText("阶段")).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "增量构建" }));
   await waitFor(() =>
@@ -120,6 +121,7 @@ test("shows queue state, logs, stats and triggers both build types", async () =>
   expect(await screen.findByText("incremental build queued")).toBeTruthy();
   expect(screen.getByText("构建已加入队列")).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "全量构建" }));
+  fireEvent.click(await screen.findByRole("button", { name: "确认构建" }));
   await waitFor(() =>
     expect(requests).toEqual([
       { build_type: "incremental" },

@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Alert, Button, Checkbox, Switch, Tag, Upload } from "antd";
+import { Alert, Button, Checkbox, Modal, Switch, Tag, Upload } from "antd";
 import type { components } from "./api";
 import { DiffViewer } from "./DiffViewer";
 import type { Messages } from "./i18n";
+import { Markdown } from "./Markdown";
 import { safeDecodePath } from "./paths";
 import { ProjectSelector, storedProject, useProjects } from "./ProjectSelector";
 
@@ -34,6 +35,7 @@ const statusColors: Record<SourceStatus["state"], string> = {
   failed: "red",
   unknown: "default",
 };
+
 function statusLabel(status: SourceStatus, t: Messages) {
   const seconds = Math.max(0, Math.ceil(status.due_in_seconds ?? 0));
   switch (status.state) {
@@ -53,6 +55,27 @@ function statusLabel(status: SourceStatus, t: Messages) {
       return t.sourceStatusUnknown;
   }
 }
+
+function statusHeading(status: SourceStatus | null, t: Messages) {
+  switch (status?.state) {
+    case "effective":
+      return t.sourceStatusEffectiveHeading;
+    case "pending":
+      return t.sourceStatusPendingHeading;
+    case "building":
+      return t.sourceStatusBuildingHeading;
+    case "failed":
+      return t.sourceStatusFailedHeading;
+    default:
+      return t.sourceStatusUnknownHeading;
+  }
+}
+
+function isMarkdownPath(pathname: string) {
+  const lower = pathname.toLowerCase();
+  return lower.endsWith(".md") || lower.endsWith(".markdown");
+}
+
 function tree(paths: string[]): Tree {
   const root: Tree = { directories: {}, files: [] };
   for (const path of paths) {
@@ -65,15 +88,18 @@ function tree(paths: string[]): Tree {
   }
   return root;
 }
+
 function FileTree({
   node,
   prefix,
   defaultOpen,
+  activePath,
   open,
 }: {
   node: Tree;
   prefix: string;
   defaultOpen: boolean;
+  activePath: string;
   open: (path: string) => void;
 }) {
   return (
@@ -86,21 +112,30 @@ function FileTree({
               node={child}
               prefix={`${prefix}${name}/`}
               defaultOpen={defaultOpen}
+              activePath={activePath}
               open={open}
             />
           </details>
         </li>
       ))}
-      {node.files.map((name) => (
-        <li key={name}>
-          <button type="button" onClick={() => open(prefix + name)}>
-            {name}
-          </button>
-        </li>
-      ))}
+      {node.files.map((name) => {
+        const fullPath = prefix + name;
+        return (
+          <li key={name}>
+            <button
+              type="button"
+              className={activePath === fullPath ? "active" : undefined}
+              onClick={() => open(fullPath)}
+            >
+              {name}
+            </button>
+          </li>
+        );
+      })}
     </ul>
   );
 }
+
 function FilePicker({
   label,
   files,
@@ -151,6 +186,7 @@ function FilePicker({
     </Upload>
   );
 }
+
 function encoded(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -159,6 +195,7 @@ function encoded(file: File): Promise<string> {
     reader.readAsDataURL(file);
   });
 }
+
 export function SourcePage({
   token,
   messages: t,
@@ -172,6 +209,7 @@ export function SourcePage({
   const [project, setProject] = useState(
     () => params.get("project") || storedProject(),
   );
+  const [uploadOpen, setUploadOpen] = useState(false);
   if (params.has("gap")) {
     return (
       <GapSourcePage
@@ -190,6 +228,8 @@ export function SourcePage({
       token={token}
       messages={t}
       onNavigateBuilds={onNavigateBuilds}
+      uploadOpen={uploadOpen}
+      setUploadOpen={setUploadOpen}
     />
   );
 }
@@ -265,6 +305,8 @@ function ProjectSourcePage({
   onNavigateBuilds,
   appendOnly = false,
   gapId,
+  uploadOpen: controlledUploadOpen,
+  setUploadOpen: setControlledUploadOpen,
 }: {
   project: string;
   setProject: (project: string) => void;
@@ -273,9 +315,16 @@ function ProjectSourcePage({
   onNavigateBuilds?: () => void;
   appendOnly?: boolean;
   gapId?: string;
+  uploadOpen?: boolean;
+  setUploadOpen?: (open: boolean) => void;
 }) {
   const [paths, setPaths] = useState<string[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
+  const [localUploadOpen, setLocalUploadOpen] = useState(appendOnly);
+  const uploadOpen = controlledUploadOpen ?? localUploadOpen;
+  const setUploadOpen = setControlledUploadOpen ?? setLocalUploadOpen;
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [viewMode, setViewMode] = useState<"read" | "raw">("read");
   const [uploadMode, setUploadMode] = useState<"category" | "target">(
     "category",
   );
@@ -506,6 +555,7 @@ function ProjectSourcePage({
       setSuccess(result.commit);
       setPreview(null);
       approvedPreview.current = null;
+      setUploadOpen(false);
       await refresh();
       setStatusRefresh((value) => value + 1);
     } catch {
@@ -528,6 +578,7 @@ function ProjectSourcePage({
       setBefore(history[1]?.commit ?? history[0]?.commit ?? "");
       setAfter(history[0]?.commit ?? "");
       setDiff("");
+      setViewMode("read");
       setError("");
     } catch {
       setError(t.sourceError);
@@ -548,6 +599,9 @@ function ProjectSourcePage({
   const visiblePaths = trimmedFilter
     ? paths.filter((p) => p.toLowerCase().includes(trimmedFilter))
     : paths;
+  const decodedPath = safeDecodePath(path);
+  const fileBasename = decodedPath.split("/").pop() || decodedPath;
+
   return (
     <section className="stack admin-page">
       <div className="page-header">
@@ -555,17 +609,25 @@ function ProjectSourcePage({
           <h1 className="page-title">{t.source}</h1>
           <p className="page-subtitle">{t.sourceHint}</p>
         </div>
-        {!appendOnly && (
-          <div className="page-actions">
+        <div className="page-actions">
+          {!appendOnly && (
             <ProjectSelector
               token={token}
               value={project}
               onChange={setProject}
               messages={t}
             />
-          </div>
-        )}
+          )}
+          <Button
+            type="primary"
+            disabled={projectUnavailable}
+            onClick={() => setUploadOpen(true)}
+          >
+            {t.sourceOpenUpload}
+          </Button>
+        </div>
       </div>
+
       <section className="card section-card source-status-bar">
         <div className="source-status-meta">
           {status && (
@@ -576,6 +638,22 @@ function ProjectSourcePage({
               {statusLabel(status, t)}
             </Tag>
           )}
+          <div>
+            <div className="source-status-heading">
+              {statusHeading(status, t)}
+            </div>
+            {(status?.last_build_id || status?.source_commit) && (
+              <div className="muted source-status-sub">
+                {status.last_build_id ? `#${status.last_build_id}` : ""}
+                {status.last_build_id && status.source_commit ? " · " : ""}
+                {status.source_commit
+                  ? `${t.sourceLatestCommit} ${status.source_commit.slice(0, 7)}`
+                  : ""}
+              </div>
+            )}
+          </div>
+        </div>
+        <div className="page-actions source-status-actions">
           {autoBuild !== null && (
             <label className="source-auto-build">
               <span className="muted">{t.autoBuild}</span>
@@ -601,381 +679,446 @@ function ProjectSourcePage({
               />
             </label>
           )}
-        </div>
-        <div className="page-actions source-status-actions">
+          {onNavigateBuilds && (
+            <Button autoInsertSpace={false} onClick={onNavigateBuilds}>
+              {t.sourceViewBuilds}
+            </Button>
+          )}
           <Button
-            type="primary"
             autoInsertSpace={false}
             disabled={busy}
             onClick={() => void triggerQuickBuild()}
           >
             {t.sourceQuickBuild}
           </Button>
-          {onNavigateBuilds && (
-            <Button autoInsertSpace={false} onClick={onNavigateBuilds}>
-              {t.sourceViewBuilds}
-            </Button>
-          )}
         </div>
       </section>
+
       {projectUnavailable && (
         <Alert type="error" title={t.gapSourceUnavailable} />
       )}
       {error && <Alert type="error" title={error} />}
       {buildNotice && <Alert type="success" title={buildNotice} />}
       {success && <Alert type="success" title={`${t.uploaded}: ${success}`} />}
+
       <div className="source-layout">
-        <div className="source-stack">
-          <section className="card section-card">
-            <div className="card-title-row">
-              <h2 className="card-title">{t.sourceUpload}</h2>
-              <div className="filter-pills">
-                <Button
-                  size="small"
-                  type={uploadMode === "category" ? "primary" : "default"}
-                  onClick={() => {
-                    invalidatePreview();
-                    setUploadMode("category");
-                  }}
-                >
-                  {t.sourceModeCategory}
-                </Button>
-                <Button
-                  size="small"
-                  type={uploadMode === "target" ? "primary" : "default"}
-                  onClick={() => {
-                    invalidatePreview();
-                    setUploadMode("target");
-                  }}
-                >
-                  {t.sourceModeTarget}
-                </Button>
-              </div>
-            </div>
-            <div className="stack">
-              <div className="field">
-                <span className="field-label">{t.sourceFiles}</span>
-                <FilePicker
-                  label={t.sourceFiles}
-                  files={files}
-                  emptyLabel={t.sourceNoFile}
-                  countLabel={t.sourceFileCount}
-                  chooseLabel={t.sourceChoose}
-                  onChange={chooseFiles}
-                />
-              </div>
-              <div className="field">
-                <span className="field-label">{t.sourceFolder}</span>
-                <FilePicker
-                  label={t.sourceFolder}
-                  files={files}
-                  emptyLabel={t.sourceNoFile}
-                  countLabel={t.sourceFileCount}
-                  chooseLabel={t.sourceChoose}
-                  directory
-                  onChange={chooseFiles}
-                />
-              </div>
-              {uploadMode === "category" ? (
-                <>
-                  <label className="field">
-                    <span className="field-label">{t.sourceCategory}</span>
-                    <select
-                      aria-label={t.sourceCategory}
-                      value={category}
-                      onChange={(e) => {
-                        invalidatePreview();
-                        setCategory(e.target.value);
-                        setNewCategory("");
-                      }}
-                    >
-                      <option value="">{t.sourceCategoryPlaceholder}</option>
-                      {categories.map((item) => (
-                        <option value={item.name} key={item.name}>
-                          {item.name}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="field">
-                    <span className="field-label">{t.sourceNewCategory}</span>
-                    <input
-                      aria-label={t.sourceNewCategory}
-                      placeholder={t.sourceNewCategoryPlaceholder}
-                      value={newCategory}
-                      onChange={(e) => {
-                        invalidatePreview();
-                        setNewCategory(e.target.value);
-                        setCategory("");
-                      }}
-                    />
-                  </label>
-                  <label className="field">
-                    <span className="field-label">{t.sourceSubfolder}</span>
-                    <input
-                      aria-label={t.sourceSubfolder}
-                      placeholder={t.sourceSubfolderPlaceholder}
-                      value={subfolder}
-                      onChange={(e) => {
-                        invalidatePreview();
-                        setSubfolder(e.target.value);
-                      }}
-                    />
-                  </label>
-                </>
-              ) : (
-                <div className="stack">
-                  <div className="filter-pills">
-                    {(["ossie", "canonical"] as const).map((preset) => (
-                      <Button
-                        key={preset}
-                        size="small"
-                        type={targetDir === preset ? "primary" : "default"}
-                        onClick={() => {
-                          invalidatePreview();
-                          setTargetDir(preset);
-                        }}
-                      >
-                        {preset}/
-                      </Button>
-                    ))}
-                  </div>
-                  <label className="field">
-                    <span className="field-label">{t.sourceTargetDir}</span>
-                    <input
-                      aria-label={t.sourceTargetDir}
-                      placeholder={t.sourceTargetDirPlaceholder}
-                      value={targetDir}
-                      onChange={(e) => {
-                        invalidatePreview();
-                        setTargetDir(e.target.value);
-                      }}
-                    />
-                  </label>
-                </div>
-              )}
-              {!appendOnly && (
-                <details className="advanced-options">
-                  <summary>{t.sourceAdvanced}</summary>
-                  <Checkbox
-                    className="plugin-enable"
-                    checked={replace}
-                    onChange={(e) => {
-                      invalidatePreview();
-                      setReplace(e.target.checked);
-                    }}
-                  >
-                    {t.sourceReplace}
-                  </Checkbox>
-                </details>
-              )}
-              <p className="field-hint">{t.sourceIndexHint}</p>
-              {preview && (
-                <div className="upload-preview">
-                  <p className="preview-counts">
-                    <span className="preview-added">
-                      {t.sourcePreviewAdded.replace(
-                        "{count}",
-                        String(preview.counts.added),
-                      )}
-                    </span>{" "}
-                    <span className="preview-overwritten">
-                      {t.sourcePreviewOverwritten.replace(
-                        "{count}",
-                        String(preview.counts.overwritten),
-                      )}
-                    </span>{" "}
-                    <span className="muted">
-                      {t.sourcePreviewUnchanged.replace(
-                        "{count}",
-                        String(preview.counts.unchanged),
-                      )}
-                    </span>
-                  </p>
-                  {preview.counts.deleted > 0 && (
-                    <Alert
-                      type="error"
-                      title={t.sourcePreviewDeleted.replace(
-                        "{count}",
-                        String(preview.counts.deleted),
-                      )}
-                    />
-                  )}
-                  <details>
-                    <summary>{t.sourcePreviewPaths}</summary>
-                    {(
-                      [
-                        ["added", t.sourcePreviewAddedTitle],
-                        ["overwritten", t.sourcePreviewOverwrittenTitle],
-                        ["unchanged", t.sourcePreviewUnchangedTitle],
-                        ["deleted", t.sourcePreviewDeletedTitle],
-                      ] as const
-                    ).map(([key, label]) =>
-                      preview[key].length ? (
-                        <div key={key}>
-                          <h4 className={`preview-${key}`}>{label}</h4>
-                          <ul>
-                            {preview[key].map((item) => (
-                              <li className="mono" key={item}>
-                                {item}
-                              </li>
-                            ))}
-                          </ul>
-                        </div>
-                      ) : null,
-                    )}
-                  </details>
-                </div>
-              )}
-              <div className="save-bar" style={{ marginTop: 0 }}>
-                <button
-                  type="button"
-                  disabled={busy || projectUnavailable || !canPreviewUpload}
-                  onClick={() => void loadPreview()}
-                >
-                  {t.sourcePreview}
-                </button>
-                <button
-                  type="button"
-                  className={replace && preview ? "danger" : undefined}
-                  disabled={busy || projectUnavailable || !preview}
-                  onClick={() => void send()}
-                >
-                  {replace && preview
-                    ? t.sourceConfirmDelete.replace(
-                        "{count}",
-                        String(preview.counts.deleted),
-                      )
-                    : t.sourceConfirm}
-                </button>
-              </div>
-            </div>
-          </section>
-          <section className="card section-card">
-            <div className="card-title-row">
-              <h2 className="card-title">{t.sourceBrowse}</h2>
-              <span className="muted">
+        <section className="card section-card">
+          <div className="card-title-row">
+            <h2 className="card-title">
+              {t.sourceBrowse}{" "}
+              <span className="muted" style={{ fontWeight: 400, fontSize: 13 }}>
+                (
                 {trimmedFilter
                   ? `${visiblePaths.length}/${paths.length}`
                   : paths.length}
+                )
               </span>
+            </h2>
+            <div className="filter-pills">
+              <Button
+                size="small"
+                onClick={() =>
+                  setTreeExpand((prev) => ({ open: true, seq: prev.seq + 1 }))
+                }
+              >
+                {t.sourceExpandAll}
+              </Button>
+              <Button
+                size="small"
+                onClick={() =>
+                  setTreeExpand((prev) => ({ open: false, seq: prev.seq + 1 }))
+                }
+              >
+                {t.sourceCollapseAll}
+              </Button>
             </div>
-            <div className="stack" style={{ marginBottom: 12 }}>
-              <input
-                aria-label={t.sourceFilterFiles}
-                placeholder={t.sourceFilterFiles}
-                value={fileFilter}
-                onChange={(e) => setFileFilter(e.target.value)}
-              />
-              <div className="filter-pills">
-                <Button
-                  size="small"
-                  onClick={() =>
-                    setTreeExpand((prev) => ({ open: true, seq: prev.seq + 1 }))
-                  }
-                >
-                  {t.sourceExpandAll}
-                </Button>
-                <Button
-                  size="small"
-                  onClick={() =>
-                    setTreeExpand((prev) => ({
-                      open: false,
-                      seq: prev.seq + 1,
-                    }))
-                  }
-                >
-                  {t.sourceCollapseAll}
-                </Button>
-              </div>
-            </div>
-            <div className="source-tree" key={treeExpand.seq}>
-              <FileTree
-                node={tree(visiblePaths)}
-                prefix=""
-                defaultOpen={treeExpand.open}
-                open={(p) => void open(p)}
-              />
-            </div>
-          </section>
-        </div>
+          </div>
+          <div className="stack" style={{ marginBottom: 12 }}>
+            <input
+              aria-label={t.sourceFilterFiles}
+              placeholder={t.sourceFilterFiles}
+              value={fileFilter}
+              onChange={(e) => setFileFilter(e.target.value)}
+            />
+          </div>
+          <div className="source-tree source-tree--tall" key={treeExpand.seq}>
+            <FileTree
+              node={tree(visiblePaths)}
+              prefix=""
+              defaultOpen={treeExpand.open}
+              activePath={path}
+              open={(p) => void open(p)}
+            />
+          </div>
+        </section>
+
         <div className="source-stack">
           {path ? (
             <section className="card section-card">
               <div className="card-title-row">
-                <h2 className="card-title mono">{path}</h2>
+                <div>
+                  <h2 className="card-title">{fileBasename}</h2>
+                  <div className="mono muted source-file-path">
+                    {decodedPath}
+                  </div>
+                </div>
+                <div className="page-actions">
+                  <Button onClick={() => setHistoryOpen(true)}>
+                    {t.sourceHistoryModal}
+                  </Button>
+                </div>
               </div>
+
               {binary ? (
-                <a
-                  href={`data:application/octet-stream;base64,${content}`}
-                  download={path.split("/").pop()}
-                >
-                  {t.sourceDownload}
-                </a>
+                <div className="empty-state">
+                  <a
+                    href={`data:application/octet-stream;base64,${content}`}
+                    download={fileBasename}
+                  >
+                    {t.sourceDownload}
+                  </a>
+                </div>
               ) : (
-                <pre className="source-preview">{content}</pre>
-              )}
-              <h3 className="card-title" style={{ marginTop: 16 }}>
-                {t.sourceHistory}
-              </h3>
-              <ul className="source-history">
-                {versions.map((v) => (
-                  <li key={v.commit}>
-                    {v.commit.slice(0, 12)} {v.author} {v.date} {v.message}
-                  </li>
-                ))}
-              </ul>
-              <div className="source-compare" style={{ marginTop: 12 }}>
-                <label className="field">
-                  <span className="field-label">{t.sourceBefore}</span>
-                  <select
-                    aria-label={t.sourceBefore}
-                    value={before}
-                    onChange={(e) => setBefore(e.target.value)}
-                  >
-                    {versions.map((v) => (
-                      <option value={v.commit} key={v.commit}>
-                        {v.commit.slice(0, 12)} {v.author}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label className="field">
-                  <span className="field-label">{t.sourceAfter}</span>
-                  <select
-                    aria-label={t.sourceAfter}
-                    value={after}
-                    onChange={(e) => setAfter(e.target.value)}
-                  >
-                    {versions.map((v) => (
-                      <option value={v.commit} key={v.commit}>
-                        {v.commit.slice(0, 12)} {v.author}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <button
-                  type="button"
-                  disabled={!before || !after}
-                  onClick={() => void compare()}
-                >
-                  {t.sourceCompare}
-                </button>
-              </div>
-              {diff && (
-                <DiffViewer
-                  diff={diff}
-                  messages={t}
-                  title={safeDecodePath(path)}
-                  defaultMode="split"
-                />
+                <>
+                  <div className="source-view-tabs">
+                    <button
+                      type="button"
+                      className={viewMode === "read" ? "active" : ""}
+                      onClick={() => setViewMode("read")}
+                    >
+                      {t.sourceTabRead}
+                    </button>
+                    <button
+                      type="button"
+                      className={viewMode === "raw" ? "active" : ""}
+                      onClick={() => setViewMode("raw")}
+                    >
+                      {t.sourceTabRaw}
+                    </button>
+                  </div>
+                  {viewMode === "read" ? (
+                    isMarkdownPath(path) ? (
+                      <div className="markdown source-doc-read">
+                        <Markdown text={content} />
+                      </div>
+                    ) : (
+                      <pre className="source-preview">{content}</pre>
+                    )
+                  ) : (
+                    <pre className="source-preview source-preview--numbered">
+                      {content.split("\n").map((line, idx) => (
+                        <div key={idx}>
+                          <span className="source-line-num">{idx + 1}</span>
+                          {line}
+                        </div>
+                      ))}
+                    </pre>
+                  )}
+                </>
               )}
             </section>
           ) : (
-            <div className="empty-state">{t.sourceSelectFile}</div>
+            <div className="empty-state">{t.sourceEmptyHint}</div>
           )}
         </div>
       </div>
+
+      <Modal
+        open={uploadOpen}
+        title={t.sourceUpload}
+        onCancel={() => setUploadOpen(false)}
+        footer={null}
+        width={640}
+      >
+        <div
+          className="stack admin-page form-card"
+          style={{ border: 0, padding: 0, margin: 0, boxShadow: "none" }}
+        >
+          <div className="filter-pills">
+            <Button
+              size="small"
+              type={uploadMode === "category" ? "primary" : "default"}
+              onClick={() => {
+                invalidatePreview();
+                setUploadMode("category");
+              }}
+            >
+              {t.sourceModeCategory}
+            </Button>
+            <Button
+              size="small"
+              type={uploadMode === "target" ? "primary" : "default"}
+              onClick={() => {
+                invalidatePreview();
+                setUploadMode("target");
+              }}
+            >
+              {t.sourceModeTarget}
+            </Button>
+          </div>
+          <div className="field">
+            <span className="field-label">{t.sourceFiles}</span>
+            <FilePicker
+              label={t.sourceFiles}
+              files={files}
+              emptyLabel={t.sourceNoFile}
+              countLabel={t.sourceFileCount}
+              chooseLabel={t.sourceChoose}
+              onChange={chooseFiles}
+            />
+          </div>
+          <div className="field">
+            <span className="field-label">{t.sourceFolder}</span>
+            <FilePicker
+              label={t.sourceFolder}
+              files={files}
+              emptyLabel={t.sourceNoFile}
+              countLabel={t.sourceFileCount}
+              chooseLabel={t.sourceChoose}
+              directory
+              onChange={chooseFiles}
+            />
+          </div>
+          {uploadMode === "category" ? (
+            <>
+              <label className="field">
+                <span className="field-label">{t.sourceCategory}</span>
+                <select
+                  aria-label={t.sourceCategory}
+                  value={category}
+                  onChange={(e) => {
+                    invalidatePreview();
+                    setCategory(e.target.value);
+                    setNewCategory("");
+                  }}
+                >
+                  <option value="">{t.sourceCategoryPlaceholder}</option>
+                  {categories.map((item) => (
+                    <option value={item.name} key={item.name}>
+                      {item.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="field">
+                <span className="field-label">{t.sourceNewCategory}</span>
+                <input
+                  aria-label={t.sourceNewCategory}
+                  placeholder={t.sourceNewCategoryPlaceholder}
+                  value={newCategory}
+                  onChange={(e) => {
+                    invalidatePreview();
+                    setNewCategory(e.target.value);
+                    setCategory("");
+                  }}
+                />
+              </label>
+              <label className="field">
+                <span className="field-label">{t.sourceSubfolder}</span>
+                <input
+                  aria-label={t.sourceSubfolder}
+                  placeholder={t.sourceSubfolderPlaceholder}
+                  value={subfolder}
+                  onChange={(e) => {
+                    invalidatePreview();
+                    setSubfolder(e.target.value);
+                  }}
+                />
+              </label>
+            </>
+          ) : (
+            <div className="stack">
+              <div className="filter-pills">
+                {(["ossie", "canonical"] as const).map((preset) => (
+                  <Button
+                    key={preset}
+                    size="small"
+                    type={targetDir === preset ? "primary" : "default"}
+                    onClick={() => {
+                      invalidatePreview();
+                      setTargetDir(preset);
+                    }}
+                  >
+                    {preset}/
+                  </Button>
+                ))}
+              </div>
+              <label className="field">
+                <span className="field-label">{t.sourceTargetDir}</span>
+                <input
+                  aria-label={t.sourceTargetDir}
+                  placeholder={t.sourceTargetDirPlaceholder}
+                  value={targetDir}
+                  onChange={(e) => {
+                    invalidatePreview();
+                    setTargetDir(e.target.value);
+                  }}
+                />
+              </label>
+            </div>
+          )}
+          {!appendOnly && (
+            <details className="advanced-options">
+              <summary>{t.sourceAdvanced}</summary>
+              <Checkbox
+                className="plugin-enable"
+                checked={replace}
+                onChange={(e) => {
+                  invalidatePreview();
+                  setReplace(e.target.checked);
+                }}
+              >
+                {t.sourceReplace}
+              </Checkbox>
+            </details>
+          )}
+          <p className="field-hint">{t.sourceIndexHint}</p>
+          {preview && (
+            <div className="upload-preview">
+              <p className="preview-counts">
+                <span className="preview-added">
+                  {t.sourcePreviewAdded.replace(
+                    "{count}",
+                    String(preview.counts.added),
+                  )}
+                </span>{" "}
+                <span className="preview-overwritten">
+                  {t.sourcePreviewOverwritten.replace(
+                    "{count}",
+                    String(preview.counts.overwritten),
+                  )}
+                </span>{" "}
+                <span className="muted">
+                  {t.sourcePreviewUnchanged.replace(
+                    "{count}",
+                    String(preview.counts.unchanged),
+                  )}
+                </span>
+              </p>
+              {preview.counts.deleted > 0 && (
+                <Alert
+                  type="error"
+                  title={t.sourcePreviewDeleted.replace(
+                    "{count}",
+                    String(preview.counts.deleted),
+                  )}
+                />
+              )}
+              <details>
+                <summary>{t.sourcePreviewPaths}</summary>
+                {(
+                  [
+                    ["added", t.sourcePreviewAddedTitle],
+                    ["overwritten", t.sourcePreviewOverwrittenTitle],
+                    ["unchanged", t.sourcePreviewUnchangedTitle],
+                    ["deleted", t.sourcePreviewDeletedTitle],
+                  ] as const
+                ).map(([key, label]) =>
+                  preview[key].length ? (
+                    <div key={key}>
+                      <h4 className={`preview-${key}`}>{label}</h4>
+                      <ul>
+                        {preview[key].map((item) => (
+                          <li className="mono" key={item}>
+                            {item}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : null,
+                )}
+              </details>
+            </div>
+          )}
+          <div className="save-bar" style={{ marginTop: 0 }}>
+            <button
+              type="button"
+              disabled={busy || projectUnavailable || !canPreviewUpload}
+              onClick={() => void loadPreview()}
+            >
+              {t.sourcePreview}
+            </button>
+            <button
+              type="button"
+              className={replace && preview ? "danger" : undefined}
+              disabled={busy || projectUnavailable || !preview}
+              onClick={() => void send()}
+            >
+              {replace && preview
+                ? t.sourceConfirmDelete.replace(
+                    "{count}",
+                    String(preview.counts.deleted),
+                  )
+                : t.sourceConfirm}
+            </button>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal
+        open={historyOpen}
+        title={t.sourceHistoryModal}
+        onCancel={() => setHistoryOpen(false)}
+        footer={null}
+        width={900}
+      >
+        <div className="stack admin-page">
+          <div className="mono muted">{decodedPath}</div>
+          <h3 className="card-title">{t.sourceHistory}</h3>
+          <ul className="source-history">
+            {versions.map((v) => (
+              <li key={v.commit}>
+                {v.commit.slice(0, 12)} {v.author} {v.date} {v.message}
+              </li>
+            ))}
+          </ul>
+          <div className="source-compare">
+            <label className="field">
+              <span className="field-label">{t.sourceBefore}</span>
+              <select
+                aria-label={t.sourceBefore}
+                value={before}
+                onChange={(e) => setBefore(e.target.value)}
+              >
+                {versions.map((v) => (
+                  <option value={v.commit} key={v.commit}>
+                    {v.commit.slice(0, 12)} {v.author}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="field">
+              <span className="field-label">{t.sourceAfter}</span>
+              <select
+                aria-label={t.sourceAfter}
+                value={after}
+                onChange={(e) => setAfter(e.target.value)}
+              >
+                {versions.map((v) => (
+                  <option value={v.commit} key={v.commit}>
+                    {v.commit.slice(0, 12)} {v.author}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button
+              type="button"
+              disabled={!before || !after}
+              onClick={() => void compare()}
+            >
+              {t.sourceCompare}
+            </button>
+          </div>
+          {diff && (
+            <DiffViewer
+              diff={diff}
+              messages={t}
+              title={decodedPath}
+              defaultMode="split"
+            />
+          )}
+        </div>
+      </Modal>
     </section>
   );
 }

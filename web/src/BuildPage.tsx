@@ -1,7 +1,17 @@
 import { PullsPanel } from "./PullsPanel";
 import { ProjectSelector, storedProject } from "./ProjectSelector";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Alert, Button, Descriptions, Input, Space, Table, Tag } from "antd";
+import {
+  Alert,
+  Button,
+  Descriptions,
+  Input,
+  Modal,
+  Select,
+  Space,
+  Table,
+  Tag,
+} from "antd";
 import type { components } from "./api";
 import type { Messages } from "./i18n";
 import { TableScroll } from "./TableScroll";
@@ -80,6 +90,14 @@ function displayTime(value: string | null) {
   return value ? new Date(value).toLocaleString() : "—";
 }
 
+function formatChangeSummary(build: Build, t: Messages): string {
+  const parts = entitySummaryKeys
+    .filter((key) => (build.counts[key] ?? 0) > 0)
+    .slice(0, 3)
+    .map((key) => `${t[countLabels[key]]} ${build.counts[key]}`);
+  return parts.length ? parts.join(" · ") : "—";
+}
+
 export function BuildPage({
   token,
   messages: t,
@@ -89,8 +107,12 @@ export function BuildPage({
 }) {
   const [project, setProject] = useState(storedProject);
   const [builds, setBuilds] = useState<Build[]>([]);
+  const [buildsLoaded, setBuildsLoaded] = useState(false);
   const [generations, setGenerations] = useState<Generations | null>(null);
   const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [typeFilter, setTypeFilter] = useState<"all" | BuildType>("all");
+  const [detailTab, setDetailTab] = useState<"changes" | "logs">("changes");
+  const [confirmFullOpen, setConfirmFullOpen] = useState(false);
   const [interval, setInterval] = useState("0");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -115,7 +137,8 @@ export function BuildPage({
       if (!response.ok) throw new Error();
       const nextBuilds = (await response.json()) as Build[];
       if (!mountedRef.current || projectRef.current !== targetProject) return;
-      setBuilds(nextBuilds);
+      setBuilds(Array.isArray(nextBuilds) ? nextBuilds : []);
+      setBuildsLoaded(true);
       const versions = await fetch(`/api/v1/generations?${projectQuery}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
@@ -128,6 +151,10 @@ export function BuildPage({
       loadInFlightCount.current = Math.max(0, loadInFlightCount.current - 1);
     }
   }, [project, projectQuery, token]);
+  useEffect(() => {
+    setBuildsLoaded(false);
+    setSelectedId(null);
+  }, [project]);
   useEffect(() => {
     let active = true;
     void fetch(`/api/v1/projects/${encodeURIComponent(project)}/schedule`, {
@@ -145,7 +172,10 @@ export function BuildPage({
   }, [project, token]);
   useEffect(() => {
     void load().catch(() => {
-      if (mountedRef.current) setError(t.buildError);
+      if (mountedRef.current) {
+        setBuildsLoaded(true);
+        setError(t.buildError);
+      }
     });
     const timer = window.setInterval(() => {
       if (loadInFlightCount.current > 0) return;
@@ -156,9 +186,6 @@ export function BuildPage({
   useEffect(() => {
     if (selectedId === null && builds.length) setSelectedId(builds[0].id);
   }, [builds, selectedId]);
-  useEffect(() => {
-    setSelectedId(null);
-  }, [project]);
   async function trigger(buildType: BuildType) {
     try {
       const response = await fetch(`/api/v1/builds?${projectQuery}`, {
@@ -215,10 +242,16 @@ export function BuildPage({
       setError(t.buildError);
     }
   }
-  const selected = builds.find((build) => build.id === selectedId) ?? null;
+
   const latestBuild = builds[0] ?? null;
   const currentGen =
     generations?.generations?.find((gen) => gen.current) ?? null;
+  const filteredBuilds =
+    typeFilter === "all"
+      ? builds
+      : builds.filter((row) => row.build_type === typeFilter);
+  const selected = builds.find((build) => build.id === selectedId) ?? null;
+
   return (
     <section className="stack admin-page">
       <div className="page-header">
@@ -233,46 +266,103 @@ export function BuildPage({
           messages={t}
         />
       </div>
-      <section className="card gov-metrics-card">
-        <div className="gov-metrics">
-          <div className="gov-metric">
-            <span className="gov-metric-label">{t.buildMetricLatest}</span>
-            <strong>{latestBuild ? `#${latestBuild.id}` : "—"}</strong>
-          </div>
-          <div className="gov-metric">
-            <span className="gov-metric-label">{t.buildMetricQueueCount}</span>
-            <strong>{builds.length}</strong>
-          </div>
-          <div className="gov-metric">
-            <span className="gov-metric-label">{t.buildMetricGeneration}</span>
-            <strong>{currentGen?.name ?? "—"}</strong>
-          </div>
-          <div className="gov-metric">
-            <span className="gov-metric-label">{t.buildMetricSyncState}</span>
-            <strong>
-              {generations?.behind ? t.buildSyncBehind : t.buildSyncUpToDate}
-            </strong>
-          </div>
-        </div>
-      </section>
-      <PullsPanel token={token} project={project} messages={t} />
       {generations?.behind && (
         <Alert
           type="warning"
           title={t.generationBehind}
           action={
-            <Button onClick={() => void trigger("full")}>{t.buildFull}</Button>
+            <Button onClick={() => setConfirmFullOpen(true)}>
+              {t.buildConfirmAction}
+            </Button>
           }
         />
       )}
       {notice && <Alert type="success" title={notice} />}
       {error && <Alert type="error" title={error} />}
-      <div className="build-grid">
-        <div className="build-stack">
-          <section className="card section-card">
-            <div className="card-title-row">
-              <h2 className="card-title">{t.scheduleTitle}</h2>
+
+      <section className="card section-card">
+        <div className="card-title-row">
+          <div>
+            <h2 className="card-title">{t.buildOverviewTitle}</h2>
+            <p className="muted" style={{ margin: "4px 0 0", fontSize: 13 }}>
+              {t.buildOverviewHint}
+            </p>
+          </div>
+          <div className="build-toolbar">
+            <Button onClick={() => void trigger("incremental")}>
+              {t.buildIncremental}
+            </Button>
+            <Button type="primary" onClick={() => setConfirmFullOpen(true)}>
+              {t.buildFull}
+            </Button>
+          </div>
+        </div>
+        <div className="build-overview-grid">
+          <div className="build-overview-stat">
+            <span className="gov-metric-label">{t.buildMetricLatest}</span>
+            <div className="build-overview-main">
+              {buildsLoaded && latestBuild ? (
+                <>
+                  <Tag color={statusColors[latestBuild.status]}>
+                    {t[latestBuild.status]}
+                  </Tag>
+                  <span>
+                    {t[latestBuild.build_type]} #{latestBuild.id}
+                  </span>
+                </>
+              ) : (
+                <span>—</span>
+              )}
             </div>
+            <span className="muted" style={{ fontSize: 12.5 }}>
+              {buildsLoaded && latestBuild
+                ? `${displayTime(latestBuild.started_at)} · ${latestBuild.triggered_by ?? "—"}`
+                : t.buildMetricOverviewChangesEmpty}
+            </span>
+          </div>
+          <div className="build-overview-stat">
+            <span className="gov-metric-label">
+              {t.buildMetricOverviewChanges}
+            </span>
+            <div className="build-overview-main">
+              <span>
+                {buildsLoaded && latestBuild
+                  ? formatChangeSummary(latestBuild, t)
+                  : "—"}
+              </span>
+            </div>
+            <span className="muted" style={{ fontSize: 12.5 }}>
+              {buildsLoaded
+                ? `${t.buildMetricQueueCount}: ${builds.length}`
+                : "—"}
+            </span>
+          </div>
+          <div className="build-overview-stat">
+            <span className="gov-metric-label">{t.buildMetricGeneration}</span>
+            <div className="build-overview-main">
+              <span>{currentGen?.name ?? "—"}</span>
+            </div>
+            <span className="muted" style={{ fontSize: 12.5 }}>
+              {currentGen?.source_commit
+                ? `${currentGen.source_commit.slice(0, 7)} · ${
+                    generations?.behind
+                      ? t.buildSyncBehind
+                      : t.buildSyncUpToDate
+                  }`
+                : generations?.behind
+                  ? t.buildSyncBehind
+                  : t.buildSyncUpToDate}
+            </span>
+          </div>
+        </div>
+      </section>
+
+      <section className="card section-card">
+        <div className="card-title-row">
+          <h2 className="card-title">{t.scheduleTitle}</h2>
+        </div>
+        <div className="build-schedule-layout">
+          <div>
             <div className="field">
               <label className="field-label" htmlFor="build-schedule-interval">
                 {t.scheduleInterval}
@@ -293,169 +383,131 @@ export function BuildPage({
                 {t.scheduleSave}
               </Button>
             </div>
-          </section>
-          <section className="card section-card">
-            <div className="card-title-row">
-              <h2 className="card-title">{t.builds}</h2>
-              <div className="build-toolbar">
-                <Button type="primary" onClick={() => void trigger("full")}>
-                  {t.buildFull}
-                </Button>
-                <Button onClick={() => void trigger("incremental")}>
-                  {t.buildIncremental}
-                </Button>
-              </div>
-            </div>
-            <TableScroll label={t.builds}>
-              <Table
-                rowKey="id"
-                dataSource={builds}
-                locale={{ emptyText: t.noBuilds }}
-                pagination={false}
-                rowClassName={(row) =>
-                  row.id === selectedId ? "build-table-row-selected" : ""
-                }
-                onRow={(row) => ({ onClick: () => setSelectedId(row.id) })}
-                columns={[
-                  { title: t.buildId, dataIndex: "id" },
-                  {
-                    title: t.buildStatus,
-                    render: (_, row) => {
-                      const fallbackLabel = fallbackReasonLabel(
-                        row.fallback_reason,
-                        t,
-                      );
-                      return (
-                        <div className="build-status-tags">
-                          <Tag color={statusColors[row.status]}>
-                            {t[row.status]}
-                          </Tag>
-                          {fallbackLabel && (
-                            <Tag color="orange">
-                              {t.fallbackBadge.replace(
-                                "{reason}",
-                                fallbackLabel,
-                              )}
-                            </Tag>
-                          )}
-                          {(row.stale_overrides?.length ?? 0) > 0 && (
-                            <Tag color="warning">
-                              {t.staleOverridesBadge.replace(
-                                "{count}",
-                                String(row.stale_overrides?.length ?? 0),
-                              )}
-                            </Tag>
-                          )}
-                        </div>
-                      );
-                    },
-                  },
-                  {
-                    title: t.buildType,
-                    render: (_, row) => t[row.build_type],
-                  },
-                  { title: t.buildTriggeredBy, dataIndex: "triggered_by" },
-                  {
-                    title: t.buildStartedAt,
-                    render: (_, row) => displayTime(row.started_at),
-                  },
-                  {
-                    title: t.buildFinishedAt,
-                    render: (_, row) => displayTime(row.finished_at),
-                  },
-                ]}
-              />
-            </TableScroll>
-          </section>
-          <section className="card section-card">
-            <div className="card-title-row">
-              <h2 className="card-title">{t.generations}</h2>
-            </div>
-            <TableScroll label={t.generations}>
-              <Table
-                rowKey="name"
-                pagination={false}
-                dataSource={generations?.generations ?? []}
-                columns={[
-                  { title: t.generationName, dataIndex: "name" },
-                  {
-                    title: t.buildStartedAt,
-                    render: (_, row) => displayTime(row.created_at),
-                  },
-                  { title: t.generationCommit, dataIndex: "source_commit" },
-                  {
-                    title: t.generationCounts,
-                    render: (_, row) => JSON.stringify(row.counts),
-                  },
-                  {
-                    title: t.generationCurrent,
-                    render: (_, row) =>
-                      row.current ? (
-                        t.generationCurrent
-                      ) : (
-                        <Button onClick={() => void switchGeneration(row.name)}>
-                          {t.generationSwitch}
-                        </Button>
-                      ),
-                  },
-                ]}
-              />
-            </TableScroll>
-          </section>
+          </div>
+          <div className="gov-info-banner gov-info-banner--stack">
+            <div>{t.buildScheduleAutoNoteUpload}</div>
+            <div>{t.buildScheduleAutoNoteCorrection}</div>
+          </div>
         </div>
-        <div className="build-stack">
-          {!selected && <div className="empty-state">{t.buildSelectHint}</div>}
-          {selected && (
-            <section className="card build-detail">
-              <Descriptions
-                title={`${t.builds} #${selected.id}`}
-                column={2}
-                items={[
-                  {
-                    key: "status",
-                    label: t.buildStatus,
-                    children: t[selected.status],
-                  },
-                  {
-                    key: "type",
-                    label: t.buildType,
-                    children: t[selected.build_type],
-                  },
-                  {
-                    key: "triggered",
-                    label: t.buildTriggeredBy,
-                    children: selected.triggered_by ?? "—",
-                  },
-                  {
-                    key: "commit",
-                    label: t.buildSourceCommit,
-                    children: selected.source_commit ?? "—",
-                  },
-                  {
-                    key: "started",
-                    label: t.buildStartedAt,
-                    children: displayTime(selected.started_at),
-                  },
-                  {
-                    key: "finished",
-                    label: t.buildFinishedAt,
-                    children: displayTime(selected.finished_at),
-                  },
-                  ...(selected.error
-                    ? [
-                        {
-                          key: "error",
-                          label: t.failed,
-                          children: selected.error,
-                          span: 2,
-                        },
-                      ]
-                    : []),
-                ]}
-              />
+      </section>
+
+      <section className="card section-card">
+        <div className="card-title-row">
+          <h2 className="card-title">{t.builds}</h2>
+          <Select
+            aria-label={t.buildType}
+            value={typeFilter}
+            style={{ minWidth: 140 }}
+            onChange={(value) => setTypeFilter(value)}
+            options={[
+              { value: "all", label: t.buildAllTypes },
+              { value: "incremental", label: t.incremental },
+              { value: "full", label: t.full },
+            ]}
+          />
+        </div>
+        <TableScroll label={t.builds}>
+          <Table
+            rowKey="id"
+            dataSource={filteredBuilds}
+            locale={{ emptyText: t.noBuilds }}
+            pagination={false}
+            rowClassName={(row) =>
+              row.id === selectedId ? "build-table-row-selected" : ""
+            }
+            onRow={(row) => ({ onClick: () => setSelectedId(row.id) })}
+            columns={[
+              { title: t.buildId, dataIndex: "id" },
+              {
+                title: t.buildStatus,
+                render: (_, row) => {
+                  const fallbackLabel = fallbackReasonLabel(
+                    row.fallback_reason,
+                    t,
+                  );
+                  return (
+                    <div className="build-status-tags">
+                      <Tag color={statusColors[row.status]}>
+                        {t[row.status]}
+                      </Tag>
+                      {fallbackLabel && (
+                        <Tag color="orange">
+                          {t.fallbackBadge.replace("{reason}", fallbackLabel)}
+                        </Tag>
+                      )}
+                      {(row.stale_overrides?.length ?? 0) > 0 && (
+                        <Tag color="warning">
+                          {t.staleOverridesBadge.replace(
+                            "{count}",
+                            String(row.stale_overrides?.length ?? 0),
+                          )}
+                        </Tag>
+                      )}
+                    </div>
+                  );
+                },
+              },
+              {
+                title: t.buildType,
+                render: (_, row) => t[row.build_type],
+              },
+              { title: t.buildTriggeredBy, dataIndex: "triggered_by" },
+              {
+                title: t.buildStartedAt,
+                render: (_, row) => displayTime(row.started_at),
+              },
+              {
+                title: t.buildChangeSummaryCol,
+                render: (_, row) => formatChangeSummary(row, t),
+              },
+              {
+                title: t.buildFinishedAt,
+                render: (_, row) => displayTime(row.finished_at),
+              },
+            ]}
+          />
+        </TableScroll>
+      </section>
+
+      {!selected ? (
+        <div className="empty-state">{t.buildSelectHint}</div>
+      ) : (
+        <section className="card section-card build-detail">
+          <div className="card-title-row">
+            <div>
+              <h2 className="card-title">{`${t.builds} #${selected.id}`}</h2>
+              <p
+                className="muted"
+                style={{ margin: "2px 0 0", fontSize: 12.5 }}
+              >
+                {`${t[selected.build_type]} · ${displayTime(selected.started_at)} · ${selected.triggered_by ?? "—"}`}
+              </p>
+            </div>
+            <Tag color={statusColors[selected.status]}>
+              {t[selected.status]}
+            </Tag>
+          </div>
+          <div className="source-view-tabs">
+            <button
+              type="button"
+              className={detailTab === "changes" ? "active" : ""}
+              onClick={() => setDetailTab("changes")}
+            >
+              {t.buildTabChanges}
+            </button>
+            <button
+              type="button"
+              className={detailTab === "logs" ? "active" : ""}
+              onClick={() => setDetailTab("logs")}
+            >
+              {t.buildTabLogs}
+            </button>
+          </div>
+
+          {detailTab === "changes" ? (
+            <div className="stack">
               {selected.fallback_reason && (
                 <Alert
-                  style={{ marginTop: 16 }}
                   type="warning"
                   showIcon
                   title={t.fallbackNoticeTitle}
@@ -464,7 +516,6 @@ export function BuildPage({
               )}
               {(selected.stale_overrides?.length ?? 0) > 0 && (
                 <Alert
-                  style={{ marginTop: 16 }}
                   type="warning"
                   showIcon
                   title={t.staleOverridesTitle}
@@ -482,78 +533,190 @@ export function BuildPage({
                   }
                 />
               )}
-              <h3 className="card-title" style={{ marginTop: 16 }}>
-                {t.buildStats}
-              </h3>
-              {entitySummaryKeys.some(
-                (key) => (selected.counts[key] ?? 0) > 0,
-              ) && (
-                <Space wrap style={{ marginBottom: 12 }}>
-                  {entitySummaryKeys
-                    .filter((key) => (selected.counts[key] ?? 0) > 0)
-                    .map((key) => (
-                      <Tag key={key} color="blue">
-                        {`${t[countLabels[key]]}: ${selected.counts[key]}`}
-                      </Tag>
-                    ))}
-                </Space>
-              )}
-              <TableScroll label={t.buildStats}>
-                <Table
-                  rowKey="key"
-                  pagination={false}
-                  dataSource={Object.entries(selected.counts)
-                    .sort(([left], [right]) => left.localeCompare(right))
-                    .map(([key, value]) => ({ key, value }))}
-                  columns={[
-                    {
-                      title: t.buildStats,
-                      render: (_, row) =>
-                        countLabels[row.key]
-                          ? t[countLabels[row.key]]
-                          : row.key,
-                    },
-                    { title: "", dataIndex: "value" },
-                  ]}
-                />
-              </TableScroll>
-              <h3 className="card-title" style={{ marginTop: 16 }}>
-                {t.buildLogs}
-              </h3>
-              <TableScroll label={t.buildLogs}>
-                <Table
-                  rowKey="index"
-                  pagination={false}
-                  dataSource={selected.logs.map((log, index) => ({
-                    ...log,
-                    index,
-                  }))}
-                  columns={[
-                    {
-                      title: t.buildLogTime,
-                      render: (_, row) => displayTime(row.timestamp),
-                    },
-                    { title: t.buildStage, dataIndex: "stage" },
-                    {
-                      title: t.buildLogs,
-                      render: (_, row) => (
-                        <span
-                          style={{
-                            color:
-                              row.level === "error" ? "#cf1322" : undefined,
-                          }}
-                        >
-                          {row.message}
-                        </span>
-                      ),
-                    },
-                  ]}
-                />
-              </TableScroll>
-            </section>
+              <div className="build-detail-split">
+                <div className="build-detail-box">
+                  <h3>{t.buildSummarySection}</h3>
+                  {entitySummaryKeys.some(
+                    (key) => (selected.counts[key] ?? 0) > 0,
+                  ) && (
+                    <Space wrap style={{ marginBottom: 12 }}>
+                      {entitySummaryKeys
+                        .filter((key) => (selected.counts[key] ?? 0) > 0)
+                        .map((key) => (
+                          <Tag key={key} color="blue">
+                            {`${t[countLabels[key]]}: ${selected.counts[key]}`}
+                          </Tag>
+                        ))}
+                    </Space>
+                  )}
+                  <TableScroll label={t.buildStats}>
+                    <Table
+                      rowKey="key"
+                      pagination={false}
+                      size="small"
+                      dataSource={Object.entries(selected.counts)
+                        .sort(([left], [right]) => left.localeCompare(right))
+                        .map(([key, value]) => ({ key, value }))}
+                      columns={[
+                        {
+                          title: t.buildStats,
+                          render: (_, row) =>
+                            countLabels[row.key]
+                              ? t[countLabels[row.key]]
+                              : row.key,
+                        },
+                        { title: "", dataIndex: "value" },
+                      ]}
+                    />
+                  </TableScroll>
+                </div>
+                <div className="build-detail-box">
+                  <h3>{t.buildInfoSection}</h3>
+                  <Descriptions
+                    column={1}
+                    size="small"
+                    items={[
+                      {
+                        key: "status",
+                        label: t.buildStatus,
+                        children: t[selected.status],
+                      },
+                      {
+                        key: "type",
+                        label: t.buildType,
+                        children: t[selected.build_type],
+                      },
+                      {
+                        key: "triggered",
+                        label: t.buildTriggeredBy,
+                        children: selected.triggered_by ?? "—",
+                      },
+                      {
+                        key: "commit",
+                        label: t.buildSourceCommit,
+                        children: selected.source_commit ?? "—",
+                      },
+                      {
+                        key: "started",
+                        label: t.buildStartedAt,
+                        children: displayTime(selected.started_at),
+                      },
+                      {
+                        key: "finished",
+                        label: t.buildFinishedAt,
+                        children: displayTime(selected.finished_at),
+                      },
+                      ...(selected.error
+                        ? [
+                            {
+                              key: "error",
+                              label: t.failed,
+                              children: selected.error,
+                            },
+                          ]
+                        : []),
+                    ]}
+                  />
+                </div>
+              </div>
+            </div>
+          ) : (
+            <TableScroll label={t.buildLogs}>
+              <Table
+                rowKey="index"
+                pagination={false}
+                dataSource={selected.logs.map((log, index) => ({
+                  ...log,
+                  index,
+                }))}
+                columns={[
+                  {
+                    title: t.buildLogTime,
+                    render: (_, row) => displayTime(row.timestamp),
+                  },
+                  { title: t.buildStage, dataIndex: "stage" },
+                  {
+                    title: t.buildLogs,
+                    render: (_, row) => (
+                      <span
+                        className={
+                          row.level === "error" ? "build-log-error" : undefined
+                        }
+                      >
+                        {row.message}
+                      </span>
+                    ),
+                  },
+                ]}
+              />
+            </TableScroll>
           )}
+        </section>
+      )}
+
+      <section className="card section-card">
+        <div className="card-title-row">
+          <h2 className="card-title">{t.generations}</h2>
         </div>
-      </div>
+        <TableScroll label={t.generations}>
+          <Table
+            rowKey="name"
+            pagination={false}
+            dataSource={generations?.generations ?? []}
+            columns={[
+              { title: t.generationName, dataIndex: "name" },
+              {
+                title: t.buildStartedAt,
+                render: (_, row) => displayTime(row.created_at),
+              },
+              { title: t.generationCommit, dataIndex: "source_commit" },
+              {
+                title: t.generationCounts,
+                render: (_, row) => JSON.stringify(row.counts),
+              },
+              {
+                title: t.generationCurrent,
+                render: (_, row) =>
+                  row.current ? (
+                    t.generationCurrent
+                  ) : (
+                    <Button onClick={() => void switchGeneration(row.name)}>
+                      {t.generationSwitch}
+                    </Button>
+                  ),
+              },
+            ]}
+          />
+        </TableScroll>
+      </section>
+
+      <section className="card section-card">
+        <details className="build-pulls-details">
+          <summary>
+            <span>{t.buildPullCollapseTitle}</span>
+          </summary>
+          <p className="muted" style={{ margin: "6px 0 0", fontSize: 12.5 }}>
+            {t.buildPullCollapseHint}
+          </p>
+          <div className="build-pulls-body">
+            <PullsPanel token={token} project={project} messages={t} />
+          </div>
+        </details>
+      </section>
+
+      <Modal
+        open={confirmFullOpen}
+        title={t.buildConfirmFullTitle}
+        onCancel={() => setConfirmFullOpen(false)}
+        okText={t.buildConfirmAction}
+        cancelText={t.buildConfirmCancel}
+        onOk={() => {
+          setConfirmFullOpen(false);
+          void trigger("full");
+        }}
+      >
+        <p style={{ margin: "8px 0" }}>{t.buildConfirmFullDesc}</p>
+      </Modal>
     </section>
   );
 }

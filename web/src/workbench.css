@@ -2560,6 +2560,86 @@ button.clarification-option-toggle:hover {
 }
 
 /* Builds */
+.build-overview-grid {
+  display: grid;
+  grid-template-columns: 1.15fr 1fr 1fr;
+  gap: 20px;
+  padding-top: 4px;
+}
+.build-overview-stat {
+  border-right: 1px solid var(--line-soft);
+  padding-right: 16px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.build-overview-stat:last-child {
+  border-right: 0;
+  padding-right: 0;
+}
+.build-overview-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--ink);
+  min-height: 26px;
+}
+.build-schedule-layout {
+  display: grid;
+  grid-template-columns: minmax(260px, 1.1fr) minmax(0, 1fr);
+  gap: 20px;
+  align-items: start;
+}
+.gov-info-banner--stack {
+  margin: 0;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+.build-detail-split {
+  display: grid;
+  grid-template-columns: 1.1fr 0.9fr;
+  gap: 16px;
+  align-items: start;
+}
+.build-detail-box {
+  border: 1px solid var(--line-soft);
+  border-radius: 10px;
+  padding: 14px 16px;
+  background: var(--panel);
+  min-width: 0;
+}
+.build-detail-box h3 {
+  margin: 0 0 12px;
+  font-size: 14px;
+  font-weight: 600;
+}
+.build-pulls-details summary {
+  cursor: pointer;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--ink);
+  list-style: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.build-pulls-details summary::after {
+  content: "展开 / 收起";
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted);
+}
+.build-pulls-body {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line-soft);
+}
 .build-grid {
   display: grid;
   grid-template-columns: minmax(0, 1.25fr) minmax(340px, 0.75fr);
@@ -2594,7 +2674,7 @@ button.clarification-option-toggle:hover {
 /* Source */
 .source-layout {
   display: grid;
-  grid-template-columns: minmax(280px, 0.72fr) minmax(0, 1.28fr);
+  grid-template-columns: minmax(260px, 320px) minmax(0, 1fr);
   gap: 16px;
   align-items: start;
 }
@@ -2662,18 +2742,86 @@ button.clarification-option-toggle:hover {
   border-radius: 10px;
   background: var(--panel);
 }
+.source-tree--tall {
+  min-height: 420px;
+  max-height: 620px;
+}
+.source-tree button.active {
+  background: var(--accent-bg);
+  color: var(--accent);
+  border-radius: 6px;
+  font-weight: 600;
+}
 .source-status-bar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: 14px;
   flex-wrap: wrap;
 }
 .source-status-meta {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
   flex-wrap: wrap;
+}
+.source-status-heading {
+  font-weight: 600;
+  color: var(--ink);
+  font-size: 14px;
+}
+.source-status-sub {
+  font-size: 12.5px;
+  margin-top: 2px;
+}
+.source-file-path {
+  font-size: 12px;
+  margin-top: 2px;
+  overflow-wrap: anywhere;
+}
+.source-view-tabs {
+  display: flex;
+  gap: 8px;
+  border-bottom: 1px solid var(--line-soft);
+  padding-bottom: 10px;
+  margin-bottom: 14px;
+}
+.source-view-tabs button {
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  padding: 6px 12px;
+  border-radius: 7px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.source-view-tabs button:hover {
+  color: var(--ink);
+  background: var(--sub);
+}
+.source-view-tabs button.active {
+  background: var(--accent-bg);
+  color: var(--accent);
+  border-color: var(--line-soft);
+  font-weight: 600;
+}
+.source-doc-read {
+  padding: 6px 2px 12px;
+  max-width: 820px;
+  min-height: 360px;
+  line-height: 1.85;
+}
+.source-preview--numbered {
+  font-family: var(--font-mono);
+  line-height: 1.75;
+}
+.source-line-num {
+  display: inline-block;
+  min-width: 34px;
+  padding-right: 10px;
+  color: var(--ink-3);
+  text-align: right;
+  user-select: none;
 }
 .source-tree ul {
   list-style: none;
@@ -5052,12 +5200,16 @@ button.model-filter-tab:not(.ant-btn)[aria-pressed="true"] {
   .gov-metrics {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
-  .gov-metric {
+  .gov-metric,
+  .build-overview-stat {
     border-right: 0;
     padding-right: 0;
   }
   .gov-split-layout,
-  .evolution-config-grid {
+  .evolution-config-grid,
+  .build-overview-grid,
+  .build-schedule-layout,
+  .build-detail-split {
     grid-template-columns: minmax(0, 1fr);
   }
 }

@@ -232,6 +232,7 @@ test("folder upload fills the category, previews, then confirms", async () => {
   vi.stubGlobal("fetch", fetcher);
   render(<SourcePage token="t" messages={getMessages("zh")} />);
 
+  fireEvent.click(await screen.findByRole("button", { name: "＋ 上传源文件" }));
   const item = new File(["document"], "a.md");
   Object.defineProperty(item, "webkitRelativePath", {
     value: "架构文档/子目录/a.md",
@@ -279,6 +280,7 @@ test("requires a category and files before previewing", async () => {
     }),
   );
   render(<SourcePage token="t" messages={getMessages("zh")} />);
+  fireEvent.click(await screen.findByRole("button", { name: "＋ 上传源文件" }));
   expect(
     (screen.getByRole("button", { name: "预览" }) as HTMLButtonElement)
       .disabled,
@@ -328,6 +330,7 @@ test("advanced replacement shows the deletion warning and confirm label", async 
     }),
   );
   render(<SourcePage token="t" messages={getMessages("zh")} />);
+  fireEvent.click(await screen.findByRole("button", { name: "＋ 上传源文件" }));
   fireEvent.change(screen.getByLabelText("选择文件"), {
     target: { files: [new File(["new"], "new.md")] },
   });
@@ -379,6 +382,7 @@ test("a late preview from the previous project cannot be uploaded in the new pro
   });
   vi.stubGlobal("fetch", fetcher);
   render(<SourcePage token="t" messages={getMessages("zh")} />);
+  fireEvent.click(await screen.findByRole("button", { name: "＋ 上传源文件" }));
   fireEvent.change(screen.getByLabelText("选择文件"), {
     target: { files: [new File(["x"], "x.md")] },
   });
@@ -434,6 +438,9 @@ test.each(["file", "category"])(
     });
     vi.stubGlobal("fetch", fetcher);
     render(<SourcePage token="t" messages={getMessages("zh")} />);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "＋ 上传源文件" }),
+    );
     fireEvent.change(screen.getByLabelText("选择文件"), {
       target: { files: [new File(["old"], "old.md")] },
     });
@@ -505,6 +512,7 @@ test("upload sends exactly the body and project that were previewed", async () =
     }),
   );
   render(<SourcePage token="t" messages={getMessages("zh")} />);
+  fireEvent.click(await screen.findByRole("button", { name: "＋ 上传源文件" }));
   fireEvent.change(screen.getByLabelText("选择文件"), {
     target: { files: [new File(["content"], "a.md")] },
   });
@@ -559,6 +567,9 @@ test("browses source history and compares versions", async () => {
   fireEvent.click(await screen.findByRole("link", { name: "源文件" }));
   fireEvent.click(await screen.findByRole("button", { name: "a.md" }));
   expect(await screen.findByText("current content")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "源码行号" }));
+  expect(await screen.findByText("current content")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "版本历史与比较" }));
   expect((await screen.findAllByText(/Alice/)).length).toBeGreaterThan(0);
   fireEvent.change(screen.getByLabelText("旧版本"), {
     target: { value: "a".repeat(40) },
@@ -798,6 +809,7 @@ test("supports semantic model target upload, path filtering, and quick increment
   expect(screen.getByText("city_domain.yaml")).toBeTruthy();
   expect(screen.queryByText("sales.md")).toBeNull();
 
+  fireEvent.click(screen.getByRole("button", { name: "＋ 上传源文件" }));
   fireEvent.click(screen.getByRole("button", { name: "语义模型 / 指定目录" }));
   fireEvent.change(screen.getByLabelText("选择文件"), {
     target: { files: [new File(["name: city\n"], "topic_city.yaml")] },
