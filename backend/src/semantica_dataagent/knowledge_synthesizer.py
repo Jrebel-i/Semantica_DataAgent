@@ -294,9 +294,12 @@ def _build_system_prompt(allow_multi: bool) -> str:
     )
 
 
-def generate_with_llm(context: dict[str, Any]) -> dict[str, Any] | None:
-    """Invoke the configured LLM provider to synthesize structured/Markdown knowledge proposals."""
-    provider_cfg = context.get("provider")
+def invoke_llm_json(
+    provider_cfg: Mapping[str, Any] | None,
+    system_prompt: str,
+    payload_data: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    """Invoke a resolved LLM provider with a custom system prompt and parse a JSON object."""
     if not isinstance(provider_cfg, Mapping) or not provider_cfg.get("base_url"):
         return None
     base_url = str(provider_cfg["base_url"]).rstrip("/")
@@ -308,12 +311,7 @@ def generate_with_llm(context: dict[str, Any]) -> dict[str, Any] | None:
     if not model:
         return None
 
-    allow_multi = bool(context.get("allow_multi"))
-    system_prompt = _build_system_prompt(allow_multi)
-    user_payload = json.dumps(
-        {k: v for k, v in context.items() if k != "provider"},
-        ensure_ascii=False,
-    )
+    user_payload = json.dumps(dict(payload_data), ensure_ascii=False)
 
     provider_obj = ProviderConfig(
         id=str(provider_cfg.get("id") or "synth"),
@@ -392,6 +390,15 @@ def generate_with_llm(context: dict[str, Any]) -> dict[str, Any] | None:
     except (httpx.HTTPError, ValueError, KeyError, IndexError, TypeError) as exc:
         logger.warning("Knowledge synthesizer LLM call failed: %s", type(exc).__name__)
         return None
+
+
+def generate_with_llm(context: dict[str, Any]) -> dict[str, Any] | None:
+    """Invoke the configured LLM provider to synthesize structured/Markdown knowledge proposals."""
+    provider_cfg = context.get("provider")
+    allow_multi = bool(context.get("allow_multi"))
+    system_prompt = _build_system_prompt(allow_multi)
+    payload_data = {k: v for k, v in context.items() if k != "provider"}
+    return invoke_llm_json(provider_cfg, system_prompt, payload_data)
 
 
 def fetch_node(

@@ -142,6 +142,7 @@ function candidateKindLabel(
   if (kind === "override") return t.discoveryKindOverride;
   if (kind === "document") return t.discoveryKindDocument;
   if (kind === "synthesized") return t.discoveryKindSynthesized;
+  if (kind === "historical_ticket") return t.discoveryKindHistoricalTicket;
   return t.discoveryKindEvalDraft;
 }
 

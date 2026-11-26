@@ -74,12 +74,24 @@ type TraceMessageSummary = {
   messages?: TraceExcerptMessage[];
 };
 
+type ContextExcerpt = {
+  sequence?: number;
+  question?: string;
+  is_target?: boolean;
+};
+
 type TriggerEvidence = {
   question?: string;
   answer?: string;
   description?: string;
   conversation_id?: string | null;
   turn_id?: number | null;
+  turn_count?: number;
+  synthesis_mode?: string;
+  reference_sql?: string;
+  dialect?: string;
+  destination_kind?: string;
+  context_excerpts?: ContextExcerpt[];
   knowledge_gap_id?: string | null;
   evolution_run_id?: string;
   trace_source_plugin?: string;
@@ -139,6 +151,12 @@ type GateReport = {
   evidence?: UnifiedEvidence;
 };
 
+type DestinationKind =
+  | "historical_ticket"
+  | "knowledge_doc"
+  | "semantic_override"
+  | "ossie_model";
+
 type Proposal = {
   id: string;
   target: string;
@@ -148,6 +166,7 @@ type Proposal = {
   status: string;
   source?: string;
   target_kind?: string;
+  destination_kind?: DestinationKind;
   is_new_file?: boolean;
   structured_patch?: Record<string, unknown> | null;
   gate_report?: GateReport | null;
@@ -184,7 +203,14 @@ function gapDescription(question: string, missing: string): string {
   return `${q.slice(0, qLimit).join("")}\n${m.slice(0, budget - qLimit).join("")}`;
 }
 type StatusFilter = "all" | "pending" | "resolved";
-type SourceFilter = "all" | "manual" | "mcp" | "evolution" | "discovery";
+type SourceFilter =
+  | "all"
+  | "manual"
+  | "feedback"
+  | "mcp"
+  | "evolution"
+  | "discovery";
+export type DestinationFilter = "all" | DestinationKind;
 
 function statusMeta(
   status: string,
@@ -201,11 +227,45 @@ function statusMeta(
 }
 
 function sourceLabel(source: string | undefined, t: Messages): string {
+  if (source === "feedback") return t.sourceFeedback;
   if (source === "mcp") return t.sourceMcp;
   if (source === "evolution") return t.sourceEvolution;
   if (source === "discovery") return t.sourceDiscovery;
   if (source === "manual") return t.sourceManual;
   return source || "";
+}
+
+function resolveDestinationKind(row: Proposal): DestinationKind {
+  if (row.destination_kind) return row.destination_kind;
+  if (row.target_kind === "override" || row.structured_patch) {
+    return "semantic_override";
+  }
+  if (row.target_kind === "ossie") return "ossie_model";
+  const decoded = safeDecodePath(row.target);
+  if (
+    decoded.includes("/historical-tickets/") ||
+    decoded.startsWith("document:historical-tickets/")
+  ) {
+    return "historical_ticket";
+  }
+  return "knowledge_doc";
+}
+
+function destinationMeta(
+  row: Proposal,
+  t: Messages,
+): { kind: DestinationKind; label: string; color: string } {
+  const kind = resolveDestinationKind(row);
+  if (kind === "historical_ticket") {
+    return { kind, label: t.destHistoricalTicket, color: "geekblue" };
+  }
+  if (kind === "semantic_override") {
+    return { kind, label: t.destSemanticOverride, color: "cyan" };
+  }
+  if (kind === "ossie_model") {
+    return { kind, label: t.destOssieModel, color: "orange" };
+  }
+  return { kind, label: t.destKnowledgeDoc, color: "purple" };
 }
 
 function isNewFileProposal(row: Proposal): boolean {
@@ -230,6 +290,7 @@ function discoveryKindText(kind: string | undefined, t: Messages): string {
   if (kind === "override") return t.discoveryKindOverride;
   if (kind === "document") return t.discoveryKindDocument;
   if (kind === "synthesized") return t.discoveryKindSynthesized;
+  if (kind === "historical_ticket") return t.discoveryKindHistoricalTicket;
   if (kind === "eval_draft") return t.discoveryKindEvalDraft;
   return kind || "-";
 }
@@ -353,12 +414,25 @@ function ProposalEvidenceCard({
         </div>
       )}
 
-      {(trigger.conversation_id || trigger.knowledge_gap_id) && (
+      {(trigger.conversation_id ||
+        trigger.knowledge_gap_id ||
+        trigger.synthesis_mode ||
+        typeof trigger.turn_count === "number") && (
         <div className="discovery-evidence-pills">
           {trigger.conversation_id && (
             <Tag className="mono">
               {t.evidenceConversation}: {trigger.conversation_id}
               {typeof trigger.turn_id === "number" ? `#${trigger.turn_id}` : ""}
+            </Tag>
+          )}
+          {typeof trigger.turn_count === "number" && trigger.turn_count > 0 && (
+            <Tag>上下文轮次: {trigger.turn_count}</Tag>
+          )}
+          {trigger.synthesis_mode && (
+            <Tag color={trigger.synthesis_mode === "llm" ? "blue" : "default"}>
+              {trigger.synthesis_mode === "llm"
+                ? t.synthesisModeLlm
+                : t.synthesisModeFallback}
             </Tag>
           )}
           {trigger.knowledge_gap_id && (
@@ -367,6 +441,23 @@ function ProposalEvidenceCard({
             </Tag>
           )}
         </div>
+      )}
+      {Array.isArray(trigger.context_excerpts) &&
+        trigger.context_excerpts.length > 0 && (
+          <div className="evidence-excerpt-list">
+            {trigger.context_excerpts.map((item, idx) => (
+              <div key={idx} className="evidence-excerpt-item">
+                <strong className="mono">
+                  #{item.sequence ?? idx + 1}
+                  {item.is_target ? " (目标轮次)" : ""}:{" "}
+                </strong>
+                <span>{item.question}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      {trigger.reference_sql && (
+        <pre className="source-raw mono">{trigger.reference_sql}</pre>
       )}
 
       {(trigger.window_since ||
@@ -566,12 +657,14 @@ export function CorrectionsPage({
   gaps = false,
   messages: t,
   initialProposalId,
+  initialDestinationFilter,
   onNavigateGaps,
 }: {
   token: string;
   gaps?: boolean;
   messages: Messages;
   initialProposalId?: string | null;
+  initialDestinationFilter?: DestinationFilter | null;
   onNavigateGaps?: () => void;
 }) {
   const [project, setProject] = useState(storedProject);
@@ -596,6 +689,17 @@ export function CorrectionsPage({
   const targetProposalId =
     initialProposalId ??
     new URLSearchParams(window.location.search).get("proposal_id");
+  const urlDestination = new URLSearchParams(window.location.search).get(
+    "destination",
+  );
+  const initialDest: DestinationFilter =
+    initialDestinationFilter ??
+    (urlDestination === "historical_ticket" ||
+    urlDestination === "knowledge_doc" ||
+    urlDestination === "semantic_override" ||
+    urlDestination === "ossie_model"
+      ? urlDestination
+      : "all");
   useEffect(() => {
     if (!targetProposalId || rows.length === 0) return;
     const match = rows.find((row) => row.id === targetProposalId);
@@ -606,6 +710,13 @@ export function CorrectionsPage({
   }, [rows, targetProposalId]);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>("all");
+  const [destinationFilter, setDestinationFilter] =
+    useState<DestinationFilter>(initialDest);
+  useEffect(() => {
+    if (initialDestinationFilter) {
+      setDestinationFilter(initialDestinationFilter);
+    }
+  }, [initialDestinationFilter]);
   const [patch, setPatch] = useState("");
   const [error, setError] = useState("");
   const [reverting, setReverting] = useState(false);
@@ -613,8 +724,16 @@ export function CorrectionsPage({
   const projectQuery = `project=${encodeURIComponent(project)}`;
 
   const sourceScopedRows = rows.filter((row) => {
-    if (sourceFilter === "all") return true;
-    return (row.source || "manual") === sourceFilter;
+    if (sourceFilter !== "all" && (row.source || "manual") !== sourceFilter) {
+      return false;
+    }
+    if (
+      destinationFilter !== "all" &&
+      resolveDestinationKind(row) !== destinationFilter
+    ) {
+      return false;
+    }
+    return true;
   });
   const pendingCount = sourceScopedRows.filter(
     (row) => row.status === "pending",
@@ -1088,6 +1207,7 @@ export function CorrectionsPage({
                       [
                         ["all", t.sourceFilterAll],
                         ["manual", t.sourceManual],
+                        ["feedback", t.sourceFeedback],
                         ["mcp", t.sourceMcp],
                         ["evolution", t.sourceEvolution],
                         ["discovery", t.sourceDiscovery],
@@ -1104,6 +1224,27 @@ export function CorrectionsPage({
                       </button>
                     ))}
                   </div>
+                  <div className="correction-filters" role="group">
+                    {(
+                      [
+                        ["all", t.destFilterAll],
+                        ["historical_ticket", t.destHistoricalTicket],
+                        ["knowledge_doc", t.destKnowledgeDoc],
+                        ["semantic_override", t.destSemanticOverride],
+                        ["ossie_model", t.destOssieModel],
+                      ] as const
+                    ).map(([key, label]) => (
+                      <button
+                        key={key}
+                        type="button"
+                        className={destinationFilter === key ? "active" : ""}
+                        aria-pressed={destinationFilter === key}
+                        onClick={() => setDestinationFilter(key)}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               )}
               {filteredRows.length === 0 ? (
@@ -1112,9 +1253,8 @@ export function CorrectionsPage({
                 <ul className="correction-list">
                   {filteredRows.map((row) => {
                     const meta = statusMeta(row.status, t);
-                    const srcText = row.source
-                      ? sourceLabel(row.source, t)
-                      : "";
+                    const srcText = sourceLabel(row.source || "manual", t);
+                    const dest = destinationMeta(row, t);
                     const targetLabel = safeDecodePath(row.target);
                     return (
                       <li key={row.id}>
@@ -1130,11 +1270,18 @@ export function CorrectionsPage({
                           <span className="mono" title={targetLabel}>
                             {targetLabel}
                           </span>
-                          <Space size={4}>
+                          <Space size={4} wrap>
                             {isNewFileProposal(row) && (
                               <Tag color="purple">{t.draftNewFileBadge}</Tag>
                             )}
-                            {srcText && <Tag>{srcText}</Tag>}
+                            {srcText && (
+                              <Tag>
+                                {t.proposalSourcePrefix}: {srcText}
+                              </Tag>
+                            )}
+                            <Tag color={dest.color}>
+                              {t.proposalDestPrefix}: {dest.label}
+                            </Tag>
                             <Tag color={meta.color}>{meta.label}</Tag>
                           </Space>
                         </button>
@@ -1151,13 +1298,24 @@ export function CorrectionsPage({
                     <h2 className="card-title mono">
                       {safeDecodePath(selected.target)}
                     </h2>
-                    <Space size={6}>
+                    <Space size={6} wrap>
                       {isNewFileProposal(selected) && (
                         <Tag color="purple">{t.draftNewFileBadge}</Tag>
                       )}
                       {selected.source && (
-                        <Tag>{sourceLabel(selected.source, t)}</Tag>
+                        <Tag>
+                          {t.proposalSourcePrefix}:{" "}
+                          {sourceLabel(selected.source, t)}
+                        </Tag>
                       )}
+                      {(() => {
+                        const dest = destinationMeta(selected, t);
+                        return (
+                          <Tag color={dest.color}>
+                            {t.proposalDestPrefix}: {dest.label}
+                          </Tag>
+                        );
+                      })()}
                       {selected.target_kind && (
                         <Tag>{selected.target_kind}</Tag>
                       )}

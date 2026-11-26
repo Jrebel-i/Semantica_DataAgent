@@ -797,10 +797,11 @@ class TurnFeedbackRequest(BaseModel):
 
 class TurnFeedbackView(BaseModel):
     rating: Literal["accurate"] = "accurate"
-    question_id: str
-    answer_confirmed: bool
-    split: EvalSplit
-    eval_question: EvalQuestionView
+    proposal_id: str
+    proposal_status: str
+    target: str
+    destination_kind: Literal["historical_ticket"] = "historical_ticket"
+    synthesis_mode: Literal["llm", "fallback"] = "llm"
 
 
 def turn_validated_sql(
@@ -935,7 +936,6 @@ def record_turn_feedback(
         turn_project_id = conversation.project_id
 
     scope = resolve_project_scope(turn_project_id, requester, allow_frozen=False)
-    is_admin = is_project_admin(scope, requester)
 
     validated = turn_validated_sql(sql_blocks, events)
     chosen_sql: str | None = None
@@ -960,34 +960,33 @@ def record_turn_feedback(
     caliber = (
         payload.caliber or ""
     ).strip() or f"对话确认口径：{turn_question.strip()}"
+
+    from . import historical_tickets
+
     try:
-        saved = upsert_eval_question(
+        saved = historical_tickets.propose_ticket_from_feedback(
             scope.project_id,
-            match_conversation_turn=(conversation_id, turn_id),
-            question=turn_question,
-            caliber=caliber,
-            reference_sql=chosen_sql,
-            expected_tables=payload.expected_tables,
-            expected_fields=payload.expected_fields,
-            notes=payload.notes,
-            dialect=chosen_dialect,
-            category=payload.category or DEFAULT_CATEGORY,
-            answer_confirmed=is_admin,
-            source="feedback",
             conversation_id=conversation_id,
             turn_id=turn_id,
-            created_by=requester.id,
+            turn_question=turn_question,
+            chosen_sql=chosen_sql,
+            chosen_dialect=chosen_dialect,
+            user_caliber=caliber,
+            user_notes=payload.notes,
+            requester=requester,
         )
+    except historical_tickets.EvalLeakageError as exc:
+        raise HTTPException(409, detail=str(exc)) from None
     except ValueError as exc:
         raise HTTPException(422, detail=str(exc)) from None
 
-    view = _row_to_view(saved, is_admin=is_admin)
     return TurnFeedbackView(
         rating=payload.rating,
-        question_id=view.id,
-        answer_confirmed=bool(saved.get("answer_confirmed", False)),
-        split="holdout" if saved.get("split") == "holdout" else "dev",
-        eval_question=view,
+        proposal_id=saved["proposal_id"],
+        proposal_status=saved["proposal_status"],
+        target=saved["target"],
+        destination_kind="historical_ticket",
+        synthesis_mode=saved["synthesis_mode"],
     )
 
 
@@ -1000,6 +999,8 @@ def revoke_turn_feedback(
     turn_id: int,
     requester: Annotated[Requester, Depends(rest_requester)],
 ):
+    from .db import CorrectionProposal
+
     with sessions()() as db:
         conversation = db.get(Conversation, conversation_id)
         turn = db.get(Turn, turn_id)
@@ -1013,55 +1014,28 @@ def revoke_turn_feedback(
         turn_project_id = conversation.project_id
 
     scope = resolve_project_scope(turn_project_id, requester, allow_frozen=False)
-    is_admin = is_project_admin(scope, requester)
 
-    with _project_eval_lock(scope.project_id):
-        path = project_context.eval_questions_path(scope.project_id)
-        if not path.exists():
+    from . import historical_tickets
+
+    matched = historical_tickets.find_feedback_proposal_by_turn(
+        scope.project_id, conversation_id, turn_id
+    )
+    if matched is None:
+        return Response(status_code=204)
+
+    with sessions().begin() as db:
+        row = db.get(CorrectionProposal, matched.id)
+        if row is None:
             return Response(status_code=204)
-        try:
-            payload, rows = _read_raw_rows(scope.project_id)
-        except (ValueError, TypeError):
-            logger.exception(
-                "Failed to read eval questions for project %s", scope.project_id
-            )
-            raise HTTPException(
-                500, detail="Failed to load evaluation questions"
-            ) from None
-
-        def _is_turn_feedback(row: dict[str, Any]) -> bool:
-            return (
-                row.get("conversation_id") == conversation_id
-                and row.get("turn_id") == turn_id
-                and str(row.get("source") or "") == "feedback"
-            )
-
-        matched = [row for row in rows if _is_turn_feedback(row)]
-        if not matched:
-            return Response(status_code=204)
-
-        if not is_admin and any(
-            bool(row.get("answer_confirmed", False)) for row in matched
-        ):
+        if row.status in ("approved", "auto_applied"):
             raise HTTPException(
                 409,
-                detail="该评测题已由管理员确认纳入评测题集，如需移除请联系项目管理员",
+                detail="该历史工单提案已审批入库，请在纠错审批中回滚或联系管理员处理",
             )
-
-        now_iso = datetime.now(UTC).isoformat()
-        next_rows: list[dict[str, Any]] = []
-        for row in rows:
-            if not _is_turn_feedback(row):
-                next_rows.append(row)
-                continue
-            if row.get("proposal_id"):
-                updated = dict(row)
-                updated["source"] = "correction"
-                updated["updated_at"] = now_iso
-                next_rows.append(updated)
-
-        payload["questions"] = next_rows
-        _atomic_write_yaml(path, payload)
+        if row.status == "pending":
+            row.status = "rejected"
+            row.reviewer_id = requester.id
+            row.reviewed_at = datetime.now(UTC)
     return Response(status_code=204)
 
 

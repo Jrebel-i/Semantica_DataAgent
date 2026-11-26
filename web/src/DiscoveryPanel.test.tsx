@@ -366,7 +366,7 @@ test("switches presets, saves config, keeps enable_fk_probing & generate_eval_dr
     /启用外键关系数据探活/,
   ) as HTMLInputElement;
   const seedBox = screen.getByLabelText(
-    /同步生成待确认评测题集草稿/,
+    /同步生成历史工单案例提案/,
   ) as HTMLInputElement;
   expect(mineBox.checked).toBe(true);
   expect(probeBox.checked).toBe(false);

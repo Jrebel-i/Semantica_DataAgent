@@ -62,13 +62,19 @@ logger = logging.getLogger(__name__)
 
 Text = Annotated[str, Field(min_length=1, max_length=20000, pattern=r"\S")]
 TargetKind = Literal["document", "override", "ossie"]
-ProposalSource = Literal["manual", "mcp", "evolution", "discovery"]
+ProposalSource = Literal["manual", "feedback", "mcp", "evolution", "discovery"]
+DestinationKind = Literal[
+    "historical_ticket", "knowledge_doc", "semantic_override", "ossie_model"
+]
 
 _TRUSTED_EVOLUTION_SOURCE: ContextVar[bool] = ContextVar(
     "trusted_evolution_source", default=False
 )
 _TRUSTED_DISCOVERY_SOURCE: ContextVar[bool] = ContextVar(
     "trusted_discovery_source", default=False
+)
+_TRUSTED_FEEDBACK_SOURCE: ContextVar[bool] = ContextVar(
+    "trusted_feedback_source", default=False
 )
 
 
@@ -90,6 +96,16 @@ def trusted_discovery_source():
         yield
     finally:
         _TRUSTED_DISCOVERY_SOURCE.reset(token)
+
+
+@contextmanager
+def trusted_feedback_source():
+    """Authorize internal feedback curation calls to emit ``source='feedback'`` proposals."""
+    token = _TRUSTED_FEEDBACK_SOURCE.set(True)
+    try:
+        yield
+    finally:
+        _TRUSTED_FEEDBACK_SOURCE.reset(token)
 
 
 def _validate_doc_relpath(target: str, project_id: str) -> str:
@@ -335,7 +351,7 @@ def propose_in_project(
                 raise ValueError("Conversation not found in project")
     if not str(reason or "").strip():
         raise ValueError("Correction reason must not be blank")
-    if source not in {"manual", "mcp", "evolution", "discovery"}:
+    if source not in {"manual", "feedback", "mcp", "evolution", "discovery"}:
         raise ValueError(f"Unsupported correction source: {source}")
     if source == "evolution" and not _TRUSTED_EVOLUTION_SOURCE.get():
         raise ValueError(
@@ -344,6 +360,10 @@ def propose_in_project(
     if source == "discovery" and not _TRUSTED_DISCOVERY_SOURCE.get():
         raise ValueError(
             "Discovery proposals can only be submitted by the discovery runner"
+        )
+    if source == "feedback" and not _TRUSTED_FEEDBACK_SOURCE.get():
+        raise ValueError(
+            "Feedback proposals can only be submitted by the historical ticket curator"
         )
 
     parsed_patch = _parse_structured_patch_arg(structured_patch)
@@ -498,8 +518,8 @@ def propose_in_project(
             raise ValueError("Correction does not change the target")
 
     policy = project_context.evolution_policy(project_id)
-    if source in {"discovery", "evolution"} or knowledge_gap_id is not None:
-        # Discovery, evolution, and confirmed-gap proposals MUST always enter human review.
+    if source in {"discovery", "evolution", "feedback"} or knowledge_gap_id is not None:
+        # Discovery, evolution, feedback tickets, and confirmed-gap proposals MUST enter human review.
         require_review = True
     else:
         require_review = policy["correction_require_review"]
@@ -615,6 +635,7 @@ class ProposalView(BaseModel):
     status: str
     source: str = "manual"
     target_kind: str = "document"
+    destination_kind: DestinationKind = "knowledge_doc"
     is_new_file: bool = False
     structured_patch: dict[str, Any] | None = None
     gate_report: dict[str, Any] | None = None
@@ -640,6 +661,16 @@ class ProposalView(BaseModel):
 
     @model_validator(mode="after")
     def _derive_evidence_and_new_file(self):
+        from .historical_tickets import is_historical_ticket_target
+
+        if self.target_kind == "override":
+            self.destination_kind = "semantic_override"
+        elif self.target_kind == "ossie":
+            self.destination_kind = "ossie_model"
+        elif is_historical_ticket_target(self.target):
+            self.destination_kind = "historical_ticket"
+        else:
+            self.destination_kind = "knowledge_doc"
         if self.target_kind == "document" and self.diff.startswith("--- /dev/null"):
             self.is_new_file = True
         if self.evidence is None:
@@ -767,15 +798,22 @@ def create_proposal(
 @router.get("/api/v1/corrections", response_model=list[ProposalView])
 def list_proposals(
     scope: Annotated[project_context.ProjectContext, Depends(project_scope)],
+    source: Annotated[ProposalSource | None, Query()] = None,
+    destination_kind: Annotated[DestinationKind | None, Query()] = None,
 ):
     with sessions()() as db:
-        return [
+        query = db.query(CorrectionProposal).filter(
+            CorrectionProposal.project_id == scope.project_id
+        )
+        if source is not None:
+            query = query.filter(CorrectionProposal.source == source)
+        views = [
             ProposalView.model_validate(row)
-            for row in db.query(CorrectionProposal)
-            .filter(CorrectionProposal.project_id == scope.project_id)
-            .order_by(CorrectionProposal.created_at.desc())
-            .all()
+            for row in query.order_by(CorrectionProposal.created_at.desc()).all()
         ]
+        if destination_kind is not None:
+            views = [v for v in views if v.destination_kind == destination_kind]
+        return views
 
 
 @router.get("/api/v1/corrections/{proposal_id}", response_model=ProposalView)
@@ -816,8 +854,6 @@ def reject(
 
 
 def _finalize(proposal_id: str, commit_sha: str) -> ProposalView:
-    from .eval_questions import promote_correction_to_eval_question
-
     source_dir_val: str | None = None
     with sessions().begin() as db:
         db.execute(text("BEGIN IMMEDIATE"))
@@ -843,7 +879,6 @@ def _finalize(proposal_id: str, commit_sha: str) -> ProposalView:
         result = ProposalView.model_validate(row)
     if source_dir_val:
         _remove_journal(Path(source_dir_val), proposal_id)
-    promote_correction_to_eval_question(proposal_id)
     project_context.wake_build_queue()
     return result
 
@@ -1199,9 +1234,6 @@ def _apply_proposal(
                 row.reviewed_at = datetime.now(UTC)
             db.flush()
             result = ProposalView.model_validate(row)
-        from .eval_questions import promote_correction_to_eval_question
-
-        promote_correction_to_eval_question(proposal_id, approval_eval=approval_eval)
         return result
 
     if row_kind != "document" and effective_structured is not None:

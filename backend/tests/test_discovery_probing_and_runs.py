@@ -1240,7 +1240,6 @@ def test_seed_eval_drafts_switch_validate_sql_and_dev_holdout_dedup(
     from semantica_dataagent import (
         eval_questions,
         knowledge,
-        project_context,
         sql_validation,
     )
     from semantica_dataagent.dtb_ai_gateway import DtbAiGatewayExecutor
@@ -1396,46 +1395,38 @@ def test_seed_eval_drafts_switch_validate_sql_and_dev_holdout_dedup(
     assert detail["status"] == "completed", detail
     assert detail["eval_drafts_created"] == 1
 
-    eval_cands = [
-        c for c in detail["candidates"] if c["candidate_kind"] == "eval_draft"
+    ticket_cands = [
+        c for c in detail["candidates"] if c["candidate_kind"] == "historical_ticket"
     ]
-    decisions = {c["decision"] for c in eval_cands}
+    decisions = {c["decision"] for c in ticket_cands}
     assert decisions == {"proposed", "deduplicated", "rejected"}
 
-    # Check isolated eval questions file & REST view
-    eval_path = project_context.eval_questions_path("default")
-    assert eval_path.is_file()
-    admin_list = client.get(
+    # Benchmark eval questions MUST remain untouched (still only the manual holdout item)
+    admin_eval_list = client.get(
         "/api/v1/eval-questions",
-        params={"source": "discovery"},
         headers=_headers(admin_token),
     )
-    assert admin_list.status_code == 200
-    items = admin_list.json()
-    assert len(items) == 1
-    assert items[0]["answer_confirmed"] is False
-    assert items[0]["split"] == "dev"
-    assert items[0]["source"] == "discovery"
-    assert "paid" not in (items[0]["reference_sql"] or "")
+    assert admin_eval_list.status_code == 200
+    assert len(admin_eval_list.json()) == 1
 
-    # Non-admin member sees discovery unconfirmed draft redacted
-    mem_tok = client.post(
-        "/api/v1/tokens",
-        headers=_headers(admin_token),
-        json={
-            "name": "eval-reader",
-            "role": "user",
-            "projects": [{"project_id": "default", "role": "member"}],
+    # Stage 3 creates pending historical-ticket CorrectionProposal (NOT eval_question)
+    corr_list = client.get(
+        "/api/v1/corrections",
+        params={
+            "project": "default",
+            "source": "discovery",
+            "destination_kind": "historical_ticket",
         },
-    ).json()["token"]
-    mem_list = client.get(
-        "/api/v1/eval-questions",
-        params={"source": "discovery"},
-        headers=_headers(mem_tok),
-    ).json()
-    assert len(mem_list) == 1
-    assert mem_list[0]["redacted"] is True
-    assert mem_list[0]["reference_sql"] is None
+        headers=_headers(admin_token),
+    )
+    assert corr_list.status_code == 200
+    props = corr_list.json()
+    assert len(props) == 1
+    assert props[0]["status"] == "pending"
+    assert props[0]["source"] == "discovery"
+    assert props[0]["destination_kind"] == "historical_ticket"
+    assert "/historical-tickets/" in props[0]["target"]
+    assert "paid" not in props[0]["patch"]
 
 
 def test_crash_recovery_in_independent_subprocess_and_project_deletion_cascade(
