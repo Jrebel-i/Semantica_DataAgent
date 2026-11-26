@@ -3510,13 +3510,41 @@ export interface components {
         };
         /** ProjectScheduleUpdate */
         ProjectScheduleUpdate: {
+            /** Enabled */
+            enabled?: boolean | null;
             /** Interval Seconds */
-            interval_seconds: number;
+            interval_seconds?: number | null;
+            /** Schedule Cron */
+            schedule_cron?: string | null;
+            /** Timezone */
+            timezone?: string | null;
         };
         /** ProjectScheduleView */
         ProjectScheduleView: {
-            /** Interval Seconds */
+            /**
+             * Enabled
+             * @default false
+             */
+            enabled: boolean;
+            /**
+             * Interval Seconds
+             * @default 0
+             */
             interval_seconds: number;
+            /**
+             * Legacy Interval
+             * @default false
+             */
+            legacy_interval: boolean;
+            /** Next Run At */
+            next_run_at?: string | null;
+            /** Schedule Cron */
+            schedule_cron?: string | null;
+            /**
+             * Timezone
+             * @default Asia/Shanghai
+             */
+            timezone: string;
         };
         /** ProjectSourceStatus */
         ProjectSourceStatus: {

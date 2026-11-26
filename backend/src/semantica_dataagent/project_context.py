@@ -24,6 +24,7 @@ from collections.abc import Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -53,6 +54,11 @@ GENERATION_KEY = "knowledge_generation"
 SOURCE_DIRECTORY_KEY = "source_directory"
 GENERATION_RETENTION_KEY = "generation_retention"
 SCHEDULE_INTERVAL_KEY = "schedule_interval_seconds"
+SCHEDULE_ENABLED_KEY = "schedule_enabled"
+SCHEDULE_CRON_KEY = "schedule_cron"
+SCHEDULE_TIMEZONE_KEY = "schedule_timezone"
+SCHEDULE_LAST_TRIGGERED_AT_KEY = "schedule_last_triggered_at"
+SCHEDULE_UPDATED_AT_KEY = "schedule_updated_at"
 DIMENSION_VALUE_LIMIT_KEY = "dimension_value_limit"
 GENERATION_PREFIX_KEY = "generation_prefix"
 CORRECTION_REQUIRE_REVIEW_KEY = "correction_require_review"
@@ -501,6 +507,11 @@ PROJECT_SETTING_KEYS = frozenset(
         SOURCE_DIRECTORY_KEY,
         GENERATION_RETENTION_KEY,
         SCHEDULE_INTERVAL_KEY,
+        SCHEDULE_ENABLED_KEY,
+        SCHEDULE_CRON_KEY,
+        SCHEDULE_TIMEZONE_KEY,
+        SCHEDULE_LAST_TRIGGERED_AT_KEY,
+        SCHEDULE_UPDATED_AT_KEY,
         DIMENSION_VALUE_LIMIT_KEY,
     }
 )
@@ -548,7 +559,15 @@ def neo4j_password(values: Mapping[str, Any]) -> str | None:
 def _read_settings(db, project_id: str = DEFAULT_PROJECT_ID) -> dict[str, str]:
     values = {row.key: row.value for row in db.query(Setting).all()}
     if project_id != DEFAULT_PROJECT_ID:
-        values.pop(SCHEDULE_INTERVAL_KEY, None)
+        for key in (
+            SCHEDULE_INTERVAL_KEY,
+            SCHEDULE_ENABLED_KEY,
+            SCHEDULE_CRON_KEY,
+            SCHEDULE_TIMEZONE_KEY,
+            SCHEDULE_LAST_TRIGGERED_AT_KEY,
+            SCHEDULE_UPDATED_AT_KEY,
+        ):
+            values.pop(key, None)
         values.update(
             {
                 row.key: row.value
@@ -1098,13 +1117,182 @@ def wake_build_queue() -> None:
     build_queue.enqueue()
 
 
+def read_project_setting_value(db, project_id: str, key: str) -> str | None:
+    if project_id == DEFAULT_PROJECT_ID:
+        row = db.get(Setting, key)
+    else:
+        row = db.get(ProjectSetting, (project_id, key))
+    return row.value if row is not None else None
+
+
+def write_project_setting_value(
+    db, project_id: str, key: str, value: str | None
+) -> None:
+    if project_id == DEFAULT_PROJECT_ID:
+        row = db.get(Setting, key)
+        if value is None:
+            if row is not None:
+                db.delete(row)
+        elif row is None:
+            db.add(Setting(key=key, value=value))
+        else:
+            row.value = value
+        return
+    row = db.get(ProjectSetting, (project_id, key))
+    if value is None:
+        if row is not None:
+            db.delete(row)
+    elif row is None:
+        db.add(ProjectSetting(project_id=project_id, key=key, value=value))
+    else:
+        row.value = value
+
+
+def _parse_iso_dt(raw: str | None) -> datetime | None:
+    if not raw:
+        return None
+    try:
+        dt = datetime.fromisoformat(raw)
+        return dt.replace(tzinfo=UTC) if dt.tzinfo is None else dt.astimezone(UTC)
+    except ValueError:
+        return None
+
+
+@dataclass(frozen=True)
+class BuildScheduleState:
+    project_id: str
+    interval_seconds: int
+    enabled: bool
+    schedule_cron: str | None
+    timezone: str
+    last_triggered_at: datetime | None
+    created_at: datetime | None
+    legacy_interval: bool
+    next_run_at: datetime | None
+
+
+def read_build_schedule(
+    db, project_id: str, *, now_utc: datetime | None = None
+) -> BuildScheduleState:
+    from .scheduler import next_scheduled_slot, validate_timezone
+
+    raw_interval = read_project_setting_value(db, project_id, SCHEDULE_INTERVAL_KEY)
+    interval = int(raw_interval) if raw_interval else 0
+    raw_enabled = read_project_setting_value(db, project_id, SCHEDULE_ENABLED_KEY)
+    raw_cron = read_project_setting_value(db, project_id, SCHEDULE_CRON_KEY)
+    schedule_cron = (raw_cron or "").strip() or None
+    raw_tz = read_project_setting_value(db, project_id, SCHEDULE_TIMEZONE_KEY)
+    try:
+        tz = validate_timezone(raw_tz)
+    except ValueError:
+        tz = "Asia/Shanghai"
+    enabled = raw_enabled == "1" and schedule_cron is not None
+    legacy_interval = interval > 0 and raw_enabled is None and schedule_cron is None
+    last_triggered = _parse_iso_dt(
+        read_project_setting_value(db, project_id, SCHEDULE_LAST_TRIGGERED_AT_KEY)
+    )
+    updated_at = _parse_iso_dt(
+        read_project_setting_value(db, project_id, SCHEDULE_UPDATED_AT_KEY)
+    )
+    next_run: datetime | None = None
+    if enabled and schedule_cron:
+        try:
+            next_run = next_scheduled_slot(
+                schedule_cron, tz, now_utc or datetime.now(UTC)
+            )
+        except ValueError:
+            next_run = None
+    return BuildScheduleState(
+        project_id=project_id,
+        interval_seconds=interval,
+        enabled=enabled,
+        schedule_cron=schedule_cron,
+        timezone=tz,
+        last_triggered_at=last_triggered,
+        created_at=updated_at,
+        legacy_interval=legacy_interval,
+        next_run_at=next_run,
+    )
+
+
+def save_build_schedule(
+    db,
+    project_id: str,
+    *,
+    enabled: bool | None = None,
+    schedule_cron: str | None = None,
+    cron_provided: bool = False,
+    timezone: str | None = None,
+    tz_provided: bool = False,
+    now_utc: datetime | None = None,
+) -> BuildScheduleState:
+    from .scheduler import normalize_schedule_cron, validate_timezone
+
+    current = read_build_schedule(db, project_id, now_utc=now_utc)
+    next_enabled = current.enabled if enabled is None else bool(enabled)
+    next_cron = (
+        normalize_schedule_cron(schedule_cron)
+        if cron_provided
+        else current.schedule_cron
+    )
+    next_tz = validate_timezone(timezone) if tz_provided else current.timezone
+    if next_enabled and not next_cron:
+        raise ValueError("启用定时增量构建时必须填写 Cron 表达式")
+
+    now_norm = (now_utc or datetime.now(UTC)).astimezone(UTC)
+    write_project_setting_value(db, project_id, SCHEDULE_INTERVAL_KEY, "0")
+    write_project_setting_value(
+        db, project_id, SCHEDULE_ENABLED_KEY, "1" if next_enabled else "0"
+    )
+    write_project_setting_value(db, project_id, SCHEDULE_CRON_KEY, next_cron)
+    write_project_setting_value(db, project_id, SCHEDULE_TIMEZONE_KEY, next_tz)
+    write_project_setting_value(
+        db, project_id, SCHEDULE_UPDATED_AT_KEY, now_norm.isoformat()
+    )
+    if next_enabled and (
+        not current.enabled
+        or next_cron != current.schedule_cron
+        or next_tz != current.timezone
+    ):
+        write_project_setting_value(
+            db, project_id, SCHEDULE_LAST_TRIGGERED_AT_KEY, now_norm.isoformat()
+        )
+    return read_build_schedule(db, project_id, now_utc=now_norm)
+
+
+def mark_build_schedule_triggered(
+    db, project_id: str, triggered_at: datetime
+) -> None:
+    write_project_setting_value(
+        db,
+        project_id,
+        SCHEDULE_LAST_TRIGGERED_AT_KEY,
+        triggered_at.astimezone(UTC).isoformat(),
+    )
+
+
+def scheduled_cron_projects(
+    db, *, now_utc: datetime | None = None
+) -> list[BuildScheduleState]:
+    project_ids = [
+        row.id for row in db.query(Project).filter(Project.status == ACTIVE_STATUS).all()
+    ]
+    if DEFAULT_PROJECT_ID not in project_ids:
+        default_row = db.get(Project, DEFAULT_PROJECT_ID)
+        if default_row is not None and default_row.status == ACTIVE_STATUS:
+            project_ids.append(DEFAULT_PROJECT_ID)
+    items: list[BuildScheduleState] = []
+    for project_id in sorted(set(project_ids)):
+        state = read_build_schedule(db, project_id, now_utc=now_utc)
+        if state.enabled and state.schedule_cron:
+            items.append(state)
+    return items
+
+
 def schedule_interval(project_id: str = DEFAULT_PROJECT_ID) -> int:
     with sessions()() as db:
-        if project_id == DEFAULT_PROJECT_ID:
-            row = db.get(Setting, SCHEDULE_INTERVAL_KEY)
-        else:
-            row = db.get(ProjectSetting, (project_id, SCHEDULE_INTERVAL_KEY))
-        return int(row.value) if row is not None and row.value else 0
+        raw = read_project_setting_value(db, project_id, SCHEDULE_INTERVAL_KEY)
+        return int(raw) if raw else 0
 
 
 def project_schedule_intervals() -> dict[str, int]:

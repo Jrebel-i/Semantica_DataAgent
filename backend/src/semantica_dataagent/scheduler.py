@@ -219,6 +219,39 @@ def _parse_cron_fields(
     )
 
 
+def normalize_schedule_cron(raw: str | None) -> str | None:
+    """Validate and normalize 'HH:MM' or 5-field cron strings; blank disables."""
+    if raw is None:
+        return None
+    cleaned = raw.strip()
+    if not cleaned:
+        return None
+    hhmm = _HHMM_RE.fullmatch(cleaned)
+    if hhmm is not None:
+        hour, minute = int(hhmm.group(1)), int(hhmm.group(2))
+        return f"{minute} {hour} * * *"
+    parts = cleaned.split()
+    if len(parts) != 5:
+        raise ValueError("定时表达式仅支持 HH:MM 或 5 段 Cron 表达式")
+    for part, (label, low, high, is_weekday) in zip(
+        parts, _CRON_FIELD_BOUNDS, strict=True
+    ):
+        _expand_cron_field(part, label, low, high, is_weekday=is_weekday)
+    return " ".join(parts)
+
+
+def validate_timezone(tz: str | None) -> str:
+    """Validate an IANA timezone name, defaulting to Asia/Shanghai."""
+    if tz is None or not tz.strip():
+        return "Asia/Shanghai"
+    cleaned = tz.strip()
+    try:
+        ZoneInfo(cleaned)
+    except (ZoneInfoNotFoundError, ValueError, KeyError) as exc:
+        raise ValueError(f"无效时区：{cleaned}") from exc
+    return cleaned
+
+
 def cron_matches(cron_expr: str, dt_local: datetime) -> bool:
     """Return True if local datetime matches the 5-field cron (or HH:MM) expression."""
     minutes, hours, days, months, weekdays = _parse_cron_fields(cron_expr)
@@ -466,9 +499,113 @@ class PullInstanceScheduler:
 instance_pull_scheduler = PullInstanceScheduler()
 
 
+class BuildCronScheduler:
+    """Fork-safe wall-clock/5-field Cron scheduler for per-project incremental builds."""
+
+    def __init__(self, poll_interval: float = 15.0, clock=lambda: datetime.now(UTC)):
+        self._poll_interval = max(0.05, float(poll_interval))
+        self._clock = clock
+        self._condition = threading.Condition()
+        self._thread: threading.Thread | None = None
+        self._stopping = False
+
+    def fork_child(self) -> None:
+        """Drop parent-thread state inherited by a forked child."""
+        self._condition = threading.Condition()
+        self._thread = None
+        self._stopping = False
+
+    def start(self) -> None:
+        with self._condition:
+            if self._thread is not None and self._thread.is_alive():
+                return
+            self._stopping = False
+            self._thread = threading.Thread(
+                target=self._run,
+                name="dataagent-build-cron-scheduler",
+                daemon=True,
+            )
+            self._thread.start()
+
+    def wake(self) -> None:
+        with self._condition:
+            self._condition.notify_all()
+
+    def stop(self, timeout: float = 5.0) -> None:
+        with self._condition:
+            self._stopping = True
+            self._condition.notify_all()
+            thread = self._thread
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout=timeout)
+
+    def tick_once(self, *, now: datetime | None = None) -> list[str]:
+        """Scan active projects with enabled Cron build schedules and enqueue due builds."""
+        from .db import sessions
+
+        now_utc = as_utc(now if now is not None else self._clock())
+        with sessions()() as db:
+            candidates = project_context.scheduled_cron_projects(db, now_utc=now_utc)
+        triggered: list[str] = []
+        for state in candidates:
+            project_id = state.project_id
+            if project_context.project_is_frozen(project_id):
+                continue
+            try:
+                if not is_instance_due(state, now_utc):
+                    continue
+            except ValueError:
+                LOGGER.warning("Invalid Cron build schedule on project %s", project_id)
+                continue
+
+            claimed = False
+            with sessions().begin() as db:
+                fresh = project_context.read_build_schedule(
+                    db, project_id, now_utc=now_utc
+                )
+                if not project_context.project_is_frozen(project_id) and is_instance_due(
+                    fresh, now_utc
+                ):
+                    project_context.mark_build_schedule_triggered(
+                        db, project_id, now_utc
+                    )
+                    claimed = True
+            if not claimed:
+                continue
+
+            triggered.append(project_id)
+            try:
+                project_context.enqueue_build(
+                    "incremental", "scheduler", project_id=project_id, dedupe=True
+                )
+            except Exception:
+                LOGGER.exception(
+                    "Could not enqueue Cron scheduled build for project %s", project_id
+                )
+        return triggered
+
+    def _run(self) -> None:
+        while True:
+            with self._condition:
+                if self._stopping:
+                    return
+            try:
+                self.tick_once()
+            except Exception:
+                LOGGER.exception("BuildCronScheduler tick failed")
+            with self._condition:
+                if self._stopping:
+                    return
+                self._condition.wait(timeout=self._poll_interval)
+
+
+build_cron_scheduler = BuildCronScheduler()
+
+
 def _reset_after_fork() -> None:
     scheduler.fork_child()
     instance_pull_scheduler.fork_child()
+    build_cron_scheduler.fork_child()
 
 
 os.register_at_fork(after_in_child=_reset_after_fork)

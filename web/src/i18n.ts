@@ -347,6 +347,19 @@ const messages = {
     possibleAmbiguity: "可能存在歧义",
     ambiguityRefs: "相关口径引用",
     scheduleTitle: "定时增量构建",
+    scheduleHint: "按设定的 Cron 周期自动检查项目来源并排队增量构建。",
+    scheduleEnabled: "启用定时增量构建",
+    scheduleEnabledState: "已开启",
+    scheduleDisabledState: "已关闭",
+    scheduleCron: "Cron 表达式",
+    scheduleCronPlaceholder: "例如 0 2 * * * 或 02:00",
+    scheduleCronHint: "支持 5 段 Cron（分 时 日 月 周）或 HH:MM。",
+    scheduleTimezone: "时区",
+    scheduleNextRun: "下次执行时间",
+    scheduleDisabledHint: "定时增量构建已关闭，配置仍会保留。",
+    scheduleLegacyIntervalHint:
+      "当前沿用旧版间隔调度（每 {seconds} 秒）；保存上方 Cron 配置后将切换为 Cron 调度。",
+    scheduleCronRequired: "开启定时构建时请填写 Cron 表达式",
     scheduleInterval: "间隔秒数（0 为关闭）",
     scheduleSave: "保存定时",
     scheduleSaved: "定时设置已保存",
@@ -1544,6 +1557,23 @@ const messages = {
     possibleAmbiguity: "Possible ambiguity",
     ambiguityRefs: "Related definition references",
     scheduleTitle: "Scheduled incremental builds",
+    scheduleHint:
+      "Automatically check project sources and queue incremental builds on a Cron schedule.",
+    scheduleEnabled: "Enable scheduled builds",
+    scheduleEnabledState: "Enabled",
+    scheduleDisabledState: "Disabled",
+    scheduleCron: "Cron expression",
+    scheduleCronPlaceholder: "e.g. 0 2 * * * or 02:00",
+    scheduleCronHint:
+      "Supports 5-field Cron (min hour day month weekday) or HH:MM.",
+    scheduleTimezone: "Timezone",
+    scheduleNextRun: "Next run",
+    scheduleDisabledHint:
+      "Scheduled builds are off; your Cron configuration is preserved.",
+    scheduleLegacyIntervalHint:
+      "Using legacy interval ({seconds}s). Save Cron settings above to switch to Cron scheduling.",
+    scheduleCronRequired:
+      "Please enter a Cron expression before enabling scheduled builds.",
     scheduleInterval: "Interval in seconds (0 disables)",
     scheduleSave: "Save schedule",
     scheduleSaved: "Schedule saved",

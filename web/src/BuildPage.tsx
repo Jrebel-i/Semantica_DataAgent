@@ -9,6 +9,7 @@ import {
   Modal,
   Select,
   Space,
+  Switch,
   Table,
   Tag,
 } from "antd";
@@ -18,8 +19,18 @@ import { TableScroll } from "./TableScroll";
 
 type Build = components["schemas"]["BuildView"];
 type Generations = components["schemas"]["GenerationsView"];
+type ProjectSchedule = components["schemas"]["ProjectScheduleView"];
 type BuildType = Build["build_type"];
 type BuildStatus = Build["status"];
+
+const TIMEZONE_PRESETS = [
+  "Asia/Shanghai",
+  "UTC",
+  "Asia/Tokyo",
+  "Asia/Singapore",
+  "Europe/London",
+  "America/New_York",
+];
 
 const statusColors: Record<BuildStatus, string> = {
   queued: "gold",
@@ -113,7 +124,14 @@ export function BuildPage({
   const [typeFilter, setTypeFilter] = useState<"all" | BuildType>("all");
   const [detailTab, setDetailTab] = useState<"changes" | "logs">("changes");
   const [confirmFullOpen, setConfirmFullOpen] = useState(false);
-  const [interval, setInterval] = useState("0");
+  const [scheduleEnabled, setScheduleEnabled] = useState(false);
+  const [scheduleCron, setScheduleCron] = useState("");
+  const [scheduleTimezone, setScheduleTimezone] = useState("Asia/Shanghai");
+  const [scheduleNextRunAt, setScheduleNextRunAt] = useState<string | null>(
+    null,
+  );
+  const [legacyIntervalSeconds, setLegacyIntervalSeconds] = useState(0);
+  const [scheduleLegacy, setScheduleLegacy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const projectRef = useRef(project);
@@ -162,8 +180,14 @@ export function BuildPage({
     })
       .then(async (response) => {
         if (!response.ok) return;
-        const saved = (await response.json()) as { interval_seconds: number };
-        if (active) setInterval(String(saved.interval_seconds));
+        const saved = (await response.json()) as Partial<ProjectSchedule>;
+        if (!active) return;
+        setScheduleEnabled(Boolean(saved.enabled));
+        setScheduleCron(saved.schedule_cron ?? "");
+        setScheduleTimezone(saved.timezone || "Asia/Shanghai");
+        setScheduleNextRunAt(saved.next_run_at ?? null);
+        setLegacyIntervalSeconds(saved.interval_seconds ?? 0);
+        setScheduleLegacy(Boolean(saved.legacy_interval));
       })
       .catch(() => undefined);
     return () => {
@@ -219,7 +243,13 @@ export function BuildPage({
       setError(t.buildError);
     }
   }
-  async function saveSchedule() {
+  async function saveSchedule(nextEnabled = scheduleEnabled) {
+    const trimmedCron = scheduleCron.trim();
+    if (nextEnabled && !trimmedCron) {
+      setNotice("");
+      setError(t.scheduleCronRequired);
+      return;
+    }
     try {
       const response = await fetch(
         `/api/v1/projects/${encodeURIComponent(project)}/schedule`,
@@ -229,12 +259,34 @@ export function BuildPage({
             Authorization: `Bearer ${token}`,
             "Content-Type": "application/json",
           },
-          body: JSON.stringify({ interval_seconds: Number(interval) }),
+          body: JSON.stringify({
+            enabled: nextEnabled,
+            schedule_cron: trimmedCron || null,
+            timezone: scheduleTimezone.trim() || "Asia/Shanghai",
+          }),
         },
       );
-      if (!response.ok) throw new Error();
-      const saved = (await response.json()) as { interval_seconds: number };
-      setInterval(String(saved.interval_seconds));
+      if (!response.ok) {
+        let detail = t.buildError;
+        try {
+          const payload = (await response.json()) as { detail?: unknown };
+          if (typeof payload.detail === "string" && payload.detail) {
+            detail = payload.detail;
+          }
+        } catch {
+          // Ignore non-JSON validation payloads
+        }
+        setNotice("");
+        setError(detail);
+        return;
+      }
+      const saved = (await response.json()) as Partial<ProjectSchedule>;
+      setScheduleEnabled(Boolean(saved.enabled));
+      setScheduleCron(saved.schedule_cron ?? "");
+      setScheduleTimezone(saved.timezone || "Asia/Shanghai");
+      setScheduleNextRunAt(saved.next_run_at ?? null);
+      setLegacyIntervalSeconds(saved.interval_seconds ?? 0);
+      setScheduleLegacy(Boolean(saved.legacy_interval));
       setNotice(t.scheduleSaved);
       setError("");
     } catch {
@@ -359,30 +411,79 @@ export function BuildPage({
 
       <section className="card section-card">
         <div className="card-title-row">
-          <h2 className="card-title">{t.scheduleTitle}</h2>
+          <div>
+            <h2 className="card-title">{t.scheduleTitle}</h2>
+            <p className="muted" style={{ margin: "4px 0 0", fontSize: 13 }}>
+              {t.scheduleHint}
+            </p>
+          </div>
+          <label className="source-auto-build">
+            <span className="muted">
+              {scheduleEnabled
+                ? t.scheduleEnabledState
+                : t.scheduleDisabledState}
+            </span>
+            <Switch
+              aria-label={t.scheduleEnabled}
+              checked={scheduleEnabled}
+              onChange={(checked) => {
+                setScheduleEnabled(checked);
+                if (!checked || scheduleCron.trim()) {
+                  void saveSchedule(checked);
+                }
+              }}
+            />
+          </label>
         </div>
         <div className="build-schedule-layout">
           <div>
-            <div className="field">
-              <label className="field-label" htmlFor="build-schedule-interval">
-                {t.scheduleInterval}
+            <div className="build-schedule-form">
+              <div className="field">
+                <label className="field-label" htmlFor="build-schedule-cron">
+                  {t.scheduleCron}
+                </label>
+                <Input
+                  id="build-schedule-cron"
+                  aria-label={t.scheduleCron}
+                  placeholder={t.scheduleCronPlaceholder}
+                  value={scheduleCron}
+                  onChange={(event) => setScheduleCron(event.target.value)}
+                />
+              </div>
+              <label className="field">
+                <span className="field-label">{t.scheduleTimezone}</span>
+                <select
+                  id="build-schedule-timezone"
+                  aria-label={t.scheduleTimezone}
+                  value={scheduleTimezone}
+                  onChange={(event) => setScheduleTimezone(event.target.value)}
+                >
+                  {(TIMEZONE_PRESETS.includes(scheduleTimezone)
+                    ? TIMEZONE_PRESETS
+                    : [scheduleTimezone, ...TIMEZONE_PRESETS]
+                  ).map((tz) => (
+                    <option key={tz} value={tz}>
+                      {tz}
+                    </option>
+                  ))}
+                </select>
               </label>
-              <Input
-                id="build-schedule-interval"
-                aria-label={t.scheduleInterval}
-                type="number"
-                min={0}
-                max={604800}
-                value={interval}
-                onChange={(event) => setInterval(event.target.value)}
-              />
-              <p className="field-hint">{t.scheduleIntervalHint}</p>
-            </div>
-            <div className="save-bar">
-              <Button onClick={() => void saveSchedule()}>
+              <Button type="primary" onClick={() => void saveSchedule()}>
                 {t.scheduleSave}
               </Button>
             </div>
+            <p className="field-hint" style={{ marginTop: 10 }}>
+              {scheduleLegacy
+                ? t.scheduleLegacyIntervalHint.replace(
+                    "{seconds}",
+                    String(legacyIntervalSeconds),
+                  )
+                : scheduleEnabled && scheduleNextRunAt
+                  ? `${t.scheduleCronHint} · ${t.scheduleNextRun}: ${displayTime(scheduleNextRunAt)}`
+                  : scheduleEnabled
+                    ? t.scheduleCronHint
+                    : t.scheduleDisabledHint}
+            </p>
           </div>
           <div className="gov-info-banner gov-info-banner--stack">
             <div>{t.buildScheduleAutoNoteUpload}</div>

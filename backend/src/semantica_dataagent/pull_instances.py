@@ -9,7 +9,6 @@ from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, Depends, HTTPException
 from jsonschema import Draft202012Validator
@@ -25,82 +24,13 @@ from .project_api import (
     project_path_scope,
 )
 from .project_context import ProjectContext
+from .scheduler import normalize_schedule_cron, validate_timezone
 
 router = APIRouter()
 
 INSTANCE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,47}$")
 CATALOG_PREFIX_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
 TASK_NAMESPACE_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}$")
-HHMM_RE = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
-CRON_PART_RE = re.compile(r"^(\*|\d+)(?:-(\d+))?(?:/(\d+))?$")
-
-_CRON_BOUNDS: tuple[tuple[str, int, int], ...] = (
-    ("minute", 0, 59),
-    ("hour", 0, 23),
-    ("day", 1, 31),
-    ("month", 1, 12),
-    ("weekday", 0, 7),
-)
-
-
-def _validate_cron_field(expr: str, label: str, low: int, high: int) -> None:
-    if not expr:
-        raise ValueError(f"Cron {label} 字段不能为空")
-    for token in expr.split(","):
-        match = CRON_PART_RE.fullmatch(token)
-        if match is None:
-            raise ValueError(f"Cron {label} 字段语法无效：{token!r}")
-        start_raw, end_raw, step_raw = match.groups()
-        if step_raw is not None:
-            step = int(step_raw)
-            if step < 1 or step > high:
-                raise ValueError(f"Cron {label} 字段步长越界：{token!r}")
-        if start_raw == "*":
-            if end_raw is not None:
-                raise ValueError(f"Cron {label} 字段范围无效：{token!r}")
-            continue
-        start = int(start_raw)
-        if not low <= start <= high:
-            raise ValueError(f"Cron {label} 字段数值越界：{token!r}")
-        if end_raw is not None:
-            end = int(end_raw)
-            if not low <= end <= high or end < start:
-                raise ValueError(f"Cron {label} 字段区间无效：{token!r}")
-        elif step_raw is not None:
-            raise ValueError(
-                f"Cron {label} 字段仅允许对 '*' 或 'a-b' 指定步长：{token!r}"
-            )
-
-
-def normalize_schedule_cron(raw: str | None) -> str | None:
-    """Normalize 'HH:MM' or 5-field cron strings; blank/None disables scheduling."""
-    if raw is None:
-        return None
-    cleaned = raw.strip()
-    if not cleaned:
-        return None
-    hhmm = HHMM_RE.fullmatch(cleaned)
-    if hhmm is not None:
-        hour, minute = int(hhmm.group(1)), int(hhmm.group(2))
-        return f"{minute} {hour} * * *"
-    parts = cleaned.split()
-    if len(parts) != 5:
-        raise ValueError("定时表达式仅支持 HH:MM 或 5 段 Cron 表达式")
-    for part, (label, low, high) in zip(parts, _CRON_BOUNDS, strict=True):
-        _validate_cron_field(part, label, low, high)
-    return " ".join(parts)
-
-
-def validate_timezone(tz: str | None) -> str:
-    """Validate an IANA timezone name, defaulting to Asia/Shanghai."""
-    if tz is None or not tz.strip():
-        return "Asia/Shanghai"
-    cleaned = tz.strip()
-    try:
-        ZoneInfo(cleaned)
-    except (ZoneInfoNotFoundError, ValueError, KeyError) as exc:
-        raise ValueError(f"无效时区：{cleaned}") from exc
-    return cleaned
 
 
 def validate_drop_threshold(value: float | None) -> float:

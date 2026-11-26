@@ -54,7 +54,7 @@ from .project_api import (
     project_scope,
 )
 from .project_context import ProjectContext
-from .scheduler import instance_pull_scheduler, scheduler
+from .scheduler import build_cron_scheduler, instance_pull_scheduler, scheduler
 
 
 @asynccontextmanager
@@ -130,6 +130,7 @@ async def lifespan(application):
     build_queue.start()
     auto_build.pending_build_scheduler.start()
     project_context.start_schedule()
+    build_cron_scheduler.start()
     instance_pull_scheduler.start()
     from .evolution_scheduler import evolution_scheduler
 
@@ -146,6 +147,7 @@ async def lifespan(application):
             discovery_dispatcher.stop()
             evolution_scheduler.stop()
             instance_pull_scheduler.stop()
+            build_cron_scheduler.stop()
             scheduler.stop()
             auto_build.pending_build_scheduler.stop()
             build_queue.stop()

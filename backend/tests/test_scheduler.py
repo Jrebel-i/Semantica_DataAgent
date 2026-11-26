@@ -144,13 +144,14 @@ def test_project_schedule_api_reads_writes_and_restarts_timer(tmp_path, monkeypa
             "/api/v1/projects/default/schedule", json={"interval_seconds": 15}
         )
         assert saved.status_code == 200, saved.text
-        assert saved.json() == {"interval_seconds": 15}
+        assert saved.json()["interval_seconds"] == 15
+        assert saved.json()["legacy_interval"] is True
         assert (
             client.get("/api/v1/settings").json()["schedule_interval_seconds"] == "15"
         )
-        assert client.get("/api/v1/projects/default/schedule").json() == {
-            "interval_seconds": 15
-        }
+        assert client.get("/api/v1/projects/default/schedule").json()[
+            "interval_seconds"
+        ] == 15
         assert configured == [("default", 15)]
 
         configured.clear()
@@ -158,7 +159,8 @@ def test_project_schedule_api_reads_writes_and_restarts_timer(tmp_path, monkeypa
             "/api/v1/projects/default/schedule", json={"interval_seconds": 0}
         )
         assert disabled.status_code == 200, disabled.text
-        assert disabled.json() == {"interval_seconds": 0}
+        assert disabled.json()["interval_seconds"] == 0
+        assert disabled.json()["legacy_interval"] is False
         assert configured == [("default", 0)]
 
         for value in (-1, 604801):
@@ -274,17 +276,134 @@ def test_each_project_schedule_api_and_startup_wiring(tmp_path, monkeypatch):
     with TestClient(app, headers=headers) as client:
         loaded = client.get(f"/api/v1/projects/{project.id}/schedule")
         assert loaded.status_code == 200, loaded.text
-        assert loaded.json() == {"interval_seconds": 7}
+        assert loaded.json()["interval_seconds"] == 7
+        assert loaded.json()["legacy_interval"] is True
         saved = client.put(
             f"/api/v1/projects/{project.id}/schedule",
             json={"interval_seconds": 11},
         )
         assert saved.status_code == 200, saved.text
-        assert client.get(f"/api/v1/projects/{project.id}/schedule").json() == {
-            "interval_seconds": 11
-        }
+        assert (
+            client.get(f"/api/v1/projects/{project.id}/schedule").json()[
+                "interval_seconds"
+            ]
+            == 11
+        )
         assert ("configure", project.id, 11) in seen
         from semantica_dataagent.project_context import schedule_interval
 
         assert schedule_interval() == 0
         assert schedule_interval(project.id) == 11
+
+
+def test_project_cron_schedule_validation_timezone_and_ticks(tmp_path, monkeypatch):
+    from semantica_dataagent.app import app
+    from semantica_dataagent.cli import initialize
+    from semantica_dataagent.db import Build, sessions
+    from semantica_dataagent.project_api import create_project_record
+    from semantica_dataagent.scheduler import BuildCronScheduler
+
+    monkeypatch.setenv("DATAAGENT_DB_PATH", str(tmp_path / "cron-schedule.db"))
+    monkeypatch.setenv("DATAAGENT_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    monkeypatch.setenv("DATAAGENT_PROJECTS_ROOT", str(tmp_path / "projects"))
+    token = initialize()
+    other = create_project_record("Docs", "document")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    with TestClient(app, headers=headers) as client:
+        # Legacy interval preserved until Cron is explicitly saved
+        legacy = client.put(
+            f"/api/v1/projects/{other.id}/schedule",
+            json={"interval_seconds": 30},
+        )
+        assert legacy.status_code == 200
+        assert legacy.json()["legacy_interval"] is True
+
+        # Validation rejects invalid cron, invalid timezone, and enabled without cron
+        for bad_payload in (
+            {"enabled": True, "schedule_cron": "", "timezone": "Asia/Shanghai"},
+            {"enabled": True, "schedule_cron": "99 * * * *", "timezone": "Asia/Shanghai"},
+            {"enabled": True, "schedule_cron": "0 2 * * *", "timezone": "Mars/Olympus"},
+        ):
+            bad = client.put(
+                f"/api/v1/projects/{other.id}/schedule", json=bad_payload
+            )
+            assert bad.status_code == 422, bad.text
+
+        # Saving Cron switches off legacy interval and computes next_run_at
+        saved = client.put(
+            f"/api/v1/projects/{other.id}/schedule",
+            json={
+                "enabled": True,
+                "schedule_cron": "0 2 * * *",
+                "timezone": "Asia/Shanghai",
+            },
+        )
+        assert saved.status_code == 200, saved.text
+        body = saved.json()
+        assert body["enabled"] is True
+        assert body["schedule_cron"] == "0 2 * * *"
+        assert body["timezone"] == "Asia/Shanghai"
+        assert body["legacy_interval"] is False
+        assert body["interval_seconds"] == 0
+        assert body["next_run_at"] is not None
+
+        # Default project remains untouched (project isolation)
+        default_view = client.get("/api/v1/projects/default/schedule").json()
+        assert default_view["enabled"] is False
+        assert default_view["schedule_cron"] is None
+
+        # Disabling preserves Cron and timezone without scheduling
+        paused = client.put(
+            f"/api/v1/projects/{other.id}/schedule",
+            json={
+                "enabled": False,
+                "schedule_cron": "0 2 * * *",
+                "timezone": "Asia/Shanghai",
+            },
+        )
+        assert paused.status_code == 200
+        assert paused.json()["enabled"] is False
+        assert paused.json()["schedule_cron"] == "0 2 * * *"
+        assert paused.json()["next_run_at"] is None
+
+        # Re-enable daily 02:00 UTC for deterministic tick testing
+        re_enabled = client.put(
+            f"/api/v1/projects/{other.id}/schedule",
+            json={
+                "enabled": True,
+                "schedule_cron": "0 2 * * *",
+                "timezone": "UTC",
+            },
+        )
+        assert re_enabled.status_code == 200
+
+    # Force anchor earlier and simulate downtime across multiple days -> triggers at most once
+    from semantica_dataagent import project_context
+
+    with sessions().begin() as db:
+        project_context.write_project_setting_value(
+            db,
+            other.id,
+            project_context.SCHEDULE_LAST_TRIGGERED_AT_KEY,
+            "2026-01-01T00:00:00+00:00",
+        )
+
+    cron_sched = BuildCronScheduler()
+    fired = cron_sched.tick_once(now=datetime(2026, 1, 5, 3, 0, tzinfo=UTC))
+    assert fired == [other.id]
+    # Calling again at same/later time before next day 02:00 does NOT backfill extra runs
+    assert cron_sched.tick_once(now=datetime(2026, 1, 5, 3, 5, tzinfo=UTC)) == []
+    with sessions()() as db:
+        rows = (
+            db.query(Build)
+            .filter(Build.project_id == other.id, Build.triggered_by == "scheduler")
+            .all()
+        )
+        assert len(rows) == 1
+        assert rows[0].build_type == "incremental"
+
+    # Next day 02:01 triggers again
+    assert cron_sched.tick_once(now=datetime(2026, 1, 6, 2, 1, tzinfo=UTC)) == [
+        other.id
+    ]

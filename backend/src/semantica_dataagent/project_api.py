@@ -368,11 +368,19 @@ class ProjectSourceStatus(BaseModel):
 class ProjectScheduleUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    interval_seconds: int = Field(ge=0, le=604800)
+    interval_seconds: int | None = Field(default=None, ge=0, le=604800)
+    enabled: bool | None = None
+    schedule_cron: str | None = None
+    timezone: str | None = None
 
 
 class ProjectScheduleView(BaseModel):
-    interval_seconds: int
+    interval_seconds: int = 0
+    enabled: bool = False
+    schedule_cron: str | None = None
+    timezone: str = "Asia/Shanghai"
+    next_run_at: UtcDatetime | None = None
+    legacy_interval: bool = False
 
 
 class ProjectAdapterUpdate(BaseModel):
@@ -400,34 +408,15 @@ class ProjectAdapterView(BaseModel):
     reason: str | None
 
 
-def _schedule_interval(db, project_id: str) -> int:
-    if project_id == DEFAULT_PROJECT_ID:
-        row = db.get(Setting, SCHEDULE_INTERVAL_KEY)
-    else:
-        row = db.get(ProjectSetting, (project_id, SCHEDULE_INTERVAL_KEY))
-    return int(row.value) if row is not None and row.value else 0
-
-
-def _save_schedule_interval(db, project_id: str, interval: int) -> None:
-    value = str(interval)
-    if project_id == DEFAULT_PROJECT_ID:
-        row = db.get(Setting, SCHEDULE_INTERVAL_KEY)
-        if row is None:
-            db.add(Setting(key=SCHEDULE_INTERVAL_KEY, value=value))
-        else:
-            row.value = value
-    else:
-        row = db.get(ProjectSetting, (project_id, SCHEDULE_INTERVAL_KEY))
-        if row is None:
-            db.add(
-                ProjectSetting(
-                    project_id=project_id,
-                    key=SCHEDULE_INTERVAL_KEY,
-                    value=value,
-                )
-            )
-        else:
-            row.value = value
+def _schedule_view(state: project_context.BuildScheduleState) -> ProjectScheduleView:
+    return ProjectScheduleView(
+        interval_seconds=state.interval_seconds,
+        enabled=state.enabled,
+        schedule_cron=state.schedule_cron,
+        timezone=state.timezone,
+        next_run_at=state.next_run_at,
+        legacy_interval=state.legacy_interval,
+    )
 
 
 @router.get(
@@ -438,9 +427,8 @@ def get_project_schedule(
     scope: Annotated[ProjectContext, Depends(admin_project_path_scope)],
 ):
     with sessions()() as db:
-        return ProjectScheduleView(
-            interval_seconds=_schedule_interval(db, scope.project_id)
-        )
+        state = project_context.read_build_schedule(db, scope.project_id)
+        return _schedule_view(state)
 
 
 @router.put(
@@ -451,12 +439,39 @@ def set_project_schedule(
     body: ProjectScheduleUpdate,
     scope: Annotated[ProjectContext, Depends(admin_project_path_scope)],
 ):
-    with sessions().begin() as db:
-        _save_schedule_interval(db, scope.project_id, body.interval_seconds)
-    from .scheduler import scheduler
+    from .scheduler import build_cron_scheduler, scheduler
 
-    scheduler.configure(body.interval_seconds, project_id=scope.project_id)
-    return ProjectScheduleView(interval_seconds=body.interval_seconds)
+    cron_fields = body.model_fields_set & {"enabled", "schedule_cron", "timezone"}
+    if not cron_fields:
+        if body.interval_seconds is None:
+            raise HTTPException(
+                status_code=422, detail="必须提供调度配置参数"
+            )
+        with sessions().begin() as db:
+            project_context.write_project_setting_value(
+                db, scope.project_id, SCHEDULE_INTERVAL_KEY, str(body.interval_seconds)
+            )
+            state = project_context.read_build_schedule(db, scope.project_id)
+        scheduler.configure(body.interval_seconds, project_id=scope.project_id)
+        return _schedule_view(state)
+
+    try:
+        with sessions().begin() as db:
+            state = project_context.save_build_schedule(
+                db,
+                scope.project_id,
+                enabled=body.enabled,
+                schedule_cron=body.schedule_cron,
+                cron_provided="schedule_cron" in body.model_fields_set,
+                timezone=body.timezone,
+                tz_provided="timezone" in body.model_fields_set,
+            )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+
+    scheduler.configure(0, project_id=scope.project_id)
+    build_cron_scheduler.wake()
+    return _schedule_view(state)
 
 
 @router.get("/api/v1/projects/{project_id}/auto-build", response_model=AutoBuildView)

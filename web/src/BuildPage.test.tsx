@@ -131,7 +131,7 @@ test("shows queue state, logs, stats and triggers both build types", async () =>
   expect(await screen.findByText("full build queued")).toBeTruthy();
 });
 
-test("shows and saves the selected project's schedule", async () => {
+test("shows and saves the selected project's cron schedule", async () => {
   const requests: Array<{ url: string; body?: string }> = [];
   vi.stubGlobal(
     "fetch",
@@ -148,12 +148,37 @@ test("shows and saves the selected project's schedule", async () => {
             my_role: "admin",
           },
         ]);
-      if (url === "/api/v1/projects/default/schedule")
-        return Response.json(
-          options?.method === "PUT"
-            ? { interval_seconds: 5 }
-            : { interval_seconds: 60 },
-        );
+      if (url === "/api/v1/projects/default/schedule") {
+        if (options?.method === "PUT") {
+          const parsed = JSON.parse(String(options.body)) as {
+            enabled: boolean;
+            schedule_cron: string | null;
+            timezone: string;
+          };
+          if (parsed.schedule_cron === "bad cron") {
+            return Response.json(
+              { detail: "定时表达式仅支持 HH:MM 或 5 段 Cron 表达式" },
+              { status: 422 },
+            );
+          }
+          return Response.json({
+            interval_seconds: 0,
+            enabled: parsed.enabled,
+            schedule_cron: parsed.schedule_cron,
+            timezone: parsed.timezone,
+            next_run_at: "2026-01-02T02:00:00+00:00",
+            legacy_interval: false,
+          });
+        }
+        return Response.json({
+          interval_seconds: 0,
+          enabled: true,
+          schedule_cron: "0 2 * * *",
+          timezone: "Asia/Shanghai",
+          next_run_at: "2026-01-02T18:00:00+00:00",
+          legacy_interval: false,
+        });
+      }
       if (url === "/api/v1/builds?project=default") return Response.json([]);
       if (url === "/api/v1/generations?project=default")
         return Response.json({
@@ -165,21 +190,40 @@ test("shows and saves the selected project's schedule", async () => {
     }),
   );
   render(<BuildPage token="token" messages={getMessages("zh")} />);
-  const input = (await screen.findByLabelText(
-    "间隔秒数（0 为关闭）",
+  const cronInput = (await screen.findByLabelText(
+    "Cron 表达式",
   )) as HTMLInputElement;
-  await waitFor(() => expect(input.value).toBe("60"));
-  fireEvent.change(input, { target: { value: "5" } });
+  const tzSelect = screen.getByLabelText("时区") as HTMLSelectElement;
+  await waitFor(() => expect(cronInput.value).toBe("0 2 * * *"));
+  expect(tzSelect.value).toBe("Asia/Shanghai");
+
+  // Validation failure preserves edited input and surfaces server detail
+  fireEvent.change(cronInput, { target: { value: "bad cron" } });
+  fireEvent.click(screen.getByRole("button", { name: "保存定时" }));
+  expect(
+    await screen.findByText("定时表达式仅支持 HH:MM 或 5 段 Cron 表达式"),
+  ).toBeTruthy();
+  expect(cronInput.value).toBe("bad cron");
+
+  // Valid Cron + timezone saves cleanly
+  fireEvent.change(cronInput, { target: { value: "30 3 * * *" } });
+  fireEvent.change(tzSelect, { target: { value: "UTC" } });
   fireEvent.click(screen.getByRole("button", { name: "保存定时" }));
   await waitFor(() =>
     expect(
       requests.find(
         (request) =>
           request.url === "/api/v1/projects/default/schedule" &&
-          request.body === JSON.stringify({ interval_seconds: 5 }),
+          request.body ===
+            JSON.stringify({
+              enabled: true,
+              schedule_cron: "30 3 * * *",
+              timezone: "UTC",
+            }),
       ),
     ).toBeTruthy(),
   );
+  expect(await screen.findByText("定时设置已保存")).toBeTruthy();
 });
 
 test("loads and saves the scheduled build interval", async () => {

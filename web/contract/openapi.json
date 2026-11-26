@@ -4967,29 +4967,102 @@
       "ProjectScheduleUpdate": {
         "additionalProperties": false,
         "properties": {
+          "enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enabled"
+          },
           "interval_seconds": {
-            "maximum": 604800.0,
-            "minimum": 0.0,
-            "title": "Interval Seconds",
-            "type": "integer"
+            "anyOf": [
+              {
+                "maximum": 604800.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Interval Seconds"
+          },
+          "schedule_cron": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Schedule Cron"
+          },
+          "timezone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timezone"
           }
         },
-        "required": [
-          "interval_seconds"
-        ],
         "title": "ProjectScheduleUpdate",
         "type": "object"
       },
       "ProjectScheduleView": {
         "properties": {
+          "enabled": {
+            "default": false,
+            "title": "Enabled",
+            "type": "boolean"
+          },
           "interval_seconds": {
+            "default": 0,
             "title": "Interval Seconds",
             "type": "integer"
+          },
+          "legacy_interval": {
+            "default": false,
+            "title": "Legacy Interval",
+            "type": "boolean"
+          },
+          "next_run_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Run At"
+          },
+          "schedule_cron": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Schedule Cron"
+          },
+          "timezone": {
+            "default": "Asia/Shanghai",
+            "title": "Timezone",
+            "type": "string"
           }
         },
-        "required": [
-          "interval_seconds"
-        ],
         "title": "ProjectScheduleView",
         "type": "object"
       },
