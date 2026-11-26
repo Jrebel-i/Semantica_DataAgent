@@ -420,6 +420,14 @@ def test_builds_list_omits_parse_failures_by_default_and_limits(tmp_path, monkey
     monkeypatch.setenv("DATAAGENT_ENCRYPTION_KEY", Fernet.generate_key().decode())
     token = initialize()
     failures = [{"task_id": "t1", "reason": "bad sql"}]
+    logs = [
+        {
+            "timestamp": "2026-01-01T00:00:10+00:00",
+            "stage": "table",
+            "level": "info",
+            "message": "parsed 3 tables",
+        }
+    ]
     with sessions().begin() as db:
         for idx in range(3):
             db.add(
@@ -430,6 +438,7 @@ def test_builds_list_omits_parse_failures_by_default_and_limits(tmp_path, monkey
                     finished_at=f"2026-01-0{idx + 1}T00:01:00+00:00",
                     counts=json.dumps({"table": idx + 1}),
                     parse_failures=json.dumps(failures),
+                    logs=json.dumps(logs),
                     build_type="full",
                     triggered_by="admin",
                 )
@@ -440,14 +449,24 @@ def test_builds_list_omits_parse_failures_by_default_and_limits(tmp_path, monkey
         default_list = client.get("/api/v1/builds").json()
         assert len(default_list) == 3
         assert all(item["parse_failures"] == [] for item in default_list)
+        assert all(item["logs"] == [] for item in default_list)
 
         limited = client.get("/api/v1/builds", params={"limit": 2}).json()
         assert len(limited) == 2
 
-        with_failures = client.get(
-            "/api/v1/builds", params={"include_parse_failures": True}
+        with_details = client.get(
+            "/api/v1/builds",
+            params={"include_parse_failures": True, "include_logs": True},
         ).json()
-        assert all(item["parse_failures"] == failures for item in with_failures)
+        assert all(item["parse_failures"] == failures for item in with_details)
+        assert all(
+            len(item["logs"]) == 1
+            and item["logs"][0]["stage"] == "table"
+            and item["logs"][0]["message"] == "parsed 3 tables"
+            for item in with_details
+        )
 
         detail = client.get(f"/api/v1/builds/{default_list[0]['id']}").json()
         assert detail["parse_failures"] == failures
+        assert len(detail["logs"]) == 1
+        assert detail["logs"][0]["message"] == "parsed 3 tables"

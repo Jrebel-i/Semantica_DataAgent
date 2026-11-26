@@ -4835,6 +4835,7 @@ export interface operations {
             query?: {
                 limit?: number;
                 include_parse_failures?: boolean;
+                include_logs?: boolean;
                 project?: string | null;
             };
             header?: never;

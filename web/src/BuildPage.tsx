@@ -121,6 +121,7 @@ export function BuildPage({
   const [buildsLoaded, setBuildsLoaded] = useState(false);
   const [generations, setGenerations] = useState<Generations | null>(null);
   const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [selectedDetail, setSelectedDetail] = useState<Build | null>(null);
   const [typeFilter, setTypeFilter] = useState<"all" | BuildType>("all");
   const [detailTab, setDetailTab] = useState<"changes" | "logs">("changes");
   const [confirmFullOpen, setConfirmFullOpen] = useState(false);
@@ -172,6 +173,7 @@ export function BuildPage({
   useEffect(() => {
     setBuildsLoaded(false);
     setSelectedId(null);
+    setSelectedDetail(null);
   }, [project]);
   useEffect(() => {
     let active = true;
@@ -303,6 +305,46 @@ export function BuildPage({
       ? builds
       : builds.filter((row) => row.build_type === typeFilter);
   const selected = builds.find((build) => build.id === selectedId) ?? null;
+  const detail =
+    selectedDetail && selected && selectedDetail.id === selected.id
+      ? selectedDetail
+      : selected;
+
+  useEffect(() => {
+    if (selectedId === null) {
+      setSelectedDetail(null);
+      return;
+    }
+    const controller = new AbortController();
+    const targetProject = project;
+    void fetch(`/api/v1/builds/${selectedId}?${projectQuery}`, {
+      headers: { Authorization: `Bearer ${token}` },
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        if (!response.ok) return;
+        const data = (await response.json()) as Partial<Build> | null;
+        if (
+          controller.signal.aborted ||
+          !mountedRef.current ||
+          projectRef.current !== targetProject ||
+          !data ||
+          typeof data.id !== "number"
+        ) {
+          return;
+        }
+        setSelectedDetail(data as Build);
+      })
+      .catch(() => undefined);
+    return () => controller.abort();
+  }, [
+    project,
+    projectQuery,
+    selected?.finished_at,
+    selected?.status,
+    selectedId,
+    token,
+  ]);
 
   return (
     <section className="stack admin-page">
@@ -570,23 +612,21 @@ export function BuildPage({
         </TableScroll>
       </section>
 
-      {!selected ? (
+      {!detail ? (
         <div className="empty-state">{t.buildSelectHint}</div>
       ) : (
         <section className="card section-card build-detail">
           <div className="card-title-row">
             <div>
-              <h2 className="card-title">{`${t.builds} #${selected.id}`}</h2>
+              <h2 className="card-title">{`${t.builds} #${detail.id}`}</h2>
               <p
                 className="muted"
                 style={{ margin: "2px 0 0", fontSize: 12.5 }}
               >
-                {`${t[selected.build_type]} · ${displayTime(selected.started_at)} · ${selected.triggered_by ?? "—"}`}
+                {`${t[detail.build_type]} · ${displayTime(detail.started_at)} · ${detail.triggered_by ?? "—"}`}
               </p>
             </div>
-            <Tag color={statusColors[selected.status]}>
-              {t[selected.status]}
-            </Tag>
+            <Tag color={statusColors[detail.status]}>{t[detail.status]}</Tag>
           </div>
           <div className="source-view-tabs">
             <button
@@ -607,22 +647,22 @@ export function BuildPage({
 
           {detailTab === "changes" ? (
             <div className="stack">
-              {selected.fallback_reason && (
+              {detail.fallback_reason && (
                 <Alert
                   type="warning"
                   showIcon
                   title={t.fallbackNoticeTitle}
-                  description={fallbackReasonLabel(selected.fallback_reason, t)}
+                  description={fallbackReasonLabel(detail.fallback_reason, t)}
                 />
               )}
-              {(selected.stale_overrides?.length ?? 0) > 0 && (
+              {(detail.stale_overrides?.length ?? 0) > 0 && (
                 <Alert
                   type="warning"
                   showIcon
                   title={t.staleOverridesTitle}
                   description={
                     <ul className="stale-overrides-list">
-                      {(selected.stale_overrides ?? []).map((item, idx) => (
+                      {(detail.stale_overrides ?? []).map((item, idx) => (
                         <li key={`${item.kind}-${item.key}-${idx}`}>
                           <strong>
                             [{item.kind}] {item.key}
@@ -638,14 +678,14 @@ export function BuildPage({
                 <div className="build-detail-box">
                   <h3>{t.buildSummarySection}</h3>
                   {entitySummaryKeys.some(
-                    (key) => (selected.counts[key] ?? 0) > 0,
+                    (key) => (detail.counts[key] ?? 0) > 0,
                   ) && (
                     <Space wrap style={{ marginBottom: 12 }}>
                       {entitySummaryKeys
-                        .filter((key) => (selected.counts[key] ?? 0) > 0)
+                        .filter((key) => (detail.counts[key] ?? 0) > 0)
                         .map((key) => (
                           <Tag key={key} color="blue">
-                            {`${t[countLabels[key]]}: ${selected.counts[key]}`}
+                            {`${t[countLabels[key]]}: ${detail.counts[key]}`}
                           </Tag>
                         ))}
                     </Space>
@@ -655,7 +695,7 @@ export function BuildPage({
                       rowKey="key"
                       pagination={false}
                       size="small"
-                      dataSource={Object.entries(selected.counts)
+                      dataSource={Object.entries(detail.counts)
                         .sort(([left], [right]) => left.localeCompare(right))
                         .map(([key, value]) => ({ key, value }))}
                       columns={[
@@ -680,39 +720,39 @@ export function BuildPage({
                       {
                         key: "status",
                         label: t.buildStatus,
-                        children: t[selected.status],
+                        children: t[detail.status],
                       },
                       {
                         key: "type",
                         label: t.buildType,
-                        children: t[selected.build_type],
+                        children: t[detail.build_type],
                       },
                       {
                         key: "triggered",
                         label: t.buildTriggeredBy,
-                        children: selected.triggered_by ?? "—",
+                        children: detail.triggered_by ?? "—",
                       },
                       {
                         key: "commit",
                         label: t.buildSourceCommit,
-                        children: selected.source_commit ?? "—",
+                        children: detail.source_commit ?? "—",
                       },
                       {
                         key: "started",
                         label: t.buildStartedAt,
-                        children: displayTime(selected.started_at),
+                        children: displayTime(detail.started_at),
                       },
                       {
                         key: "finished",
                         label: t.buildFinishedAt,
-                        children: displayTime(selected.finished_at),
+                        children: displayTime(detail.finished_at),
                       },
-                      ...(selected.error
+                      ...(detail.error
                         ? [
                             {
                               key: "error",
                               label: t.failed,
-                              children: selected.error,
+                              children: detail.error,
                             },
                           ]
                         : []),
@@ -726,7 +766,7 @@ export function BuildPage({
               <Table
                 rowKey="index"
                 pagination={false}
-                dataSource={selected.logs.map((log, index) => ({
+                dataSource={detail.logs.map((log, index) => ({
                   ...log,
                   index,
                 }))}

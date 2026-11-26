@@ -8484,6 +8484,16 @@
           },
           {
             "in": "query",
+            "name": "include_logs",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Include Logs",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
             "name": "project",
             "required": false,
             "schema": {

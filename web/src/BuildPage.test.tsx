@@ -463,3 +463,71 @@ test("displays fallback_reason labels, entity-level counts and stale_overrides t
   expect(screen.getByText("向量缓存命中")).toBeTruthy();
   expect(screen.getByText("部分语义覆盖条目在本次构建中已失效")).toBeTruthy();
 });
+
+test("loads selected build detail logs on demand when builds list returns lightweight rows", async () => {
+  const lightBuild = {
+    id: 12,
+    project_id: "default",
+    status: "succeeded",
+    started_at: "2026-01-04T00:00:00Z",
+    finished_at: "2026-01-04T00:01:00Z",
+    counts: { table: 2 },
+    error: null,
+    build_type: "incremental",
+    triggered_by: "scheduler",
+    source_commit: "d".repeat(40),
+    logs: [],
+  };
+  const detailedBuild = {
+    ...lightBuild,
+    logs: [
+      {
+        timestamp: "2026-01-04T00:00:30+00:00",
+        stage: "table",
+        level: "info",
+        message: "on-demand detail log entry",
+      },
+    ],
+  };
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) => {
+      if (url === "/api/v1/projects")
+        return Response.json([
+          {
+            id: "default",
+            name: "业务数据",
+            type: "warehouse",
+            status: "active",
+            created_at: "2026-01-01T00:00:00Z",
+            my_role: "admin",
+          },
+        ]);
+      if (url === "/api/v1/projects/default/schedule")
+        return Response.json({
+          interval_seconds: 0,
+          enabled: false,
+          schedule_cron: null,
+          timezone: "Asia/Shanghai",
+          next_run_at: null,
+          legacy_interval: false,
+        });
+      if (url === "/api/v1/generations?project=default")
+        return Response.json({
+          generations: [],
+          behind: false,
+          source_head: null,
+        });
+      if (url === "/api/v1/builds?project=default")
+        return Response.json([lightBuild]);
+      if (url === "/api/v1/builds/12?project=default")
+        return Response.json(detailedBuild);
+      return Response.json([]);
+    }),
+  );
+
+  render(<BuildPage token="token" messages={getMessages("zh")} />);
+  expect(await screen.findByText("表: 2")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "执行日志" }));
+  expect(await screen.findByText("on-demand detail log entry")).toBeTruthy();
+});

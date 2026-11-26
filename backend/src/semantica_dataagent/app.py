@@ -682,7 +682,12 @@ def build_stale_overrides(value: str | None) -> list[StaleOverrideWarning]:
     ]
 
 
-def build_view(row: Build, *, include_parse_failures: bool = True) -> BuildView:
+def build_view(
+    row: Build,
+    *,
+    include_parse_failures: bool = True,
+    include_logs: bool = True,
+) -> BuildView:
     return BuildView(
         id=row.id,
         project_id=row.project_id or "default",
@@ -699,7 +704,7 @@ def build_view(row: Build, *, include_parse_failures: bool = True) -> BuildView:
         triggered_by=row.triggered_by,
         source_commit=row.source_commit,
         fallback_reason=getattr(row, "fallback_reason", None),
-        logs=build_logs(row.logs),
+        logs=build_logs(row.logs) if include_logs else [],
     )
 
 
@@ -821,10 +826,15 @@ def builds(
     scope: Annotated[ProjectContext, Depends(project_scope)],
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
     include_parse_failures: bool = False,
+    include_logs: bool = False,
 ):
     with sessions()() as db:
         return [
-            build_view(row, include_parse_failures=include_parse_failures)
+            build_view(
+                row,
+                include_parse_failures=include_parse_failures,
+                include_logs=include_logs,
+            )
             for row in db.query(Build)
             .filter(Build.project_id == scope.project_id)
             .order_by(Build.id.desc())
