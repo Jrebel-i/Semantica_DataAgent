@@ -682,7 +682,7 @@ def build_stale_overrides(value: str | None) -> list[StaleOverrideWarning]:
     ]
 
 
-def build_view(row: Build) -> BuildView:
+def build_view(row: Build, *, include_parse_failures: bool = True) -> BuildView:
     return BuildView(
         id=row.id,
         project_id=row.project_id or "default",
@@ -691,7 +691,9 @@ def build_view(row: Build) -> BuildView:
         finished_at=row.finished_at,
         counts=json.loads(row.counts),
         error=row.error,
-        parse_failures=json.loads(row.parse_failures or "[]"),
+        parse_failures=(
+            json.loads(row.parse_failures or "[]") if include_parse_failures else []
+        ),
         stale_overrides=build_stale_overrides(getattr(row, "stale_overrides", None)),
         build_type=row.build_type or "full",
         triggered_by=row.triggered_by,
@@ -817,13 +819,16 @@ def start_build(
 def builds(
     _: Annotated[str, Depends(current_user)],
     scope: Annotated[ProjectContext, Depends(project_scope)],
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    include_parse_failures: bool = False,
 ):
     with sessions()() as db:
         return [
-            build_view(row)
+            build_view(row, include_parse_failures=include_parse_failures)
             for row in db.query(Build)
             .filter(Build.project_id == scope.project_id)
             .order_by(Build.id.desc())
+            .limit(limit)
             .all()
         ]
 

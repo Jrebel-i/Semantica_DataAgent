@@ -407,3 +407,47 @@ def test_project_cron_schedule_validation_timezone_and_ticks(tmp_path, monkeypat
     assert cron_sched.tick_once(now=datetime(2026, 1, 6, 2, 1, tzinfo=UTC)) == [
         other.id
     ]
+
+
+def test_builds_list_omits_parse_failures_by_default_and_limits(tmp_path, monkeypatch):
+    import json
+
+    from semantica_dataagent.app import app
+    from semantica_dataagent.cli import initialize
+    from semantica_dataagent.db import Build, sessions
+
+    monkeypatch.setenv("DATAAGENT_DB_PATH", str(tmp_path / "builds-list.db"))
+    monkeypatch.setenv("DATAAGENT_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    token = initialize()
+    failures = [{"task_id": "t1", "reason": "bad sql"}]
+    with sessions().begin() as db:
+        for idx in range(3):
+            db.add(
+                Build(
+                    project_id="default",
+                    status="succeeded",
+                    started_at=f"2026-01-0{idx + 1}T00:00:00+00:00",
+                    finished_at=f"2026-01-0{idx + 1}T00:01:00+00:00",
+                    counts=json.dumps({"table": idx + 1}),
+                    parse_failures=json.dumps(failures),
+                    build_type="full",
+                    triggered_by="admin",
+                )
+            )
+
+    headers = {"Authorization": f"Bearer {token}"}
+    with TestClient(app, headers=headers) as client:
+        default_list = client.get("/api/v1/builds").json()
+        assert len(default_list) == 3
+        assert all(item["parse_failures"] == [] for item in default_list)
+
+        limited = client.get("/api/v1/builds", params={"limit": 2}).json()
+        assert len(limited) == 2
+
+        with_failures = client.get(
+            "/api/v1/builds", params={"include_parse_failures": True}
+        ).json()
+        assert all(item["parse_failures"] == failures for item in with_failures)
+
+        detail = client.get(f"/api/v1/builds/{default_list[0]['id']}").json()
+        assert detail["parse_failures"] == failures

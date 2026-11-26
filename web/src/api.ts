@@ -4833,6 +4833,8 @@ export interface operations {
     builds_api_v1_builds_get: {
         parameters: {
             query?: {
+                limit?: number;
+                include_parse_failures?: boolean;
                 project?: string | null;
             };
             header?: never;

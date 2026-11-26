@@ -8462,6 +8462,28 @@
         "parameters": [
           {
             "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "include_parse_failures",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Include Parse Failures",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
             "name": "project",
             "required": false,
             "schema": {
