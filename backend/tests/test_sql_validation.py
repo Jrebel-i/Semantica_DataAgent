@@ -1039,3 +1039,62 @@ def test_issue_335_unknown_star_in_other_source_remains_unknown(monkeypatch):
     assert any(
         f["name"] == "rn" and f["status"] == "unknown" for f in result["fields"]
     ), result
+
+
+def test_issue_339_correlated_exists():
+    sql = "SELECT o.id FROM shop.orders o WHERE EXISTS (SELECT 1 FROM shop.customers c WHERE c.id = o.id)"
+    result = check_sql(sql, "hive", snapshot())
+    assert result["status"] == "pass", result
+
+
+@pytest.mark.parametrize(
+    "predicate",
+    [
+        "EXISTS (SELECT 1 FROM shop.customers c WHERE c.id = o.id)",
+        "o.id IN (SELECT c.id FROM shop.customers c WHERE c.id = o.id)",
+        "o.id = (SELECT MAX(c.id) FROM shop.customers c WHERE c.id = o.id)",
+    ],
+)
+def test_issue_339_correlated_forms(predicate):
+    result = check_sql(
+        f"SELECT o.id FROM shop.orders o WHERE {predicate}", "hive", snapshot()
+    )
+    assert result["status"] == "pass", result
+
+
+@pytest.mark.parametrize(
+    "sql,field,message",
+    [
+        (
+            "SELECT o.id FROM shop.orders o WHERE EXISTS (SELECT 1 FROM shop.customers c WHERE c.nope = o.id)",
+            "nope",
+            "字段不存在",
+        ),
+        (
+            "SELECT o.id FROM shop.orders o WHERE EXISTS (SELECT 1 FROM shop.customers c WHERE c.id = typo.id)",
+            "id",
+            "未知别名",
+        ),
+        (
+            "SELECT o.id FROM shop.orders o WHERE EXISTS (WITH x AS (SELECT o.id) SELECT * FROM x)",
+            "id",
+            "未知别名",
+        ),
+        (
+            "SELECT o.id FROM shop.orders o JOIN (SELECT o.id) x ON 1=1",
+            "id",
+            "未知别名",
+        ),
+        (
+            "SELECT o.id FROM shop.orders o WHERE EXISTS (SELECT 1 FROM (SELECT id FROM shop.customers) o WHERE o.created_at = 1)",
+            "created_at",
+            "字段不存在",
+        ),
+    ],
+)
+def test_issue_339_invalid_references(sql, field, message):
+    result = check_sql(sql, "hive", snapshot())
+    assert any(
+        i.get("kind") == "field" and i.get("field") == field and message in i["message"]
+        for i in result["issues"]
+    ), result
