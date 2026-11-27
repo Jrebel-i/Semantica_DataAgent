@@ -264,10 +264,8 @@ def reconcile(storage, records, generation):
             for c, db, tbl in sorted(rebuilt_table_keys | rebuilt_field_tables)
         ]
         dim_tables = [
-            {"database": db, "table": tbl}
-            for db, tbl in sorted(
-                {(db, tbl) for _, db, tbl in rebuilt_field_tables} | rebuilt_dim_tables
-            )
+            {"catalog": catalog, "database": db, "table": tbl}
+            for catalog, db, tbl in sorted(rebuilt_field_tables | rebuilt_dim_tables)
         ]
         doc_refs = sorted(rebuilt_doc_refs)
         scoped_queries = []
@@ -293,14 +291,14 @@ def reconcile(storage, records, generation):
                     "SDADimensionValue",
                     (
                         "WHERE ($build_id IS NOT NULL AND n.build_id = $build_id) "
-                        "OR any(t IN $tables WHERE t.database = n.database AND t.table = n.table)"
+                        "OR any(t IN $tables WHERE t.database = n.database AND t.table = n.table AND coalesce(t.catalog, '') = coalesce(n.catalog, ''))"
                     ),
                     {
                         "generation": generation,
                         "build_id": build_id,
                         "tables": dim_tables,
                     },
-                    "MATCH (f:SDAField {generation:$generation, database:n.database, table:n.table, name:n.field}) MERGE (f)-[:HAS_VALUE]->(n)",
+                    "MATCH (f:SDAField {generation:$generation, database:n.database, table:n.table, name:n.field}) WHERE NOT coalesce(n.ambiguous_catalog, false) AND coalesce(f.catalog, '') = coalesce(n.catalog, '') MERGE (f)-[:HAS_VALUE]->(n)",
                 )
             )
         if doc_refs:
@@ -328,7 +326,7 @@ def reconcile(storage, records, generation):
             ),
             (
                 "SDADimensionValue",
-                "MATCH (f:SDAField {generation:$generation, database:n.database, table:n.table, name:n.field}) MERGE (f)-[:HAS_VALUE]->(n)",
+                "MATCH (f:SDAField {generation:$generation, database:n.database, table:n.table, name:n.field}) WHERE NOT coalesce(n.ambiguous_catalog, false) AND coalesce(f.catalog, '') = coalesce(n.catalog, '') MERGE (f)-[:HAS_VALUE]->(n)",
             ),
             (
                 "SDADocument",

@@ -1,0 +1,54 @@
+[
+  {
+    "catalog": "hive",
+    "database": "i337shop",
+    "name": "orders",
+    "comment": "hiveorders"
+  },
+  {
+    "catalog": "hive",
+    "database": "i337shop",
+    "name": "output",
+    "comment": "hiveoutput"
+  },
+  {
+    "catalog": "internal",
+    "database": "i337shop",
+    "name": "orders",
+    "comment": "internalorders"
+  },
+  {
+    "catalog": "internal",
+    "database": "i337shop",
+    "name": "output",
+    "comment": "internaloutput"
+  },
+  {
+    "database": "legacy",
+    "name": "orders",
+    "comment": "legacy"
+  },
+  {
+    "catalog": "hive",
+    "database": "i342single",
+    "name": "orders",
+    "comment": "test"
+  },
+  {
+    "catalog": "hive",
+    "database": "i342ambig",
+    "name": "orders",
+    "comment": "test"
+  },
+  {
+    "catalog": "internal",
+    "database": "i342ambig",
+    "name": "orders",
+    "comment": "test"
+  },
+  {
+    "database": "i342ambig",
+    "name": "orders",
+    "comment": "test"
+  }
+]
