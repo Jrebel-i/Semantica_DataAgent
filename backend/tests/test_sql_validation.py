@@ -1175,7 +1175,16 @@ def test_issue_344_column_and_composite_evidence(monkeypatch):
         [edge],
         [],
         relationships=original.relationships,
-        column_edges=[column],
+        column_edges=[
+            column,
+            {
+                "upstream_table": "hive.shop.order_items",
+                "upstream_field": "order_id",
+                "downstream_table": "hive.shop.orders",
+                "downstream_field": "id",
+                "parse_status": "success",
+            },
+        ],
     )
     monkeypatch.setattr(sql_validation, "load_snapshot", lambda: data)
 
@@ -1198,3 +1207,32 @@ def test_issue_344_column_and_composite_evidence(monkeypatch):
         "hive.shop.orders o JOIN hive.shop.order_items i",
     )
     assert complete["joins"][0]["status"] == "supported", complete
+
+
+def test_issue_344_strong_relationship_path_preferred_to_table_lineage():
+    data = indexed_snapshot()
+    relations = [
+        {
+            "name": "a",
+            "from_table": "warehouse.t0",
+            "to_table": "warehouse.t2",
+            "from_columns": ["id"],
+            "to_columns": ["id"],
+        },
+        {
+            "name": "b",
+            "from_table": "warehouse.t2",
+            "to_table": "warehouse.t1",
+            "from_columns": ["id"],
+            "to_columns": ["id"],
+        },
+    ]
+    data = Snapshot(
+        data.tables,
+        [{"upstream": "warehouse.t0", "downstream": "warehouse.t1"}],
+        [],
+        relationships=relations,
+    )
+    path = join_path(["warehouse.t0", "warehouse.t1"], data)
+    assert len(path["steps"]) == 2
+    assert all(step["strength"] == "strong" for step in path["steps"])

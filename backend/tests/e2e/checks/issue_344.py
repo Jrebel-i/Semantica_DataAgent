@@ -19,3 +19,71 @@ def check_join_evidence(ctx):
                 ),
                 f"missing lineage explanation: {result}",
             )
+
+
+def check_column_lineage(ctx):
+    sql = "SELECT i.id FROM shop.order_items i JOIN shop.customers c ON i.created_at = c.id WHERE i.dt = '2025-01-01' AND c.dt = '2025-01-01'"
+    result = ctx.mcp_call("validate_sql", {"sql": sql})
+    ctx.require(
+        result["joins"][0]["status"] == "supported", f"column lineage: {result}"
+    )
+    ctx.require(
+        any(
+            proof["type"] == "column_lineage"
+            for proof in result["joins"][0]["evidence"]
+        ),
+        f"missing column lineage: {result}",
+    )
+
+
+if __name__ == "__main__":
+    import json
+    import shutil
+    import sys
+    from pathlib import Path
+
+    target = Path(sys.argv[1])
+    demo = Path(__file__).resolve().parents[4] / "samples/demo"
+    shutil.copytree(demo, target, dirs_exist_ok=True)
+    lineage_path = target / "lineage.json"
+    lineage = json.loads(lineage_path.read_text())
+    lineage.append(
+        {
+            "upstream": "shop.orders",
+            "downstream": "shop.customers",
+            "evidence": "declared",
+            "parse_status": "success",
+            "task_id": "i344_lineage",
+        }
+    )
+    lineage_path.write_text(json.dumps(lineage))
+    (target / "relationships.json").write_text(
+        json.dumps(
+            [
+                {
+                    "name": "i344_fk",
+                    "from_database": "shop",
+                    "from_table": "orders",
+                    "from_columns": ["id", "created_at"],
+                    "to_database": "shop",
+                    "to_table": "customers",
+                    "to_columns": ["id", "created_at"],
+                }
+            ]
+        )
+    )
+    (target / "column_lineage.json").write_text(
+        json.dumps(
+            [
+                {
+                    "upstream_table": "shop.order_items",
+                    "upstream_field": "created_at",
+                    "downstream_table": "shop.customers",
+                    "downstream_field": "id",
+                    "task_id": "i344_orphan",
+                    "evidence": "declared",
+                    "parse_status": "success",
+                }
+            ]
+        )
+    )

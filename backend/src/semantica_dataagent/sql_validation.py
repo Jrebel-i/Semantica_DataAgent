@@ -820,12 +820,22 @@ def check_sql(sql, dialect, snapshot, partition_tables=None):
                     {"label": label, "proofs": proofs, "pair": pair, "group": group}
                 )
             for pair_key, observed in observed_pairs.items():
+                incomplete = set()
+                complete = set()
                 for rel in snapshot.relationship_pairs.get(pair_key, ()):
                     required = _relationship_required_pairs(rel)
                     if required is not None and required <= observed:
+                        complete.update(required)
                         for record in pair_records:
                             if record["pair"] in required:
                                 record["proofs"].append(_relationship_evidence(rel))
+                    elif required and len(required) > 1:
+                        incomplete.update(required & observed)
+                for record in pair_records:
+                    if record["pair"] in incomplete - complete:
+                        for proof in record["proofs"]:
+                            if proof["type"] == "column_lineage":
+                                proof["strength"] = "weak"
             result["joins"].append(
                 {
                     "condition": condition.sql(dialect=dialect)
