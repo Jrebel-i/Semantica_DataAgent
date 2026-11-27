@@ -45,6 +45,7 @@ from .project_api import admin_project_scope, project_scope
 from .project_context import add_queued_build
 from .semantic_overrides import (
     OVERRIDE_RELATIVE_PATH,
+    GateReport,
     GateValidationError,
     dump_overrides_yaml,
     legacy_target_to_patch,
@@ -116,6 +117,27 @@ def _validate_doc_relpath(target: str, project_id: str) -> str:
         target[len("document:") :],
         markdown_root=md_root,
         require_category_subdir=True,
+    )
+
+
+def _with_placeholder_gate(report: GateReport, target: str, patch: str) -> GateReport:
+    """Reject historical-ticket drafts that still carry unresolved placeholders."""
+    from .historical_tickets import historical_ticket_placeholder_errors
+
+    errors = historical_ticket_placeholder_errors(target, patch)
+    if not errors:
+        return report
+    return GateReport(
+        passed=False,
+        checks=[
+            *report.checks,
+            {
+                "name": "historical_ticket_placeholders",
+                "passed": False,
+                "details": errors,
+            },
+        ],
+        errors=[*report.errors, *errors],
     )
 
 
@@ -1192,6 +1214,7 @@ def _apply_proposal(
         target_kind=row_kind,
         project_id=row_project_id,
     )
+    gate_report = _with_placeholder_gate(gate_report, row_target, effective_patch)
     if not gate_report.passed:
         raise HTTPException(422, str(GateValidationError(gate_report)))
 

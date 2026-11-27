@@ -48,12 +48,46 @@ _SQL_BLOCK_RE = re.compile(r"```sql\s*\n([\s\S]*?)```", re.IGNORECASE)
 _META_LINE_RE = re.compile(r"^\s*[-*]\s+\*\*(.+?)\*\*[：:]\s*(.+?)\s*$", re.MULTILINE)
 _SLUG_SAFE_RE = re.compile(r"[^\w\u4e00-\u9fff-]+")
 _MULTI_DASH_RE = re.compile(r"-{2,}")
+_WRAPPED_PLACEHOLDER_RE = re.compile(
+    r"_{1,2}\s*[A-Za-z0-9_]*placeholder[A-Za-z0-9_]*\s*_{1,2}", re.IGNORECASE
+)
+_TOKEN_PLACEHOLDER_RE = re.compile(
+    r"(?<![A-Za-z0-9_])[A-Za-z0-9_]*placeholder(?:_[A-Za-z0-9_]*)?"
+    r"(?![A-Za-z0-9_])",
+    re.IGNORECASE,
+)
 
 NonEmptyText = Annotated[str, Field(min_length=1, max_length=20000, pattern=r"\S")]
 
 
 class EvalLeakageError(ValueError):
     """Raised when a candidate historical ticket duplicates an eval benchmark question."""
+
+
+def find_unresolved_placeholders(text: str) -> list[str]:
+    """Return distinct placeholder markers that must be resolved before a ticket is stored.
+
+    Covers the discovery marker and its common deformations: case changes,
+    extra prefixes/suffixes inside the double underscores, whitespace around
+    the word, and the bare word with the underscores removed. Quoting and
+    SQL comments need no special handling because the scan is textual.
+    """
+    if not text:
+        return []
+    found: list[str] = []
+    for pattern in (_WRAPPED_PLACEHOLDER_RE, _TOKEN_PLACEHOLDER_RE):
+        for match in pattern.finditer(text):
+            token = match.group(0)
+            if token not in found:
+                found.append(token)
+    return found
+
+
+def unresolved_placeholder_message(markers: list[str]) -> str:
+    """Build the user-facing rejection message for unresolved placeholders."""
+    shown = "、".join(markers[:5])
+    suffix = f" 等 {len(markers)} 处" if len(markers) > 5 else ""
+    return f"历史工单仍含未替换的占位符：{shown}{suffix}；请替换为真实值后再入库或审批"
 
 
 class HistoricalTicketView(BaseModel):
@@ -120,6 +154,14 @@ def is_historical_ticket_target(target: str) -> bool:
     rel = target[len("document:") :].strip().strip("/")
     parts = PurePosixPath(rel).parts
     return HISTORICAL_TICKETS_CATEGORY in parts[:-1]
+
+
+def historical_ticket_placeholder_errors(target: str, patch: str) -> list[str]:
+    """Return gate errors when a historical-ticket target still carries placeholders."""
+    if not is_historical_ticket_target(target):
+        return []
+    markers = find_unresolved_placeholders(patch)
+    return [unresolved_placeholder_message(markers)] if markers else []
 
 
 def _tickets_rel_dir(project_id: str) -> tuple[str, str]:
@@ -918,6 +960,9 @@ def create_historical_ticket(
             source_label="人工录入",
         )
     )
+    markers = find_unresolved_placeholders(content)
+    if markers:
+        raise HTTPException(422, detail=unresolved_placeholder_message(markers))
     rel_file = f"{rel_dir}/{slug}.md"
     validate_markdown_relpath(
         rel_file, markdown_root=md_root, require_category_subdir=True
@@ -1015,6 +1060,10 @@ def update_historical_ticket(
             check_q = next_title
             check_sql = next_sql
             check_dialect = next_dialect
+
+        markers = find_unresolved_placeholders(next_content)
+        if markers:
+            raise HTTPException(422, detail=unresolved_placeholder_message(markers))
 
         if check_sql.strip():
             ok, err = eval_questions.validate_sql_if_available(
