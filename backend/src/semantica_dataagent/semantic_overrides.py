@@ -265,7 +265,14 @@ def _write_ambiguities(patch: dict[str, Any], index: _SchemaIndex) -> list[str]:
                 for col in parsed.find_all(exp.Column):
                     parts = [p.name for p in col.parts if getattr(p, "name", None)]
                     if len(parts) == 3:
-                        check(f"metric '{key}'", None, parts[0], parts[1])
+                        scoped = [
+                            candidate
+                            for ref in refs
+                            for candidate in index.resolve_table_ref(str(ref))
+                            if candidate[1:] == (parts[0], parts[1])
+                        ]
+                        if not scoped:
+                            check(f"metric '{key}'", None, parts[0], parts[1])
                     elif len(parts) == 2:
                         scoped = [
                             candidate

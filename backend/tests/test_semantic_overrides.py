@@ -4173,3 +4173,81 @@ def test_issue_341_catalogued_override_applies_only_to_target(client, tmp_path):
     ]
     result = apply_overrides_detailed(records, source_dir=directory.parent)
     assert [row.data["comment"] for row in result.records] == ["specific", "original"]
+
+
+@pytest.mark.parametrize(
+    "expression,refs,expected",
+    [
+        ("SUM(shop.orders.amount)", ["hive.shop.orders"], 200),
+        ("SUM(shop.orders.amount)", [], 422),
+        ("SUM(orders.amount)", [], 422),
+        ("SUM(shop.orders.amount)", ["hive.shop.users"], 422),
+    ],
+    ids=["declared-catalog", "three-part", "two-part", "other-declared-table"],
+)
+def test_issue_341_metric_sql_qualified_columns_approval(
+    client, monkeypatch, expression, refs, expected
+):
+    import yaml
+
+    from semantica_dataagent import semantic_overrides
+
+    c, admin = client
+    headers = _headers(admin)
+    project, _ = _setup_override_project(c, headers, monkeypatch, "i341 metric sql")
+    created = c.post(
+        "/api/v1/corrections",
+        headers=headers,
+        params={"project": project},
+        json={
+            "target": "table:shop.orders",
+            "reason": "metric validation",
+            "structured_patch": {
+                "version": 1,
+                "tables": {
+                    "shop.orders": {
+                        "database": "shop",
+                        "name": "orders",
+                        "comment": "test",
+                    }
+                },
+            },
+        },
+    )
+    assert created.status_code == 201, created.text
+    index = semantic_overrides._SchemaIndex.from_described(
+        [
+            {
+                "catalog": cat,
+                "database": "shop",
+                "name": "orders",
+                "fields": [{"name": "amount"}],
+            }
+            for cat in ("hive", "internal")
+        ]
+        + [
+            {
+                "catalog": "hive",
+                "database": "shop",
+                "name": "users",
+                "fields": [{"name": "id"}],
+            }
+        ]
+    )
+    monkeypatch.setattr(
+        semantic_overrides, "_current_schema_index", lambda _: (index, None)
+    )
+    metric = {"name": "revenue", "expression": expression}
+    if refs:
+        metric["tables"] = refs
+    patch = {"version": 1, "metrics": {"revenue": metric}}
+    response = c.post(
+        f"/api/v1/corrections/{created.json()['id']}/approve",
+        headers=headers,
+        params={"project": project},
+        json={"patch": yaml.safe_dump(patch)},
+    )
+    assert response.status_code == expected, response.text
+    if expected == 422:
+        assert "hive.shop.orders" in response.text
+        assert "internal.shop.orders" in response.text
