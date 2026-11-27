@@ -12,7 +12,7 @@ import sqlglot
 from sqlalchemy import func, select
 from sqlglot import exp
 from sqlglot.errors import ErrorLevel, OptimizeError, ParseError
-from sqlglot.optimizer.scope import traverse_scope
+from sqlglot.optimizer.scope import ScopeType, traverse_scope
 
 from . import knowledge, project_context
 from .db import Build, sessions
@@ -586,8 +586,38 @@ def check_sql(sql, dialect, snapshot, partition_tables=None):
         for column in scope.columns:
             if column.is_star:
                 continue
+            column_sources = sources
+            if column.table and column.table.lower() not in sources:
+                ancestor = scope
+                while ancestor.parent and ancestor.scope_type == ScopeType.SUBQUERY:
+                    ancestor = ancestor.parent
+                    try:
+                        parent_sources = ancestor.selected_sources
+                    except OptimizeError:
+                        break
+                    match = next(
+                        (
+                            source
+                            for alias, (_, source) in parent_sources.items()
+                            if alias.lower() == column.table.lower()
+                        ),
+                        None,
+                    )
+                    if match is not None:
+                        source = (
+                            resolved.get(id(match))
+                            if isinstance(match, exp.Table)
+                            else scope_outputs.get(
+                                id(match), {"fields": [], "derived_unknown": True}
+                            )
+                        )
+                        column_sources = {column.table.lower(): source}
+                        break
+            unknown_alias = bool(
+                column.table and column.table.lower() not in column_sources
+            )
             candidates = (
-                [sources.get(column.table.lower())]
+                [column_sources.get(column.table.lower())]
                 if column.table
                 else list(sources.values())
             )
@@ -611,7 +641,9 @@ def check_sql(sql, dialect, snapshot, partition_tables=None):
                 bool(field.get("_explicit_projection")) for field in matching
             )
             status = (
-                "ambiguous"
+                "error"
+                if unknown_alias
+                else "ambiguous"
                 if matching_count > 1
                 else "pass"
                 if matching_count == 1
@@ -640,7 +672,9 @@ def check_sql(sql, dialect, snapshot, partition_tables=None):
                         "field": column.name,
                         "condition": column.sql(dialect=dialect),
                         "message": (
-                            f"字段不唯一: {item['name']}"
+                            f"未知别名: {column.table}"
+                            if unknown_alias
+                            else f"字段不唯一: {item['name']}"
                             if status == "ambiguous"
                             else f"无法确认字段: {item['name']}"
                             if status == "unknown"
