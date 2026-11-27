@@ -11,7 +11,7 @@ from typing import Literal
 import sqlglot
 from sqlalchemy import func, select
 from sqlglot import exp
-from sqlglot.errors import ErrorLevel, ParseError
+from sqlglot.errors import ErrorLevel, OptimizeError, ParseError
 from sqlglot.optimizer.scope import traverse_scope
 
 from . import knowledge, project_context
@@ -236,17 +236,78 @@ def _relationship_step_keys(rel, left_name):
 
 def _join_column_source(col, sources):
     source = sources.get(col.table.lower())
-    if source is None or "database" not in source:
-        return None
+    if source is None:
+        return None, None
+    if "database" not in source:
+        if col.db or col.catalog or source.get("derived_unknown"):
+            return None, None
+        matches = [f for f in source["fields"] if f["name"].lower() == col.name.lower()]
+        if len(matches) != 1:
+            return None, None
+        return matches[0].get("_physical_table"), matches[0].get("_physical_column")
     if col.db and col.db.lower() != source["database"].lower():
-        return None
+        return None, None
     if (
         col.catalog
         and source.get("catalog")
         and col.catalog.lower() != source["catalog"].lower()
     ):
-        return None
-    return source
+        return None, None
+    return source, col.name
+
+
+def _qualify_join_column(column, aliases, sources):
+    if column.table or any(
+        sources.get(alias) is None or sources[alias].get("derived_unknown")
+        for alias in aliases
+    ):
+        return column
+    matches = [
+        alias for alias in aliases if column.name.lower() in field_names(sources[alias])
+    ]
+    return exp.column(column.name, table=matches[0]) if len(matches) == 1 else column
+
+
+def _merged_using_sources(scope, sources):
+    """Identify USING columns that denote one output across known inputs."""
+    from_clause = scope.expression.args.get("from_")
+    left = (
+        {from_clause.this.alias_or_name.lower()}
+        if from_clause and from_clause.this
+        else set()
+    )
+    merged = {}
+    for join in scope.expression.args.get("joins") or []:
+        right = join.this.alias_or_name.lower()
+        for identifier in join.args.get("using") or []:
+            name = identifier.name.lower()
+            candidates = [
+                alias
+                for alias in left
+                if sources.get(alias) is not None
+                and name in field_names(sources[alias])
+            ]
+            unknown = any(
+                sources.get(alias) is None or sources[alias].get("derived_unknown")
+                for alias in left | {right}
+            )
+            unique_fields = all(
+                sum(f["name"].lower() == name for f in sources[alias]["fields"]) == 1
+                for alias in candidates
+                + ([right] if sources.get(right) is not None else [])
+            )
+            if (
+                not unknown
+                and unique_fields
+                and candidates
+                and name in field_names(sources[right])
+                and (len(candidates) == 1 or set(candidates) == merged.get(name))
+            ):
+                merged[name] = set(candidates) | {right}
+            else:
+                merged.pop(name, None)
+        left.add(right)
+    return merged
 
 
 def full(t):
@@ -398,18 +459,130 @@ def check_sql(sql, dialect, snapshot, partition_tables=None):
                     }
                 )
     pending_documents = []
+    scope_outputs = {}
+    invalid_scope = False
     for scope in traverse_scope(tree):
         sources = {}
-        for alias, source in scope.sources.items():
+        try:
+            selected_sources = scope.selected_sources
+        except OptimizeError as exc:
+            invalid_scope = True
+            result["issues"].append(
+                {
+                    "kind": "table",
+                    "message": str(exc),
+                    "suggestion": "为每个输入使用不同的表别名。",
+                }
+            )
+            scope_outputs[id(scope)] = {"fields": [], "derived_unknown": True}
+            continue
+        for alias, (_, source) in selected_sources.items():
             if isinstance(source, exp.Table):
                 sources[alias.lower()] = resolved.get(id(source))
             else:
-                # A derived source has known names only for explicit projections.
-                names = source.expression.named_selects
-                sources[alias.lower()] = {
-                    "fields": [{"name": n} for n in names if n != "*"],
-                    "derived_unknown": "*" in names,
+                sources[alias.lower()] = scope_outputs.get(
+                    id(source), {"fields": [], "derived_unknown": True}
+                )
+        merged_columns = _merged_using_sources(scope, sources)
+        output_fields = []
+        output_unknown = False
+        for projection in scope.expression.selects:
+            if isinstance(projection, exp.Star):
+                expanded = list(sources.items())
+            elif isinstance(projection, exp.Column) and projection.is_star:
+                alias = projection.table.lower()
+                expanded = [(alias, sources.get(alias))]
+            else:
+                if projection.alias_or_name:
+                    output_fields.append(
+                        {"name": projection.alias_or_name, "_explicit_projection": True}
+                    )
+                continue
+            seen_merged = set()
+            for alias, source in expanded:
+                if source is None or source.get("derived_unknown"):
+                    output_unknown = True
+                if source is not None:
+                    for field in source["fields"]:
+                        name = field["name"].lower()
+                        if isinstance(
+                            projection, exp.Star
+                        ) and alias in merged_columns.get(name, set()):
+                            if name in seen_merged:
+                                continue
+                            seen_merged.add(name)
+                        if "database" in source:
+                            field = {
+                                **field,
+                                "_physical_table": source,
+                                "_physical_column": field["name"],
+                            }
+                        if isinstance(
+                            projection, exp.Star
+                        ) and alias in merged_columns.get(name, set()):
+                            field = {
+                                k: v
+                                for k, v in field.items()
+                                if k not in ("_physical_table", "_physical_column")
+                            }
+                        output_fields.append(field)
+        if output_unknown:
+            # A propagated star cannot guarantee uniqueness of its input's names.
+            explicit_names = {
+                projection.alias_or_name.lower()
+                for projection in scope.expression.selects
+                if not isinstance(projection, exp.Star)
+                and not (isinstance(projection, exp.Column) and projection.is_star)
+                and projection.alias_or_name
+            }
+            output_fields = [
+                {
+                    **field,
+                    "_explicit_projection": field["name"].lower() in explicit_names
+                    and field.get("_explicit_projection", False),
                 }
+                for field in output_fields
+            ]
+        if scope.union_scopes:
+            # Set operations expose the names of the first input.
+            first = scope_outputs.get(
+                id(scope.union_scopes[0]), {"fields": [], "derived_unknown": True}
+            )
+            scope_outputs[id(scope)] = {
+                "fields": [
+                    {
+                        k: v
+                        for k, v in f.items()
+                        if k not in ("_physical_table", "_physical_column")
+                    }
+                    for f in first["fields"]
+                ],
+                "derived_unknown": first["derived_unknown"],
+            }
+        else:
+            scope_outputs[id(scope)] = {
+                "fields": output_fields,
+                "derived_unknown": output_unknown,
+            }
+        if scope.outer_columns:
+            output = scope_outputs[id(scope)]
+            names = scope.outer_columns
+            fields = output["fields"]
+            scope_outputs[id(scope)] = {
+                "fields": [
+                    {
+                        **{
+                            k: v
+                            for k, v in field.items()
+                            if k not in ("_physical_table", "_physical_column")
+                        },
+                        "name": names[index] if index < len(names) else field["name"],
+                    }
+                    for index, field in enumerate(fields)
+                ]
+                + [{"name": name} for name in names[len(fields) :]],
+                "derived_unknown": output["derived_unknown"],
+            }
         for column in scope.columns:
             if column.is_star:
                 continue
@@ -419,17 +592,32 @@ def check_sql(sql, dialect, snapshot, partition_tables=None):
                 else list(sources.values())
             )
             known = [s for s in candidates if s is not None]
-            matching = [s for s in known if column.name.lower() in field_names(s)]
+            matching = [
+                field
+                for source in known
+                for field in source["fields"]
+                if field["name"].lower() == column.name.lower()
+            ]
             uncertain = len(known) != len(candidates) or any(
                 s.get("derived_unknown") for s in known
             )
+            matching_count = len(matching)
+            if not column.table:
+                merged = merged_columns.get(column.name.lower(), set())
+                matching_count -= max(len(merged) - 1, 0)
+            # An unknown star in another source can still introduce a collision.
+            explicit_certain = len(candidates) == 1 and len(known) == 1
+            explicit_count = sum(
+                bool(field.get("_explicit_projection")) for field in matching
+            )
             status = (
-                "unknown"
-                if uncertain
+                "ambiguous"
+                if matching_count > 1
                 else "pass"
-                if len(matching) == 1
-                else "ambiguous"
-                if len(matching) > 1
+                if matching_count == 1
+                and (not uncertain or (explicit_certain and explicit_count == 1))
+                else "unknown"
+                if uncertain
                 else "error"
             )
             item = {"name": column.sql(dialect=dialect), "status": status}
@@ -465,89 +653,182 @@ def check_sql(sql, dialect, snapshot, partition_tables=None):
                         ),
                     }
                 )
+        left_aliases = set()
+        from_clause = scope.expression.args.get("from_")
+        if from_clause and from_clause.this:
+            left_aliases.add(from_clause.this.alias_or_name.lower())
+        merged_using = {}
         for join in scope.expression.args.get("joins") or []:
             condition = join.args.get("on")
-            supports = []
-            observed_pairs = defaultdict(set)
+            right_alias = join.this.alias_or_name.lower()
+            pairs = []
             if condition and not condition.find(exp.Or):
                 for eq in condition.find_all(exp.EQ):
                     if eq.find_ancestor(exp.Not) is not None:
                         continue
                     l, r = eq.left, eq.right
-                    if (
-                        isinstance(l, exp.Column)
-                        and isinstance(r, exp.Column)
-                        and join.this.alias_or_name.lower()
-                        in {l.table.lower(), r.table.lower()}
-                    ):
-                        a = _join_column_source(l, sources)
-                        b = _join_column_source(r, sources)
-                        if a and b and a is not b:
-                            aname, bname = full(a).lower(), full(b).lower()
-                            pair_key = frozenset((aname, bname))
-                            observed_pairs[pair_key].add(
-                                frozenset(
-                                    ((aname, l.name.lower()), (bname, r.name.lower()))
-                                )
-                            )
-                            supports.extend(evidence(a, b, l.name, r.name, snapshot))
-                            pending_documents.append(
-                                (len(result["joins"]), a, b, l.name, r.name)
-                            )
-                for pair_key, observed in observed_pairs.items():
-                    for rel in snapshot.relationship_pairs.get(pair_key, ()):
-                        required = _relationship_required_pairs(rel)
-                        if required is not None and required <= observed:
-                            supports.append(_relationship_evidence(rel))
-            join_item = {
-                "condition": condition.sql(dialect=dialect)
-                if condition
-                else join.sql(dialect=dialect),
+                    if isinstance(l, exp.Column) and isinstance(r, exp.Column):
+                        aliases = left_aliases | {right_alias}
+                        l = _qualify_join_column(l, aliases, sources)
+                        r = _qualify_join_column(r, aliases, sources)
+                        if (
+                            l.table.lower() == right_alias
+                            and r.table.lower() in left_aliases
+                        ):
+                            l, r = r, l
+                        if (
+                            l.table.lower() in left_aliases
+                            and r.table.lower() == right_alias
+                        ):
+                            pairs.append((l, r, len(pairs)))
+            for identifier in join.args.get("using") or []:
+                name = identifier.name
+                matches = [
+                    alias
+                    for alias in left_aliases
+                    if sources.get(alias) is not None
+                    and name.lower() in field_names(sources[alias])
+                ]
+                uncertain = any(
+                    sources.get(alias) is None or sources[alias].get("derived_unknown")
+                    for alias in left_aliases
+                )
+                right = sources.get(right_alias)
+                if (
+                    (
+                        len(matches) == 1
+                        or set(matches) == merged_using.get(name.lower())
+                    )
+                    and bool(matches)
+                    and not uncertain
+                    and right is not None
+                    and not right.get("derived_unknown")
+                    and all(
+                        sum(
+                            f["name"].lower() == name.lower()
+                            for f in sources[alias]["fields"]
+                        )
+                        == 1
+                        for alias in matches + [right_alias]
+                    )
+                    and name.lower() in field_names(right)
+                ):
+                    group = len(pairs)
+                    pairs.extend(
+                        (
+                            exp.column(name, table=alias),
+                            exp.column(name, table=right_alias),
+                            group,
+                        )
+                        for alias in matches
+                    )
+                    merged_using[name.lower()] = set(matches) | {right_alias}
+                else:
+                    pairs.append(
+                        (None, exp.column(name, table=right_alias), len(pairs))
+                    )
+                    merged_using.pop(name.lower(), None)
+            pair_records = []
+            observed_pairs = defaultdict(set)
+            for l, r, group in pairs:
+                a, left_key = (
+                    _join_column_source(l, sources) if l is not None else (None, None)
+                )
+                b, right_key = _join_column_source(r, sources)
+                label = f"{l.sql(dialect=dialect) if l is not None else 'USING'} = {r.sql(dialect=dialect)}"
+                proofs = []
+                pair = None
+                if a and b and left_key and right_key and a is not b:
+                    aname, bname = full(a).lower(), full(b).lower()
+                    pair_key = frozenset((aname, bname))
+                    pair = frozenset(
+                        ((aname, left_key.lower()), (bname, right_key.lower()))
+                    )
+                    observed_pairs[pair_key].add(pair)
+                    proofs = evidence(a, b, left_key, right_key, snapshot)
+                    pending_documents.append(
+                        (pair_records, len(pair_records), a, b, left_key, right_key)
+                    )
+                pair_records.append(
+                    {"label": label, "proofs": proofs, "pair": pair, "group": group}
+                )
+            for pair_key, observed in observed_pairs.items():
+                for rel in snapshot.relationship_pairs.get(pair_key, ()):
+                    required = _relationship_required_pairs(rel)
+                    if required is not None and required <= observed:
+                        for record in pair_records:
+                            if record["pair"] in required:
+                                record["proofs"].append(_relationship_evidence(rel))
+            result["joins"].append(
+                {
+                    "condition": condition.sql(dialect=dialect)
+                    if condition
+                    else join.sql(dialect=dialect),
+                    "pairs": pair_records,
+                }
+            )
+            left_aliases.add(right_alias)
+    candidates = [
+        item
+        for item in pending_documents
+        if not any(
+            proof["strength"] == "strong"
+            for record in item[0]
+            if record["group"] == item[0][item[1]]["group"]
+            for proof in record["proofs"]
+        )
+    ]
+    documents = snapshot.documents_for(
+        {(full(a).lower(), full(b).lower()) for _, _, a, b, _, _ in candidates}
+    )
+    for records, index, a, b, l, r in candidates:
+        records[index]["proofs"].extend(
+            p
+            for p in evidence(a, b, l, r, snapshot, documents)
+            if p["type"] == "document"
+        )
+    for join_item in result["joins"]:
+        records = join_item.pop("pairs")
+        supports = [proof for record in records for proof in record["proofs"]]
+        groups = defaultdict(list)
+        for record in records:
+            groups[record["group"]].append(record)
+        missing = [
+            alternatives[0]["label"]
+            for alternatives in groups.values()
+            if not any(
+                proof["strength"] == "strong"
+                for record in alternatives
+                for proof in record["proofs"]
+            )
+        ]
+        supported = bool(records) and not missing
+        join_item.update(
+            {
                 "status": "supported"
-                if any(p["strength"] == "strong" for p in supports)
+                if supported
                 else "weak"
                 if supports
                 else "unsupported",
                 "evidence": supports,
                 "suggestion": None
-                if any(p["strength"] == "strong" for p in supports)
+                if supported
                 else "Weak or missing evidence; use find_join_path and verify the join.",
             }
-            result["joins"].append(join_item)
-    candidates = [
-        (i, a, b, l, r)
-        for i, a, b, l, r in pending_documents
-        if result["joins"][i]["status"] != "supported"
-    ]
-    documents = snapshot.documents_for(
-        {(full(a).lower(), full(b).lower()) for _, a, b, _, _ in candidates}
-    )
-    for i, a, b, l, r in candidates:
-        proofs = [
-            p
-            for p in evidence(a, b, l, r, snapshot, documents)
-            if p["type"] == "document"
-        ]
-        if proofs:
-            result["joins"][i]["evidence"].extend(proofs)
-            result["joins"][i]["status"] = "supported"
-            result["joins"][i]["suggestion"] = None
-    for join_item in result["joins"]:
-        if join_item["status"] != "supported":
+        )
+        if not supported:
             result["issues"].append(
                 {
                     "kind": "join",
                     "table": None,
                     "condition": join_item["condition"],
-                    "message": (
-                        "JOIN 只有弱证据"
-                        if join_item["status"] == "weak"
-                        else "JOIN 缺少证据"
-                    ),
+                    "message": ("JOIN 缺少证据: " + ", ".join(missing))
+                    if missing
+                    else "JOIN 缺少证据",
                     "suggestion": join_item["suggestion"],
                 }
             )
-    if partition_tables is not None:
+    if partition_tables is not None and not invalid_scope:
         from .query_api import _partition_issues
 
         _, _, problems = _partition_issues(tree, partition_tables)
