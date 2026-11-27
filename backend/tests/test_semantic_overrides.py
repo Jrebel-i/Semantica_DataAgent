@@ -2585,6 +2585,7 @@ def test_approval_deep_merge_writes_yaml_and_incremental_build(client, monkeypat
                 )
                 if build is not None and build.status in {"succeeded", "failed"}:
                     assert build.status == "succeeded", build.error
+                    assert build.build_type == "incremental", build.build_type
                     return
             time.sleep(0.02)
         raise AssertionError("Timed out waiting for deep-merge incremental build")
