@@ -177,6 +177,71 @@ def _partition_terms(where):
     return terms
 
 
+def _constant_partition_value(node):
+    """Accept only literal date expressions and their parser-generated wrappers."""
+    allowed = (
+        exp.Literal,
+        exp.Var,
+        exp.Interval,
+        exp.Neg,
+        exp.Mul,
+        exp.CurrentDate,
+        exp.DateAdd,
+        exp.DateSub,
+        exp.TsOrDsAdd,
+        exp.TimeToStr,
+        exp.TimeStrToTime,
+        exp.Paren,
+    )
+    if isinstance(node, exp.Anonymous):
+        if node.name.upper() != "NOW":
+            return False
+    elif not isinstance(node, allowed):
+        return False
+    return all(_constant_partition_value(child) for child in node.iter_expressions())
+
+
+def _join_partition_terms(scope):
+    terms = {alias.lower(): [] for alias in scope.selected_sources}
+    locations = {}
+    from_ = scope.expression.args.get("from_")
+    left = {from_.this.alias_or_name.lower()} if from_ and from_.this else set()
+    for join in scope.expression.args.get("joins") or []:
+        right = {join.this.alias_or_name.lower()} if join.this else set()
+        side = (join.args.get("side") or "").upper()
+        eligible = (
+            right
+            if side == "LEFT"
+            else left
+            if side == "RIGHT"
+            else set()
+            if side == "FULL"
+            else left | right
+        )
+        on = join.args.get("on")
+        for alias in eligible:
+            terms.setdefault(alias, []).extend(
+                _partition_terms(exp.Where(this=on.copy())) if on else []
+            )
+        if side == "LEFT":
+            locations.update(
+                {alias: "LEFT JOIN 的右侧表请在该 JOIN 的 ON 中" for alias in right}
+            )
+        elif side == "RIGHT":
+            locations.update(
+                {alias: "RIGHT JOIN 的左侧表请在该 JOIN 的 ON 中" for alias in left}
+            )
+        elif side == "FULL":
+            locations.update(
+                {
+                    alias: "FULL JOIN 的两侧表请在 WHERE 中或通过改写"
+                    for alias in left | right
+                }
+            )
+        left |= right
+    return terms, locations
+
+
 def _latest_partition_subquery(term, field, alias, scope, table, metadata, lookup):
     if not isinstance(term, exp.EQ):
         return None
@@ -261,6 +326,7 @@ def _partition_issues(tree, tables):
     for scope in traverse_scope(tree):
         # A predicate beneath OR or NOT cannot prove the partition is constrained.
         terms = _partition_terms(scope.expression.args.get("where"))
+        join_terms, locations = _join_partition_terms(scope)
         for alias, source in scope.selected_sources.items():
             table = source[1]
             if not isinstance(table, exp.Table):
@@ -344,11 +410,22 @@ def _partition_issues(tree, tables):
             if name not in names:
                 names.append(name)
             partitions = [f["name"].lower() for f in fields if f.get("partition")]
-            records.append((scope, terms, alias, table, name, partitions, metadata))
+            records.append(
+                (
+                    scope,
+                    terms + join_terms.get(alias.lower(), []),
+                    alias,
+                    table,
+                    name,
+                    partitions,
+                    metadata,
+                    locations.get(alias.lower()),
+                )
+            )
 
     latest_runtime = False
     allowed = set()
-    for scope, terms, alias, table, _, partitions, metadata in records:
+    for scope, terms, alias, table, _, partitions, metadata, _ in records:
         for field in partitions:
             for term in terms:
                 inner = _latest_partition_subquery(
@@ -358,7 +435,7 @@ def _partition_issues(tree, tables):
                     allowed.add(id(inner))
                     latest_runtime = True
 
-    for scope, terms, alias, table, name, partitions, metadata in records:
+    for scope, terms, alias, table, name, partitions, metadata, location in records:
         if id(scope.expression) in allowed:
             continue
         for field in partitions:
@@ -381,12 +458,24 @@ def _partition_issues(tree, tables):
                 ):
                     return False
                 column = term.this
+                reversed_comparison = False
+                if isinstance(
+                    term, (exp.EQ, exp.GT, exp.GTE, exp.LT, exp.LTE)
+                ) and isinstance(term.expression, exp.Column):
+                    column = term.expression
+                    reversed_comparison = True
                 if not isinstance(column, exp.Column) or column.name.lower() != field:
                     return False
                 if column.table and column.table.lower() != alias.lower():
                     return False
                 if not column.table and len(scope.selected_sources) != 1:
                     return False
+                if reversed_comparison:
+                    value = term.this
+                    upper = isinstance(term, (exp.GT, exp.GTE))
+                    return _constant_partition_value(value) and (
+                        not upper or isinstance(value, exp.Literal)
+                    )
                 values = [
                     value
                     for key, value in term.args.items()
@@ -397,8 +486,12 @@ def _partition_issues(tree, tables):
                     for value in values
                     for item in (value if isinstance(value, list) else [value])
                 ]
+                if isinstance(term, (exp.LT, exp.LTE)) and any(
+                    not isinstance(value, exp.Literal) for value in flat
+                ):
+                    return False
                 return bool(flat) and all(
-                    isinstance(value, exp.Literal) for value in flat
+                    _constant_partition_value(value) for value in flat
                 )
 
             if not any(valid(term) for term in terms):
@@ -412,7 +505,7 @@ def _partition_issues(tree, tables):
                             "field": field,
                             "message": f"分区表 {name} 缺少分区条件: {field}",
                             "suggestion": (
-                                f"在 WHERE 中限定 {field}：快照表用 "
+                                f"{location or '在 WHERE 中'}限定 {field}：快照表用 "
                                 f"{field} = (SELECT MAX({field}) FROM {qualified})；"
                                 f"增量表用 {field} 的范围条件，如 "
                                 f"{field} >= '2025-01-01'。"
