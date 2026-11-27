@@ -424,10 +424,16 @@ def check_sql(sql, dialect, snapshot, partition_tables=None):
                     output_unknown = True
                 if source is not None:
                     output_fields.extend(source["fields"])
-        scope_outputs[id(scope)] = {
-            "fields": output_fields,
-            "derived_unknown": output_unknown,
-        }
+        if scope.union_scopes:
+            # Set operations expose the names of the first input.
+            scope_outputs[id(scope)] = scope_outputs.get(
+                id(scope.union_scopes[0]), {"fields": [], "derived_unknown": True}
+            )
+        else:
+            scope_outputs[id(scope)] = {
+                "fields": output_fields,
+                "derived_unknown": output_unknown,
+            }
         for column in scope.columns:
             if column.is_star:
                 continue

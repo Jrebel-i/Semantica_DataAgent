@@ -32,3 +32,16 @@ def check_join_using(ctx):
     )
     result = ctx.mcp_call("validate_sql", {"sql": sql})
     ctx.require(result["status"] == "pass", f"USING with lineage: {result}")
+
+
+def check_ambiguous_using(ctx):
+    sql = (
+        "SELECT o.id FROM shop.orders o JOIN shop.daily_sales d USING (id) "
+        "JOIN shop.customers c USING (id) WHERE o.dt = '2025-01-01' "
+        "AND d.dt = '2025-01-01' AND c.dt = '2025-01-01'"
+    )
+    result = ctx.mcp_call("validate_sql", {"sql": sql})
+    ctx.require(
+        len(result["joins"]) == 2 and result["joins"][1]["status"] != "supported",
+        f"ambiguous USING was accepted: {result}",
+    )

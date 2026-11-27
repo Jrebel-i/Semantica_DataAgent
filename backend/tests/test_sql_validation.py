@@ -729,3 +729,42 @@ def test_issue_335_using_single_relationship(monkeypatch):
         "SELECT o.id FROM hive.shop.orders o JOIN hive.shop.customers c USING (id) WHERE o.dt = '2025-01-01'"
     )
     assert result["status"] == "pass", result
+
+
+def test_issue_335_document_proves_only_one_composite_pair(monkeypatch):
+    from semantica_dataagent import sql_validation
+
+    original = _catalog_relationship_snapshot()
+    data = Snapshot(
+        original.tables,
+        [],
+        [
+            {
+                "ref": "document:join",
+                "content": "hive.shop.orders.tenant_id = hive.shop.order_items.tenant_id",
+            }
+        ],
+    )
+    monkeypatch.setattr(sql_validation, "load_snapshot", lambda: data)
+    result = sql_validation.validate_sql(
+        "SELECT o.id FROM hive.shop.orders o JOIN hive.shop.order_items i "
+        "ON o.tenant_id = i.tenant_id AND o.id = i.sku "
+        "WHERE o.dt = '2025-01-01'"
+    )
+    assert any(
+        i["kind"] == "join" and "o.id = i.sku" in i["message"] for i in result["issues"]
+    ), result
+
+
+def test_issue_335_union_star_does_not_report_known_missing_field(monkeypatch):
+    from semantica_dataagent import sql_validation
+
+    data = _catalog_relationship_snapshot()
+    monkeypatch.setattr(sql_validation, "load_snapshot", lambda: data)
+    result = sql_validation.validate_sql(
+        "SELECT x.id FROM (SELECT * FROM hive.shop.customers UNION ALL "
+        "SELECT * FROM hive.shop.customers) x"
+    )
+    assert not any(
+        f["name"] == "x.id" and f["status"] == "error" for f in result["fields"]
+    ), result
