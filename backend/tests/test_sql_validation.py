@@ -644,3 +644,88 @@ def test_check_sql_distinguishes_multiple_relationships_between_same_tables():
     )
     assert checked["status"] == "pass"
     assert [e["name"] for e in checked["joins"][0]["evidence"]] == ["shipping"]
+
+
+def test_issue_335_public_validation_expands_nested_stars(monkeypatch):
+    from semantica_dataagent import sql_validation
+
+    data = _catalog_relationship_snapshot()
+    monkeypatch.setattr(sql_validation, "load_snapshot", lambda: data)
+    base = "WITH c1 AS (SELECT * FROM hive.shop.customers), c2 AS (SELECT c1.*, COUNT(*) AS cnt FROM c1) "
+    result = sql_validation.validate_sql(base + "SELECT c2.id, c2.cnt FROM c2")
+    assert result["status"] == "pass", result
+    result = sql_validation.validate_sql(base + "SELECT c2.nope FROM c2")
+    assert any(
+        f["name"] == "c2.nope" and f["status"] == "error" for f in result["fields"]
+    ), result
+    result = sql_validation.validate_sql("SELECT x.nope FROM (SELECT * FROM mystery) x")
+    assert any(
+        f["name"] == "x.nope" and f["status"] == "unknown" for f in result["fields"]
+    ), result
+
+
+def test_issue_335_public_validation_requires_each_pair(monkeypatch):
+    from semantica_dataagent import sql_validation
+
+    data = _catalog_relationship_snapshot()
+    data.documents = [
+        {
+            "ref": "doc:join",
+            "content": "hive.shop.orders.customer_id = hive.shop.customers.id",
+        }
+    ]
+    monkeypatch.setattr(sql_validation, "load_snapshot", lambda: data)
+    prefix = "SELECT o.id FROM hive.shop.orders o JOIN hive.shop.customers c ON "
+    suffix = " WHERE o.dt = '2025-01-01'"
+    good = sql_validation.validate_sql(
+        prefix + "o.customer_id = c.id AND o.dt = '2025-01-01'" + suffix
+    )
+    assert good["status"] == "pass", good
+    bad = sql_validation.validate_sql(
+        prefix + "o.customer_id = c.id AND o.id = c.name" + suffix
+    )
+    assert any(i["kind"] == "join" and "o.id" in i["message"] for i in bad["issues"]), (
+        bad
+    )
+
+
+def test_issue_335_using_and_composite_pairs(monkeypatch):
+    from semantica_dataagent import sql_validation
+
+    data = _catalog_relationship_snapshot()
+    monkeypatch.setattr(sql_validation, "load_snapshot", lambda: data)
+    sql = (
+        "SELECT o.id FROM hive.shop.orders o JOIN hive.shop.order_items i "
+        "USING (tenant_id) WHERE o.dt = '2025-01-01'"
+    )
+    result = sql_validation.validate_sql(sql)
+    assert result["joins"][0]["status"] != "supported", result
+    sql = (
+        "SELECT o.id FROM hive.shop.orders o JOIN hive.shop.order_items i "
+        "ON o.tenant_id = i.tenant_id AND o.id = i.order_id "
+        "WHERE o.dt = '2025-01-01'"
+    )
+    result = sql_validation.validate_sql(sql)
+    assert result["status"] == "pass", result
+    sql = (
+        "SELECT o.id FROM hive.shop.orders o JOIN hive.shop.order_items i "
+        "ON o.tenant_id = i.tenant_id AND o.id = i.order_id "
+        "JOIN hive.shop.customers c USING (id) WHERE o.dt = '2025-01-01'"
+    )
+    # The left input contains both orders.id and (after adding it) order_items.id.
+    data.tables[2]["fields"].append({"name": "id", "partition": False})
+    result = sql_validation.validate_sql(sql)
+    assert result["joins"][1]["status"] != "supported", result
+
+
+def test_issue_335_using_single_relationship(monkeypatch):
+    from semantica_dataagent import sql_validation
+
+    data = _catalog_relationship_snapshot()
+    data.relationships[0]["from_columns"] = ["id"]
+    data = Snapshot(data.tables, [], [], relationships=data.relationships)
+    monkeypatch.setattr(sql_validation, "load_snapshot", lambda: data)
+    result = sql_validation.validate_sql(
+        "SELECT o.id FROM hive.shop.orders o JOIN hive.shop.customers c USING (id) WHERE o.dt = '2025-01-01'"
+    )
+    assert result["status"] == "pass", result

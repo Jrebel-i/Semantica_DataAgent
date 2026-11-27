@@ -398,18 +398,36 @@ def check_sql(sql, dialect, snapshot, partition_tables=None):
                     }
                 )
     pending_documents = []
+    scope_outputs = {}
     for scope in traverse_scope(tree):
         sources = {}
-        for alias, source in scope.sources.items():
+        for alias, (_, source) in scope.selected_sources.items():
             if isinstance(source, exp.Table):
                 sources[alias.lower()] = resolved.get(id(source))
             else:
-                # A derived source has known names only for explicit projections.
-                names = source.expression.named_selects
-                sources[alias.lower()] = {
-                    "fields": [{"name": n} for n in names if n != "*"],
-                    "derived_unknown": "*" in names,
-                }
+                sources[alias.lower()] = scope_outputs.get(
+                    id(source), {"fields": [], "derived_unknown": True}
+                )
+        output_fields = []
+        output_unknown = False
+        for projection in scope.expression.selects:
+            if isinstance(projection, exp.Star):
+                expanded = list(sources.values())
+            elif isinstance(projection, exp.Column) and projection.is_star:
+                expanded = [sources.get(projection.table.lower())]
+            else:
+                if projection.alias_or_name:
+                    output_fields.append({"name": projection.alias_or_name})
+                continue
+            for source in expanded:
+                if source is None or source.get("derived_unknown"):
+                    output_unknown = True
+                if source is not None:
+                    output_fields.extend(source["fields"])
+        scope_outputs[id(scope)] = {
+            "fields": output_fields,
+            "derived_unknown": output_unknown,
+        }
         for column in scope.columns:
             if column.is_star:
                 continue
@@ -465,85 +483,132 @@ def check_sql(sql, dialect, snapshot, partition_tables=None):
                         ),
                     }
                 )
+        left_aliases = set()
+        from_clause = scope.expression.args.get("from_")
+        if from_clause and from_clause.this:
+            left_aliases.add(from_clause.this.alias_or_name.lower())
         for join in scope.expression.args.get("joins") or []:
             condition = join.args.get("on")
-            supports = []
-            observed_pairs = defaultdict(set)
+            right_alias = join.this.alias_or_name.lower()
+            pairs = []
             if condition and not condition.find(exp.Or):
                 for eq in condition.find_all(exp.EQ):
                     if eq.find_ancestor(exp.Not) is not None:
                         continue
                     l, r = eq.left, eq.right
-                    if (
-                        isinstance(l, exp.Column)
-                        and isinstance(r, exp.Column)
-                        and join.this.alias_or_name.lower()
-                        in {l.table.lower(), r.table.lower()}
-                    ):
-                        a = _join_column_source(l, sources)
-                        b = _join_column_source(r, sources)
-                        if a and b and a is not b:
-                            aname, bname = full(a).lower(), full(b).lower()
-                            pair_key = frozenset((aname, bname))
-                            observed_pairs[pair_key].add(
-                                frozenset(
-                                    ((aname, l.name.lower()), (bname, r.name.lower()))
-                                )
-                            )
-                            supports.extend(evidence(a, b, l.name, r.name, snapshot))
-                            pending_documents.append(
-                                (len(result["joins"]), a, b, l.name, r.name)
-                            )
-                for pair_key, observed in observed_pairs.items():
-                    for rel in snapshot.relationship_pairs.get(pair_key, ()):
-                        required = _relationship_required_pairs(rel)
-                        if required is not None and required <= observed:
-                            supports.append(_relationship_evidence(rel))
-            join_item = {
-                "condition": condition.sql(dialect=dialect)
-                if condition
-                else join.sql(dialect=dialect),
+                    if isinstance(l, exp.Column) and isinstance(r, exp.Column):
+                        if (
+                            l.table.lower() == right_alias
+                            and r.table.lower() in left_aliases
+                        ):
+                            l, r = r, l
+                        if (
+                            l.table.lower() in left_aliases
+                            and r.table.lower() == right_alias
+                        ):
+                            pairs.append((l, r))
+            for identifier in join.args.get("using") or []:
+                name = identifier.name
+                matches = [
+                    alias
+                    for alias in left_aliases
+                    if sources.get(alias) is not None
+                    and name.lower() in field_names(sources[alias])
+                ]
+                uncertain = any(
+                    sources.get(alias) is None or sources[alias].get("derived_unknown")
+                    for alias in left_aliases
+                )
+                right = sources.get(right_alias)
+                if (
+                    len(matches) == 1
+                    and not uncertain
+                    and right is not None
+                    and not right.get("derived_unknown")
+                    and name.lower() in field_names(right)
+                ):
+                    pairs.append(
+                        (
+                            exp.column(name, table=matches[0]),
+                            exp.column(name, table=right_alias),
+                        )
+                    )
+                else:
+                    pairs.append((None, exp.column(name, table=right_alias)))
+            pair_records = []
+            observed_pairs = defaultdict(set)
+            for l, r in pairs:
+                a = _join_column_source(l, sources) if l is not None else None
+                b = _join_column_source(r, sources)
+                label = f"{l.sql(dialect=dialect) if l is not None else 'USING'} = {r.sql(dialect=dialect)}"
+                proofs = []
+                pair = None
+                if a and b and a is not b:
+                    aname, bname = full(a).lower(), full(b).lower()
+                    pair_key = frozenset((aname, bname))
+                    pair = frozenset(((aname, l.name.lower()), (bname, r.name.lower())))
+                    observed_pairs[pair_key].add(pair)
+                    proofs = evidence(a, b, l.name, r.name, snapshot)
+                    pending_documents.append(
+                        (pair_records, len(pair_records), a, b, l.name, r.name)
+                    )
+                pair_records.append({"label": label, "proofs": proofs, "pair": pair})
+            for pair_key, observed in observed_pairs.items():
+                for rel in snapshot.relationship_pairs.get(pair_key, ()):
+                    required = _relationship_required_pairs(rel)
+                    if required is not None and required <= observed:
+                        for record in pair_records:
+                            if record["pair"] in required:
+                                record["proofs"].append(_relationship_evidence(rel))
+            result["joins"].append(
+                {
+                    "condition": condition.sql(dialect=dialect)
+                    if condition
+                    else join.sql(dialect=dialect),
+                    "pairs": pair_records,
+                }
+            )
+            left_aliases.add(right_alias)
+    documents = snapshot.documents_for(
+        {(full(a).lower(), full(b).lower()) for _, _, a, b, _, _ in pending_documents}
+    )
+    for records, index, a, b, l, r in pending_documents:
+        records[index]["proofs"].extend(
+            p
+            for p in evidence(a, b, l, r, snapshot, documents)
+            if p["type"] == "document"
+        )
+    for join_item in result["joins"]:
+        records = join_item.pop("pairs")
+        supports = [proof for record in records for proof in record["proofs"]]
+        missing = [
+            record["label"]
+            for record in records
+            if not any(p["strength"] == "strong" for p in record["proofs"])
+        ]
+        supported = bool(records) and not missing
+        join_item.update(
+            {
                 "status": "supported"
-                if any(p["strength"] == "strong" for p in supports)
+                if supported
                 else "weak"
                 if supports
                 else "unsupported",
                 "evidence": supports,
                 "suggestion": None
-                if any(p["strength"] == "strong" for p in supports)
+                if supported
                 else "Weak or missing evidence; use find_join_path and verify the join.",
             }
-            result["joins"].append(join_item)
-    candidates = [
-        (i, a, b, l, r)
-        for i, a, b, l, r in pending_documents
-        if result["joins"][i]["status"] != "supported"
-    ]
-    documents = snapshot.documents_for(
-        {(full(a).lower(), full(b).lower()) for _, a, b, _, _ in candidates}
-    )
-    for i, a, b, l, r in candidates:
-        proofs = [
-            p
-            for p in evidence(a, b, l, r, snapshot, documents)
-            if p["type"] == "document"
-        ]
-        if proofs:
-            result["joins"][i]["evidence"].extend(proofs)
-            result["joins"][i]["status"] = "supported"
-            result["joins"][i]["suggestion"] = None
-    for join_item in result["joins"]:
-        if join_item["status"] != "supported":
+        )
+        if not supported:
             result["issues"].append(
                 {
                     "kind": "join",
                     "table": None,
                     "condition": join_item["condition"],
-                    "message": (
-                        "JOIN 只有弱证据"
-                        if join_item["status"] == "weak"
-                        else "JOIN 缺少证据"
-                    ),
+                    "message": ("JOIN 缺少证据: " + ", ".join(missing))
+                    if missing
+                    else "JOIN 缺少证据",
                     "suggestion": join_item["suggestion"],
                 }
             )
