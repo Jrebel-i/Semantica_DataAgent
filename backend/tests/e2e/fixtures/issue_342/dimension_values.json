@@ -1,0 +1,1 @@
+[{"catalog": "hive", "database": "i337shop", "table": "orders", "field": "code", "value": "hive_only", "row_id": "hive.i337shop.orders:1"}, {"catalog": "internal", "database": "i337shop", "table": "orders", "field": "code", "value": "internal_only", "row_id": "internal.i337shop.orders:1"}]

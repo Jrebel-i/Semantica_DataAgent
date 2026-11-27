@@ -2200,7 +2200,7 @@ def describe(names=None, database=None, search=None, summary=False, project_id=N
     return [_format_table_row(r) for r in rows]
 
 
-def dimension_values(database, table, field, project_id=None):
+def dimension_values(database, table, field, project_id=None, catalog=None):
     """Return every indexed value for one field in the current generation."""
     values = _project_settings(project_id)
     project = project_context.from_values(values)
@@ -2208,12 +2208,14 @@ def dimension_values(database, table, field, project_id=None):
         read_graph(values),
         """MATCH (v:SDADimensionValue {generation:$generation})
            WHERE v.database = $database AND v.table = $table AND v.field = $field
+             AND coalesce(v.catalog, '') = $catalog
            RETURN v.value AS value ORDER BY v.value""",
         {
             "generation": project.generation,
             "database": database,
             "table": table,
             "field": field,
+            "catalog": catalog or "",
         },
     )
     return [row["value"] for row in rows if isinstance(row.get("value"), str)]

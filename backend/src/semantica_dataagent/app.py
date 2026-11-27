@@ -975,9 +975,13 @@ def search_knowledge(
     )
 
 
-def lookup_dim_values(table: str, keyword: str, field: str | None = None) -> list[dict]:
+def lookup_dim_values(
+    table: str, keyword: str, field: str | None = None, catalog: str | None = None
+) -> list[dict]:
     """Look up indexed dimension values in the caller's project."""
-    return _lookup_dim_values(table, keyword, field, project_id=_mcp_project_arg())
+    return _lookup_dim_values(
+        table, keyword, field, project_id=_mcp_project_arg(), catalog=catalog
+    )
 
 
 def list_categories() -> list[dict]:

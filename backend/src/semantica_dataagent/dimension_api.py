@@ -3,6 +3,7 @@
 import re
 
 from . import knowledge, project_context
+from .mcp_contract import ToolInvalidInput
 
 
 def lookup_dim_values(
@@ -10,6 +11,7 @@ def lookup_dim_values(
     keyword: str,
     field: str | None = None,
     project_id: str | None = None,
+    catalog: str | None = None,
 ) -> list[dict]:
     keyword = keyword.strip()
     if not table or not keyword:
@@ -21,23 +23,61 @@ def lookup_dim_values(
     )
     project = project_context.from_values(values)
     store = knowledge.read_graph(values)
+    parts = table.split(".")
+    if len(parts) == 3:
+        table_catalog, database, table_name = parts
+        if catalog is not None and catalog != table_catalog:
+            raise ToolInvalidInput("422: catalog conflicts with qualified table")
+        catalog = table_catalog
+    elif len(parts) == 2:
+        database, table_name = parts
+    elif len(parts) == 1:
+        database, table_name = None, parts[0]
+    else:
+        raise ToolInvalidInput("422: invalid table name")
+    candidates = knowledge.execute(
+        store,
+        "MATCH (t:SDATable {generation:$generation, name:$table}) "
+        "WHERE ($database IS NULL OR t.database = $database) "
+        "AND ($catalog IS NULL OR coalesce(t.catalog, '') = $catalog) "
+        "RETURN DISTINCT coalesce(t.catalog, '') AS catalog, t.database AS database, t.name AS table",
+        {
+            "generation": project.generation,
+            "table": table_name,
+            "database": database,
+            "catalog": catalog,
+        },
+    )
+    if len(candidates) > 1:
+        names = sorted(
+            ".".join(
+                part for part in (row["catalog"], row["database"], row["table"]) if part
+            )
+            for row in candidates
+        )
+        raise ToolInvalidInput("422: ambiguous table; candidates: " + ", ".join(names))
+    if not candidates:
+        return []
+    selected = candidates[0]
     params = {
         "generation": project.generation,
-        "table": table,
+        "table": selected["table"],
+        "database": selected["database"],
+        "catalog": selected["catalog"],
         "field": field,
         "keyword": keyword,
         "query": re.sub(r'([+\-&|!(){}\[\]^"~*?:\\/])', r"\\\1", keyword),
     }
     exact = knowledge.execute(
         store,
-        "MATCH (v:SDADimensionValue {generation:$generation}) WHERE (v.table = $table OR v.database + '.' + v.table = $table) AND ($field IS NULL OR v.field = $field) AND (toLower(v.normalized) = toLower($keyword) OR any(alias IN v.aliases WHERE toLower(alias) = toLower($keyword))) RETURN properties(v) AS item",
+        "MATCH (v:SDADimensionValue {generation:$generation, database:$database, table:$table}) WHERE coalesce(v.catalog, '') = $catalog AND ($field IS NULL OR v.field = $field) AND (toLower(v.normalized) = toLower($keyword) OR any(alias IN v.aliases WHERE toLower(alias) = toLower($keyword))) RETURN properties(v) AS item",
         params,
     )
     fulltext = knowledge.execute(
         store,
         "CALL db.index.fulltext.queryNodes('"
         + project_context.index_name("dimension_values")
-        + "', $query) YIELD node WHERE node.generation = $generation AND (node.table = $table OR node.database + '.' + node.table = $table) AND ($field IS NULL OR node.field = $field) RETURN properties(node) AS item",
+        + "', $query) YIELD node WHERE node.generation = $generation AND node.database = $database AND node.table = $table AND coalesce(node.catalog, '') = $catalog AND ($field IS NULL OR node.field = $field) RETURN properties(node) AS item",
         params,
     )
     result = {}
