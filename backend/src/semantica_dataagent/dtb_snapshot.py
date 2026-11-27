@@ -482,6 +482,9 @@ class DtbSnapshotReader:
             database = _text(meta.get("database")).strip()
             catalog = _text(meta.get("catalog")).strip()
             qualified = _text(meta.get("qualified_table")).strip()
+            qualified_parts = qualified.split(".")
+            if len(qualified_parts) == 3:
+                catalog = catalog or qualified_parts[0]
             table = _text(meta.get("table")).strip() or qualified
             if "." in table:
                 parts = table.split(".")

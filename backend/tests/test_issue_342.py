@@ -9,6 +9,14 @@ def test_dtb_dimension_records_keep_catalog_and_default_identity(tmp_path):
         ("hive", {"catalog": "hive", "qualified_table": "hive.shop.orders"}),
         ("internal", {"catalog": "internal", "database": "shop", "table": "orders"}),
         ("qualified", {"qualified_table": "hive.shop.orders", "table": "orders"}),
+        (
+            "qualified_db",
+            {
+                "qualified_table": "hive.shop.orders",
+                "database": "shop",
+                "table": "orders",
+            },
+        ),
         ("default", {"database": "shop", "table": "orders"}),
     ):
         root = tmp_path / "dimensions" / directory
@@ -32,6 +40,7 @@ def test_dtb_dimension_records_keep_catalog_and_default_identity(tmp_path):
         "hive",
         "shop",
     )
+    assert items["qualified_db"]["catalog"] == "hive"
     assert "catalog" not in items["default"]
     assert items["default"]["row_id"] == "shop.orders:1"
 
