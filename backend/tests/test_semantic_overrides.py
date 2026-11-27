@@ -4182,8 +4182,15 @@ def test_issue_341_catalogued_override_applies_only_to_target(client, tmp_path):
         ("SUM(shop.orders.amount)", [], 422),
         ("SUM(orders.amount)", [], 422),
         ("SUM(shop.orders.amount)", ["hive.shop.users"], 422),
+        ("SUM(shop.orders.amount)", ["hive.other_db.orders"], 422),
     ],
-    ids=["declared-catalog", "three-part", "two-part", "other-declared-table"],
+    ids=[
+        "declared-catalog",
+        "three-part",
+        "two-part",
+        "other-declared-table",
+        "other-database",
+    ],
 )
 def test_issue_341_metric_sql_qualified_columns_approval(
     client, monkeypatch, expression, refs, expected
@@ -4231,7 +4238,13 @@ def test_issue_341_metric_sql_qualified_columns_approval(
                 "database": "shop",
                 "name": "users",
                 "fields": [{"name": "id"}],
-            }
+            },
+            {
+                "catalog": "hive",
+                "database": "other_db",
+                "name": "orders",
+                "fields": [{"name": "amount"}],
+            },
         ]
     )
     monkeypatch.setattr(
