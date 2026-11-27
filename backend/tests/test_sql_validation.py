@@ -212,7 +212,7 @@ def test_generic_keys_are_not_evidence_and_specific_keys_are_weak():
     )
 
 
-def test_strong_path_preferred_to_weak_direct_path():
+def test_table_lineage_path_is_weak():
     data = indexed_snapshot()
     data = Snapshot(
         data.tables,
@@ -223,8 +223,8 @@ def test_strong_path_preferred_to_weak_direct_path():
         [],
     )
     path = join_path(["warehouse.t0", "warehouse.t1"], data)
-    assert len(path["steps"]) == 2
-    assert all(s["strength"] == "strong" for s in path["steps"])
+    assert len(path["steps"]) == 1
+    assert all(s["strength"] == "weak" for s in path["steps"])
 
 
 def test_realistic_snapshot_scale():
@@ -258,7 +258,7 @@ def test_realistic_snapshot_scale():
             "hive",
             data,
         )["status"]
-        == "pass"
+        == "issues"
     )
     assert time.monotonic() - start < 2
 
@@ -1128,3 +1128,73 @@ def test_issue_339_duplicate_outer_alias_returns_structured_result(monkeypatch):
     )
     assert result["status"] == "issues", result
     assert any(issue["kind"] == "table" for issue in result["issues"]), result
+
+
+def test_issue_344_table_lineage_does_not_confirm_join_columns(monkeypatch):
+    from semantica_dataagent import sql_validation
+
+    data = _catalog_relationship_snapshot()
+    data.edges.append(
+        {
+            "upstream": "hive.shop.orders",
+            "downstream": "hive.shop.customers",
+            "parse_status": "success",
+            "ref": "lineage:test",
+        }
+    )
+    data = Snapshot(data.tables, data.edges, [], relationships=data.relationships)
+    monkeypatch.setattr(sql_validation, "load_snapshot", lambda: data)
+    result = sql_validation.validate_sql(
+        "SELECT o.id FROM hive.shop.orders o JOIN hive.shop.customers c ON o.id = c.id WHERE o.dt = '2025-01-01'",
+        dialect="hive",
+    )
+    assert result["joins"][0]["status"] == "weak", result
+    assert any("血缘存在但连接列未确认" in i["message"] for i in result["issues"])
+
+
+def test_issue_344_column_and_composite_evidence(monkeypatch):
+    from semantica_dataagent import sql_validation
+
+    original = _catalog_relationship_snapshot()
+    edge = {
+        "upstream": "hive.shop.order_items",
+        "downstream": "hive.shop.orders",
+        "parse_status": "success",
+        "ref": "lineage:items",
+    }
+    column = {
+        "upstream_table": "hive.shop.orders",
+        "upstream_field": "id",
+        "downstream_table": "hive.shop.customers",
+        "downstream_field": "id",
+        "parse_status": "success",
+        "task_id": "test",
+    }
+    data = Snapshot(
+        original.tables,
+        [edge],
+        [],
+        relationships=original.relationships,
+        column_edges=[column],
+    )
+    monkeypatch.setattr(sql_validation, "load_snapshot", lambda: data)
+
+    def validate(condition, tables="hive.shop.orders o JOIN hive.shop.customers c"):
+        return sql_validation.validate_sql(
+            f"SELECT o.id FROM {tables} ON {condition} WHERE o.dt = '2025-01-01'",
+            dialect="hive",
+        )
+
+    assert validate("o.customer_id = c.id")["joins"][0]["status"] == "supported"
+    assert validate("o.id = c.id")["joins"][0]["status"] == "supported"
+    column["parse_status"] = "failed"
+    assert validate("o.id = c.id")["joins"][0]["status"] == "weak"
+    partial = validate(
+        "i.order_id = o.id", "hive.shop.orders o JOIN hive.shop.order_items i"
+    )
+    assert partial["joins"][0]["status"] == "weak", partial
+    complete = validate(
+        "i.order_id = o.id AND i.tenant_id = o.tenant_id",
+        "hive.shop.orders o JOIN hive.shop.order_items i",
+    )
+    assert complete["joins"][0]["status"] == "supported", complete

@@ -30,6 +30,7 @@ class Snapshot:
     documents: list[dict]
     document_loader: object = None
     relationships: list[dict] = field(default_factory=list)
+    column_edges: list[dict] = field(default_factory=list)
 
     def __post_init__(self):
         self.by_name = {full(t).lower(): t for t in self.tables}
@@ -53,6 +54,18 @@ class Snapshot:
         self.neighbors = defaultdict(set)
         self.edge_pairs = defaultdict(list)
         self.relationship_pairs = defaultdict(list)
+        self.column_pairs = defaultdict(list)
+        for edge in self.column_edges:
+            pair = frozenset(
+                (
+                    (edge["upstream_table"].lower(), edge["upstream_field"].lower()),
+                    (
+                        edge["downstream_table"].lower(),
+                        edge["downstream_field"].lower(),
+                    ),
+                )
+            )
+            self.column_pairs[pair].append(edge)
         for edge in self.edges:
             a, b = edge["upstream"].lower(), edge["downstream"].lower()
             if a in self.by_name and b in self.by_name and a != b:
@@ -155,6 +168,11 @@ def load_snapshot(project_id: str | None = None):
         """MATCH (:SDATable {generation:$generation})-[r:RELATES_TO]->(:SDATable {generation:$generation}) RETURN properties(r) AS relationship""",
         params,
     )
+    column_edges = knowledge.execute(
+        store,
+        "MATCH (:SDAField {generation:$generation})-[r:FIELD_DEPENDS_ON]->(:SDAField {generation:$generation}) RETURN properties(r) AS edge",
+        params,
+    )
 
     def documents(pairs):
         return knowledge.execute(
@@ -169,6 +187,7 @@ def load_snapshot(project_id: str | None = None):
         [],
         documents,
         [r["relationship"] for r in relationships],
+        [r["edge"] for r in column_edges],
     )
     if not version[1] or version[1][1] != "running":
         _snapshot_cache = (key, result)
@@ -328,13 +347,27 @@ def evidence(a, b, left_key=None, right_key=None, snapshot=None, documents=()):
         found.append(
             {
                 "type": "lineage",
-                "strength": "strong",
+                "strength": "weak",
                 "ref": edge.get("ref")
                 or f"lineage:{edge['upstream']}:{edge['downstream']}",
                 "parse_status": edge.get("parse_status"),
                 "evidence": edge.get("evidence"),
             }
         )
+    if left_key and right_key:
+        pair = frozenset(((aname, left_key.lower()), (bname, right_key.lower())))
+        for edge in snapshot.column_pairs.get(pair, ()):
+            found.append(
+                {
+                    "type": "column_lineage",
+                    "strength": "weak"
+                    if edge.get("parse_status") == "failed"
+                    else "strong",
+                    "ref": edge.get("ref")
+                    or f"column_lineage:{edge.get('task_id', '')}",
+                    "parse_status": edge.get("parse_status"),
+                }
+            )
     if left_key is None and right_key is None:
         for rel in snapshot.relationship_pairs.get(pair_key, ()):
             found.append(_relationship_evidence(rel))
@@ -856,7 +889,17 @@ def check_sql(sql, dialect, snapshot, partition_tables=None):
                     "kind": "join",
                     "table": None,
                     "condition": join_item["condition"],
-                    "message": ("JOIN 缺少证据: " + ", ".join(missing))
+                    "message": (
+                        (
+                            "血缘存在但连接列未确认: "
+                            if any(
+                                p["type"] in ("lineage", "column_lineage")
+                                for p in supports
+                            )
+                            else "JOIN 缺少证据: "
+                        )
+                        + ", ".join(missing)
+                    )
                     if missing
                     else "JOIN 缺少证据",
                     "suggestion": join_item["suggestion"],
@@ -905,10 +948,7 @@ def join_path(tables, snapshot=None):
             neighbors.discard(current)
             for neighbor in sorted(neighbors):
                 pair = frozenset((current, neighbor))
-                strong = bool(
-                    snapshot.edge_pairs.get(pair)
-                    or snapshot.relationship_pairs.get(pair)
-                )
+                strong = bool(snapshot.relationship_pairs.get(pair))
                 cost = (weak_count + (not strong), distance + 1)
                 if neighbor not in best or cost < best[neighbor]:
                     heappush(queue, (*cost, neighbor, route + [(current, neighbor)]))
@@ -920,10 +960,7 @@ def join_path(tables, snapshot=None):
     weak_steps = {
         (a, b)
         for a, b in steps
-        if not (
-            snapshot.edge_pairs.get(frozenset((a, b)))
-            or snapshot.relationship_pairs.get(frozenset((a, b)))
-        )
+        if not (snapshot.relationship_pairs.get(frozenset((a, b))))
     }
     documents = snapshot.documents_for(weak_steps)
     result = []
