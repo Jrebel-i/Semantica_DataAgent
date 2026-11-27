@@ -336,7 +336,10 @@ def merge_overrides_doc(base: dict[str, Any], patch: dict[str, Any]) -> dict[str
     }
     for section in _SECTION_KEYS:
         for key, entry in patch_norm[section].items():
-            merged[section][key] = dict(entry)
+            if section in {"tables", "fields"} and key in merged[section]:
+                merged[section][key].update(entry)
+            else:
+                merged[section][key] = dict(entry)
     return normalize_override_document(merged)
 
 
