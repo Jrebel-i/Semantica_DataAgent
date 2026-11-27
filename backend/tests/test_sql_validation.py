@@ -877,3 +877,19 @@ def test_issue_335_cte_column_aliases_after_star_expansion(monkeypatch):
         field["name"] == "c.id" and field["status"] == "error"
         for field in missing["fields"]
     ), missing
+
+
+def test_issue_335_duplicate_star_projection_is_ambiguous(monkeypatch):
+    from semantica_dataagent import sql_validation
+
+    data = _catalog_relationship_snapshot()
+    monkeypatch.setattr(sql_validation, "load_snapshot", lambda: data)
+    result = sql_validation.validate_sql(
+        "SELECT x.id FROM (SELECT o.*, c.* FROM hive.shop.orders o "
+        "JOIN hive.shop.customers c ON o.customer_id = c.id "
+        "WHERE o.dt = '2025-01-01') x"
+    )
+    assert any(
+        field["name"] == "x.id" and field["status"] == "ambiguous"
+        for field in result["fields"]
+    ), result

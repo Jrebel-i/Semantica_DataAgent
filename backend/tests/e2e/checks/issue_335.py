@@ -67,3 +67,19 @@ def check_cte_star_column_aliases(ctx):
     )
     result = ctx.mcp_call("validate_sql", {"sql": sql})
     ctx.require(result.get("status") == "pass", f"CTE column aliases: {result}")
+
+
+def check_duplicate_projected_fields_are_ambiguous(ctx):
+    sql = (
+        "SELECT x.id FROM (SELECT o.*, d.* FROM shop.orders o "
+        "JOIN shop.daily_sales d ON o.id = d.id "
+        "WHERE o.dt = '2025-01-01' AND d.dt = '2025-01-01') x"
+    )
+    result = ctx.mcp_call("validate_sql", {"sql": sql})
+    ctx.require(
+        any(
+            f.get("name") == "x.id" and f.get("status") == "ambiguous"
+            for f in result.get("fields", [])
+        ),
+        f"duplicate projected field must be ambiguous: {result}",
+    )

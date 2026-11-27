@@ -481,7 +481,12 @@ def check_sql(sql, dialect, snapshot, partition_tables=None):
                 else list(sources.values())
             )
             known = [s for s in candidates if s is not None]
-            matching = [s for s in known if column.name.lower() in field_names(s)]
+            matching = [
+                field
+                for source in known
+                for field in source["fields"]
+                if field["name"].lower() == column.name.lower()
+            ]
             uncertain = len(known) != len(candidates) or any(
                 s.get("derived_unknown") for s in known
             )
