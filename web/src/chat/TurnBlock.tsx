@@ -107,7 +107,7 @@ export function TurnBlock({
   const planExpired = plan ? expiredPlans.includes(plan.id) : false;
   return (
     <article className="turn">
-      <div className="message">
+      <div className="message" data-role="user">
         <span className="avatar user" aria-hidden="true">
           我
         </span>
@@ -120,7 +120,7 @@ export function TurnBlock({
           <QuestionText text={turn.question} messages={messages} />
         </div>
       </div>
-      <div className="message">
+      <div className="message" data-role="ai">
         <span className="avatar ai" aria-hidden="true">
           AI
         </span>
@@ -198,6 +198,7 @@ export function TurnBlock({
               </p>
             </div>
           )}
+          {answer && <div className="answered-badge">已回答</div>}
           <div className="answer">
             <Markdown text={answer} />
           </div>

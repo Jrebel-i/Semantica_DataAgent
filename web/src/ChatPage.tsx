@@ -898,7 +898,7 @@ export function ChatPage({
               ))}
               {live && (
                 <article className="turn">
-                  <div className="message">
+                  <div className="message" data-role="user">
                     <span className="avatar user" aria-hidden="true">
                       我
                     </span>
@@ -906,7 +906,7 @@ export function ChatPage({
                       <QuestionText text={live.question} messages={t} />
                     </div>
                   </div>
-                  <div className="message">
+                  <div className="message" data-role="ai">
                     <span className="avatar ai" aria-hidden="true">
                       AI
                     </span>
@@ -919,11 +919,20 @@ export function ChatPage({
                       <div className="answer">
                         {liveAnswer.text ? (
                           <Markdown text={liveAnswer.text} />
-                        ) : (
-                          <p className="muted">
-                            {live.status === "running" ? t.asking : ""}
-                          </p>
-                        )}
+                        ) : live.status === "running" ? (
+                          <div className="thinking-block" role="status">
+                            <div className="dots-row">
+                              <span className="dot"></span>
+                              <span className="dot"></span>
+                              <span className="dot"></span>
+                              <span className="thinking-phase">
+                                {live.tools?.length > 0
+                                  ? `正在处理（${live.tools.length} 步）…`
+                                  : t.asking}
+                              </span>
+                            </div>
+                          </div>
+                        ) : null}
                       </div>
                       <SqlList
                         blocks={live.sql}
@@ -951,6 +960,7 @@ export function ChatPage({
               )}
             </div>
             <Composer
+              sending={sending}
               messages={t}
               question={question}
               setQuestion={setQuestion}

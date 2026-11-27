@@ -9,11 +9,13 @@ function ClarificationOption({
   option,
   messages,
   disabled,
+  selected,
   onSelect,
 }: {
   option: NonNullable<Clarification["options"]>[number];
   messages: Messages;
   disabled: boolean;
+  selected: boolean;
   onSelect: () => void;
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -37,10 +39,13 @@ function ClarificationOption({
   return (
     <div className="clarification-option-item">
       <Button
-        className="clarification-option"
+        className={`clarification-option${selected ? " is-selected" : ""}`}
+        role="radio"
+        aria-checked={selected}
         disabled={disabled}
         onClick={onSelect}
       >
+        <span className="radio-dot" aria-hidden="true"></span>
         <span className="clarification-option-content">
           <span
             ref={labelRef}
@@ -87,6 +92,7 @@ export function ClarificationList({
     option: NonNullable<Clarification["options"]>[number],
   ) => void;
 }) {
+  const [selected, setSelected] = useState<Record<string, number>>({});
   if (groups.length === 0) return null;
   return (
     <section className="clarification-card" aria-label={messages.clarification}>
@@ -105,7 +111,11 @@ export function ClarificationList({
                 return (
                   <>
                     {usable.length > 0 && (
-                      <div className="clarification-options">
+                      <div
+                        className="clarification-options"
+                        role="radiogroup"
+                        aria-label={question.question}
+                      >
                         {usable.map((option, optionIndex) => (
                           <ClarificationOption
                             key={
@@ -115,7 +125,16 @@ export function ClarificationList({
                             option={option}
                             messages={messages}
                             disabled={disabled}
-                            onSelect={() => onSelect(question, option)}
+                            selected={
+                              selected[`${index}-${questionIndex}`] === optionIndex
+                            }
+                            onSelect={() => {
+                              setSelected((current) => ({
+                                ...current,
+                                [`${index}-${questionIndex}`]: optionIndex,
+                              }));
+                              onSelect(question, option);
+                            }}
                           />
                         ))}
                       </div>

@@ -8,7 +8,6 @@ import {
 } from "react";
 import { Alert, Button, Input, Select, Tag } from "antd";
 import {
-  ArrowUpOutlined,
   CheckOutlined,
   CloseOutlined,
   FileOutlined,
@@ -35,6 +34,7 @@ const SLASH_COMMAND_RE = /^\/([a-z0-9-]*)$/i;
 
 export function Composer({
   messages,
+  sending = false,
   question,
   setQuestion,
   onAsk,
@@ -87,6 +87,7 @@ export function Composer({
   onResetPersonalDefault,
 }: {
   messages: Messages;
+  sending?: boolean;
   question: string;
   setQuestion: (value: string) => void;
   onAsk: (event: FormEvent) => void;
@@ -298,7 +299,10 @@ export function Composer({
   const showVisibleProviderSelect =
     catalogMode && activeProvidersList.length > 1;
   return (
-    <div className="chat-composer">
+    <div
+      className="chat-composer"
+      style={{ opacity: sending ? 0.6 : 1, transition: "opacity .2s" }}
+    >
       {emptyConversation && (
         <>
           <h1 className="chat-greeting">{t.chatGreeting}</h1>
@@ -731,9 +735,26 @@ export function Composer({
               title={t.askSubmit}
               disabled={!canAsk}
             >
-              <ArrowUpOutlined />
+              <svg
+                width="16"
+                height="16"
+                viewBox="0 0 16 16"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <line x1="2" y1="8" x2="13" y2="8" />
+                <polyline points="9,4 13,8 9,12" />
+              </svg>
             </Button>
           </div>
+        </div>
+        <div className="composer-hint">
+          <span>Enter 发送 · Shift+Enter 换行</span>
+          <span>{question.length} / 4000</span>
         </div>
         {noPublishedAgents && !conversationAgentDisabled && (
           <Alert type="warning" title={t.chatNoPublishedAgents} />
