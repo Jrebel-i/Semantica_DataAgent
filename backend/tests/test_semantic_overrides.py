@@ -106,6 +106,263 @@ def test_semantic_override_schema_validates_all_override_entities():
     assert list(validator.iter_errors(invalid_doc))
 
 
+def test_merge_overrides_deep_merges_table_attributes():
+    from semantica_dataagent.semantic_overrides import (
+        merge_overrides_doc,
+        validate_override_document,
+    )
+
+    base = {
+        "version": 1,
+        "tables": {
+            "shop.orders": {
+                "database": "shop",
+                "name": "orders",
+                "comment": "旧说明",
+                "synonyms": ["旧同义词"],
+                "instructions": "旧约束",
+            }
+        },
+    }
+    prefix = {
+        "version": 1,
+        "tables": {"shop.orders": {"database": "shop", "name": "orders"}},
+    }
+    table_prefix = prefix["tables"]["shop.orders"]
+
+    comment_only = merge_overrides_doc(
+        base,
+        {
+            **prefix,
+            "tables": {"shop.orders": {**table_prefix, "comment": "新说明"}},
+        },
+    )
+    assert comment_only["tables"]["shop.orders"] == {
+        "database": "shop",
+        "name": "orders",
+        "comment": "新说明",
+        "synonyms": ["旧同义词"],
+        "instructions": "旧约束",
+    }
+
+    instructions_only = merge_overrides_doc(
+        base,
+        {
+            **prefix,
+            "tables": {"shop.orders": {**table_prefix, "instructions": "新约束"}},
+        },
+    )
+    assert instructions_only["tables"]["shop.orders"] == {
+        "database": "shop",
+        "name": "orders",
+        "comment": "旧说明",
+        "synonyms": ["旧同义词"],
+        "instructions": "新约束",
+    }
+
+    synonyms_replaced = merge_overrides_doc(
+        base,
+        {
+            **prefix,
+            "tables": {"shop.orders": {**table_prefix, "synonyms": ["新同义词"]}},
+        },
+    )
+    assert synonyms_replaced["tables"]["shop.orders"]["synonyms"] == ["新同义词"]
+
+    for patch, expected_comment, expected_synonyms, expected_instructions in (
+        ({**table_prefix, "comment": ""}, "", ["旧同义词"], "旧约束"),
+        ({**table_prefix, "synonyms": []}, "旧说明", [], "旧约束"),
+        (
+            {**table_prefix, "instructions": ""},
+            "旧说明",
+            ["旧同义词"],
+            "",
+        ),
+    ):
+        merged = merge_overrides_doc(
+            base, {"version": 1, "tables": {"shop.orders": patch}}
+        )
+        entry = merged["tables"]["shop.orders"]
+        assert entry["comment"] == expected_comment
+        assert entry["synonyms"] == expected_synonyms
+        assert entry["instructions"] == expected_instructions
+        assert validate_override_document(merged) == []
+
+
+def test_merge_overrides_deep_merges_field_attributes():
+    from semantica_dataagent.semantic_overrides import (
+        merge_overrides_doc,
+        validate_override_document,
+    )
+
+    base = {
+        "version": 1,
+        "fields": {
+            "shop.orders.amount": {
+                "database": "shop",
+                "table": "orders",
+                "name": "amount",
+                "comment": "旧字段说明",
+                "synonyms": ["旧字段同义词"],
+                "instructions": "旧字段约束",
+            }
+        },
+    }
+    prefix = {
+        "version": 1,
+        "fields": {
+            "shop.orders.amount": {
+                "database": "shop",
+                "table": "orders",
+                "name": "amount",
+            }
+        },
+    }
+    field_prefix = prefix["fields"]["shop.orders.amount"]
+
+    comment_only = merge_overrides_doc(
+        base,
+        {
+            **prefix,
+            "fields": {
+                "shop.orders.amount": {
+                    **field_prefix,
+                    "comment": "新字段说明",
+                }
+            },
+        },
+    )
+    assert comment_only["fields"]["shop.orders.amount"] == {
+        "database": "shop",
+        "table": "orders",
+        "name": "amount",
+        "comment": "新字段说明",
+        "synonyms": ["旧字段同义词"],
+        "instructions": "旧字段约束",
+    }
+
+    instructions_only = merge_overrides_doc(
+        base,
+        {
+            **prefix,
+            "fields": {
+                "shop.orders.amount": {
+                    **field_prefix,
+                    "instructions": "新字段约束",
+                }
+            },
+        },
+    )
+    assert instructions_only["fields"]["shop.orders.amount"] == {
+        "database": "shop",
+        "table": "orders",
+        "name": "amount",
+        "comment": "旧字段说明",
+        "synonyms": ["旧字段同义词"],
+        "instructions": "新字段约束",
+    }
+
+    for patch, expected_comment, expected_synonyms, expected_instructions in (
+        ({**field_prefix, "comment": ""}, "", ["旧字段同义词"], "旧字段约束"),
+        ({**field_prefix, "synonyms": []}, "旧字段说明", [], "旧字段约束"),
+        (
+            {**field_prefix, "instructions": ""},
+            "旧字段说明",
+            ["旧字段同义词"],
+            "",
+        ),
+    ):
+        merged = merge_overrides_doc(
+            base, {"version": 1, "fields": {"shop.orders.amount": patch}}
+        )
+        entry = merged["fields"]["shop.orders.amount"]
+        assert entry["comment"] == expected_comment
+        assert entry["synonyms"] == expected_synonyms
+        assert entry["instructions"] == expected_instructions
+        assert validate_override_document(merged) == []
+
+
+def test_merge_overrides_replaces_relationships_and_metrics_whole():
+    from semantica_dataagent.semantic_overrides import merge_overrides_doc
+
+    base = {
+        "version": 1,
+        "relationships": {
+            "orders_to_users": {
+                "name": "orders_to_users",
+                "from_database": "shop",
+                "from_table": "orders",
+                "from_columns": ["user_id"],
+                "to_database": "shop",
+                "to_table": "users",
+                "to_columns": ["id"],
+                "description": "旧关系说明",
+                "instructions": "旧关系约束",
+            }
+        },
+        "metrics": {
+            "daily_gmv": {
+                "name": "daily_gmv",
+                "expression": "SUM(orders.amount)",
+                "description": "旧指标说明",
+                "filters": ["orders.dt IS NOT NULL"],
+                "synonyms": ["旧指标同义词"],
+                "instructions": "旧指标约束",
+            }
+        },
+    }
+    patch = {
+        "version": 1,
+        "relationships": {
+            "orders_to_users": {
+                "name": "orders_to_users",
+                "from_database": "shop",
+                "from_table": "orders",
+                "from_columns": ["buyer_id"],
+                "to_database": "shop",
+                "to_table": "users",
+                "to_columns": ["id"],
+            }
+        },
+        "metrics": {
+            "daily_gmv": {
+                "name": "daily_gmv",
+                "expression": "SUM(orders.paid_amount)",
+            }
+        },
+    }
+
+    merged = merge_overrides_doc(base, patch)
+    assert (
+        merged["relationships"]["orders_to_users"]
+        == patch["relationships"]["orders_to_users"]
+    )
+    assert merged["metrics"]["daily_gmv"] == patch["metrics"]["daily_gmv"]
+    assert "description" not in merged["relationships"]["orders_to_users"]
+    assert "instructions" not in merged["relationships"]["orders_to_users"]
+    assert "description" not in merged["metrics"]["daily_gmv"]
+    assert "synonyms" not in merged["metrics"]["daily_gmv"]
+    assert "instructions" not in merged["metrics"]["daily_gmv"]
+
+
+@pytest.mark.parametrize("attribute", ["comment", "synonyms", "instructions"])
+def test_normalize_structured_patch_rejects_explicit_null_attributes(attribute):
+    from semantica_dataagent.semantic_overrides import normalize_structured_patch
+
+    patch = {
+        "version": 1,
+        "tables": {
+            "shop.orders": {
+                "database": "shop",
+                "name": "orders",
+                attribute: None,
+            }
+        },
+    }
+    with pytest.raises(ValueError, match=f"{attribute}: None is not of type"):
+        normalize_structured_patch(patch)
+
+
 def test_evolution_policy_defaults_when_unset_or_blank_and_enforces_scope(
     client, tmp_path
 ):
@@ -2305,6 +2562,152 @@ def test_interrupted_structured_override_approval_recovers(
         ["git", "-C", str(root), "status", "--porcelain", "--untracked-files=all"],
         text=True,
     ).strip()
+
+
+def test_approval_deep_merge_writes_yaml_and_incremental_build(client, monkeypatch):
+    import time
+
+    import yaml
+
+    from semantica_dataagent.db import Build, sessions
+
+    def wait_for_build(proposal_id: str) -> None:
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            with sessions()() as db:
+                build = (
+                    db.query(Build)
+                    .filter_by(
+                        project_id=proj_id,
+                        correction_proposal_id=proposal_id,
+                    )
+                    .first()
+                )
+                if build is not None and build.status in {"succeeded", "failed"}:
+                    assert build.status == "succeeded", build.error
+                    assert build.build_type == "incremental", build.build_type
+                    return
+            time.sleep(0.02)
+        raise AssertionError("Timed out waiting for deep-merge incremental build")
+
+    c, admin = client
+    headers = _headers(admin)
+    proj_id, src = _setup_override_project(c, headers, monkeypatch, "Deep Merge Proj")
+
+    seeded = c.post(
+        "/api/v1/corrections",
+        headers=headers,
+        params={"project": proj_id},
+        json={
+            "target": "table:shop.orders",
+            "reason": "建立覆盖基线",
+            "structured_patch": {
+                "version": 1,
+                "tables": {
+                    "shop.orders": {
+                        "database": "shop",
+                        "name": "orders",
+                        "comment": "基础表说明",
+                        "synonyms": ["表同义词"],
+                        "instructions": "基础表约束",
+                    }
+                },
+                "fields": {
+                    "shop.orders.amount": {
+                        "database": "shop",
+                        "table": "orders",
+                        "name": "amount",
+                        "comment": "基础字段说明",
+                        "synonyms": ["字段同义词"],
+                        "instructions": "基础字段约束",
+                    }
+                },
+            },
+        },
+    )
+    assert seeded.status_code == 201, seeded.text
+    seed_proposal = seeded.json()
+    assert seed_proposal["status"] == "pending"
+    seeded_approval = c.post(
+        f"/api/v1/corrections/{seed_proposal['id']}/approve",
+        headers=headers,
+        params={"project": proj_id},
+    )
+    assert seeded_approval.status_code == 200, seeded_approval.text
+    wait_for_build(seed_proposal["id"])
+
+    created = c.post(
+        "/api/v1/corrections",
+        headers=headers,
+        params={"project": proj_id},
+        json={
+            "target": "table:shop.orders",
+            "reason": "只补充表说明与字段使用约束",
+            "structured_patch": {
+                "version": 1,
+                "tables": {
+                    "shop.orders": {
+                        "database": "shop",
+                        "name": "orders",
+                        "comment": "只改表说明",
+                    }
+                },
+                "fields": {
+                    "shop.orders.amount": {
+                        "database": "shop",
+                        "table": "orders",
+                        "name": "amount",
+                        "instructions": "只改字段使用约束",
+                    }
+                },
+            },
+        },
+    )
+    assert created.status_code == 201, created.text
+    proposal = created.json()
+    assert proposal["status"] == "pending"
+
+    approved = c.post(
+        f"/api/v1/corrections/{proposal['id']}/approve",
+        headers=headers,
+        params={"project": proj_id},
+    )
+    assert approved.status_code == 200, approved.text
+    assert approved.json()["status"] == "approved"
+
+    written_yaml = yaml.safe_load(
+        (src / "overrides" / "semantic_overrides.yaml").read_text(encoding="utf-8")
+    )
+    assert written_yaml["tables"]["shop.orders"] == {
+        "database": "shop",
+        "name": "orders",
+        "comment": "只改表说明",
+        "synonyms": ["表同义词"],
+        "instructions": "基础表约束",
+    }
+    assert written_yaml["fields"]["shop.orders.amount"] == {
+        "database": "shop",
+        "table": "orders",
+        "name": "amount",
+        "comment": "基础字段说明",
+        "synonyms": ["字段同义词"],
+        "instructions": "只改字段使用约束",
+    }
+
+    wait_for_build(proposal["id"])
+
+    table = c.get(
+        "/api/v1/tables",
+        headers=headers,
+        params={"project": proj_id, "names": "shop.orders"},
+    ).json()[0]
+    assert table["comment"] == "只改表说明"
+    assert table["synonyms"] == ["表同义词"]
+    assert table["instructions"] == "基础表约束"
+    amount = next(field for field in table["fields"] if field["name"] == "amount")
+    assert amount["comment"] == "基础字段说明"
+    assert amount["synonyms"] == ["字段同义词"]
+    assert amount["instructions"] == "只改字段使用约束"
 
 
 @pytest.mark.parametrize("crash_at", ["precheck", "write", "add", "commit", "finalize"])
