@@ -439,6 +439,7 @@ class DtbSnapshotReader:
         *,
         stats=None,
         hashes=None,
+        include_catalog=False,
     ):
         """Yield (database, table, rows_source, meta_source, rows_iter) per dimension table."""
         parameters = parameters or {}
@@ -479,10 +480,16 @@ class DtbSnapshotReader:
                 stats["dimension_tables_unreadable"] += 1
                 continue
             database = _text(meta.get("database")).strip()
+            catalog = _text(meta.get("catalog")).strip()
             qualified = _text(meta.get("qualified_table")).strip()
             table = _text(meta.get("table")).strip() or qualified
             if "." in table:
-                database, table = table.rsplit(".", 1)
+                parts = table.split(".")
+                if len(parts) == 3:
+                    qualified_catalog, database, table = parts
+                    catalog = catalog or qualified_catalog
+                else:
+                    database, table = table.rsplit(".", 1)
             elif not database and "." in qualified:
                 database = qualified.rsplit(".", 1)[0]
             table = table or table_dir.name
@@ -549,7 +556,8 @@ class DtbSnapshotReader:
                 for column in _columns - seen_columns:
                     _stats["dimension_columns_without_rows"] += 1
 
-            yield database, table, rows_source, meta_source, _row_stream()
+            result = (database, table, rows_source, meta_source, _row_stream())
+            yield (catalog, *result) if include_catalog else result
 
         if wanted is not None:
             stats["dimension_tables_requested_missing"] += len(set(wanted) - seen)
@@ -557,19 +565,23 @@ class DtbSnapshotReader:
     def _dimensions(self, base, parameters, hashes, stats):
         records = []
         for (
+            catalog,
             database,
             table,
             rows_source,
             meta_source,
             row_stream,
-        ) in self.iter_dimension_tables(base, parameters, stats=stats, hashes=hashes):
+        ) in self.iter_dimension_tables(
+            base, parameters, stats=stats, hashes=hashes, include_catalog=True
+        ):
             for line_number, cells in row_stream:
-                row_id = f"{database}.{table}:{line_number}"
+                row_id = f"{catalog + '.' if catalog else ''}{database}.{table}:{line_number}"
                 for field, value in cells:
                     records.append(
                         Record(
                             "dimension_value",
                             {
+                                **({"catalog": catalog} if catalog else {}),
                                 "database": database,
                                 "table": table,
                                 "field": field,
