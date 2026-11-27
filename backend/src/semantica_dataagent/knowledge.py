@@ -201,15 +201,26 @@ def _table_entity_key(data: Mapping) -> str:
     return reference("table", table_data)
 
 
-def _dim_table_entity_key(database: str, table: str) -> str:
-    return f"dim_table:{quote(database, safe='')}.{quote(table, safe='')}"
+def _dim_table_entity_key(database: str, table: str, catalog: str = "") -> str:
+    parts = (catalog, database, table) if catalog else (database, table)
+    return "dim_table:" + ".".join(
+        quote(part, safe="").replace(".", "%2E") for part in parts
+    )
+
+
+def _dim_table_key(data):
+    return (data.get("catalog") or "", data["database"], data["table"])
+
+
+def _normalize_dim_table(table):
+    return tuple(table) if len(table) == 3 else ("", *table)
 
 
 def compute_entity_hashes(records) -> dict[str, str]:
     """Compute deterministic SHA-256 content hashes per canonical entity unit."""
     tables_by_key: dict[str, object] = {}
     fields_by_table: dict[str, list] = {}
-    dim_groups: dict[tuple[str, str], list] = {}
+    dim_groups: dict[tuple[str, str, str], list] = {}
     lineage_groups: dict[str, list] = {}
     column_lineage_groups: dict[str, list] = {}
     hashes: dict[str, str] = {}
@@ -223,7 +234,7 @@ def compute_entity_hashes(records) -> dict[str, str]:
         elif record.kind == "task":
             hashes[f"task:{data['name']}"] = _canonical_sha256(_record_snapshot(record))
         elif record.kind == "dimension_value":
-            dim_groups.setdefault((data["database"], data["table"]), []).append(record)
+            dim_groups.setdefault(_dim_table_key(data), []).append(record)
         elif record.kind == "document":
             hashes[f"document:{data['category']}/{data['path']}"] = _canonical_sha256(
                 _record_snapshot(record)
@@ -255,7 +266,7 @@ def compute_entity_hashes(records) -> dict[str, str]:
             }
         )
 
-    for (db_name, tbl_name), group in sorted(dim_groups.items()):
+    for (catalog, db_name, tbl_name), group in sorted(dim_groups.items()):
         sorted_group = sorted(
             group,
             key=lambda r: (
@@ -264,7 +275,7 @@ def compute_entity_hashes(records) -> dict[str, str]:
                 str(r.data.get("row_id") or ""),
             ),
         )
-        hashes[_dim_table_entity_key(db_name, tbl_name)] = _canonical_sha256(
+        hashes[_dim_table_entity_key(db_name, tbl_name, catalog)] = _canonical_sha256(
             [_record_snapshot(r) for r in sorted_group]
         )
 
@@ -286,26 +297,28 @@ def compute_entity_hashes(records) -> dict[str, str]:
     return hashes
 
 
-def _dim_tables_from_entities(entities: set[str]) -> set[tuple[str, str]]:
-    result: set[tuple[str, str]] = set()
+def _dim_tables_from_entities(entities: set[str]) -> set[tuple[str, str, str]]:
+    result: set[tuple[str, str, str]] = set()
     for key in entities:
         if key.startswith("dim_table:"):
             rest = key[len("dim_table:") :]
-            if "." in rest:
-                db_part, tbl_part = rest.split(".", 1)
-                result.add((unquote(db_part), unquote(tbl_part)))
+            parts = tuple(unquote(part) for part in rest.split("."))
+            if len(parts) in (2, 3):
+                result.add(_normalize_dim_table(parts))
     return result
 
 
 def select_incremental_records(
-    records, touched_entities: set[str], dirty_tables: set[tuple[str, str]] = ()
+    records, touched_entities: set[str], dirty_tables: set[tuple[str, str, str]] = ()
 ):
     """Select only canonical records belonging to added/changed/dirty entity units."""
     touched_table_refs = {k for k in touched_entities if k.startswith("table:")}
     touched_task_names = {
         k[len("task:") :] for k in touched_entities if k.startswith("task:")
     }
-    touched_dim_tables = set(dirty_tables) | _dim_tables_from_entities(touched_entities)
+    touched_dim_tables = {
+        _normalize_dim_table(t) for t in dirty_tables
+    } | _dim_tables_from_entities(touched_entities)
     touched_doc_keys = {k for k in touched_entities if k.startswith("document:")}
     touched_rel_refs = {k for k in touched_entities if k.startswith("relationship:")}
     has_touched_lineage = any(k.startswith("lineage:") for k in touched_entities)
@@ -323,7 +336,7 @@ def select_incremental_records(
             if data["name"] in touched_task_names:
                 selected.append(record)
         elif record.kind == "dimension_value":
-            if (data["database"], data["table"]) in touched_dim_tables:
+            if _dim_table_key(data) in touched_dim_tables:
                 selected.append(record)
         elif record.kind == "document":
             if f"document:{data['category']}/{data['path']}" in touched_doc_keys:
@@ -939,7 +952,7 @@ def dimension_sources(records):
     result = {}
     for record in records:
         if record.kind == "dimension_value":
-            table = [record.data["database"], record.data["table"]]
+            table = list(_dim_table_key(record.data))
             for path in dict.fromkeys((record.source_file, *record.source_files)):
                 if path is None:
                     continue
@@ -1293,7 +1306,8 @@ def run_build(build_id):
                     dirty_entities.update(saved.get("entities", []))
                     old_ids.update(saved.get("vector_ids", []))
                     dirty_tables.update(
-                        tuple(table) for table in saved.get("dimension_tables", [])
+                        _normalize_dim_table(table)
+                        for table in saved.get("dimension_tables", [])
                     )
         if fallback_reason is not None:
             _record_log(
@@ -1359,15 +1373,18 @@ def run_build(build_id):
             )
             for path in touched:
                 dirty_tables.update(
-                    tuple(table) for table in prior_dimensions.get(path, [])
+                    _normalize_dim_table(table)
+                    for table in prior_dimensions.get(path, [])
                 )
-                dirty_tables.update(tuple(table) for table in dimensions.get(path, []))
+                dirty_tables.update(
+                    _normalize_dim_table(table) for table in dimensions.get(path, [])
+                )
             if dirty_tables:
                 selected = [r for r in selected if r.kind != "dimension_value"] + [
                     r
                     for r in records
                     if r.kind == "dimension_value"
-                    and (r.data["database"], r.data["table"]) in dirty_tables
+                    and _dim_table_key(r.data) in dirty_tables
                 ]
         counts.update(Counter(r.kind for r in selected))
 
@@ -1487,8 +1504,8 @@ def run_build(build_id):
                             "selected_refs": selected_refs,
                             "touched_tables": touched_table_rows,
                             "tables": [
-                                {"database": db, "table": table}
-                                for db, table in sorted(dirty_tables)
+                                {"catalog": catalog, "database": db, "table": table}
+                                for catalog, db, table in sorted(dirty_tables)
                             ],
                         }
                         found = storage.execute(
@@ -1497,7 +1514,7 @@ def run_build(build_id):
                             "OR any(s IN coalesce(n.source_files, []) WHERE s IN $files) "
                             "OR n.ref IN $selected_refs OR n.doc_id IN $selected_refs "
                             "OR (n:SDAField AND any(t IN $touched_tables WHERE t.database = n.database AND t.table = n.table AND coalesce(t.catalog, '') = coalesce(n.catalog, ''))) "
-                            "OR (n:SDADimensionValue AND any(t IN $tables WHERE t.database = n.database AND t.table = n.table)) "
+                            "OR (n:SDADimensionValue AND any(t IN $tables WHERE t.database = n.database AND t.table = n.table AND coalesce(t.catalog, '') = coalesce(n.catalog, ''))) "
                             "RETURN n.ref AS ref",
                             params,
                         )
@@ -1535,7 +1552,7 @@ def run_build(build_id):
                                 "OR any(s IN coalesce(n.source_files, []) WHERE s IN $files) "
                                 "OR n.ref IN $selected_refs OR n.doc_id IN $selected_refs "
                                 "OR (n:SDAField AND any(t IN $touched_tables WHERE t.database = n.database AND t.table = n.table AND coalesce(t.catalog, '') = coalesce(n.catalog, ''))) "
-                                "OR (n:SDADimensionValue AND any(t IN $tables WHERE t.database = n.database AND t.table = n.table))",
+                                "OR (n:SDADimensionValue AND any(t IN $tables WHERE t.database = n.database AND t.table = n.table AND coalesce(t.catalog, '') = coalesce(n.catalog, '')))",
                                 "n",
                                 params,
                                 detach=True,
@@ -1553,12 +1570,12 @@ def run_build(build_id):
                             "files": sorted(touched),
                             "selected_refs": selected_refs,
                             "tables": [
-                                {"database": db, "table": table}
-                                for db, table in sorted(dirty_tables)
+                                {"catalog": catalog, "database": db, "table": table}
+                                for catalog, db, table in sorted(dirty_tables)
                             ],
                         }
                         found = storage.execute(
-                            "MATCH (n:SDAEntity {generation:$generation}) WHERE n.source_file IN $files OR n.source_key IN $files OR any(s IN coalesce(n.source_files, []) WHERE s IN $files) OR n.ref IN $selected_refs OR n.doc_id IN $selected_refs OR (n:SDADimensionValue AND any(t IN $tables WHERE t.database = n.database AND t.table = n.table)) RETURN n.ref AS ref",
+                            "MATCH (n:SDAEntity {generation:$generation}) WHERE n.source_file IN $files OR n.source_key IN $files OR any(s IN coalesce(n.source_files, []) WHERE s IN $files) OR n.ref IN $selected_refs OR n.doc_id IN $selected_refs OR (n:SDADimensionValue AND any(t IN $tables WHERE t.database = n.database AND t.table = n.table AND coalesce(t.catalog, '') = coalesce(n.catalog, ''))) RETURN n.ref AS ref",
                             params,
                         )
                         old_ids.update(row["ref"] for row in found if row["ref"])
@@ -1596,7 +1613,7 @@ def run_build(build_id):
                         )
                         delete_batches(
                             storage.execute,
-                            "MATCH (n:SDAEntity {generation:$generation}) WHERE n.source_file IN $files OR n.source_key IN $files OR any(s IN coalesce(n.source_files, []) WHERE s IN $files) OR n.ref IN $selected_refs OR n.doc_id IN $selected_refs OR (n:SDADimensionValue AND any(t IN $tables WHERE t.database = n.database AND t.table = n.table))",
+                            "MATCH (n:SDAEntity {generation:$generation}) WHERE n.source_file IN $files OR n.source_key IN $files OR any(s IN coalesce(n.source_files, []) WHERE s IN $files) OR n.ref IN $selected_refs OR n.doc_id IN $selected_refs OR (n:SDADimensionValue AND any(t IN $tables WHERE t.database = n.database AND t.table = n.table AND coalesce(t.catalog, '') = coalesce(n.catalog, '')))",
                             "n",
                             params,
                             detach=True,
@@ -1608,7 +1625,7 @@ def run_build(build_id):
                         )
                     if dirty_tables:
                         storage.execute(
-                            "UNWIND $rows AS row MATCH (f:SDAField {generation:$generation, database:row.database, table:row.table}) REMOVE f.dimension_count, f.dimension_too_many, f.dimension_samples",
+                            "UNWIND $rows AS row MATCH (f:SDAField {generation:$generation, database:row.database, table:row.table}) WHERE coalesce(f.catalog, '') = coalesce(row.catalog, '') REMOVE f.dimension_count, f.dimension_too_many, f.dimension_samples",
                             {"generation": generation, "rows": params["tables"]},
                         )
                     _run_stages_and_reconcile(

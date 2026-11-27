@@ -23,28 +23,41 @@ def _prepare(records, limit):
         if record.kind != "dimension_value":
             continue
         item = record.data
-        key = (item["database"], item["table"], item["field"])
+        key = (
+            item.get("catalog") or "",
+            item["database"],
+            item["table"],
+            item["field"],
+        )
         groups[key].append(item["value"])
         if item.get("row_id") is not None:
-            rows[(item["database"], item["table"], item["row_id"])][item["field"]] = (
-                item["value"]
-            )
+            rows[
+                (
+                    item.get("catalog") or "",
+                    item["database"],
+                    item["table"],
+                    item["row_id"],
+                )
+            ][item["field"]] = item["value"]
     aliases = defaultdict(set)
-    for (database, table, _), cells in rows.items():
+    for (catalog, database, table, _), cells in rows.items():
         for field, value in cells.items():
             # Only explicit same-row *_type / *_code / *_id and *_name pairs.
             for suffix in ("_type", "_code", "_id"):
                 if field.endswith(suffix):
                     name = cells.get(field[: -len(suffix)] + "_name")
                     if name:
-                        aliases[(database, table, field, value)].add(name.strip())
+                        aliases[(catalog, database, table, field, value)].add(
+                            name.strip()
+                        )
     values, statuses, skipped = [], [], 0
-    for (database, table, field), raw in groups.items():
+    for (catalog, database, table, field), raw in groups.items():
         distinct = sorted(set(raw))
         normalized = {value.strip() for value in distinct}
         too_many = len(normalized) > limit
         statuses.append(
             {
+                **({"catalog": catalog} if catalog else {}),
                 "database": database,
                 "table": table,
                 "field": field,
@@ -59,7 +72,11 @@ def _prepare(records, limit):
             for value in distinct:
                 ref = "dimension_value:" + ".".join(
                     quote(x, safe="").replace(".", "%2E")
-                    for x in (database, table, field, value)
+                    for x in (
+                        (catalog, database, table, field, value)
+                        if catalog
+                        else (database, table, field, value)
+                    )
                 )
                 if (
                     len(ref.encode("utf-8")) > MAX_REF_BYTES
@@ -69,12 +86,15 @@ def _prepare(records, limit):
                     continue
                 values.append(
                     {
+                        **({"catalog": catalog} if catalog else {}),
                         "database": database,
                         "table": table,
                         "field": field,
                         "value": value,
                         "normalized": value.strip(),
-                        "aliases": sorted(aliases[(database, table, field, value)]),
+                        "aliases": sorted(
+                            aliases[(catalog, database, table, field, value)]
+                        ),
                         "ref": ref,
                     }
                 )
@@ -87,7 +107,12 @@ def write(records, generation, storage):
     limit = project_context.from_values(storage._settings).dimension_value_limit_int
     values, statuses, skipped = _prepare(records, limit)
     changed_fields = {
-        (r.data["database"], r.data["table"], r.data["name"])
+        (
+            r.data.get("catalog") or "",
+            r.data["database"],
+            r.data["table"],
+            r.data["name"],
+        )
         for r in records
         if r.kind == "field"
     }
@@ -96,25 +121,39 @@ def write(records, generation, storage):
         statuses = [
             s
             for s in statuses
-            if (s["database"], s["table"], s["field"]) not in changed_fields
+            if (s.get("catalog") or "", s["database"], s["table"], s["field"])
+            not in changed_fields
         ] + [
             s
             for s in all_statuses
-            if (s["database"], s["table"], s["field"]) in changed_fields
+            if (s.get("catalog") or "", s["database"], s["table"], s["field"])
+            in changed_fields
         ]
     sources = defaultdict(set)
     primary_sources = defaultdict(set)
     for record in records:
         if record.kind == "dimension_value":
             item = record.data
-            table = (item["database"], item["table"])
+            table = (item.get("catalog") or "", item["database"], item["table"])
             sources[table].add(record.source_file)
             primary_sources[
-                (item["database"], item["table"], item["field"], item["value"])
+                (
+                    item.get("catalog") or "",
+                    item["database"],
+                    item["table"],
+                    item["field"],
+                    item["value"],
+                )
             ].add(record.source_file)
     for value in values:
-        key = (value["database"], value["table"], value["field"], value["value"])
-        value["source_files"] = sorted(sources[key[:2]])
+        key = (
+            value.get("catalog") or "",
+            value["database"],
+            value["table"],
+            value["field"],
+            value["value"],
+        )
+        value["source_files"] = sorted(sources[key[:3]])
         value["source_file"] = min(primary_sources[key])
         value["build_id"] = storage.build_id
     storage.execute(
@@ -130,7 +169,7 @@ def write(records, generation, storage):
     for rows, query in (
         (
             statuses,
-            "UNWIND $rows AS row MATCH (f:SDAField {generation:$generation, database:row.database, table:row.table, name:row.field}) SET f.dimension_count = row.count, f.dimension_too_many = row.too_many, f.dimension_samples = row.samples",
+            "UNWIND $rows AS row MATCH (f:SDAField {generation:$generation, database:row.database, table:row.table, name:row.field}) WHERE coalesce(f.catalog, '') = coalesce(row.catalog, '') SET f.dimension_count = row.count, f.dimension_too_many = row.too_many, f.dimension_samples = row.samples",
         ),
         (
             values,
@@ -147,10 +186,11 @@ def write(records, generation, storage):
             )
     if hasattr(storage, "rebuilt_dim_tables"):
         storage.rebuilt_dim_tables.update(
-            (row["database"], row["table"]) for row in values
+            (row.get("catalog") or "", row["database"], row["table"]) for row in values
         )
         storage.rebuilt_dim_tables.update(
-            (row["database"], row["table"]) for row in statuses
+            (row.get("catalog") or "", row["database"], row["table"])
+            for row in statuses
         )
     return StageResult(
         counts={"dimension_value": len(values), "dimension_value_skipped": skipped}
