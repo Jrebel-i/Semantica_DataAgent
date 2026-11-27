@@ -3948,3 +3948,228 @@ def test_interrupted_revert_recovers_without_duplicate_commit_or_build(
         ["git", "-C", str(root), "status", "--porcelain", "--untracked-files=all"],
         text=True,
     ).strip()
+
+
+def test_issue_341_approval_rejects_ambiguous_table(client, monkeypatch):
+    from semantica_dataagent import semantic_overrides
+
+    c, admin = client
+    headers = _headers(admin)
+    project, _ = _setup_override_project(c, headers, monkeypatch, "i341 approval")
+    created = c.post(
+        "/api/v1/corrections",
+        headers=headers,
+        params={"project": project},
+        json={
+            "target": "table:shop.orders",
+            "reason": "test",
+            "structured_patch": {
+                "version": 1,
+                "tables": {
+                    "shop.orders": {
+                        "database": "shop",
+                        "name": "orders",
+                        "comment": "test",
+                    }
+                },
+            },
+        },
+    )
+    assert created.status_code == 201, created.text
+    index = semantic_overrides._SchemaIndex.from_described(
+        [
+            {
+                "catalog": cat,
+                "database": "shop",
+                "name": "orders",
+                "fields": [{"name": "id"}],
+            }
+            for cat in ("hive", "internal")
+        ]
+    )
+    monkeypatch.setattr(
+        semantic_overrides, "_current_schema_index", lambda _: (index, None)
+    )
+    response = c.post(
+        f"/api/v1/corrections/{created.json()['id']}/approve",
+        headers=headers,
+        params={"project": project},
+    )
+    assert response.status_code == 422, response.text
+    assert (
+        "hive.shop.orders" in response.text and "internal.shop.orders" in response.text
+    )
+
+
+@pytest.mark.parametrize(
+    "section,entry",
+    [
+        (
+            "fields",
+            {"database": "shop", "table": "orders", "name": "id", "comment": "x"},
+        ),
+        (
+            "relationships",
+            {
+                "name": "r",
+                "from_database": "shop",
+                "from_table": "orders",
+                "from_columns": ["id"],
+                "to_catalog": "hive",
+                "to_database": "shop",
+                "to_table": "orders",
+                "to_columns": ["id"],
+            },
+        ),
+        (
+            "relationships",
+            {
+                "name": "r",
+                "from_catalog": "hive",
+                "from_database": "shop",
+                "from_table": "orders",
+                "from_columns": ["id"],
+                "to_database": "shop",
+                "to_table": "orders",
+                "to_columns": ["id"],
+            },
+        ),
+        ("metrics", {"name": "r", "expression": "SUM(id)", "tables": ["shop.orders"]}),
+    ],
+)
+def test_issue_341_approval_rejects_other_ambiguous_references(
+    client, monkeypatch, section, entry
+):
+    import yaml
+
+    from semantica_dataagent import semantic_overrides
+
+    c, admin = client
+    headers = _headers(admin)
+    project, _ = _setup_override_project(c, headers, monkeypatch, "i341 references")
+    created = c.post(
+        "/api/v1/corrections",
+        headers=headers,
+        params={"project": project},
+        json={
+            "target": "table:shop.orders",
+            "reason": "test",
+            "structured_patch": {
+                "version": 1,
+                "tables": {
+                    "shop.orders": {
+                        "database": "shop",
+                        "name": "orders",
+                        "comment": "test",
+                    }
+                },
+            },
+        },
+    )
+    assert created.status_code == 201, created.text
+    index = semantic_overrides._SchemaIndex.from_described(
+        [
+            {
+                "catalog": cat,
+                "database": "shop",
+                "name": "orders",
+                "fields": [{"name": "id"}],
+            }
+            for cat in ("hive", "internal")
+        ]
+    )
+    monkeypatch.setattr(
+        semantic_overrides, "_current_schema_index", lambda _: (index, None)
+    )
+    patch = {"version": 1, section: {"r": entry}}
+    response = c.post(
+        f"/api/v1/corrections/{created.json()['id']}/approve",
+        headers=headers,
+        params={"project": project},
+        json={"patch": yaml.safe_dump(patch)},
+    )
+    assert response.status_code == 422, response.text
+    assert (
+        "hive.shop.orders" in response.text and "internal.shop.orders" in response.text
+    )
+
+
+def test_issue_341_existing_uncatalogued_override_still_applies_at_build(
+    client, tmp_path
+):
+    import yaml
+
+    from semantica_dataagent.canonical import Record
+    from semantica_dataagent.semantic_overrides import apply_overrides_detailed
+
+    directory = tmp_path / "source" / "overrides"
+    directory.mkdir(parents=True)
+    (directory / "semantic_overrides.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "version": 1,
+                "tables": {
+                    "shop.orders": {
+                        "database": "shop",
+                        "name": "orders",
+                        "comment": "legacy",
+                    }
+                },
+            }
+        )
+    )
+    records = [
+        Record(
+            "table",
+            {
+                "catalog": cat,
+                "database": "shop",
+                "name": "orders",
+                "comment": "original",
+            },
+            "tables.json",
+        )
+        for cat in ("hive", "internal")
+    ]
+    result = apply_overrides_detailed(records, source_dir=directory.parent)
+    assert [row.data["comment"] for row in result.records] == ["legacy", "legacy"]
+
+
+def test_issue_341_catalogued_override_applies_only_to_target(client, tmp_path):
+    import yaml
+
+    from semantica_dataagent.canonical import Record
+    from semantica_dataagent.semantic_overrides import apply_overrides_detailed
+
+    directory = tmp_path / "source" / "overrides"
+    directory.mkdir(parents=True)
+    (directory / "semantic_overrides.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "version": 1,
+                "tables": {
+                    "hive.shop.orders": {
+                        "catalog": "hive",
+                        "database": "shop",
+                        "name": "orders",
+                        "comment": "specific",
+                    }
+                },
+            }
+        )
+    )
+    records = [
+        Record(
+            "table",
+            {
+                "catalog": cat,
+                "database": "shop",
+                "name": "orders",
+                "comment": "original",
+            },
+            "tables.json",
+        )
+        for cat in ("hive", "internal")
+    ]
+    result = apply_overrides_detailed(records, source_dir=directory.parent)
+    assert [row.data["comment"] for row in result.records] == ["specific", "original"]

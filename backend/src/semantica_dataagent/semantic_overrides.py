@@ -199,6 +199,15 @@ class _SchemaIndex:
         empty = [c for c in candidates if c[0] == ""]
         return empty or list(candidates)
 
+    def candidates(
+        self, catalog: str | None, database: str | None, name: str
+    ) -> list[tuple[str, str, str]]:
+        if _norm_cat(catalog):
+            return self.match_table(catalog, database or "", name)
+        if database:
+            return list(self.by_db_table.get((database, name), []))
+        return list(self.by_name.get(name, []))
+
     def resolve_table_ref(self, ref: str) -> list[tuple[str, str, str]]:
         parts = [p.strip() for p in ref.split(".") if p.strip()]
         if len(parts) == 3:
@@ -208,6 +217,65 @@ class _SchemaIndex:
         if len(parts) == 1:
             return list(self.by_name.get(parts[0], []))
         return []
+
+
+def _write_ambiguities(patch: dict[str, Any], index: _SchemaIndex) -> list[str]:
+    errors: list[str] = []
+
+    def check(label: str, catalog: str | None, database: str | None, name: str) -> None:
+        candidates = index.candidates(catalog, database, name)
+        if not _norm_cat(catalog) and len({key[0] for key in candidates}) > 1:
+            names = [
+                ".".join(part for part in key if part) for key in sorted(candidates)
+            ]
+            errors.append(
+                f"{label}: ambiguous table; specify catalog: {', '.join(names)}"
+            )
+
+    for key, entry in patch["tables"].items():
+        check(f"table '{key}'", entry.get("catalog"), entry["database"], entry["name"])
+    for key, entry in patch["fields"].items():
+        check(f"field '{key}'", entry.get("catalog"), entry["database"], entry["table"])
+    for key, entry in patch["relationships"].items():
+        for side in ("from", "to"):
+            check(
+                f"relationship '{key}' {side}",
+                entry.get(f"{side}_catalog"),
+                entry[f"{side}_database"],
+                entry[f"{side}_table"],
+            )
+    for key, entry in patch["metrics"].items():
+        refs = ([entry["table"]] if entry.get("table") else []) + list(
+            entry.get("tables") or []
+        )
+        for ref in refs:
+            parts = str(ref).split(".")
+            if len(parts) == 1:
+                check(f"metric '{key}'", None, None, parts[0])
+            elif len(parts) == 2:
+                check(f"metric '{key}'", None, parts[0], parts[1])
+        for sql in [entry["expression"], *(entry.get("filters") or [])]:
+            try:
+                parsed = sqlglot.parse_one(
+                    str(sql), read=_DIALECT_MAP.get(entry.get("dialect"))
+                )
+            except sqlglot.errors.SqlglotError:
+                continue
+            if parsed is not None:
+                for col in parsed.find_all(exp.Column):
+                    parts = [p.name for p in col.parts if getattr(p, "name", None)]
+                    if len(parts) == 3:
+                        check(f"metric '{key}'", None, parts[0], parts[1])
+                    elif len(parts) == 2:
+                        scoped = [
+                            candidate
+                            for ref in refs
+                            for candidate in index.resolve_table_ref(str(ref))
+                            if candidate[2] == parts[0]
+                        ]
+                        if not scoped:
+                            check(f"metric '{key}'", None, None, parts[0])
+    return errors
 
 
 def _norm_cat(value: str | None) -> str:
@@ -1213,7 +1281,7 @@ def run_l1_gate(
                     }
                 )
         else:
-            phys_errors: list[str] = []
+            phys_errors: list[str] = _write_ambiguities(normalized_patch, schema_index)
             sql_errors = []
             for tkey, tentry in normalized_patch["tables"].items():
                 if not schema_index.match_table(
