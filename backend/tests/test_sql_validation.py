@@ -803,3 +803,38 @@ def test_issue_335_strong_relationship_needs_no_document_lookup(monkeypatch):
         "ON o.customer_id = c.id WHERE o.dt = '2025-01-01'"
     )
     assert result["status"] == "pass", result
+
+
+def test_issue_335_using_merged_key_on_consecutive_joins(monkeypatch):
+    from semantica_dataagent import sql_validation
+
+    tables = [
+        {
+            "database": "s",
+            "name": name,
+            "ref": f"table:s.{name}",
+            "fields": [{"name": "id", "partition": False}],
+        }
+        for name in ("a", "b", "c")
+    ]
+    rels = [
+        {
+            "name": left + right,
+            "from_table": "s." + left,
+            "to_table": "s." + right,
+            "from_columns": ["id"],
+            "to_columns": ["id"],
+        }
+        for left, right in (("a", "b"), ("a", "c"))
+    ]
+    data = Snapshot(tables, [], [], relationships=rels)
+
+    def unavailable(_pairs):
+        raise RuntimeError("documents unavailable")
+
+    data.document_loader = unavailable
+    monkeypatch.setattr(sql_validation, "load_snapshot", lambda: data)
+    result = sql_validation.validate_sql(
+        "SELECT a.id FROM s.a a JOIN s.b b USING (id) JOIN s.c c USING (id)"
+    )
+    assert result["status"] == "pass", result

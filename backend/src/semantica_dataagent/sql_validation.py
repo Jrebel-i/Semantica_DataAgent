@@ -505,6 +505,7 @@ def check_sql(sql, dialect, snapshot, partition_tables=None):
         from_clause = scope.expression.args.get("from_")
         if from_clause and from_clause.this:
             left_aliases.add(from_clause.this.alias_or_name.lower())
+        merged_using = {}
         for join in scope.expression.args.get("joins") or []:
             condition = join.args.get("on")
             right_alias = join.this.alias_or_name.lower()
@@ -527,7 +528,7 @@ def check_sql(sql, dialect, snapshot, partition_tables=None):
                             l.table.lower() in left_aliases
                             and r.table.lower() == right_alias
                         ):
-                            pairs.append((l, r))
+                            pairs.append((l, r, len(pairs)))
             for identifier in join.args.get("using") or []:
                 name = identifier.name
                 matches = [
@@ -542,23 +543,34 @@ def check_sql(sql, dialect, snapshot, partition_tables=None):
                 )
                 right = sources.get(right_alias)
                 if (
-                    len(matches) == 1
+                    (
+                        len(matches) == 1
+                        or set(matches) == merged_using.get(name.lower())
+                    )
+                    and bool(matches)
                     and not uncertain
                     and right is not None
                     and not right.get("derived_unknown")
                     and name.lower() in field_names(right)
                 ):
-                    pairs.append(
+                    group = len(pairs)
+                    pairs.extend(
                         (
-                            exp.column(name, table=matches[0]),
+                            exp.column(name, table=alias),
                             exp.column(name, table=right_alias),
+                            group,
                         )
+                        for alias in matches
                     )
+                    merged_using[name.lower()] = set(matches) | {right_alias}
                 else:
-                    pairs.append((None, exp.column(name, table=right_alias)))
+                    pairs.append(
+                        (None, exp.column(name, table=right_alias), len(pairs))
+                    )
+                    merged_using.pop(name.lower(), None)
             pair_records = []
             observed_pairs = defaultdict(set)
-            for l, r in pairs:
+            for l, r, group in pairs:
                 a = _join_column_source(l, sources) if l is not None else None
                 b = _join_column_source(r, sources)
                 label = f"{l.sql(dialect=dialect) if l is not None else 'USING'} = {r.sql(dialect=dialect)}"
@@ -573,7 +585,9 @@ def check_sql(sql, dialect, snapshot, partition_tables=None):
                     pending_documents.append(
                         (pair_records, len(pair_records), a, b, l.name, r.name)
                     )
-                pair_records.append({"label": label, "proofs": proofs, "pair": pair})
+                pair_records.append(
+                    {"label": label, "proofs": proofs, "pair": pair, "group": group}
+                )
             for pair_key, observed in observed_pairs.items():
                 for rel in snapshot.relationship_pairs.get(pair_key, ()):
                     required = _relationship_required_pairs(rel)
@@ -593,7 +607,12 @@ def check_sql(sql, dialect, snapshot, partition_tables=None):
     candidates = [
         item
         for item in pending_documents
-        if not any(p["strength"] == "strong" for p in item[0][item[1]]["proofs"])
+        if not any(
+            proof["strength"] == "strong"
+            for record in item[0]
+            if record["group"] == item[0][item[1]]["group"]
+            for proof in record["proofs"]
+        )
     ]
     documents = snapshot.documents_for(
         {(full(a).lower(), full(b).lower()) for _, _, a, b, _, _ in candidates}
@@ -607,10 +626,17 @@ def check_sql(sql, dialect, snapshot, partition_tables=None):
     for join_item in result["joins"]:
         records = join_item.pop("pairs")
         supports = [proof for record in records for proof in record["proofs"]]
+        groups = defaultdict(list)
+        for record in records:
+            groups[record["group"]].append(record)
         missing = [
-            record["label"]
-            for record in records
-            if not any(p["strength"] == "strong" for p in record["proofs"])
+            alternatives[0]["label"]
+            for alternatives in groups.values()
+            if not any(
+                proof["strength"] == "strong"
+                for record in alternatives
+                for proof in record["proofs"]
+            )
         ]
         supported = bool(records) and not missing
         join_item.update(
