@@ -37,6 +37,7 @@ def validate(monkeypatch):
     [
         "'2025-01-01' <= dt",
         "CURRENT_DATE() <= dt",
+        "NOW() < dt",
         "'2025-01-31' >= dt",
         "dt >= DATE_SUB(CURRENT_DATE(), INTERVAL 7 DAY)",
         "dt = CURRENT_DATE()",
@@ -57,6 +58,7 @@ def test_partition_constants(validate, predicate):
         "NOW() > dt",
         "DATE_SUB(CURRENT_DATE(), INTERVAL 1 DAY) >= dt",
         "dt >= DATE_SUB(id, INTERVAL 1 DAY)",
+        "dt >= DATE_SUB(orders.id, INTERVAL 1 DAY)",
         "dt = DATE_ADD(id, INTERVAL 1 DAY)",
         "id <= dt",
         "(dt = '2025-01-01' OR id = 1)",
