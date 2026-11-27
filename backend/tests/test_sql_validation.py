@@ -786,3 +786,20 @@ def test_issue_335_unqualified_join_column_is_checked(monkeypatch):
         and "sku" in issue["message"]
         for issue in result["issues"]
     ), result
+
+
+def test_issue_335_strong_relationship_needs_no_document_lookup(monkeypatch):
+    from semantica_dataagent import sql_validation
+
+    data = _catalog_relationship_snapshot()
+
+    def unavailable(_pairs):
+        raise RuntimeError("documents unavailable")
+
+    data.document_loader = unavailable
+    monkeypatch.setattr(sql_validation, "load_snapshot", lambda: data)
+    result = sql_validation.validate_sql(
+        "SELECT o.id FROM hive.shop.orders o JOIN hive.shop.customers c "
+        "ON o.customer_id = c.id WHERE o.dt = '2025-01-01'"
+    )
+    assert result["status"] == "pass", result

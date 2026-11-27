@@ -590,10 +590,15 @@ def check_sql(sql, dialect, snapshot, partition_tables=None):
                 }
             )
             left_aliases.add(right_alias)
+    candidates = [
+        item
+        for item in pending_documents
+        if not any(p["strength"] == "strong" for p in item[0][item[1]]["proofs"])
+    ]
     documents = snapshot.documents_for(
-        {(full(a).lower(), full(b).lower()) for _, _, a, b, _, _ in pending_documents}
+        {(full(a).lower(), full(b).lower()) for _, _, a, b, _, _ in candidates}
     )
-    for records, index, a, b, l, r in pending_documents:
+    for records, index, a, b, l, r in candidates:
         records[index]["proofs"].extend(
             p
             for p in evidence(a, b, l, r, snapshot, documents)
