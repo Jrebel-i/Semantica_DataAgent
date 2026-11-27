@@ -88,3 +88,121 @@ def test_dimension_groups_and_incremental_selection_are_catalog_scoped():
         r.data["catalog"] for r in select_incremental_records(records, {hive_key})
     } == {"hive"}
     assert len(hashes) == 2
+
+
+def test_lookup_rejects_ambiguous_two_part_name(monkeypatch):
+    from types import SimpleNamespace
+
+    import pytest
+
+    from semantica_dataagent import dimension_api
+    from semantica_dataagent.mcp_contract import ToolInvalidInput
+
+    monkeypatch.setattr(dimension_api.knowledge, "settings", dict)
+    monkeypatch.setattr(
+        dimension_api.project_context,
+        "from_values",
+        lambda _: SimpleNamespace(generation="g"),
+    )
+    monkeypatch.setattr(dimension_api.knowledge, "read_graph", lambda _: object())
+    monkeypatch.setattr(
+        dimension_api.knowledge,
+        "execute",
+        lambda *args: [
+            {"catalog": "hive", "database": "shop", "table": "orders"},
+            {"catalog": "internal", "database": "shop", "table": "orders"},
+        ],
+    )
+    with pytest.raises(ToolInvalidInput) as exc:
+        dimension_api.lookup_dim_values("shop.orders", "A")
+    assert all(
+        name in str(exc.value)
+        for name in ("422", "hive.shop.orders", "internal.shop.orders")
+    )
+
+
+def test_dimension_relationships_are_catalog_scoped(monkeypatch):
+    from types import SimpleNamespace
+
+    from semantica_dataagent import relationships
+
+    for incremental in (False, True):
+        edges = set()
+
+        def fake_link(storage, label, where, params, query, generation, edges=edges):
+            if label != "SDADimensionValue":
+                return
+            for field_catalog in ("hive", "internal"):
+                for value_catalog in ("hive", "internal"):
+                    if (
+                        "coalesce(f.catalog, '') = coalesce(n.catalog, '')" not in query
+                        or field_catalog == value_catalog
+                    ):
+                        edges.add((field_catalog, value_catalog))
+
+        monkeypatch.setattr(relationships, "_link_nodes", fake_link)
+        monkeypatch.setattr(
+            relationships, "delete_batches", lambda *args, **kwargs: None
+        )
+        storage = SimpleNamespace(
+            is_incremental=incremental,
+            build_id=1,
+            rebuilt_field_tables={
+                ("hive", "shop", "orders"),
+                ("internal", "shop", "orders"),
+            },
+            rebuilt_dim_tables=set(),
+            execute=lambda *args: [],
+        )
+        relationships.reconcile(storage, [], "g")
+        assert edges == {("hive", "hive"), ("internal", "internal")}
+
+
+def test_single_catalog_preserves_original_dimension_reference():
+    from semantica_dataagent.canonical import Record
+    from semantica_dataagent.dimension_stage import prepare
+    from semantica_dataagent.knowledge import (
+        _resolve_legacy_dimensions,
+        compute_entity_hashes,
+    )
+
+    records = [
+        Record(
+            "field",
+            {"catalog": "hive", "database": "shop", "table": "orders", "name": "code"},
+        ),
+        Record(
+            "dimension_value",
+            {
+                "catalog": "hive",
+                "database": "shop",
+                "table": "orders",
+                "field": "code",
+                "value": "A",
+            },
+        ),
+    ]
+    resolved, _ = _resolve_legacy_dimensions(records)
+    values, _ = prepare(resolved, 10)
+    assert [v["ref"] for v in values] == ["dimension_value:shop.orders.code.A"]
+    assert values[0]["catalog"] == "hive"
+    multi, _ = _resolve_legacy_dimensions(
+        records
+        + [
+            Record(
+                "field",
+                {
+                    "catalog": "internal",
+                    "database": "shop",
+                    "table": "orders",
+                    "name": "code",
+                },
+            )
+        ]
+    )
+    multi_values, _ = prepare(multi, 10)
+    assert multi_values[0]["ref"] == "dimension_value:hive.shop.orders.code.A"
+    assert (
+        compute_entity_hashes(resolved)["dim_table:hive.shop.orders"]
+        != compute_entity_hashes(multi)["dim_table:hive.shop.orders"]
+    )

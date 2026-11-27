@@ -28,6 +28,8 @@ def _prepare(records, limit):
             item["database"],
             item["table"],
             item["field"],
+            bool(item.get("_legacy_ref")),
+            bool(item.get("_ambiguous_catalog")),
         )
         groups[key].append(item["value"])
         if item.get("row_id") is not None:
@@ -51,30 +53,31 @@ def _prepare(records, limit):
                             name.strip()
                         )
     values, statuses, skipped = [], [], 0
-    for (catalog, database, table, field), raw in groups.items():
+    for (catalog, database, table, field, legacy_ref, ambiguous), raw in groups.items():
         distinct = sorted(set(raw))
         normalized = {value.strip() for value in distinct}
         too_many = len(normalized) > limit
-        statuses.append(
-            {
-                **({"catalog": catalog} if catalog else {}),
-                "database": database,
-                "table": table,
-                "field": field,
-                "count": len(normalized),
-                "too_many": too_many,
-                "samples": [
-                    value for value in distinct if len(value) <= MAX_SAMPLE_CHARS
-                ][:5],
-            }
-        )
+        if not ambiguous:
+            statuses.append(
+                {
+                    **({"catalog": catalog} if catalog else {}),
+                    "database": database,
+                    "table": table,
+                    "field": field,
+                    "count": len(normalized),
+                    "too_many": too_many,
+                    "samples": [
+                        value for value in distinct if len(value) <= MAX_SAMPLE_CHARS
+                    ][:5],
+                }
+            )
         if not too_many:
             for value in distinct:
                 ref = "dimension_value:" + ".".join(
                     quote(x, safe="").replace(".", "%2E")
                     for x in (
                         (catalog, database, table, field, value)
-                        if catalog
+                        if catalog and not legacy_ref
                         else (database, table, field, value)
                     )
                 )
@@ -87,6 +90,7 @@ def _prepare(records, limit):
                 values.append(
                     {
                         **({"catalog": catalog} if catalog else {}),
+                        **({"ambiguous_catalog": True} if ambiguous else {}),
                         "database": database,
                         "table": table,
                         "field": field,

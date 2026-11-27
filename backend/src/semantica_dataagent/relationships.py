@@ -298,7 +298,7 @@ def reconcile(storage, records, generation):
                         "build_id": build_id,
                         "tables": dim_tables,
                     },
-                    "MATCH (f:SDAField {generation:$generation, database:n.database, table:n.table, name:n.field}) WHERE coalesce(f.catalog, '') = coalesce(n.catalog, '') MERGE (f)-[:HAS_VALUE]->(n)",
+                    "MATCH (f:SDAField {generation:$generation, database:n.database, table:n.table, name:n.field}) WHERE NOT coalesce(n.ambiguous_catalog, false) AND coalesce(f.catalog, '') = coalesce(n.catalog, '') MERGE (f)-[:HAS_VALUE]->(n)",
                 )
             )
         if doc_refs:
@@ -326,7 +326,7 @@ def reconcile(storage, records, generation):
             ),
             (
                 "SDADimensionValue",
-                "MATCH (f:SDAField {generation:$generation, database:n.database, table:n.table, name:n.field}) WHERE coalesce(f.catalog, '') = coalesce(n.catalog, '') MERGE (f)-[:HAS_VALUE]->(n)",
+                "MATCH (f:SDAField {generation:$generation, database:n.database, table:n.table, name:n.field}) WHERE NOT coalesce(n.ambiguous_catalog, false) AND coalesce(f.catalog, '') = coalesce(n.catalog, '') MERGE (f)-[:HAS_VALUE]->(n)",
             ),
             (
                 "SDADocument",

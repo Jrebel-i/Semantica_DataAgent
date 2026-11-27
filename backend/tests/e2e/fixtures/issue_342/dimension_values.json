@@ -21,5 +21,107 @@
     "field": "code",
     "value": "legacy_old",
     "row_id": "legacy.orders:1"
+  },
+  {
+    "database": "i342single",
+    "table": "orders",
+    "field": "code",
+    "value": "old_value",
+    "row_id": "i342single.orders:1"
+  },
+  {
+    "database": "i342ambig",
+    "table": "orders",
+    "field": "code",
+    "value": "old_value",
+    "row_id": "i342ambig.orders:1"
+  },
+  {
+    "database": "dimensions",
+    "table": "dim_airport",
+    "field": "airport_code",
+    "value": " PVG ",
+    "row_id": "hive.dimensions.dim_airport:1",
+    "catalog": "hive"
+  },
+  {
+    "database": "dimensions",
+    "table": "dim_airport",
+    "field": "airport_name",
+    "value": "浦东机场",
+    "row_id": "hive.dimensions.dim_airport:1",
+    "catalog": "hive"
+  },
+  {
+    "database": "dimensions",
+    "table": "dim_airport",
+    "field": "region",
+    "value": "华东",
+    "row_id": "hive.dimensions.dim_airport:1",
+    "catalog": "hive"
+  },
+  {
+    "database": "dimensions",
+    "table": "dim_airport",
+    "field": "airport_name",
+    "value": "未知机场",
+    "row_id": "hive.dimensions.dim_airport:2",
+    "catalog": "hive"
+  },
+  {
+    "database": "dimensions",
+    "table": "dim_airport",
+    "field": "airport_code",
+    "value": "SHA",
+    "row_id": "hive.dimensions.dim_airport:3",
+    "catalog": "hive"
+  },
+  {
+    "database": "dimensions",
+    "table": "dim_airport",
+    "field": "airport_name",
+    "value": "虹桥机场",
+    "row_id": "hive.dimensions.dim_airport:3",
+    "catalog": "hive"
+  },
+  {
+    "database": "dimensions",
+    "table": "dim_airport",
+    "field": "region",
+    "value": "华东",
+    "row_id": "hive.dimensions.dim_airport:3",
+    "catalog": "hive"
+  },
+  {
+    "database": "dimensions",
+    "table": "dim_truncated",
+    "field": "code",
+    "value": "A",
+    "row_id": "hive.dimensions.dim_truncated:1",
+    "catalog": "hive"
+  },
+  {
+    "database": "dimensions",
+    "table": "dim_truncated",
+    "field": "name",
+    "value": "甲",
+    "row_id": "hive.dimensions.dim_truncated:1",
+    "catalog": "hive"
+  },
+  {
+    "database": "dimensions",
+    "table": "dim_truncated",
+    "field": "code",
+    "value": "B",
+    "row_id": "hive.dimensions.dim_truncated:2",
+    "catalog": "hive"
+  },
+  {
+    "database": "dimensions",
+    "table": "dim_truncated",
+    "field": "name",
+    "value": "乙",
+    "row_id": "hive.dimensions.dim_truncated:2",
+    "catalog": "hive"
   }
 ]

@@ -1,0 +1,225 @@
+version: 0.3.0.dev0
+name: issue342
+datasets:
+- name: dim_airport
+  source: hive.dimensions.dim_airport
+  description: 机场维度
+  fields:
+  - name: airport_code
+    expression:
+      sql: airport_code
+    datatype: String
+    nonportable_extensions:
+    - vendor_name: SEMANTICA_DATAAGENT
+      data:
+        partition: false
+        raw_type: string
+    description: 三字码
+    ai_context:
+      instructions: 示例取值（共 2 个去重值，抽样前 2 个）：' PVG ', 'SHA'
+  - name: airport_name
+    expression:
+      sql: airport_name
+    datatype: String
+    nonportable_extensions:
+    - vendor_name: SEMANTICA_DATAAGENT
+      data:
+        partition: false
+        raw_type: string
+    description: 机场名
+    ai_context:
+      instructions: 示例取值（共 3 个去重值，抽样前 3 个）：'未知机场', '浦东机场', '虹桥机场'
+  - name: region
+    expression:
+      sql: region
+    datatype: String
+    nonportable_extensions:
+    - vendor_name: SEMANTICA_DATAAGENT
+      data:
+        partition: false
+        raw_type: string
+    description: 区域
+    ai_context:
+      instructions: 全部取值（共 1 个）：'华东'
+- name: air_report_d
+  source: hive.dm.air_report_d
+  description: 报表
+  ai_context:
+    instructions: 直接上游表：hive.dwd.air_tickets_d
+  fields:
+  - name: report_id
+    expression:
+      sql: report_id
+    datatype: String
+    nonportable_extensions:
+    - vendor_name: SEMANTICA_DATAAGENT
+      data:
+        partition: false
+        raw_type: string
+    description: 报表号
+- name: air_bad_conf_d
+  source: hive.dwd.air_bad_conf_d
+  description: 坏配置
+  ai_context:
+    instructions: 直接上游表：hive.dwd.air_orders_d
+  fields:
+  - name: id
+    expression:
+      sql: id
+    datatype: String
+    nonportable_extensions:
+    - vendor_name: SEMANTICA_DATAAGENT
+      data:
+        partition: false
+        raw_type: string
+    description: 编号
+- name: air_bad_seq_d
+  source: hive.dwd.air_bad_seq_d
+  description: 坏分区号
+  ai_context:
+    instructions: 直接上游表：hive.dwd.air_orders_d
+  fields:
+  - name: id
+    expression:
+      sql: id
+    datatype: String
+    nonportable_extensions:
+    - vendor_name: SEMANTICA_DATAAGENT
+      data:
+        partition: false
+        raw_type: string
+    description: 编号
+- name: air_broken_d
+  source: hive.dwd.air_broken_d
+  description: 解析失败样例
+  fields:
+  - name: id
+    expression:
+      sql: id
+    datatype: String
+    nonportable_extensions:
+    - vendor_name: SEMANTICA_DATAAGENT
+      data:
+        partition: false
+        raw_type: string
+    description: 编号
+- name: air_no_id_d
+  source: hive.dwd.air_no_id_d
+  description: 无任务 id
+  ai_context:
+    instructions: 直接上游表：hive.dwd.air_orders_d, hive.ods.air_no_id_raw
+  fields:
+  - name: id
+    expression:
+      sql: id
+    datatype: String
+    nonportable_extensions:
+    - vendor_name: SEMANTICA_DATAAGENT
+      data:
+        partition: false
+        raw_type: string
+    description: 编号
+- name: air_orders_d
+  source: hive.dwd.air_orders_d
+  description: 机票订单
+  ai_context:
+    instructions: '分区策略：merge_onself 合并更新
+
+      分区策略：全量快照分区（INSERT OVERWRITE，查询最新状态请限定 MAX(分区列)）
+
+      直接上游表：hive.ods.air_orders_raw'
+  fields:
+  - name: amount
+    expression:
+      sql: amount
+    datatype: Decimal
+    nonportable_extensions:
+    - vendor_name: SEMANTICA_DATAAGENT
+      data:
+        partition: false
+        raw_type: decimal(18,2)
+    description: 金额
+  - name: day_num
+    expression:
+      sql: day_num
+    datatype: String
+    nonportable_extensions:
+    - vendor_name: SEMANTICA_DATAAGENT
+      data:
+        partition: true
+        raw_type: string
+    description: 分区日期
+  - name: order_id
+    expression:
+      sql: order_id
+    datatype: String
+    nonportable_extensions:
+    - vendor_name: SEMANTICA_DATAAGENT
+      data:
+        partition: false
+        raw_type: string
+    description: 订单号
+- name: air_payments_d
+  source: hive.dwd.air_payments_d
+  description: 支付流水
+  ai_context:
+    instructions: '分区策略：全量快照分区（INSERT OVERWRITE，查询最新状态请限定 MAX(分区列)）
+
+      直接上游表：hive.dwd.air_orders_d, hive.ods.air_payments_raw'
+  fields:
+  - name: currency
+    expression:
+      sql: currency
+    datatype: String
+    nonportable_extensions:
+    - vendor_name: SEMANTICA_DATAAGENT
+      data:
+        partition: false
+        raw_type: string
+    description: 币种
+  - name: day_num
+    expression:
+      sql: day_num
+    datatype: String
+    nonportable_extensions:
+    - vendor_name: SEMANTICA_DATAAGENT
+      data:
+        partition: true
+        raw_type: string
+    description: 分区日期
+  - name: payment_id
+    expression:
+      sql: payment_id
+    datatype: String
+    nonportable_extensions:
+    - vendor_name: SEMANTICA_DATAAGENT
+      data:
+        partition: false
+        raw_type: string
+    description: 支付号
+- name: air_tickets_d
+  source: hive.dwd.air_tickets_d
+  description: 客票
+  ai_context:
+    instructions: 直接上游表：hive.dwd.air_orders_d, hive.dwd.air_payments_d, hive.ods.air_tickets_raw
+  fields:
+  - name: price
+    expression:
+      sql: price
+    datatype: Decimal
+    nonportable_extensions:
+    - vendor_name: SEMANTICA_DATAAGENT
+      data:
+        partition: false
+        raw_type: decimal(18,2)
+    description: 票价
+  - name: ticket_id
+    expression:
+      sql: ticket_id
+    datatype: String
+    nonportable_extensions:
+    - vendor_name: SEMANTICA_DATAAGENT
+      data:
+        partition: false
+        raw_type: string
+    description: 客票号

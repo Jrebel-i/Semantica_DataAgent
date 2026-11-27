@@ -13,7 +13,7 @@ from collections import Counter
 from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager, suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import Lock
@@ -210,6 +210,40 @@ def _dim_table_entity_key(database: str, table: str, catalog: str = "") -> str:
 
 def _dim_table_key(data):
     return (data.get("catalog") or "", data["database"], data["table"])
+
+
+def _resolve_legacy_dimensions(records):
+    catalogs = {}
+    project_catalogs = set()
+    for record in records:
+        if record.kind in {"table", "field"}:
+            project_catalogs.add(record.data.get("catalog") or "")
+        if record.kind == "field":
+            data = record.data
+            catalogs.setdefault((data["database"], data["table"]), set()).add(
+                data.get("catalog") or ""
+            )
+    result, ambiguous = [], set()
+    for record in records:
+        data = record.data
+        if (
+            record.kind == "dimension_value"
+            and data.get("catalog")
+            and project_catalogs == {data["catalog"]}
+        ):
+            record = replace(record, data={**data, "_legacy_ref": True})
+        if record.kind == "dimension_value" and not data.get("catalog"):
+            key = (data["database"], data["table"])
+            choices = catalogs.get(key, set())
+            if len(choices) > 1:
+                ambiguous.add(key)
+                record = replace(record, data={**data, "_ambiguous_catalog": True})
+            elif len(choices) == 1 and (catalog := next(iter(choices))):
+                record = replace(
+                    record, data={**data, "catalog": catalog, "_legacy_ref": True}
+                )
+        result.append(record)
+    return result, ambiguous
 
 
 def _normalize_dim_table(table):
@@ -1189,6 +1223,14 @@ def run_build(build_id):
                 level="info",
             )
         validate_records(records)
+        records, ambiguous_dimensions = _resolve_legacy_dimensions(records)
+        for database, table in sorted(ambiguous_dimensions):
+            _record_log(
+                build_id,
+                logs,
+                "dimension",
+                f"WARNING: Ambiguous catalog for dimension values: {database}.{table}; values are not linked",
+            )
         current_entity_hashes = compute_entity_hashes(records)
         _record_log(
             build_id,
@@ -2208,6 +2250,7 @@ def dimension_values(database, table, field, project_id=None, catalog=None):
         read_graph(values),
         """MATCH (v:SDADimensionValue {generation:$generation})
            WHERE v.database = $database AND v.table = $table AND v.field = $field
+             AND NOT coalesce(v.ambiguous_catalog, false)
              AND coalesce(v.catalog, '') = $catalog
            RETURN v.value AS value ORDER BY v.value""",
         {

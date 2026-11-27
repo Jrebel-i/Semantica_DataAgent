@@ -70,14 +70,14 @@ def lookup_dim_values(
     }
     exact = knowledge.execute(
         store,
-        "MATCH (v:SDADimensionValue {generation:$generation, database:$database, table:$table}) WHERE coalesce(v.catalog, '') = $catalog AND ($field IS NULL OR v.field = $field) AND (toLower(v.normalized) = toLower($keyword) OR any(alias IN v.aliases WHERE toLower(alias) = toLower($keyword))) RETURN properties(v) AS item",
+        "MATCH (v:SDADimensionValue {generation:$generation, database:$database, table:$table}) WHERE NOT coalesce(v.ambiguous_catalog, false) AND coalesce(v.catalog, '') = $catalog AND ($field IS NULL OR v.field = $field) AND (toLower(v.normalized) = toLower($keyword) OR any(alias IN v.aliases WHERE toLower(alias) = toLower($keyword))) RETURN properties(v) AS item",
         params,
     )
     fulltext = knowledge.execute(
         store,
         "CALL db.index.fulltext.queryNodes('"
         + project_context.index_name("dimension_values")
-        + "', $query) YIELD node WHERE node.generation = $generation AND node.database = $database AND node.table = $table AND coalesce(node.catalog, '') = $catalog AND ($field IS NULL OR node.field = $field) RETURN properties(node) AS item",
+        + "', $query) YIELD node WHERE node.generation = $generation AND node.database = $database AND node.table = $table AND NOT coalesce(node.ambiguous_catalog, false) AND coalesce(node.catalog, '') = $catalog AND ($field IS NULL OR node.field = $field) RETURN properties(node) AS item",
         params,
     )
     result = {}

@@ -42,5 +42,40 @@
     "type": "string",
     "comment": "code",
     "partition": false
+  },
+  {
+    "catalog": "hive",
+    "database": "i342single",
+    "table": "orders",
+    "name": "code",
+    "type": "string",
+    "comment": "code",
+    "partition": false
+  },
+  {
+    "catalog": "hive",
+    "database": "i342ambig",
+    "table": "orders",
+    "name": "code",
+    "type": "string",
+    "comment": "code",
+    "partition": false
+  },
+  {
+    "catalog": "internal",
+    "database": "i342ambig",
+    "table": "orders",
+    "name": "code",
+    "type": "string",
+    "comment": "code",
+    "partition": false
+  },
+  {
+    "database": "i342ambig",
+    "table": "orders",
+    "name": "code",
+    "type": "string",
+    "comment": "code",
+    "partition": false
   }
 ]

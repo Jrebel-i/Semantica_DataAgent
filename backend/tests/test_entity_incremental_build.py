@@ -75,7 +75,7 @@ class _InMemoryGraph:
     def _find_node(self, node_id: int) -> dict:
         return next(n for n in self.nodes if n["id"] == node_id)
 
-    def _matches_incremental(self, node: dict, params: dict) -> bool:
+    def _matches_incremental(self, node: dict, params: dict, query: str) -> bool:
         props = node["props"]
         files = set(params.get("files") or ())
         selected_refs = set(params.get("selected_refs") or ())
@@ -84,7 +84,8 @@ class _InMemoryGraph:
             for t in (params.get("touched_tables") or ())
         }
         dim_tables = {
-            (t.get("database"), t.get("table")) for t in (params.get("tables") or ())
+            (t.get("catalog") or "", t.get("database"), t.get("table"))
+            for t in (params.get("tables") or ())
         }
         if (
             props.get("source_file") in files
@@ -99,9 +100,15 @@ class _InMemoryGraph:
             in touched_tables
         ):
             return True
-        return (
-            "SDADimensionValue" in node["labels"]
-            and (props.get("database"), props.get("table")) in dim_tables
+        return "SDADimensionValue" in node["labels"] and any(
+            db == props.get("database")
+            and table == props.get("table")
+            and (
+                "coalesce(t.catalog, '') = coalesce(n.catalog, '')"
+                not in query.partition("n:SDADimensionValue AND any")[2]
+                or catalog == (props.get("catalog") or "")
+            )
+            for catalog, db, table in dim_tables
         )
 
     def execute_query(self, query: str, params: dict):
@@ -177,7 +184,7 @@ class _InMemoryGraph:
                     for n in self.nodes
                     if "SDAEntity" in n["labels"]
                     and n["props"].get("generation") == gen
-                    and self._matches_incremental(n, params)
+                    and self._matches_incremental(n, params, q)
                     and n["props"].get("ref")
                 ],
             }
@@ -193,7 +200,7 @@ class _InMemoryGraph:
                 for n in self.nodes
                 if "SDAEntity" in n["labels"]
                 and n["props"].get("generation") == gen
-                and self._matches_incremental(n, params)
+                and self._matches_incremental(n, params, q)
             }
             if "DELETE batch_relationship" in q:
                 keep = [
@@ -1862,3 +1869,52 @@ def test_compute_entity_hashes_and_legacy_build_without_entity_hashes(
     assert inc["status"] == "succeeded", inc["error"]
     assert inc["build_type"] == "incremental"
     assert inc["entity_hashes"] is not None
+
+
+def test_incremental_dimension_delete_keeps_other_catalog(tmp_path, monkeypatch):
+    _setup_db(tmp_path, monkeypatch)
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "tables.json").write_text(
+        json.dumps([{"database": "shop", "name": "orders", "comment": "orders"}])
+    )
+    dimensions = [
+        {
+            "catalog": c,
+            "database": "shop",
+            "table": "orders",
+            "field": "code",
+            "value": c,
+        }
+        for c in ("hive", "internal")
+    ]
+    path = source / "dimension_values.json"
+    path.write_text(json.dumps(dimensions))
+    graph, vectors = _InMemoryGraph(), _InMemoryVectors()
+    settings = _wire_stores(monkeypatch, source, graph, vectors)
+    full = _run_build(settings, "full")
+    assert full["status"] == "succeeded", full
+    for idx, row in enumerate(dimensions, 10000):
+        graph.nodes.append(
+            {
+                "id": idx,
+                "labels": {"SDAEntity", "SDADimensionValue"},
+                "props": {
+                    **row,
+                    "generation": settings["knowledge_generation"],
+                    "ref": "dimension_value:" + row["catalog"],
+                    "build_id": full["id"],
+                },
+            }
+        )
+    dimensions[0]["value"] = "changed"
+    path.write_text(json.dumps(dimensions))
+    result = _run_build(settings, "incremental")
+    assert result["status"] == "succeeded" and result["build_type"] == "incremental", (
+        result
+    )
+    assert any(
+        n["props"].get("ref") == "dimension_value:internal"
+        and n["props"].get("build_id") == full["id"]
+        for n in graph.nodes
+    )

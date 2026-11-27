@@ -261,6 +261,8 @@ def _apply_hybrid_dimensions(
             )
         )
         for item in table_entries:
+            if catalog_prefix:
+                item["catalog"] = catalog_prefix
             dedup = (
                 item["database"],
                 item["table"],

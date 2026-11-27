@@ -27,5 +27,28 @@
     "database": "legacy",
     "name": "orders",
     "comment": "legacy"
+  },
+  {
+    "catalog": "hive",
+    "database": "i342single",
+    "name": "orders",
+    "comment": "test"
+  },
+  {
+    "catalog": "hive",
+    "database": "i342ambig",
+    "name": "orders",
+    "comment": "test"
+  },
+  {
+    "catalog": "internal",
+    "database": "i342ambig",
+    "name": "orders",
+    "comment": "test"
+  },
+  {
+    "database": "i342ambig",
+    "name": "orders",
+    "comment": "test"
   }
 ]

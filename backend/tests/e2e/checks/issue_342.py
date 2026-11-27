@@ -199,3 +199,162 @@ def check_legacy_snapshot_incremental(ctx):
         return {"hits": hits}
     finally:
         path.write_bytes(original)
+
+
+def check_old_catalogless_values(ctx):
+    from neo4j import GraphDatabase
+
+    driver = GraphDatabase.driver(
+        ctx.config.neo4j_uri, auth=(ctx.config.neo4j_user, ctx.runtime.password)
+    )
+    try:
+        with driver.session() as session:
+            rows = [
+                dict(row)
+                for row in session.run(
+                    "MATCH (f:SDAField {generation:$g, name:'code'}) WHERE f.database IN ['i342single', 'i342ambig'] "
+                    "OPTIONAL MATCH (f)-[:HAS_VALUE]->(v:SDADimensionValue) "
+                    "RETURN f.database AS db, f.catalog AS catalog, f.dimension_count AS count, collect(v.ref) AS refs ORDER BY db,catalog",
+                    g=ctx.generation,
+                )
+            ]
+        ctx.require(
+            rows
+            == [
+                {"db": "i342ambig", "catalog": "hive", "count": None, "refs": []},
+                {"db": "i342ambig", "catalog": "internal", "count": None, "refs": []},
+                {"db": "i342ambig", "catalog": None, "count": None, "refs": []},
+                {
+                    "db": "i342single",
+                    "catalog": "hive",
+                    "count": 1,
+                    "refs": ["dimension_value:i342single.orders.code.old_value"],
+                },
+            ],
+            f"old dimension scope mismatch: {rows}",
+        )
+        hits = ctx.mcp_call(
+            "lookup_dim_values",
+            {"table": "hive.i342single.orders", "keyword": "old_value"},
+        )
+        ctx.require(
+            [v["ref"] for v in hits]
+            == ["dimension_value:i342single.orders.code.old_value"],
+            f"legacy lookup: {hits}",
+        )
+        ambiguous = ctx.mcp_call(
+            "lookup_dim_values",
+            {"table": "i342ambig.orders", "catalog": "", "keyword": "old_value"},
+        )
+        ctx.require(not ambiguous, f"ambiguous legacy value leaked: {ambiguous}")
+        detail = ctx.rest.get(f"/api/v1/builds/{ctx.build_id}").json()
+        ctx.require(
+            "i342ambig.orders" in str(detail.get("logs")),
+            f"no ambiguous dimension warning: {detail.get('logs')}",
+        )
+        return {"fields": rows}
+    finally:
+        driver.close()
+
+
+def check_ossie_catalog_prefix(ctx):
+    import json
+    from pathlib import Path
+
+    from semantica_dataagent.dtb_ossie import convert_dtb_to_ossie
+
+    fixture = Path(__file__).resolve().parents[2] / "fixtures" / "dtb_source"
+    result = convert_dtb_to_ossie(
+        fixture, model_name="issue342", catalog_prefix="hive", low_cardinality_limit=1
+    )
+    expected = [
+        r
+        for r in result.dimension_values
+        if r["database"] == "dimensions" and r["table"] == "dim_airport"
+    ]
+    actual = [
+        r
+        for r in json.loads((ctx.source_dir / "dimension_values.json").read_text())
+        if r["database"] == "dimensions" and r["table"] == "dim_airport"
+    ]
+    ctx.require(
+        expected
+        and actual == expected
+        and all(r.get("catalog") == "hive" for r in actual),
+        f"ossie export lost catalog: {actual}",
+    )
+    hits = ctx.mcp_call(
+        "lookup_dim_values",
+        {
+            "table": "hive.dimensions.dim_airport",
+            "field": "airport_code",
+            "keyword": "SHA",
+        },
+    )
+    ctx.require(
+        any(r["value"] == "SHA" for r in hits),
+        f"ossie catalog round trip missing: {hits}",
+    )
+    return {"exported": len(actual), "hits": hits}
+
+
+def check_z_legacy_catalogless_incremental(ctx):
+    import json
+    import time
+
+    from neo4j import GraphDatabase
+
+    path = ctx.source_dir / "dimension_values.json"
+    original = path.read_bytes()
+    driver = GraphDatabase.driver(
+        ctx.config.neo4j_uri, auth=(ctx.config.neo4j_user, ctx.runtime.password)
+    )
+
+    def build():
+        response = ctx.rest.post("/api/v1/builds", json={"build_type": "incremental"})
+        response.raise_for_status()
+        ident = response.json()["id"]
+        deadline = time.monotonic() + 180
+        while time.monotonic() < deadline:
+            detail = ctx.rest.get(f"/api/v1/builds/{ident}").json()
+            if detail["status"] not in ("running", "queued"):
+                ctx.require(
+                    detail["status"] == "succeeded"
+                    and detail["build_type"] == "incremental",
+                    f"legacy incremental: {detail}",
+                )
+                return
+            time.sleep(1)
+        raise AssertionError("legacy incremental timed out")
+
+    try:
+        rows = json.loads(original)
+        old = next(row for row in rows if row["database"] == "i342single")
+        old["value"] = "changed_legacy"
+        path.write_text(json.dumps(rows), encoding="utf8")
+        build()
+        hits = ctx.mcp_call(
+            "lookup_dim_values",
+            {"table": "hive.i342single.orders", "keyword": "changed_legacy"},
+        )
+        ctx.require(
+            [hit["ref"] for hit in hits]
+            == ["dimension_value:i342single.orders.code.changed_legacy"],
+            f"legacy change missing: {hits}",
+        )
+        rows.remove(old)
+        path.write_text(json.dumps(rows), encoding="utf8")
+        build()
+        with driver.session() as session:
+            field = session.run(
+                "MATCH (f:SDAField {generation:$g, database:'i342single', table:'orders', name:'code'}) OPTIONAL MATCH (f)-[:HAS_VALUE]->(v) RETURN f.dimension_count AS count, collect(v.ref) AS refs",
+                g=ctx.generation,
+            ).single()
+        ctx.require(
+            field["count"] is None and field["refs"] == [],
+            f"legacy delete retained field status: {field}",
+        )
+        return {"deleted": True}
+    finally:
+        path.write_bytes(original)
+        driver.close()
