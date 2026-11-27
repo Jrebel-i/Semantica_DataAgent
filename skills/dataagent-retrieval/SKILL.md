@@ -41,7 +41,11 @@ Use this skill when a question needs warehouse knowledge or SQL. Retrieve before
    if the required event or its field cannot be established, explain the missing evidence and
    report the knowledge gap without SQL.
 7. Subject to step 6, when a relevant table exists, write one SQL statement in the requested
-   dialect even if some fields or definitions are missing. Use only fields confirmed by
+   dialect even if some fields or definitions are missing. Hive and Spark are syntax-check
+   dialects only: `validate_sql` returns a `dialect_notice` for them, and delivery and
+   execution use Doris. When the questioner requests Hive or Spark, say explicitly that only
+   the Doris version can be delivered and give the equivalent Doris SQL; do not silently
+   switch dialects. Use only fields confirmed by
    `describe_tables` or returned table metadata, never a column name inferred from
    convention or the metric name (for example, do not invent an `amount` column). State
    the assumptions and explain how the result differs from the requested metric. Then call
@@ -71,7 +75,7 @@ Use this skill when a question needs warehouse knowledge or SQL. Retrieve before
      user which condition cannot be applied and why, or call `request_clarification`.
      Good: keep `WHERE country = 'HK '` and repair the join. Bad: remove the airline
      filter and submit total sales.
-9. When the question asks for a computed answer, call `propose_query` with the Doris SQL after validation passes. The tool only creates a plan. Stop and wait for the questioner's confirmation; do not claim the query has run. Otherwise answer with the SQL and citations. Attach the exact `ref` values returned by the tools to each material claim. End the final answer with a short `引用：` line listing every ref used; an answer built from tool results must not omit references. Do not invent, shorten, or rewrite reference ids.
+9. When the question asks for a computed answer, call `propose_query` with the Doris SQL after validation passes. If the questioner requested Hive or Spark, state that only the Doris version can be delivered and show that Doris SQL before proposing it; the Hive or Spark text was syntax-checked only. The tool only creates a plan. Stop and wait for the questioner's confirmation; do not claim the query has run. Otherwise answer with the SQL and citations. Attach the exact `ref` values returned by the tools to each material claim. End the final answer with a short `引用：` line listing every ref used; an answer built from tool results must not omit references. Do not invent, shorten, or rewrite reference ids.
    - **Minimal result set:** return only the metric the question asks for. Default to one
      row and one column (a single aggregate).
    - Unless the user explicitly asks to group or compare, do not add month/group
