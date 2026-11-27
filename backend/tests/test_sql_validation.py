@@ -1098,3 +1098,33 @@ def test_issue_339_invalid_references(sql, field, message):
         i.get("kind") == "field" and i.get("field") == field and message in i["message"]
         for i in result["issues"]
     ), result
+
+
+def test_issue_339_unknown_outer_alias_is_field_error(monkeypatch):
+    from semantica_dataagent import sql_validation
+
+    monkeypatch.setattr(sql_validation, "load_snapshot", snapshot)
+    result = sql_validation.validate_sql(
+        "SELECT o.id FROM shop.orders o WHERE EXISTS "
+        "(SELECT 1 FROM shop.customers c WHERE c.id = typo.id)"
+    )
+    assert any(
+        issue.get("kind") == "field" and "未知别名" in issue["message"]
+        for issue in result["issues"]
+    ), result
+    assert any(
+        field["name"] == "typo.id" and field["status"] == "error"
+        for field in result["fields"]
+    ), result
+
+
+def test_issue_339_duplicate_outer_alias_returns_structured_result(monkeypatch):
+    from semantica_dataagent import sql_validation
+
+    monkeypatch.setattr(sql_validation, "load_snapshot", snapshot)
+    result = sql_validation.validate_sql(
+        "SELECT o.id FROM shop.orders o JOIN shop.customers o ON o.id = o.id "
+        "WHERE EXISTS (SELECT 1 FROM shop.customers c WHERE c.id = o.id)"
+    )
+    assert result["status"] == "issues", result
+    assert any(issue["kind"] == "table" for issue in result["issues"]), result
