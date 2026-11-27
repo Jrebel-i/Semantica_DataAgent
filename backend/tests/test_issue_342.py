@@ -108,10 +108,14 @@ def test_lookup_rejects_ambiguous_two_part_name(monkeypatch):
     monkeypatch.setattr(
         dimension_api.knowledge,
         "execute",
-        lambda *args: [
-            {"catalog": "hive", "database": "shop", "table": "orders"},
-            {"catalog": "internal", "database": "shop", "table": "orders"},
-        ],
+        lambda _store, query, _params: (
+            [
+                {"catalog": "hive", "database": "shop", "table": "orders"},
+                {"catalog": "internal", "database": "shop", "table": "orders"},
+            ]
+            if "RETURN DISTINCT" in query
+            else []
+        ),
     )
     with pytest.raises(ToolInvalidInput) as exc:
         dimension_api.lookup_dim_values("shop.orders", "A")
