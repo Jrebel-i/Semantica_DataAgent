@@ -703,6 +703,8 @@ def _make_fake_stores():
                             and f["props"].get("database") == row["database"]
                             and f["props"].get("table") == row["table"]
                             and f["props"].get("name") == row["field"]
+                            and (f["props"].get("catalog") or "")
+                            == (row.get("catalog") or "")
                         ):
                             f["props"]["dimension_count"] = row["count"]
                             f["props"]["dimension_too_many"] = row["too_many"]
@@ -805,6 +807,33 @@ def _make_fake_stores():
                                     "type": "HAS_FIELD",
                                     "start": t["id"],
                                     "end": f["id"],
+                                    "props": {},
+                                }
+                            )
+                return {"success": True, "records": []}
+
+            if "MERGE (f)-[:HAS_VALUE]->(n)" in q:
+                for value in self.nodes:
+                    if value["id"] not in params["ids"]:
+                        continue
+                    v = value["props"]
+                    if v.get("ambiguous_catalog"):
+                        continue
+                    for field in self.nodes:
+                        f = field["props"]
+                        if (
+                            "SDAField" in field["labels"]
+                            and f.get("generation") == gen
+                            and f.get("database") == v.get("database")
+                            and f.get("table") == v.get("table")
+                            and f.get("name") == v.get("field")
+                            and (f.get("catalog") or "") == (v.get("catalog") or "")
+                        ):
+                            self.rels.append(
+                                {
+                                    "type": "HAS_VALUE",
+                                    "start": field["id"],
+                                    "end": value["id"],
                                     "props": {},
                                 }
                             )
@@ -987,6 +1016,7 @@ def _make_fake_stores():
                         p.get("table") != tbl
                         or p.get("database") != params["database"]
                         or (p.get("catalog") or "") != params["catalog"]
+                        or p.get("ambiguous_catalog")
                     ):
                         continue
                     if field is not None and p.get("field") != field:
@@ -1844,3 +1874,31 @@ def test_large_dimension_table_streaming_and_export_cap(tmp_path) -> None:
     # <=1000 distinct column keeps 1 representative per distinct value + paired *_name alias
     assert len(reg_vals) == 25
     assert len(reg_names) == 25
+
+
+def test_exported_dimension_values_include_only_supplied_catalog(tmp_path):
+    import json
+    from pathlib import Path
+
+    from semantica_dataagent.dtb_ossie import (
+        convert_dtb_to_ossie,
+        write_dtb_ossie_output,
+    )
+
+    source = Path(__file__).resolve().parent / "fixtures" / "dtb_source"
+    for prefix in ("hive", ""):
+        result = convert_dtb_to_ossie(
+            source,
+            model_name="catalog_test",
+            catalog_prefix=prefix,
+            low_cardinality_limit=1,
+        )
+        output = tmp_path / (prefix or "default")
+        paths = write_dtb_ossie_output(result, output, model_name="catalog_test")
+        values = json.loads(paths["dimension_values"].read_text(encoding="utf-8"))
+        assert values
+        assert (
+            all(value.get("catalog") == "hive" for value in values)
+            if prefix
+            else all("catalog" not in value for value in values)
+        )

@@ -210,3 +210,79 @@ def test_single_catalog_preserves_original_dimension_reference():
         compute_entity_hashes(resolved)["dim_table:hive.shop.orders"]
         != compute_entity_hashes(multi)["dim_table:hive.shop.orders"]
     )
+
+
+def test_ambiguous_legacy_dimensions_remain_unattached_through_build(
+    tmp_path, monkeypatch
+):
+    from test_dtb_ossie import _make_fake_stores
+    from test_entity_incremental_build import _run_build, _setup_db, _wire_stores
+
+    from semantica_dataagent.dimension_api import lookup_dim_values
+
+    _setup_db(tmp_path, monkeypatch)
+    source = tmp_path / "source"
+    source.mkdir()
+    tables = []
+    fields = []
+    for database, catalogs in (
+        ("two", ("hive", "internal")),
+        ("default", ("hive", "internal", "")),
+        ("single", ("hive",)),
+    ):
+        for catalog in catalogs:
+            scope = {"catalog": catalog} if catalog else {}
+            tables.append(
+                {**scope, "database": database, "name": "orders", "comment": "orders"}
+            )
+            fields.append(
+                {
+                    **scope,
+                    "database": database,
+                    "table": "orders",
+                    "name": "code",
+                    "type": "string",
+                    "comment": "code",
+                    "partition": False,
+                }
+            )
+    dimensions = [
+        {"database": database, "table": "orders", "field": "code", "value": "legacy"}
+        for database in ("two", "default", "single")
+    ]
+    for name, rows in (
+        ("tables.json", tables),
+        ("fields.json", fields),
+        ("dimension_values.json", dimensions),
+    ):
+        (source / name).write_text(json.dumps(rows))
+    graph, vectors = _make_fake_stores()
+    settings = _wire_stores(monkeypatch, source, graph, vectors)
+    build = _run_build(settings, "full")
+    assert build["status"] == "succeeded", build["error"]
+    nodes = [n for n in graph.nodes if "SDADimensionValue" in n["labels"]]
+    assert {n["props"]["database"] for n in nodes} == {"two", "default", "single"}
+    for database in ("default", "two"):
+        node = next(n for n in nodes if n["props"]["database"] == database)
+        assert not any(
+            r["type"] == "HAS_VALUE" and r["end"] == node["id"] for r in graph.rels
+        )
+        assert all(
+            "dimension_count" not in n["props"]
+            for n in graph.nodes
+            if "SDAField" in n["labels"] and n["props"].get("database") == database
+        )
+        for catalog in (
+            ("hive", "internal") if database == "two" else ("hive", "internal", "")
+        ):
+            assert (
+                lookup_dim_values(f"{database}.orders", "legacy", catalog=catalog) == []
+            )
+        assert node["props"].get("ambiguous_catalog") is True
+    single = next(n for n in nodes if n["props"]["database"] == "single")
+    assert any(
+        r["type"] == "HAS_VALUE" and r["end"] == single["id"] for r in graph.rels
+    )
+    assert [
+        r["value"] for r in lookup_dim_values("single.orders", "legacy", catalog="hive")
+    ] == ["legacy"]
