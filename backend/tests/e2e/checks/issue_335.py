@@ -83,3 +83,13 @@ def check_duplicate_projected_fields_are_ambiguous(ctx):
         ),
         f"duplicate projected field must be ambiguous: {result}",
     )
+
+
+def check_using_merged_field_is_visible(ctx):
+    sql = (
+        "SELECT x.id FROM (SELECT * FROM shop.orders o "
+        "JOIN shop.daily_sales d USING (id) "
+        "WHERE o.dt = '2025-01-01' AND d.dt = '2025-01-01') x"
+    )
+    result = ctx.mcp_call("validate_sql", {"sql": sql})
+    ctx.require(result.get("status") == "pass", f"merged USING field: {result}")

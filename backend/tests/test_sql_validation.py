@@ -893,3 +893,31 @@ def test_issue_335_duplicate_star_projection_is_ambiguous(monkeypatch):
         field["name"] == "x.id" and field["status"] == "ambiguous"
         for field in result["fields"]
     ), result
+
+
+def test_issue_335_unqualified_using_key_is_one_output_column(monkeypatch):
+    from semantica_dataagent import sql_validation
+
+    data = _catalog_relationship_snapshot()
+    data.relationships[0]["from_columns"] = ["id"]
+    data = Snapshot(data.tables, [], [], relationships=data.relationships)
+    monkeypatch.setattr(sql_validation, "load_snapshot", lambda: data)
+    result = sql_validation.validate_sql(
+        "SELECT id FROM hive.shop.orders o JOIN hive.shop.customers c USING (id) "
+        "WHERE o.dt = '2025-01-01'"
+    )
+    assert result["status"] == "pass", result
+
+
+def test_issue_335_star_projection_preserves_using_merged_key(monkeypatch):
+    from semantica_dataagent import sql_validation
+
+    data = _catalog_relationship_snapshot()
+    data.relationships[0]["from_columns"] = ["id"]
+    data = Snapshot(data.tables, [], [], relationships=data.relationships)
+    monkeypatch.setattr(sql_validation, "load_snapshot", lambda: data)
+    result = sql_validation.validate_sql(
+        "SELECT x.id FROM (SELECT * FROM hive.shop.orders o "
+        "JOIN hive.shop.customers c USING (id) WHERE o.dt = '2025-01-01') x"
+    )
+    assert result["status"] == "pass", result

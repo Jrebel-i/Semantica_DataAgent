@@ -261,6 +261,48 @@ def _qualify_join_column(column, aliases, sources):
     return exp.column(column.name, table=matches[0]) if len(matches) == 1 else column
 
 
+def _merged_using_sources(scope, sources):
+    """Identify USING columns that denote one output across known inputs."""
+    from_clause = scope.expression.args.get("from_")
+    left = (
+        {from_clause.this.alias_or_name.lower()}
+        if from_clause and from_clause.this
+        else set()
+    )
+    merged = {}
+    for join in scope.expression.args.get("joins") or []:
+        right = join.this.alias_or_name.lower()
+        for identifier in join.args.get("using") or []:
+            name = identifier.name.lower()
+            candidates = [
+                alias
+                for alias in left
+                if sources.get(alias) is not None
+                and name in field_names(sources[alias])
+            ]
+            unknown = any(
+                sources.get(alias) is None or sources[alias].get("derived_unknown")
+                for alias in left | {right}
+            )
+            unique_fields = all(
+                sum(f["name"].lower() == name for f in sources[alias]["fields"]) == 1
+                for alias in candidates
+                + ([right] if sources.get(right) is not None else [])
+            )
+            if (
+                not unknown
+                and unique_fields
+                and candidates
+                and name in field_names(sources[right])
+                and (len(candidates) == 1 or set(candidates) == merged.get(name))
+            ):
+                merged[name] = set(candidates) | {right}
+            else:
+                merged.pop(name, None)
+        left.add(right)
+    return merged
+
+
 def full(t):
     return ".".join(
         part for part in (t.get("catalog"), t.get("database"), t.get("name")) if part
@@ -434,22 +476,33 @@ def check_sql(sql, dialect, snapshot, partition_tables=None):
                 sources[alias.lower()] = scope_outputs.get(
                     id(source), {"fields": [], "derived_unknown": True}
                 )
+        merged_columns = _merged_using_sources(scope, sources)
         output_fields = []
         output_unknown = False
         for projection in scope.expression.selects:
             if isinstance(projection, exp.Star):
-                expanded = list(sources.values())
+                expanded = list(sources.items())
             elif isinstance(projection, exp.Column) and projection.is_star:
-                expanded = [sources.get(projection.table.lower())]
+                alias = projection.table.lower()
+                expanded = [(alias, sources.get(alias))]
             else:
                 if projection.alias_or_name:
                     output_fields.append({"name": projection.alias_or_name})
                 continue
-            for source in expanded:
+            seen_merged = set()
+            for alias, source in expanded:
                 if source is None or source.get("derived_unknown"):
                     output_unknown = True
                 if source is not None:
-                    output_fields.extend(source["fields"])
+                    for field in source["fields"]:
+                        name = field["name"].lower()
+                        if isinstance(
+                            projection, exp.Star
+                        ) and alias in merged_columns.get(name, set()):
+                            if name in seen_merged:
+                                continue
+                            seen_merged.add(name)
+                        output_fields.append(field)
         if scope.union_scopes:
             # Set operations expose the names of the first input.
             scope_outputs[id(scope)] = scope_outputs.get(
@@ -490,13 +543,17 @@ def check_sql(sql, dialect, snapshot, partition_tables=None):
             uncertain = len(known) != len(candidates) or any(
                 s.get("derived_unknown") for s in known
             )
+            matching_count = len(matching)
+            if not column.table:
+                merged = merged_columns.get(column.name.lower(), set())
+                matching_count -= max(len(merged) - 1, 0)
             status = (
                 "unknown"
                 if uncertain
                 else "pass"
-                if len(matching) == 1
+                if matching_count == 1
                 else "ambiguous"
-                if len(matching) > 1
+                if matching_count > 1
                 else "error"
             )
             item = {"name": column.sql(dialect=dialect), "status": status}
