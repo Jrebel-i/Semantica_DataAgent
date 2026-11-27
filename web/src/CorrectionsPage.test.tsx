@@ -634,7 +634,7 @@ test("filters by source, renders gate_report and expanded statuses, and supports
   expect(screen.getByText("已回滚")).toBeTruthy();
 
   // Filter by source: mcp
-  fireEvent.click(screen.getByRole("button", { name: "MCP" }));
+  fireEvent.click(screen.getByRole("button", { name: "Agent 提报 (MCP)" }));
   expect(
     screen.getByRole("button", { name: /table:shop.orders/ }),
   ).toBeTruthy();
@@ -1186,8 +1186,8 @@ test("filters by discovery source and renders structured discovery_evidence veri
     await screen.findByRole("button", { name: /fk_orders_users/ }),
   ).toBeTruthy();
 
-  // Filter by 历史发现 (discovery)
-  fireEvent.click(screen.getByRole("button", { name: "历史发现" }));
+  // Filter by 冷启动发现 (discovery)
+  fireEvent.click(screen.getByRole("button", { name: "冷启动发现" }));
   expect(screen.getByRole("button", { name: /fk_orders_users/ })).toBeTruthy();
   expect(
     screen.queryByRole("button", { name: /document:guide.md/ }),
@@ -1420,4 +1420,97 @@ test("renders unified evidence card across manual, evolution, and discovery prop
   ).toBeTruthy();
   expect(screen.getByText(/外键探活聚合证据/)).toBeTruthy();
   expect(screen.getByText(/98\.0%/)).toBeTruthy();
+});
+
+test("displays explicit source and destination badges and filters feedback proposals to historical_ticket", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) => {
+      if (url === "/api/v1/projects") {
+        return Response.json([
+          {
+            id: "default",
+            name: "业务数据",
+            type: "warehouse",
+            status: "active",
+            created_at: "2026-01-01T00:00:00Z",
+            my_role: "admin",
+          },
+        ]);
+      }
+      return Response.json([
+        {
+          id: "prop-fb-1",
+          target: "document:knowledge/historical-tickets/air-gmv.md",
+          reason: "由对话点赞沉淀经上下文大模型提炼为历史工单",
+          diff: "--- /dev/null\n+++ knowledge/historical-tickets/air-gmv.md\n+# 机票销售额",
+          patch: "# 机票销售额\n",
+          status: "pending",
+          source: "feedback",
+          target_kind: "document",
+          destination_kind: "historical_ticket",
+          is_new_file: true,
+          evidence: {
+            source_type: "feedback",
+            summary_reason: "由对话点赞沉淀经上下文大模型提炼为历史工单",
+            trigger_evidence: {
+              question: "按 finished_time 的机票销售额",
+              conversation_id: "conv-1",
+              turn_id: 2,
+              turn_count: 2,
+              synthesis_mode: "llm",
+              reference_sql: "SELECT SUM(gmv_cny) FROM dm.dm_air_orders",
+              context_excerpts: [
+                { sequence: 1, question: "查今年航司销售额", is_target: false },
+                {
+                  sequence: 2,
+                  question: "按 finished_time 排除辅营",
+                  is_target: true,
+                },
+              ],
+            },
+          },
+        },
+        {
+          id: "prop-override-1",
+          target: "table:shop.orders",
+          reason: "补充表说明",
+          diff: "-a\n+b",
+          patch: "version: 1",
+          status: "pending",
+          source: "manual",
+          target_kind: "override",
+          destination_kind: "semantic_override",
+        },
+      ]);
+    }),
+  );
+
+  render(<CorrectionsPage token="token" messages={getMessages("zh")} />);
+
+  const ticketBtn = await screen.findByRole("button", {
+    name: /air-gmv\.md/,
+  });
+  expect(ticketBtn.textContent).toContain("来源: 对话点赞沉淀");
+  expect(ticketBtn.textContent).toContain("去向: 历史工单");
+
+  const overrideBtn = screen.getByRole("button", {
+    name: /table:shop\.orders/,
+  });
+  expect(overrideBtn.textContent).toContain("来源: 人工纠错");
+  expect(overrideBtn.textContent).toContain("去向: 语义覆盖层");
+
+  // Destination filter hides non-historical_ticket proposals
+  fireEvent.click(screen.getByRole("button", { name: "历史工单" }));
+  expect(
+    screen.queryByRole("button", { name: /table:shop\.orders/ }),
+  ).toBeNull();
+  expect(screen.getByRole("button", { name: /air-gmv\.md/ })).toBeTruthy();
+
+  fireEvent.click(screen.getByRole("button", { name: /air-gmv\.md/ }));
+  expect(screen.getByText("上下文轮次: 2")).toBeTruthy();
+  expect(screen.getByText("大模型上下文归纳")).toBeTruthy();
+  expect(
+    screen.getByText("SELECT SUM(gmv_cny) FROM dm.dm_air_orders"),
+  ).toBeTruthy();
 });

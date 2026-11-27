@@ -925,6 +925,10 @@ from .eval_questions import router as eval_questions_router
 
 app.include_router(eval_questions_router)
 
+from .historical_tickets import router as historical_tickets_router
+
+app.include_router(historical_tickets_router)
+
 from .evolution_api import router as evolution_router
 
 app.include_router(evolution_router)

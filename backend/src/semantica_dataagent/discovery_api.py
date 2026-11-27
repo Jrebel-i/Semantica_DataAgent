@@ -409,6 +409,7 @@ DiscoveryCandidateKind = Literal[
     "override",
     "document",
     "synthesized",
+    "historical_ticket",
     "eval_draft",
 ]
 DiscoveryCandidateDecision = Literal[

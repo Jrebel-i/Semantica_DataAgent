@@ -311,6 +311,8 @@ export function ChatPage({
               ? {
                   ...row,
                   feedback_accurate: false,
+                  ticket_proposal_id: null,
+                  ticket_proposal_status: null,
                   eval_question_id: null,
                   eval_answer_confirmed: null,
                 }
@@ -332,8 +334,9 @@ export function ChatPage({
         throw new Error(await readErrorDetail(response, t.operationFailed));
       }
       const saved = (await response.json()) as {
-        question_id: string;
-        answer_confirmed: boolean;
+        proposal_id: string;
+        proposal_status: string;
+        target: string;
       };
       setTurns((prev) =>
         prev.map((row) =>
@@ -341,17 +344,15 @@ export function ChatPage({
             ? {
                 ...row,
                 feedback_accurate: true,
-                eval_question_id: saved.question_id,
-                eval_answer_confirmed: saved.answer_confirmed,
+                ticket_proposal_id: saved.proposal_id,
+                ticket_proposal_status: saved.proposal_status,
+                eval_question_id: null,
+                eval_answer_confirmed: null,
               }
             : row,
         ),
       );
-      setFeedbackNotice(
-        saved.answer_confirmed
-          ? t.turnAccurateSavedConfirmed
-          : t.turnAccurateSavedDraft,
-      );
+      setFeedbackNotice(t.turnAccurateSavedDraft);
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : t.operationFailed);
     } finally {
@@ -897,7 +898,7 @@ export function ChatPage({
               ))}
               {live && (
                 <article className="turn">
-                  <div className="message">
+                  <div className="message" data-role="user">
                     <span className="avatar user" aria-hidden="true">
                       我
                     </span>
@@ -905,7 +906,7 @@ export function ChatPage({
                       <QuestionText text={live.question} messages={t} />
                     </div>
                   </div>
-                  <div className="message">
+                  <div className="message" data-role="ai">
                     <span className="avatar ai" aria-hidden="true">
                       AI
                     </span>
@@ -918,11 +919,20 @@ export function ChatPage({
                       <div className="answer">
                         {liveAnswer.text ? (
                           <Markdown text={liveAnswer.text} />
-                        ) : (
-                          <p className="muted">
-                            {live.status === "running" ? t.asking : ""}
-                          </p>
-                        )}
+                        ) : live.status === "running" ? (
+                          <div className="thinking-block" role="status">
+                            <div className="dots-row">
+                              <span className="dot"></span>
+                              <span className="dot"></span>
+                              <span className="dot"></span>
+                              <span className="thinking-phase">
+                                {live.tools?.length > 0
+                                  ? `正在处理（${live.tools.length} 步）…`
+                                  : t.asking}
+                              </span>
+                            </div>
+                          </div>
+                        ) : null}
                       </div>
                       <SqlList
                         blocks={live.sql}
@@ -950,6 +960,7 @@ export function ChatPage({
               )}
             </div>
             <Composer
+              sending={sending}
               messages={t}
               question={question}
               setQuestion={setQuestion}

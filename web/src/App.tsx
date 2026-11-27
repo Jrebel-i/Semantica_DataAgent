@@ -9,10 +9,11 @@ import {
   Typography,
   theme as antdTheme,
 } from "antd";
-import { CorrectionsPage } from "./CorrectionsPage";
+import { CorrectionsPage, type DestinationFilter } from "./CorrectionsPage";
 import { DiscoveryPage } from "./DiscoveryPage";
 import { EvaluationsPage } from "./EvaluationsPage";
 import { EvolutionPage } from "./EvolutionPage";
+import { HistoricalTicketsPage } from "./HistoricalTicketsPage";
 import { BuildPage } from "./BuildPage";
 import { getMessages, type Language, type Messages } from "./i18n";
 import { ChatPage } from "./ChatPage";
@@ -192,6 +193,8 @@ export function App() {
   const [correctionProposalId, setCorrectionProposalId] = useState<
     string | null
   >(null);
+  const [correctionDestination, setCorrectionDestination] =
+    useState<DestinationFilter | null>(null);
   const [error, setError] = useState("");
   const [health, setHealth] = useState<Health | null>(null);
   const [generation, setGeneration] = useState<{
@@ -326,11 +329,20 @@ export function App() {
   const navigate = (next: string) => {
     const [nextPath, nextQuery] = next.split("?");
     if (nextPath === "/corrections" && nextQuery) {
-      setCorrectionProposalId(
-        new URLSearchParams(nextQuery).get("proposal_id"),
+      const params = new URLSearchParams(nextQuery);
+      setCorrectionProposalId(params.get("proposal_id"));
+      const destParam = params.get("destination");
+      setCorrectionDestination(
+        destParam === "historical_ticket" ||
+          destParam === "knowledge_doc" ||
+          destParam === "semantic_override" ||
+          destParam === "ossie_model"
+          ? destParam
+          : null,
       );
     } else {
       setCorrectionProposalId(null);
+      setCorrectionDestination(null);
     }
     history.pushState(null, "", next);
     setPath(nextPath || "/");
@@ -347,7 +359,8 @@ export function App() {
     if (
       path === "/knowledge" ||
       path === "/search" ||
-      (path === "/knowledge-gaps" && !canManageProject)
+      ((path === "/knowledge-gaps" || path === "/historical-tickets") &&
+        !canManageProject)
     ) {
       return "knowledge";
     }
@@ -356,6 +369,7 @@ export function App() {
         "/builds",
         "/source",
         "/corrections",
+        "/historical-tickets",
         "/evaluations",
         "/knowledge-gaps",
         "/evolution",
@@ -424,7 +438,13 @@ export function App() {
             { path: "/knowledge", label: t.knowledge },
             { path: "/search", label: t.searchDebug },
             ...(!canManageProject && projectMember
-              ? [{ path: "/knowledge-gaps", label: t.gapTitle }]
+              ? [
+                  {
+                    path: "/historical-tickets",
+                    label: t.historicalTicketsTab,
+                  },
+                  { path: "/knowledge-gaps", label: t.gapTitle },
+                ]
               : []),
           ],
         },
@@ -452,6 +472,7 @@ export function App() {
           items: [
             { path: "/knowledge-gaps", label: t.gapTitle },
             { path: "/corrections", label: t.correctionTitle },
+            { path: "/historical-tickets", label: t.historicalTicketsTab },
             { path: "/evaluations", label: t.evalQuestionsTab },
             { path: "/evolution", label: t.evolutionTitle },
             { path: "/discovery", label: t.discoveryTitle },
@@ -545,12 +566,27 @@ export function App() {
   const content =
     path === "/knowledge-gaps" ? (
       <CorrectionsPage token={token} gaps messages={t} />
+    ) : path === "/historical-tickets" ? (
+      canViewProjects ? (
+        <HistoricalTicketsPage
+          token={token}
+          messages={t}
+          onNavigateCorrections={
+            canManageProject
+              ? () => navigate("/corrections?destination=historical_ticket")
+              : undefined
+          }
+        />
+      ) : (
+        <Alert title={t.forbidden} type="warning" />
+      )
     ) : path === "/corrections" ? (
       canManageProject ? (
         <CorrectionsPage
           token={token}
           messages={t}
           initialProposalId={correctionProposalId}
+          initialDestinationFilter={correctionDestination}
           onNavigateGaps={() => navigate("/knowledge-gaps")}
         />
       ) : (
@@ -595,7 +631,7 @@ export function App() {
                 : "/corrections",
             )
           }
-          onNavigateEvaluations={() => navigate("/evaluations")}
+          onNavigateEvaluations={() => navigate("/historical-tickets")}
           onNavigatePersonalSettings={() => navigate("/personal-settings")}
         />
       ) : (

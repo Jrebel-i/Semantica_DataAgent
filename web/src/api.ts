@@ -578,6 +578,42 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/historical-tickets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Historical Tickets */
+        get: operations["list_historical_tickets_api_v1_historical_tickets_get"];
+        put?: never;
+        /** Create Historical Ticket */
+        post: operations["create_historical_ticket_api_v1_historical_tickets_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/historical-tickets/{slug}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete Historical Ticket */
+        delete: operations["delete_historical_ticket_api_v1_historical_tickets__slug__delete"];
+        options?: never;
+        head?: never;
+        /** Update Historical Ticket */
+        patch: operations["update_historical_ticket_api_v1_historical_tickets__slug__patch"];
+        trace?: never;
+    };
     "/api/v1/knowledge-gaps": {
         parameters: {
             query?: never;
@@ -2264,7 +2300,7 @@ export interface components {
              * Candidate Kind
              * @enum {string}
              */
-            candidate_kind: "relationship" | "metric" | "filter_rule" | "table" | "field" | "override" | "document" | "synthesized" | "eval_draft";
+            candidate_kind: "relationship" | "metric" | "filter_rule" | "table" | "field" | "override" | "document" | "synthesized" | "historical_ticket" | "eval_draft";
             /**
              * Created At
              * Format: date-time
@@ -3295,6 +3331,103 @@ export interface components {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
         };
+        /** HistoricalTicketCreate */
+        HistoricalTicketCreate: {
+            /**
+             * Caliber
+             * @default
+             */
+            caliber: string;
+            /**
+             * Caveats
+             * @default
+             */
+            caveats: string;
+            /** Content */
+            content?: string | null;
+            /**
+             * Dialect
+             * @default doris
+             * @enum {string}
+             */
+            dialect: "hive" | "spark" | "doris";
+            /**
+             * Reference Sql
+             * @default
+             */
+            reference_sql: string;
+            /** Slug */
+            slug?: string | null;
+            /** Title */
+            title: string;
+        };
+        /** HistoricalTicketListView */
+        HistoricalTicketListView: {
+            /** Items */
+            items?: components["schemas"]["HistoricalTicketView"][];
+            /**
+             * Pending Proposal Count
+             * @default 0
+             */
+            pending_proposal_count: number;
+            /**
+             * Total Tables
+             * @default 0
+             */
+            total_tables: number;
+        };
+        /** HistoricalTicketPatch */
+        HistoricalTicketPatch: {
+            /** Caliber */
+            caliber?: string | null;
+            /** Caveats */
+            caveats?: string | null;
+            /** Content */
+            content?: string | null;
+            /** Dialect */
+            dialect?: ("hive" | "spark" | "doris") | null;
+            /** Reference Sql */
+            reference_sql?: string | null;
+            /** Title */
+            title?: string | null;
+        };
+        /** HistoricalTicketView */
+        HistoricalTicketView: {
+            /** Content */
+            content: string;
+            /**
+             * Dialect
+             * @default doris
+             */
+            dialect: string;
+            /** Path */
+            path: string;
+            /** Size Bytes */
+            size_bytes: number;
+            /** Slug */
+            slug: string;
+            /**
+             * Source Label
+             * @default 人工录入
+             */
+            source_label: string;
+            /**
+             * Sql Preview
+             * @default
+             */
+            sql_preview: string;
+            /** Summary */
+            summary: string;
+            /** Tables */
+            tables?: string[];
+            /** Title */
+            title: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
         /** ModelCapability */
         ModelCapability: {
             /**
@@ -3663,6 +3796,12 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+            /**
+             * Destination Kind
+             * @default knowledge_doc
+             * @enum {string}
+             */
+            destination_kind: "historical_ticket" | "knowledge_doc" | "semantic_override" | "ossie_model";
             /** Diff */
             diff: string;
             /** Evidence */
@@ -4422,11 +4561,16 @@ export interface components {
         };
         /** TurnFeedbackView */
         TurnFeedbackView: {
-            /** Answer Confirmed */
-            answer_confirmed: boolean;
-            eval_question: components["schemas"]["EvalQuestionView"];
-            /** Question Id */
-            question_id: string;
+            /**
+             * Destination Kind
+             * @default historical_ticket
+             * @constant
+             */
+            destination_kind: "historical_ticket";
+            /** Proposal Id */
+            proposal_id: string;
+            /** Proposal Status */
+            proposal_status: string;
             /**
              * Rating
              * @default accurate
@@ -4434,10 +4578,13 @@ export interface components {
              */
             rating: "accurate";
             /**
-             * Split
+             * Synthesis Mode
+             * @default llm
              * @enum {string}
              */
-            split: "dev" | "holdout";
+            synthesis_mode: "llm" | "fallback";
+            /** Target */
+            target: string;
         };
         /** TurnView */
         TurnView: {
@@ -4495,6 +4642,10 @@ export interface components {
             started_at: string;
             /** Status */
             status: string;
+            /** Ticket Proposal Id */
+            ticket_proposal_id?: string | null;
+            /** Ticket Proposal Status */
+            ticket_proposal_status?: string | null;
         };
         /** UserAgentDefaultView */
         UserAgentDefaultView: {
@@ -5353,6 +5504,8 @@ export interface operations {
     list_proposals_api_v1_corrections_get: {
         parameters: {
             query?: {
+                source?: ("manual" | "feedback" | "mcp" | "evolution" | "discovery") | null;
+                destination_kind?: ("historical_ticket" | "knowledge_doc" | "semantic_override" | "ossie_model") | null;
                 project?: string | null;
             };
             header?: never;
@@ -5961,6 +6114,141 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["GenerationView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_historical_tickets_api_v1_historical_tickets_get: {
+        parameters: {
+            query?: {
+                search?: string | null;
+                project?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HistoricalTicketListView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_historical_ticket_api_v1_historical_tickets_post: {
+        parameters: {
+            query?: {
+                project?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["HistoricalTicketCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HistoricalTicketView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_historical_ticket_api_v1_historical_tickets__slug__delete: {
+        parameters: {
+            query?: {
+                project?: string | null;
+            };
+            header?: never;
+            path: {
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_historical_ticket_api_v1_historical_tickets__slug__patch: {
+        parameters: {
+            query?: {
+                project?: string | null;
+            };
+            header?: never;
+            path: {
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["HistoricalTicketPatch"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HistoricalTicketView"];
                 };
             };
             /** @description Validation Error */

@@ -1547,15 +1547,17 @@ async def _execute_discovery_run_async(
                 proposal_id=prop_id,
             )
 
-    # Stage 3: Optional cold-start eval question draft seeding (OFF by default)
+    # Stage 3: Optional cold-start historical ticket proposal seeding (OFF by default)
     if seed_eval_drafts_flag and mining_result is not None:
+        from . import historical_tickets
+
         for tpl in mining_result.templates[:MAX_EVAL_DRAFTS_PER_RUN]:
-            target_ref = f"eval_draft:{tpl.fingerprint[:12]}"
+            target_ref = f"historical_ticket:{tpl.fingerprint[:12]}"
             candidate_sql, eval_dialect = _render_synthetic_eval_sql(tpl, tables)
             question, caliber = _build_eval_draft_question(tpl)
             evidence = {
                 "run_id": run_id,
-                "candidate_kind": "eval_draft",
+                "candidate_kind": "historical_ticket",
                 "fingerprint": tpl.fingerprint,
                 "tables": list(tpl.tables),
                 "dialect": eval_dialect,
@@ -1570,7 +1572,7 @@ async def _execute_discovery_run_async(
                 _record_candidate(
                     run_id=run_id,
                     project_id=project_id,
-                    candidate_kind="eval_draft",
+                    candidate_kind="historical_ticket",
                     target=target_ref,
                     evidence=evidence,
                     decision="rejected",
@@ -1578,60 +1580,37 @@ async def _execute_discovery_run_async(
                 )
                 continue
 
-            dup = eval_questions.find_duplicate_eval_question(
-                project_id,
-                question=question,
-                reference_sql=candidate_sql,
-                dialect=eval_dialect,
-                template_fingerprint=tpl.fingerprint,
-            )
-            if dup is not None:
-                _record_candidate(
-                    run_id=run_id,
-                    project_id=project_id,
-                    candidate_kind="eval_draft",
-                    target=target_ref,
-                    evidence=evidence,
-                    decision="deduplicated",
-                    reason="duplicate_eval_question",
-                    eval_question_id=str(dup.get("id") or "") or None,
-                )
-                continue
-
-            try:
-                saved = eval_questions.upsert_eval_question(
+            decision, prop_id, err_reason, ticket_ev = (
+                historical_tickets.propose_ticket_from_discovery(
                     project_id,
-                    question=question,
-                    caliber=caliber,
-                    reference_sql=candidate_sql,
-                    notes=f"discovery_run:{run_id}; template_fingerprint:{tpl.fingerprint}",
-                    dialect=eval_dialect,
-                    split="dev",
-                    answer_confirmed=False,
-                    source="discovery",
-                    created_by=owner_id,
-                )
-            except ValueError as exc:
-                _record_candidate(
                     run_id=run_id,
-                    project_id=project_id,
-                    candidate_kind="eval_draft",
-                    target=target_ref,
-                    evidence=evidence,
-                    decision="rejected",
-                    reason=str(exc),
+                    tpl=tpl,
+                    candidate_sql=candidate_sql,
+                    eval_dialect=eval_dialect,
+                    fallback_title=question,
+                    fallback_caliber=caliber,
+                    requester=actor_requester,
                 )
-            else:
+            )
+            merged_ev = {**evidence, **(ticket_ev or {})}
+            if decision == "proposed" and prop_id:
                 eval_drafts_created += 1
-                _record_candidate(
-                    run_id=run_id,
-                    project_id=project_id,
-                    candidate_kind="eval_draft",
-                    target=target_ref,
-                    evidence=evidence,
-                    decision="proposed",
-                    eval_question_id=str(saved["id"]),
-                )
+                proposals_created += 1
+                proposal_ids.append(prop_id)
+            elif decision == "deduplicated":
+                duplicates_skipped += 1
+            elif decision == "rejected":
+                l1_rejected += 1
+            _record_candidate(
+                run_id=run_id,
+                project_id=project_id,
+                candidate_kind="historical_ticket",
+                target=target_ref,
+                evidence=merged_ev,
+                decision=decision,
+                reason=err_reason,
+                proposal_id=prop_id,
+            )
 
     has_any_valid_progress = (
         proposals_created > 0

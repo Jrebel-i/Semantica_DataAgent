@@ -439,8 +439,7 @@ def _seed_conversation_turn(
 def test_turn_feedback_accurate_requires_ownership_scope_and_validated_sql(
     tmp_path: Path, monkeypatch
 ):
-    from semantica_dataagent import eval as eval_mod
-    from semantica_dataagent import project_context, sql_validation
+    from semantica_dataagent import sql_validation
     from semantica_dataagent.app import app
     from semantica_dataagent.db import Token, digest, sessions
     from semantica_dataagent.project_api import create_project_record
@@ -536,7 +535,7 @@ def test_turn_feedback_accurate_requires_ownership_scope_and_validated_sql(
             == 404
         )
 
-        # Member submits accurate feedback -> creates unconfirmed draft
+        # Member submits accurate feedback -> creates pending historical-ticket proposal (NOT eval question)
         member_fb = client.post(
             f"/api/v1/conversations/{conv_val}/turns/{turn_val}/feedback",
             headers=member_headers,
@@ -544,37 +543,49 @@ def test_turn_feedback_accurate_requires_ownership_scope_and_validated_sql(
         )
         assert member_fb.status_code == 201, member_fb.text
         fb_body = member_fb.json()
-        assert fb_body["answer_confirmed"] is False
-        assert fb_body["split"] == "dev"
-        assert fb_body["eval_question"]["redacted"] is True
-        assert fb_body["eval_question"]["reference_sql"] is None
+        assert fb_body["proposal_status"] == "pending"
+        assert fb_body["destination_kind"] == "historical_ticket"
+        assert "knowledge/historical-tickets/" in fb_body["target"]
 
-        # Turn detail reflects accurate feedback
+        # Eval questions MUST remain empty (isolated from chat feedback)
+        assert (
+            client.get("/api/v1/eval-questions", params={"project": project.id}).json()
+            == []
+        )
+
+        # Turn detail reflects accurate feedback & linked historical ticket proposal
         conv_detail = client.get(
             f"/api/v1/conversations/{conv_val}", headers=member_headers
         ).json()
         assert conv_detail["turns"][0]["has_validated_sql"] is True
         assert conv_detail["turns"][0]["feedback_accurate"] is True
-        assert conv_detail["turns"][0]["eval_answer_confirmed"] is False
-        assert conv_detail["turns"][0]["eval_question_id"] == fb_body["question_id"]
+        assert conv_detail["turns"][0]["ticket_proposal_id"] == fb_body["proposal_id"]
+        assert conv_detail["turns"][0]["ticket_proposal_status"] == "pending"
+        assert conv_detail["turns"][0]["eval_question_id"] is None
 
-        # Repeat feedback is idempotent (still 1 item)
+        # Repeat feedback is idempotent (still 1 pending proposal, 0 eval questions)
         repeat_fb = client.post(
             f"/api/v1/conversations/{conv_val}/turns/{turn_val}/feedback",
             headers=member_headers,
             json={"rating": "accurate"},
         )
         assert repeat_fb.status_code in (200, 201)
+        assert repeat_fb.json()["proposal_id"] == fb_body["proposal_id"]
         assert (
             len(
                 client.get(
-                    "/api/v1/eval-questions", params={"project": project.id}
+                    "/api/v1/corrections",
+                    params={"project": project.id, "source": "feedback"},
                 ).json()
             )
             == 1
         )
+        assert (
+            client.get("/api/v1/eval-questions", params={"project": project.id}).json()
+            == []
+        )
 
-        # Admin turn accurate feedback creates confirmed item with stratified split
+        # Admin turn accurate feedback also goes to pending historical-ticket proposal, NOT eval questions
         for i in range(4):
             a_conv, a_turn = _seed_conversation_turn(
                 project.id,
@@ -590,18 +601,12 @@ def test_turn_feedback_accurate_requires_ownership_scope_and_validated_sql(
                 json={"rating": "accurate", "category": "订单指标"},
             )
             assert a_res.status_code == 201, a_res.text
-            assert a_res.json()["answer_confirmed"] is True
+            assert a_res.json()["proposal_status"] == "pending"
+            assert a_res.json()["destination_kind"] == "historical_ticket"
 
-        all_questions = client.get(
-            "/api/v1/eval-questions", params={"project": project.id}
-        ).json()
-        confirmed_splits = [q["split"] for q in all_questions if q["answer_confirmed"]]
-        assert "holdout" in confirmed_splits and "dev" in confirmed_splits
         assert (
-            len(
-                eval_mod.load_questions(project_context.eval_questions_path(project.id))
-            )
-            == 5
+            client.get("/api/v1/eval-questions", params={"project": project.id}).json()
+            == []
         )
 
         # Archived project -> 409 on feedback
@@ -619,7 +624,6 @@ def test_turn_feedback_accurate_requires_ownership_scope_and_validated_sql(
 def test_approved_correction_promotes_validated_sql_to_eval_questions(
     tmp_path: Path, monkeypatch
 ):
-    from semantica_dataagent import eval as eval_mod
     from semantica_dataagent import knowledge, project_context, sql_validation
     from semantica_dataagent.app import app
     from semantica_dataagent.project_api import create_project_record
@@ -717,7 +721,7 @@ def test_approved_correction_promotes_validated_sql_to_eval_questions(
             json={"rating": "accurate"},
         )
         assert fb_res.status_code == 201
-        draft_qid = fb_res.json()["question_id"]
+        fb_proposal_id = fb_res.json()["proposal_id"]
 
         prop1 = client.post(
             "/api/v1/corrections",
@@ -734,28 +738,26 @@ def test_approved_correction_promotes_validated_sql_to_eval_questions(
         )
         assert prop1.status_code == 201, prop1.text
         prop1_id = prop1.json()["id"]
+        assert prop1_id != fb_proposal_id
 
-        # While pending, draft remains unconfirmed
-        before_qs = client.get(
-            "/api/v1/eval-questions", params={"project": project.id}
-        ).json()
-        assert before_qs[0]["answer_confirmed"] is False
+        # While pending, eval_questions remains empty (feedback created a ticket proposal, not an eval question)
+        assert (
+            client.get("/api/v1/eval-questions", params={"project": project.id}).json()
+            == []
+        )
 
-        # Approving promotes existing draft in place -> answer_confirmed=True without duplicate
+        # Approving correction applies doc update WITHOUT polluting eval/questions.yaml
         app1 = client.post(
             f"/api/v1/corrections/{prop1_id}/approve",
             params={"project": project.id},
         )
         assert app1.status_code == 200, app1.text
-        after_qs = client.get(
-            "/api/v1/eval-questions", params={"project": project.id}
-        ).json()
-        assert len(after_qs) == 1
-        assert after_qs[0]["id"] == draft_qid
-        assert after_qs[0]["answer_confirmed"] is True
-        assert after_qs[0]["proposal_id"] == prop1_id
+        assert (
+            client.get("/api/v1/eval-questions", params={"project": project.id}).json()
+            == []
+        )
 
-        # Direct correction with validated reference_sql appends new confirmed eval question on approve
+        # Direct correction with validated reference_sql also does NOT write to eval_questions
         prop2 = client.post(
             "/api/v1/corrections",
             params={"project": project.id},
@@ -777,45 +779,9 @@ def test_approved_correction_promotes_validated_sql_to_eval_questions(
             params={"project": project.id},
         )
         assert app2.status_code == 200, app2.text
-        all_qs = client.get(
-            "/api/v1/eval-questions", params={"project": project.id}
-        ).json()
-        assert len(all_qs) == 2
-        promoted = next(
-            item for item in all_qs if item["proposal_id"] == prop2.json()["id"]
-        )
-        assert promoted["answer_confirmed"] is True
-        assert promoted["source"] == "correction"
-
-        # Invalid SQL on correction does NOT promote on approval
-        prop3 = client.post(
-            "/api/v1/corrections",
-            params={"project": project.id},
-            headers=member_headers,
-            json={
-                "target": "document:gmv",
-                "target_kind": "document",
-                "patch": "# GMV 口径 v3\n\n备注更新\n",
-                "reason": "文档微调",
-                "question": "坏SQL不应该进入题集",
-                "reference_sql": "SELECT COUNT(*) FROM shop.invalid_tbl",
-            },
-        )
-        assert prop3.status_code == 201, prop3.text
-        app3 = client.post(
-            f"/api/v1/corrections/{prop3.json()['id']}/approve",
-            params={"project": project.id},
-        )
-        assert app3.status_code == 200, app3.text
-        final_qs = client.get(
-            "/api/v1/eval-questions", params={"project": project.id}
-        ).json()
-        assert len(final_qs) == 2
         assert (
-            len(
-                eval_mod.load_questions(project_context.eval_questions_path(project.id))
-            )
-            == 2
+            client.get("/api/v1/eval-questions", params={"project": project.id}).json()
+            == []
         )
 
 
@@ -901,7 +867,7 @@ def test_auto_applied_member_correction_does_not_auto_confirm_eval_question(
             == 200
         )
 
-        # Member auto_applied correction MUST NOT become answer_confirmed=True
+        # Auto-applied corrections (member or admin) MUST NOT pollute eval/questions.yaml
         mem_prop = client.post(
             "/api/v1/corrections",
             params={"project": project.id},
@@ -919,12 +885,6 @@ def test_auto_applied_member_correction_does_not_auto_confirm_eval_question(
         assert mem_prop.status_code == 201, mem_prop.text
         assert mem_prop.json()["status"] == "auto_applied"
 
-        qs_after_member = client.get(
-            "/api/v1/eval-questions", params={"project": project.id}
-        ).json()
-        assert all(q["answer_confirmed"] is False for q in qs_after_member)
-
-        # Admin-authored auto_applied correction DOES promote as answer_confirmed=True
         adm_prop = client.post(
             "/api/v1/corrections",
             params={"project": project.id},
@@ -933,21 +893,17 @@ def test_auto_applied_member_correction_does_not_auto_confirm_eval_question(
                 "target_kind": "document",
                 "patch": "# 管理员直通修改\n",
                 "reason": "管理员自动生效纠错",
-                "question": "管理员自动生效的问题应该直接确认",
+                "question": "管理员自动生效的问题也不应写进回归集",
                 "caliber": "管理员口径",
                 "reference_sql": "SELECT SUM(amount) FROM shop.orders",
             },
         )
         assert adm_prop.status_code == 201, adm_prop.text
         assert adm_prop.json()["status"] == "auto_applied"
-
-        qs_after_admin = client.get(
-            "/api/v1/eval-questions", params={"project": project.id}
-        ).json()
-        adm_q = next(
-            q for q in qs_after_admin if q["proposal_id"] == adm_prop.json()["id"]
+        assert (
+            client.get("/api/v1/eval-questions", params={"project": project.id}).json()
+            == []
         )
-        assert adm_q["answer_confirmed"] is True
 
 
 def test_eval_questions_500_scrubs_internal_yaml_parse_errors(
@@ -986,7 +942,7 @@ def test_eval_questions_500_scrubs_internal_yaml_parse_errors(
 def test_revoke_turn_feedback_removes_draft_and_respects_confirmations(
     tmp_path: Path, monkeypatch
 ):
-    from semantica_dataagent import knowledge, sql_validation
+    from semantica_dataagent import sql_validation
     from semantica_dataagent.app import app
     from semantica_dataagent.db import Token, digest, sessions
     from semantica_dataagent.project_api import create_project_record
@@ -1006,9 +962,6 @@ def test_revoke_turn_feedback_removes_draft_and_respects_confirmations(
         sql_validation,
         "validate_sql",
         lambda sql, dialect="hive", project_id=None: {"status": "pass", "issues": []},
-    )
-    monkeypatch.setattr(
-        knowledge, "existing_refs", lambda refs, project_id=None: set(refs)
     )
 
     with TestClient(app, headers=admin_headers) as client:
@@ -1073,26 +1026,28 @@ def test_revoke_turn_feedback_removes_draft_and_respects_confirmations(
             f"/api/v1/conversations/{conv_m}", headers=member_headers
         ).json()
         assert conv_detail["turns"][0]["feedback_accurate"] is False
-        assert conv_detail["turns"][0]["eval_question_id"] is None
-        assert conv_detail["turns"][0]["eval_answer_confirmed"] is None
+        assert conv_detail["turns"][0]["ticket_proposal_id"] is None
+        assert conv_detail["turns"][0]["ticket_proposal_status"] is None
         assert (
-            client.get("/api/v1/eval-questions", params={"project": project.id}).json()
-            == []
+            client.get(
+                "/api/v1/corrections",
+                params={"project": project.id, "source": "feedback"},
+            ).json()[0]["status"]
+            == "rejected"
         )
 
-        # 2. Member marks accurate, admin confirms via PATCH -> member DELETE blocked (409)
+        # 2. Member marks accurate, admin approves proposal -> member DELETE blocked (409)
         repost_res = client.post(
             f"/api/v1/conversations/{conv_m}/turns/{turn_m}/feedback",
             headers=member_headers,
             json={"rating": "accurate"},
         )
         assert repost_res.status_code == 201
-        confirmed_qid = repost_res.json()["question_id"]
+        approved_pid = repost_res.json()["proposal_id"]
         assert (
-            client.patch(
-                f"/api/v1/eval-questions/{confirmed_qid}",
+            client.post(
+                f"/api/v1/corrections/{approved_pid}/approve",
                 params={"project": project.id},
-                json={"answer_confirmed": True},
             ).status_code
             == 200
         )
@@ -1101,16 +1056,8 @@ def test_revoke_turn_feedback_removes_draft_and_respects_confirmations(
             headers=member_headers,
         )
         assert blocked_del.status_code == 409
-        assert (
-            len(
-                client.get(
-                    "/api/v1/eval-questions", params={"project": project.id}
-                ).json()
-            )
-            == 1
-        )
 
-        # 3. Admin marks own turn accurate (answer_confirmed=True) -> admin DELETE succeeds
+        # 3. Admin marks own turn accurate (pending proposal) -> admin DELETE withdraws cleanly
         conv_a, turn_a = _seed_conversation_turn(
             project.id,
             admin_id,
@@ -1125,7 +1072,7 @@ def test_revoke_turn_feedback_removes_draft_and_respects_confirmations(
             json={"rating": "accurate"},
         )
         assert adm_post.status_code == 201
-        assert adm_post.json()["answer_confirmed"] is True
+        assert adm_post.json()["proposal_status"] == "pending"
 
         assert (
             client.delete(
@@ -1135,13 +1082,33 @@ def test_revoke_turn_feedback_removes_draft_and_respects_confirmations(
         )
         adm_detail = client.get(f"/api/v1/conversations/{conv_a}").json()
         assert adm_detail["turns"][0]["feedback_accurate"] is False
-        assert adm_detail["turns"][0]["eval_question_id"] is None
+        assert adm_detail["turns"][0]["ticket_proposal_id"] is None
 
         # 4. Archived project -> 409 on DELETE
-        assert client.post(f"/api/v1/projects/{project.id}/archive").status_code == 200
+        archived_proj = create_project_record("Archived Feedback Project", "warehouse")
+        conv_arch, turn_arch = _seed_conversation_turn(
+            archived_proj.id,
+            admin_id,
+            question="归档项目昨日客单价",
+            sql_blocks=[
+                {"sql": "SELECT AVG(pay_amount) FROM shop.orders", "dialect": "hive"}
+            ],
+            with_validate_sql_pass=True,
+        )
+        assert (
+            client.post(
+                f"/api/v1/conversations/{conv_arch}/turns/{turn_arch}/feedback",
+                json={"rating": "accurate"},
+            ).status_code
+            == 201
+        )
+        assert (
+            client.post(f"/api/v1/projects/{archived_proj.id}/archive").status_code
+            == 200
+        )
         assert (
             client.delete(
-                f"/api/v1/conversations/{conv_a}/turns/{turn_a}/feedback",
+                f"/api/v1/conversations/{conv_arch}/turns/{turn_arch}/feedback",
             ).status_code
             == 409
         )
@@ -1247,8 +1214,14 @@ def test_turn_feedback_accurate_accepts_propose_query_plan_turn(
             json={"rating": "accurate"},
         )
         assert fb.status_code == 201, fb.text
-        assert fb.json()["eval_question"]["dialect"] == "doris"
+        fb_data = fb.json()
+        assert fb_data["destination_kind"] == "historical_ticket"
+        assert fb_data["proposal_status"] == "pending"
+        prop = client.get(
+            f"/api/v1/corrections/{fb_data['proposal_id']}",
+            params={"project": project.id},
+        ).json()
         assert (
-            fb.json()["eval_question"]["reference_sql"]
-            == "SELECT COUNT(*) FROM shop.orders WHERE dt = '2026-01-01'"
+            "SELECT COUNT(*) FROM shop.orders WHERE dt = '2026-01-01'" in prop["patch"]
         )
+        assert "doris" in prop["patch"]

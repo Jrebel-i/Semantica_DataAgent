@@ -549,10 +549,11 @@ test("轮次底部 👍 准确 仅对通过 SQL 校验的回答开放并写入�
         return Response.json(
           {
             rating: "accurate",
-            question_id: "eq-102",
-            answer_confirmed: false,
-            split: "dev",
-            eval_question: { id: "eq-102", answer_confirmed: false },
+            proposal_id: "prop-fb-102",
+            proposal_status: "pending",
+            target: "document:knowledge/historical-tickets/paid-orders.md",
+            destination_kind: "historical_ticket",
+            synthesis_mode: "llm",
           },
           { status: 201 },
         );
@@ -572,7 +573,7 @@ test("轮次底部 👍 准确 仅对通过 SQL 校验的回答开放并写入�
   fireEvent.click(await screen.findByRole("button", { name: "订单统计核对" }));
   expect(await screen.findByText("共 42 单。")).toBeTruthy();
 
-  const accurateBtns = screen.getAllByRole("button", { name: /准确/ });
+  const accurateBtns = screen.getAllByRole("button", { name: /沉淀工单/ });
   expect(accurateBtns).toHaveLength(2);
   expect((accurateBtns[0] as HTMLButtonElement).disabled).toBe(true);
   expect((accurateBtns[1] as HTMLButtonElement).disabled).toBe(false);
@@ -587,10 +588,10 @@ test("轮次底部 👍 准确 仅对通过 SQL 校验的回答开放并写入�
     ]),
   );
   const doneBtn = (await screen.findByRole("button", {
-    name: /已标为准确/,
+    name: /已提报工单/,
   })) as HTMLButtonElement;
   expect(doneBtn.disabled).toBe(false);
-  expect(doneBtn.title).toBe("点击取消准确标记");
+  expect(doneBtn.title).toBe("点击撤销待审批的历史工单提案");
 
   fireEvent.click(doneBtn);
   await waitFor(() =>
@@ -605,13 +606,13 @@ test("轮次底部 👍 准确 仅对通过 SQL 校验的回答开放并写入�
       },
     ]),
   );
-  expect(
-    await screen.findByText("已取消准确标记，已从评测题集移除"),
-  ).toBeTruthy();
-  const revertedBtns = screen.getAllByRole("button", { name: /准确/ });
-  expect((revertedBtns[1] as HTMLButtonElement).textContent).toContain("准确");
+  expect(await screen.findByText("已撤销待审批的历史工单提案")).toBeTruthy();
+  const revertedBtns = screen.getAllByRole("button", { name: /沉淀工单/ });
+  expect((revertedBtns[1] as HTMLButtonElement).textContent).toContain(
+    "沉淀工单",
+  );
   expect((revertedBtns[1] as HTMLButtonElement).textContent).not.toContain(
-    "已标为准确",
+    "已提报工单",
   );
 });
 
