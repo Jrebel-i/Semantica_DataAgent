@@ -49,13 +49,10 @@ _META_LINE_RE = re.compile(r"^\s*[-*]\s+\*\*(.+?)\*\*[：:]\s*(.+?)\s*$", re.MUL
 _SLUG_SAFE_RE = re.compile(r"[^\w\u4e00-\u9fff-]+")
 _MULTI_DASH_RE = re.compile(r"-{2,}")
 _WRAPPED_PLACEHOLDER_RE = re.compile(
-    r"_{1,2}\s*[A-Za-z0-9_]*placeholder[A-Za-z0-9_]*\s*_{1,2}", re.IGNORECASE
-)
-_TOKEN_PLACEHOLDER_RE = re.compile(
-    r"(?<![A-Za-z0-9_])[A-Za-z0-9_]*placeholder(?:_[A-Za-z0-9_]*)?"
-    r"(?![A-Za-z0-9_])",
+    r"_{2,}[ \t]*[A-Za-z0-9_\-]*placeholder[A-Za-z0-9_\-]*[ \t]*_{2,}",
     re.IGNORECASE,
 )
+_TOKEN_PLACEHOLDER_RE = re.compile(r"(?<![A-Za-z0-9_])PLACEHOLDER(?![A-Za-z0-9_])")
 
 NonEmptyText = Annotated[str, Field(min_length=1, max_length=20000, pattern=r"\S")]
 
@@ -67,10 +64,12 @@ class EvalLeakageError(ValueError):
 def find_unresolved_placeholders(text: str) -> list[str]:
     """Return distinct placeholder markers that must be resolved before a ticket is stored.
 
-    Covers the discovery marker and its common deformations: case changes,
-    extra prefixes/suffixes inside the double underscores, whitespace around
-    the word, and the bare word with the underscores removed. Quoting and
-    SQL comments need no special handling because the scan is textual.
+    Only the double-underscore wrapped discovery marker (case-insensitive,
+    optional ASCII prefix/suffix, optional whitespace just inside the
+    underscores) and a standalone all-caps ``PLACEHOLDER`` token are treated
+    as unresolved. Lowercase or mixed-case bare words, single-underscore
+    identifiers, SQL identifiers such as ``placeholder_flag`` and prose
+    mentions are legitimate business text and must not block a ticket.
     """
     if not text:
         return []

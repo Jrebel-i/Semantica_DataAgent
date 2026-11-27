@@ -441,6 +441,42 @@ def test_feedback_fallback_without_llm_and_leakage_block(tmp_path: Path, monkeyp
         assert blocked.status_code == 409
 
 
+PLACEHOLDER_LEGAL_TEXTS = {
+    "prose_english": (
+        "Note: replace the placeholder value with a real business date before running."
+    ),
+    "prose_chinese": (
+        "说明：SQL 中的 placeholder 仅作示例说明，实际查询请填写具体日期。"
+    ),
+    "column_name": (
+        "SELECT order_id, placeholder_flag FROM dm.dm_orders WHERE dt = '2026-11-26'"
+    ),
+    "sql_line_comment": (
+        "-- placeholder: filter out test orders\nSELECT COUNT(1) FROM dm.dm_orders"
+    ),
+    "sql_block_comment": (
+        "/* placeholder comment for future filter */\nSELECT COUNT(1) FROM dm.dm_orders"
+    ),
+    "string_literal": "SELECT * FROM dm.dm_orders WHERE tag = 'placeholder'",
+    "string_literal_phrase": (
+        "SELECT * FROM dm.dm_orders WHERE note = 'default placeholder text'"
+    ),
+    "realistic_ticket": (
+        "# 过滤占位订单统计真实成交额\n\n"
+        "- **来源**: 对话点赞沉淀\n"
+        "- **涉及表**: dm.dm_orders\n"
+        "- **方言**: doris\n\n"
+        "## 业务口径与上下文\n\n"
+        "排除 `placeholder_flag = 1` 的测试占位记录。\n\n"
+        "## 参考 SQL\n\n"
+        "```sql\n"
+        "SELECT SUM(amount) FROM dm.dm_orders WHERE dt = '2026-11-26' "
+        "AND placeholder_flag = 0\n"
+        "```\n"
+    ),
+}
+
+
 def test_placeholder_detector_covers_common_deformations():
     from semantica_dataagent.historical_tickets import find_unresolved_placeholders
 
@@ -448,16 +484,16 @@ def test_placeholder_detector_covers_common_deformations():
         "exact": "__PLACEHOLDER__",
         "lowercase": "__placeholder__",
         "titlecase": "__Placeholder__",
-        "bare": "PLACEHOLDER",
-        "bare_lowercase": "placeholder",
+        "bare_token": "PLACEHOLDER",
+        "bare_token_in_string": "SELECT 'PLACEHOLDER' FROM t",
         "prefix_suffix": "__PLACEHOLDER_DATE__",
         "hyphen_suffix": "__PLACEHOLDER-DATE__",
         "digit_suffix": "__PLACEHOLDER2__",
-        "bare_prefix_suffix": "PLACEHOLDER_DATE",
-        "bare_prefixed": "my_PLACEHOLDER_value",
+        "custom_prefix": "__MY_PLACEHOLDER_V2__",
         "inside_string": "'__PLACEHOLDER__'",
-        "inside_string_bare_suffix": "SELECT 'placeholder_value' FROM t",
+        "inside_double_quotes": '"__placeholder__"',
         "inside_comment": "-- __PLACEHOLDER__",
+        "inside_block_comment": "/* __PLACEHOLDER_DATE__ */",
         "spaces": "__ PLACEHOLDER __",
         "extra_wrapping_underscores": "___PLACEHOLDER___",
     }
@@ -465,12 +501,21 @@ def test_placeholder_detector_covers_common_deformations():
         assert find_unresolved_placeholders(text), name
 
     negatives = {
+        "bare_lowercase": "placeholder",
+        "bare_mixed_case": "Placeholder",
+        "bare_uppercase_suffix": "PLACEHOLDER_DATE",
+        "bare_prefixed": "my_PLACEHOLDER_value",
+        "single_underscore": "_placeholder_",
+        "prefixed_identifier": "my_placeholder_1",
+        "is_placeholder": "is_placeholder",
+        "placeholder_suffix_word": "placeholderish",
+        "inside_string_bare_suffix": "SELECT 'placeholder_value' FROM t",
+        "dunder_identifier": "SELECT __init__ FROM t",
         "ordinary_identifiers": (
             "SELECT order_id, __internal_flag FROM shop.orders "
             "WHERE dt = '2025-01-01' -- 按分区过滤"
         ),
-        "placeholder_suffix_word": "placeholderish",
-        "dunder_identifier": "SELECT __init__ FROM t",
+        **PLACEHOLDER_LEGAL_TEXTS,
     }
     for name, text in negatives.items():
         assert find_unresolved_placeholders(text) == [], name
@@ -609,6 +654,37 @@ def test_placeholder_ticket_cannot_be_created_or_approved_via_http(
                 ).status_code
                 == 200
             )
+
+        legal_approved = 0
+        for name, text in PLACEHOLDER_LEGAL_TEXTS.items():
+            legal_slug = f"legal-placeholder-{name}"
+            legal_patch = f"# 合法历史工单 {name}\n\n{text}\n"
+            legal_created = client.post(
+                "/api/v1/corrections",
+                params={"project": project.id},
+                json={
+                    "target": (
+                        f"document:knowledge/historical-tickets/{legal_slug}.md"
+                    ),
+                    "target_kind": "document",
+                    "patch": legal_patch,
+                    "reason": f"合法 placeholder 文本样例 {name}",
+                },
+            )
+            assert legal_created.status_code == 201, (name, legal_created.text)
+            legal_id = legal_created.json()["id"]
+            legal_approval = client.post(
+                f"/api/v1/corrections/{legal_id}/approve",
+                params={"project": project.id},
+            )
+            assert legal_approval.status_code == 200, (name, legal_approval.text)
+            legal_dest = (
+                source / "knowledge" / "historical-tickets" / f"{legal_slug}.md"
+            )
+            assert legal_dest.is_file(), name
+            assert legal_dest.read_text(encoding="utf-8") == legal_patch, name
+            legal_approved += 1
+        assert legal_approved == len(PLACEHOLDER_LEGAL_TEXTS)
 
         listing = client.get("/api/v1/corrections", params={"project": project.id})
         assert listing.status_code == 200
