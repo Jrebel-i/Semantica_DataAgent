@@ -57,3 +57,13 @@ def check_duplicate_alias_returns_issue(ctx):
         result.get("status") == "issues" and bool(result.get("issues")),
         f"duplicate alias must produce a structured issue: {result}",
     )
+
+
+def check_cte_star_column_aliases(ctx):
+    sql = (
+        "WITH c(customer_key, created_time, partition_day) AS "
+        "(SELECT * FROM shop.customers WHERE dt = '2025-01-01') "
+        "SELECT c.customer_key FROM c"
+    )
+    result = ctx.mcp_call("validate_sql", {"sql": sql})
+    ctx.require(result.get("status") == "pass", f"CTE column aliases: {result}")

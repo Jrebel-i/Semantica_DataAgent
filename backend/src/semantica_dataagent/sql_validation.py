@@ -460,6 +460,18 @@ def check_sql(sql, dialect, snapshot, partition_tables=None):
                 "fields": output_fields,
                 "derived_unknown": output_unknown,
             }
+        if scope.outer_columns:
+            output = scope_outputs[id(scope)]
+            names = scope.outer_columns
+            fields = output["fields"]
+            scope_outputs[id(scope)] = {
+                "fields": [
+                    {**field, "name": names[index]} if index < len(names) else field
+                    for index, field in enumerate(fields)
+                ]
+                + [{"name": name} for name in names[len(fields) :]],
+                "derived_unknown": output["derived_unknown"],
+            }
         for column in scope.columns:
             if column.is_star:
                 continue

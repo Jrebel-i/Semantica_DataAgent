@@ -857,3 +857,23 @@ def test_issue_335_duplicate_source_alias_returns_issue(monkeypatch):
     assert result is not None, "duplicate alias must return a structured issue"
     assert result["status"] == "issues", result
     assert any("a" in issue["message"] for issue in result["issues"]), result
+
+
+def test_issue_335_cte_column_aliases_after_star_expansion(monkeypatch):
+    from semantica_dataagent import sql_validation
+
+    data = _catalog_relationship_snapshot()
+    monkeypatch.setattr(sql_validation, "load_snapshot", lambda: data)
+    result = sql_validation.validate_sql(
+        "WITH c(customer_key, customer_name) AS (SELECT * FROM hive.shop.customers) "
+        "SELECT c.customer_key, c.customer_name FROM c"
+    )
+    assert result["status"] == "pass", result
+    missing = sql_validation.validate_sql(
+        "WITH c(customer_key, customer_name) AS (SELECT * FROM hive.shop.customers) "
+        "SELECT c.id FROM c"
+    )
+    assert any(
+        field["name"] == "c.id" and field["status"] == "error"
+        for field in missing["fields"]
+    ), missing
