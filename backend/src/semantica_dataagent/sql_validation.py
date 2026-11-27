@@ -236,17 +236,24 @@ def _relationship_step_keys(rel, left_name):
 
 def _join_column_source(col, sources):
     source = sources.get(col.table.lower())
-    if source is None or "database" not in source:
-        return None
+    if source is None:
+        return None, None
+    if "database" not in source:
+        if col.db or col.catalog or source.get("derived_unknown"):
+            return None, None
+        matches = [f for f in source["fields"] if f["name"].lower() == col.name.lower()]
+        if len(matches) != 1:
+            return None, None
+        return matches[0].get("_physical_table"), matches[0].get("_physical_column")
     if col.db and col.db.lower() != source["database"].lower():
-        return None
+        return None, None
     if (
         col.catalog
         and source.get("catalog")
         and col.catalog.lower() != source["catalog"].lower()
     ):
-        return None
-    return source
+        return None, None
+    return source, col.name
 
 
 def _qualify_join_column(column, aliases, sources):
@@ -502,12 +509,37 @@ def check_sql(sql, dialect, snapshot, partition_tables=None):
                             if name in seen_merged:
                                 continue
                             seen_merged.add(name)
+                        if "database" in source:
+                            field = {
+                                **field,
+                                "_physical_table": source,
+                                "_physical_column": field["name"],
+                            }
+                        if isinstance(
+                            projection, exp.Star
+                        ) and alias in merged_columns.get(name, set()):
+                            field = {
+                                k: v
+                                for k, v in field.items()
+                                if k not in ("_physical_table", "_physical_column")
+                            }
                         output_fields.append(field)
         if scope.union_scopes:
             # Set operations expose the names of the first input.
-            scope_outputs[id(scope)] = scope_outputs.get(
+            first = scope_outputs.get(
                 id(scope.union_scopes[0]), {"fields": [], "derived_unknown": True}
             )
+            scope_outputs[id(scope)] = {
+                "fields": [
+                    {
+                        k: v
+                        for k, v in f.items()
+                        if k not in ("_physical_table", "_physical_column")
+                    }
+                    for f in first["fields"]
+                ],
+                "derived_unknown": first["derived_unknown"],
+            }
         else:
             scope_outputs[id(scope)] = {
                 "fields": output_fields,
@@ -519,7 +551,14 @@ def check_sql(sql, dialect, snapshot, partition_tables=None):
             fields = output["fields"]
             scope_outputs[id(scope)] = {
                 "fields": [
-                    {**field, "name": names[index]} if index < len(names) else field
+                    {
+                        **{
+                            k: v
+                            for k, v in field.items()
+                            if k not in ("_physical_table", "_physical_column")
+                        },
+                        "name": names[index] if index < len(names) else field["name"],
+                    }
                     for index, field in enumerate(fields)
                 ]
                 + [{"name": name} for name in names[len(fields) :]],
@@ -659,19 +698,23 @@ def check_sql(sql, dialect, snapshot, partition_tables=None):
             pair_records = []
             observed_pairs = defaultdict(set)
             for l, r, group in pairs:
-                a = _join_column_source(l, sources) if l is not None else None
-                b = _join_column_source(r, sources)
+                a, left_key = (
+                    _join_column_source(l, sources) if l is not None else (None, None)
+                )
+                b, right_key = _join_column_source(r, sources)
                 label = f"{l.sql(dialect=dialect) if l is not None else 'USING'} = {r.sql(dialect=dialect)}"
                 proofs = []
                 pair = None
-                if a and b and a is not b:
+                if a and b and left_key and right_key and a is not b:
                     aname, bname = full(a).lower(), full(b).lower()
                     pair_key = frozenset((aname, bname))
-                    pair = frozenset(((aname, l.name.lower()), (bname, r.name.lower())))
+                    pair = frozenset(
+                        ((aname, left_key.lower()), (bname, right_key.lower()))
+                    )
                     observed_pairs[pair_key].add(pair)
-                    proofs = evidence(a, b, l.name, r.name, snapshot)
+                    proofs = evidence(a, b, left_key, right_key, snapshot)
                     pending_documents.append(
-                        (pair_records, len(pair_records), a, b, l.name, r.name)
+                        (pair_records, len(pair_records), a, b, left_key, right_key)
                     )
                 pair_records.append(
                     {"label": label, "proofs": proofs, "pair": pair, "group": group}

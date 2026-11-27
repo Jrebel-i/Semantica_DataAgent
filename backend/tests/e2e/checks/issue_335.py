@@ -93,3 +93,13 @@ def check_using_merged_field_is_visible(ctx):
     )
     result = ctx.mcp_call("validate_sql", {"sql": sql})
     ctx.require(result.get("status") == "pass", f"merged USING field: {result}")
+
+
+def check_derived_star_join_uses_source_evidence(ctx):
+    sql = (
+        "SELECT o.id FROM shop.orders o JOIN "
+        "(SELECT * FROM shop.daily_sales WHERE dt = '2025-01-01') d USING (id) "
+        "WHERE o.dt = '2025-01-01'"
+    )
+    result = ctx.mcp_call("validate_sql", {"sql": sql})
+    ctx.require(result.get("status") == "pass", f"derived USING: {result}")

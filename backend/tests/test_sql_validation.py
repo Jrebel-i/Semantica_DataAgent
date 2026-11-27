@@ -921,3 +921,45 @@ def test_issue_335_star_projection_preserves_using_merged_key(monkeypatch):
         "JOIN hive.shop.customers c USING (id) WHERE o.dt = '2025-01-01') x"
     )
     assert result["status"] == "pass", result
+
+
+def test_issue_335_derived_star_join_uses_physical_column_evidence(monkeypatch):
+    from semantica_dataagent import sql_validation
+
+    data = _catalog_relationship_snapshot()
+    monkeypatch.setattr(sql_validation, "load_snapshot", lambda: data)
+    sql = (
+        "WITH c AS (SELECT * FROM hive.shop.customers), "
+        "c2 AS (SELECT * FROM c) "
+        "SELECT o.id FROM hive.shop.orders o JOIN c2 ON o.customer_id = c2.id "
+        "WHERE o.dt = '2025-01-01'"
+    )
+    result = sql_validation.validate_sql(sql)
+    assert result["status"] == "pass", result
+    wrong = sql_validation.validate_sql(
+        sql.replace("o.customer_id = c2.id", "o.id = c2.name")
+    )
+    assert any(issue["kind"] == "join" for issue in wrong["issues"]), wrong
+
+
+def test_issue_335_derived_using_and_union_evidence(monkeypatch):
+    from semantica_dataagent import sql_validation
+
+    data = _catalog_relationship_snapshot()
+    data.relationships[0]["from_columns"] = ["id"]
+    data = Snapshot(data.tables, [], [], relationships=data.relationships)
+    monkeypatch.setattr(sql_validation, "load_snapshot", lambda: data)
+    sql = (
+        "SELECT o.id FROM hive.shop.orders o JOIN "
+        "(SELECT * FROM hive.shop.customers) c USING (id) "
+        "WHERE o.dt = '2025-01-01'"
+    )
+    good = sql_validation.validate_sql(sql)
+    assert good["status"] == "pass", good
+    union = sql_validation.validate_sql(
+        sql.replace(
+            "SELECT * FROM hive.shop.customers",
+            "SELECT * FROM hive.shop.customers UNION ALL SELECT * FROM hive.shop.customers",
+        )
+    )
+    assert union["joins"][-1]["status"] != "supported", union
