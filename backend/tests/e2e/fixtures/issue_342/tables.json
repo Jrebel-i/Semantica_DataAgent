@@ -1,1 +1,31 @@
-[{"catalog": "hive", "database": "i337shop", "name": "orders", "comment": "hiveorders"}, {"catalog": "hive", "database": "i337shop", "name": "output", "comment": "hiveoutput"}, {"catalog": "internal", "database": "i337shop", "name": "orders", "comment": "internalorders"}, {"catalog": "internal", "database": "i337shop", "name": "output", "comment": "internaloutput"}]
+[
+  {
+    "catalog": "hive",
+    "database": "i337shop",
+    "name": "orders",
+    "comment": "hiveorders"
+  },
+  {
+    "catalog": "hive",
+    "database": "i337shop",
+    "name": "output",
+    "comment": "hiveoutput"
+  },
+  {
+    "catalog": "internal",
+    "database": "i337shop",
+    "name": "orders",
+    "comment": "internalorders"
+  },
+  {
+    "catalog": "internal",
+    "database": "i337shop",
+    "name": "output",
+    "comment": "internaloutput"
+  },
+  {
+    "database": "legacy",
+    "name": "orders",
+    "comment": "legacy"
+  }
+]

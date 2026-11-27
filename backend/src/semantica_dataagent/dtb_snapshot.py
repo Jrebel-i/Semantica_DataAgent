@@ -491,7 +491,12 @@ class DtbSnapshotReader:
                 else:
                     database, table = table.rsplit(".", 1)
             elif not database and "." in qualified:
-                database = qualified.rsplit(".", 1)[0]
+                parts = qualified.split(".")
+                if len(parts) == 3:
+                    qualified_catalog, database, _ = parts
+                    catalog = catalog or qualified_catalog
+                else:
+                    database = qualified.rsplit(".", 1)[0]
             table = table or table_dir.name
             if not database:
                 stats["dimension_tables_without_database"] += 1

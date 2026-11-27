@@ -1,1 +1,46 @@
-[{"catalog": "hive", "database": "i337shop", "table": "orders", "name": "code", "type": "string", "comment": "code", "partition": false}, {"catalog": "hive", "database": "i337shop", "table": "output", "name": "code", "type": "string", "comment": "code", "partition": false}, {"catalog": "internal", "database": "i337shop", "table": "orders", "name": "code", "type": "string", "comment": "code", "partition": false}, {"catalog": "internal", "database": "i337shop", "table": "output", "name": "code", "type": "string", "comment": "code", "partition": false}]
+[
+  {
+    "catalog": "hive",
+    "database": "i337shop",
+    "table": "orders",
+    "name": "code",
+    "type": "string",
+    "comment": "code",
+    "partition": false
+  },
+  {
+    "catalog": "hive",
+    "database": "i337shop",
+    "table": "output",
+    "name": "code",
+    "type": "string",
+    "comment": "code",
+    "partition": false
+  },
+  {
+    "catalog": "internal",
+    "database": "i337shop",
+    "table": "orders",
+    "name": "code",
+    "type": "string",
+    "comment": "code",
+    "partition": false
+  },
+  {
+    "catalog": "internal",
+    "database": "i337shop",
+    "table": "output",
+    "name": "code",
+    "type": "string",
+    "comment": "code",
+    "partition": false
+  },
+  {
+    "database": "legacy",
+    "table": "orders",
+    "name": "code",
+    "type": "string",
+    "comment": "code",
+    "partition": false
+  }
+]

@@ -945,7 +945,33 @@ def _make_fake_stores():
                             records.append({"relationship": dict(rel["props"])})
                 return {"success": True, "records": records}
 
-            if "MATCH (v:SDADimensionValue {generation:$generation})" in q:
+            if "RETURN DISTINCT coalesce(t.catalog, '') AS catalog" in q:
+                rows = []
+                for node in self.nodes:
+                    p = node["props"]
+                    if (
+                        "SDATable" in node["labels"]
+                        and p.get("generation") == gen
+                        and p.get("name") == params["table"]
+                        and (
+                            params["database"] is None
+                            or p.get("database") == params["database"]
+                        )
+                        and (
+                            params["catalog"] is None
+                            or (p.get("catalog") or "") == params["catalog"]
+                        )
+                    ):
+                        rows.append(
+                            {
+                                "catalog": p.get("catalog") or "",
+                                "database": p["database"],
+                                "table": p["name"],
+                            }
+                        )
+                return {"success": True, "records": rows}
+
+            if "MATCH (v:SDADimensionValue {generation:$generation" in q:
                 tbl = params["table"]
                 field = params.get("field")
                 kw = params["keyword"].lower()
@@ -959,7 +985,8 @@ def _make_fake_stores():
                         continue
                     if (
                         p.get("table") != tbl
-                        and f"{p.get('database')}.{p.get('table')}" != tbl
+                        or p.get("database") != params["database"]
+                        or (p.get("catalog") or "") != params["catalog"]
                     ):
                         continue
                     if field is not None and p.get("field") != field:

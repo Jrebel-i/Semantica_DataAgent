@@ -8,6 +8,7 @@ def test_dtb_dimension_records_keep_catalog_and_default_identity(tmp_path):
     for directory, meta in (
         ("hive", {"catalog": "hive", "qualified_table": "hive.shop.orders"}),
         ("internal", {"catalog": "internal", "database": "shop", "table": "orders"}),
+        ("qualified", {"qualified_table": "hive.shop.orders", "table": "orders"}),
         ("default", {"database": "shop", "table": "orders"}),
     ):
         root = tmp_path / "dimensions" / directory
@@ -27,6 +28,10 @@ def test_dtb_dimension_records_keep_catalog_and_default_identity(tmp_path):
         items["hive"]["row_id"],
     ) == ("hive", "shop", "orders", "hive.shop.orders:1")
     assert items["internal"]["row_id"] == "internal.shop.orders:1"
+    assert (items["qualified"]["catalog"], items["qualified"]["database"]) == (
+        "hive",
+        "shop",
+    )
     assert "catalog" not in items["default"]
     assert items["default"]["row_id"] == "shop.orders:1"
 
@@ -59,7 +64,7 @@ def test_dimension_groups_and_incremental_selection_are_catalog_scoped():
     ]
     values, statuses = prepare(records, 10)
     codes = [v for v in values if v["field"] == "order_code"]
-    assert {(v["catalog"], tuple(v["aliases"]), v["ref"]) for v in codes} == {
+    assert {(v.get("catalog"), tuple(v["aliases"]), v["ref"]) for v in codes} == {
         ("hive", ("Hive",), "dimension_value:hive.shop.orders.order_code.A"),
         (
             "internal",
