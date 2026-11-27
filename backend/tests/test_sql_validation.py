@@ -963,3 +963,79 @@ def test_issue_335_derived_using_and_union_evidence(monkeypatch):
         )
     )
     assert union["joins"][-1]["status"] != "supported", union
+
+
+def test_issue_335_explicit_projection_with_unknown_star(monkeypatch):
+    from semantica_dataagent import sql_validation
+
+    monkeypatch.setattr(
+        sql_validation, "load_snapshot", lambda: _catalog_relationship_snapshot()
+    )
+    sql = "SELECT x.rn FROM (SELECT *, ROW_NUMBER() OVER () AS rn FROM mystery) x"
+    result = sql_validation.validate_sql(sql)
+    assert any(
+        f["name"] == "x.rn" and f["status"] == "pass" for f in result["fields"]
+    ), result
+    duplicate = sql_validation.validate_sql(
+        sql.replace("AS rn FROM", "AS rn, 1 AS rn FROM")
+    )
+    assert any(
+        f["name"] == "x.rn" and f["status"] == "ambiguous" for f in duplicate["fields"]
+    ), duplicate
+    unknown = sql_validation.validate_sql(sql.replace("x.rn", "x.other"))
+    assert any(
+        f["name"] == "x.other" and f["status"] == "unknown" for f in unknown["fields"]
+    ), unknown
+
+
+def test_issue_335_using_output_order_and_duplicate_input(monkeypatch):
+    from semantica_dataagent import sql_validation
+
+    data = _catalog_relationship_snapshot()
+    data.relationships[0]["from_columns"] = ["id"]
+    data = Snapshot(data.tables, [], [], relationships=data.relationships)
+    monkeypatch.setattr(sql_validation, "load_snapshot", lambda: data)
+    sql = (
+        "WITH x(first, second, third, fourth, fifth) AS "
+        "(SELECT * FROM hive.shop.orders o JOIN hive.shop.customers c USING (id) "
+        "WHERE o.dt = '2025-01-01') SELECT x.first, x.fifth FROM x"
+    )
+    result = sql_validation.validate_sql(sql)
+    assert result["status"] == "pass", result
+    assert any(
+        f["name"] == "x.fifth" and f["status"] == "pass" for f in result["fields"]
+    ), result
+    renamed = sql_validation.validate_sql(
+        "WITH x(first, second, third, fourth, fifth) AS "
+        "(SELECT * FROM hive.shop.orders o JOIN hive.shop.customers c USING (id) "
+        "WHERE o.dt = '2025-01-01') SELECT x.sixth FROM x"
+    )
+    assert any(
+        f["name"] == "x.sixth" and f["status"] == "error" for f in renamed["fields"]
+    ), renamed
+    bad = sql_validation.validate_sql(
+        "SELECT o.id FROM hive.shop.orders o JOIN "
+        "(SELECT o2.*, c2.* FROM hive.shop.orders o2 "
+        "JOIN hive.shop.customers c2 ON o2.customer_id = c2.id "
+        "WHERE o2.dt = '2025-01-01') c USING (id) "
+        "WHERE o.dt = '2025-01-01'"
+    )
+    assert bad["joins"][-1]["status"] != "supported", bad
+    assert "USING" in bad["issues"][-1]["message"] or any(
+        issue["kind"] == "join" and "USING" in issue["message"]
+        for issue in bad["issues"]
+    ), bad
+
+
+def test_issue_335_unknown_star_in_other_source_remains_unknown(monkeypatch):
+    from semantica_dataagent import sql_validation
+
+    monkeypatch.setattr(
+        sql_validation, "load_snapshot", lambda: _catalog_relationship_snapshot()
+    )
+    result = sql_validation.validate_sql(
+        "SELECT rn FROM (SELECT 1 AS rn) x CROSS JOIN mystery m"
+    )
+    assert any(
+        f["name"] == "rn" and f["status"] == "unknown" for f in result["fields"]
+    ), result

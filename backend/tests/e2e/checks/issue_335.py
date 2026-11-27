@@ -103,3 +103,98 @@ def check_derived_star_join_uses_source_evidence(ctx):
     )
     result = ctx.mcp_call("validate_sql", {"sql": sql})
     ctx.require(result.get("status") == "pass", f"derived USING: {result}")
+
+
+def check_join_pair_evidence_from_graph(ctx):
+    import sqlite3
+    from uuid import uuid4
+
+    from neo4j import GraphDatabase
+
+    prefix = "i335_" + uuid4().hex[:12]
+    driver = GraphDatabase.driver(
+        ctx.config.neo4j_uri, auth=(ctx.config.neo4j_user, ctx.runtime.password)
+    )
+    generation = prefix + "_generation"
+    original_generation = ctx.generation
+    switched = False
+    names = {key: prefix + "_" + key for key in ("a", "b", "c", "d")}
+    try:
+        with driver.session() as session:
+            session.run(
+                """
+                UNWIND $tables AS item
+                CREATE (t:SDAEntity:SDATable {generation:$g, database:$db, name:item.name, ref:item.ref})
+                WITH t, item
+                UNWIND ['good','wrong'] AS name
+                CREATE (f:SDAEntity:SDAField {generation:$g, database:$db, name:name, partition:false})
+                CREATE (t)-[:HAS_FIELD]->(f)
+                """,
+                g=generation,
+                db=prefix,
+                tables=[
+                    {"name": name, "ref": f"table:{prefix}.{name}"}
+                    for name in names.values()
+                ],
+            ).consume()
+            session.run(
+                """
+                MATCH (a:SDATable {generation:$g, database:$db, name:$a})
+                MATCH (b:SDATable {generation:$g, database:$db, name:$b})
+                CREATE (a)-[:RELATES_TO {name:'good_relation', from_table:$aname,
+                    to_table:$bname, from_columns:['good'], to_columns:['good']}]->(b)
+                CREATE (:SDAEntity:SDAChunk {generation:$g, database:$db, ref:$docref, content:$content})
+                """,
+                g=generation,
+                db=prefix,
+                a=names["a"],
+                b=names["b"],
+                aname=f"{prefix}.{names['a']}",
+                bname=f"{prefix}.{names['b']}",
+                docref=f"document:{prefix}",
+                content=f"{prefix}.{names['c']}.good = {prefix}.{names['d']}.good",
+            ).consume()
+        with sqlite3.connect(ctx.runtime.db_path) as db:
+            db.execute(
+                "INSERT INTO knowledge_generations (name, project_id, deleting) VALUES (?, 'default', 0)",
+                (generation,),
+            )
+        response = ctx.rest.post(f"/api/v1/generations/{generation}/switch")
+        ctx.require(
+            response.status_code == 200, f"switch fixture generation: {response.text}"
+        )
+        switched = True
+        relation = f"SELECT a.good FROM {prefix}.{names['a']} a JOIN {prefix}.{names['b']} b ON "
+        document = f"SELECT a.good FROM {prefix}.{names['c']} a JOIN {prefix}.{names['d']} b ON "
+        for label, base in (("relationship", relation), ("document", document)):
+            good = ctx.mcp_call("validate_sql", {"sql": base + "a.good = b.good"})
+            ctx.require(good.get("status") == "pass", f"{label} fixture: {good}")
+            mixed = ctx.mcp_call(
+                "validate_sql", {"sql": base + "a.good = b.good AND a.wrong = b.wrong"}
+            )
+            ctx.require(
+                any(
+                    i.get("kind") == "join" and "a.wrong" in i.get("message", "")
+                    for i in mixed.get("issues", [])
+                ),
+                f"{label} mixed keys accepted: {mixed}",
+            )
+    finally:
+        if switched:
+            response = ctx.rest.post(
+                f"/api/v1/generations/{original_generation}/switch"
+            )
+            ctx.require(
+                response.status_code == 200, f"restore generation: {response.text}"
+            )
+        with sqlite3.connect(ctx.runtime.db_path) as db:
+            db.execute(
+                "DELETE FROM knowledge_generations WHERE name = ?", (generation,)
+            )
+        with driver.session() as session:
+            session.run(
+                "MATCH (n:SDAEntity {generation:$g, database:$db}) DETACH DELETE n",
+                g=generation,
+                db=prefix,
+            ).consume()
+        driver.close()

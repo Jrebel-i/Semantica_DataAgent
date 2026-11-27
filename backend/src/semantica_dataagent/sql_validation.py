@@ -494,7 +494,9 @@ def check_sql(sql, dialect, snapshot, partition_tables=None):
                 expanded = [(alias, sources.get(alias))]
             else:
                 if projection.alias_or_name:
-                    output_fields.append({"name": projection.alias_or_name})
+                    output_fields.append(
+                        {"name": projection.alias_or_name, "_explicit_projection": True}
+                    )
                 continue
             seen_merged = set()
             for alias, source in expanded:
@@ -524,6 +526,23 @@ def check_sql(sql, dialect, snapshot, partition_tables=None):
                                 if k not in ("_physical_table", "_physical_column")
                             }
                         output_fields.append(field)
+        if output_unknown:
+            # A propagated star cannot guarantee uniqueness of its input's names.
+            explicit_names = {
+                projection.alias_or_name.lower()
+                for projection in scope.expression.selects
+                if not isinstance(projection, exp.Star)
+                and not (isinstance(projection, exp.Column) and projection.is_star)
+                and projection.alias_or_name
+            }
+            output_fields = [
+                {
+                    **field,
+                    "_explicit_projection": field["name"].lower() in explicit_names
+                    and field.get("_explicit_projection", False),
+                }
+                for field in output_fields
+            ]
         if scope.union_scopes:
             # Set operations expose the names of the first input.
             first = scope_outputs.get(
@@ -586,13 +605,19 @@ def check_sql(sql, dialect, snapshot, partition_tables=None):
             if not column.table:
                 merged = merged_columns.get(column.name.lower(), set())
                 matching_count -= max(len(merged) - 1, 0)
+            # An unknown star in another source can still introduce a collision.
+            explicit_certain = len(candidates) == 1 and len(known) == 1
+            explicit_count = sum(
+                bool(field.get("_explicit_projection")) for field in matching
+            )
             status = (
-                "unknown"
-                if uncertain
+                "ambiguous"
+                if matching_count > 1
                 else "pass"
                 if matching_count == 1
-                else "ambiguous"
-                if matching_count > 1
+                and (not uncertain or (explicit_certain and explicit_count == 1))
+                else "unknown"
+                if uncertain
                 else "error"
             )
             item = {"name": column.sql(dialect=dialect), "status": status}
@@ -678,6 +703,14 @@ def check_sql(sql, dialect, snapshot, partition_tables=None):
                     and not uncertain
                     and right is not None
                     and not right.get("derived_unknown")
+                    and all(
+                        sum(
+                            f["name"].lower() == name.lower()
+                            for f in sources[alias]["fields"]
+                        )
+                        == 1
+                        for alias in matches + [right_alias]
+                    )
                     and name.lower() in field_names(right)
                 ):
                     group = len(pairs)
