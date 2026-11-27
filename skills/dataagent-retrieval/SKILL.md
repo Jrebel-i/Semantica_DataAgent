@@ -108,7 +108,11 @@ Read `validate_sql` completely:
 - A join with `supported` has evidence. A `weak` join has only a common-key or other weak indication. An `unsupported` join has no evidence.
 - For a `weak` or `unsupported` join, prefer a different relation found with `find_join_path`/`get_lineage` and revalidate. If the questioner's requirement still needs that join, call it out explicitly in the answer and explain the limitation. Never describe it as fully validated.
 - **Partitioned tables must be constrained.** If `describe_tables` marks any field with
-  `partition: true`, put a condition on that partition column in `WHERE`.
+  `partition: true`, constrain that partition column. For a LEFT JOIN, put the
+  non-preserved right table's partition condition in that JOIN's `ON`; for a RIGHT
+  JOIN, put the non-preserved left table's condition in `ON`. For a FULL JOIN,
+  constrain both sides separately in `WHERE` or rewrite the query; `ON` alone
+  does not constrain the preserved rows. For other cases use `WHERE`.
   Decide whether the table is a snapshot or an incremental table from the table
   dictionary document, the table comment, or the producing task SQL (`read_task_sql`).
   An `INSERT OVERWRITE ... PARTITION (...)` task that replaces the whole table is a
