@@ -249,6 +249,18 @@ def _join_column_source(col, sources):
     return source
 
 
+def _qualify_join_column(column, aliases, sources):
+    if column.table or any(
+        sources.get(alias) is None or sources[alias].get("derived_unknown")
+        for alias in aliases
+    ):
+        return column
+    matches = [
+        alias for alias in aliases if column.name.lower() in field_names(sources[alias])
+    ]
+    return exp.column(column.name, table=matches[0]) if len(matches) == 1 else column
+
+
 def full(t):
     return ".".join(
         part for part in (t.get("catalog"), t.get("database"), t.get("name")) if part
@@ -503,6 +515,9 @@ def check_sql(sql, dialect, snapshot, partition_tables=None):
                         continue
                     l, r = eq.left, eq.right
                     if isinstance(l, exp.Column) and isinstance(r, exp.Column):
+                        aliases = left_aliases | {right_alias}
+                        l = _qualify_join_column(l, aliases, sources)
+                        r = _qualify_join_column(r, aliases, sources)
                         if (
                             l.table.lower() == right_alias
                             and r.table.lower() in left_aliases

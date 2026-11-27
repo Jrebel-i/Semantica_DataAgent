@@ -768,3 +768,21 @@ def test_issue_335_union_star_does_not_report_known_missing_field(monkeypatch):
     assert not any(
         f["name"] == "x.id" and f["status"] == "error" for f in result["fields"]
     ), result
+
+
+def test_issue_335_unqualified_join_column_is_checked(monkeypatch):
+    from semantica_dataagent import sql_validation
+
+    data = _catalog_relationship_snapshot()
+    monkeypatch.setattr(sql_validation, "load_snapshot", lambda: data)
+    result = sql_validation.validate_sql(
+        "SELECT o.id FROM hive.shop.orders o JOIN hive.shop.order_items i "
+        "ON o.tenant_id = i.tenant_id AND o.id = i.order_id AND o.customer_id = sku "
+        "WHERE o.dt = '2025-01-01'"
+    )
+    assert any(
+        issue["kind"] == "join"
+        and "customer_id" in issue["message"]
+        and "sku" in issue["message"]
+        for issue in result["issues"]
+    ), result
