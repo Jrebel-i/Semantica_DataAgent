@@ -1016,9 +1016,20 @@ def read_task_sql(task_id: str) -> dict:
     return _read_task_sql(task_id, project_id=_mcp_project_arg())
 
 
+_SYNTAX_ONLY_DIALECT_NOTICE = "该方言仅用于语法检查，交付请使用 Doris SQL。"
+
+
 def validate_sql(sql: str, dialect: Literal["hive", "spark", "doris"] = "hive") -> dict:
-    """Validate SQL against the caller's project metadata."""
-    return _validate_sql(sql, dialect, project_id=_mcp_project_arg())
+    """Validate SQL against the caller's project metadata.
+
+    Hive and Spark are syntax-check dialects only. Delivery and execution
+    always use Doris, so results for those dialects carry a ``dialect_notice``
+    field explaining that. The existing status and issues fields are unchanged.
+    """
+    result = _validate_sql(sql, dialect, project_id=_mcp_project_arg())
+    if dialect in ("hive", "spark"):
+        result["dialect_notice"] = _SYNTAX_ONLY_DIALECT_NOTICE
+    return result
 
 
 def find_join_path(tables: list[str]) -> dict:
