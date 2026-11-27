@@ -838,3 +838,22 @@ def test_issue_335_using_merged_key_on_consecutive_joins(monkeypatch):
         "SELECT a.id FROM s.a a JOIN s.b b USING (id) JOIN s.c c USING (id)"
     )
     assert result["status"] == "pass", result
+
+
+def test_issue_335_duplicate_source_alias_returns_issue(monkeypatch):
+    from semantica_dataagent import sql_validation
+
+    data = _catalog_relationship_snapshot()
+    monkeypatch.setattr(sql_validation, "load_snapshot", lambda: data)
+    from sqlglot.errors import OptimizeError
+
+    try:
+        result = sql_validation.validate_sql(
+            "SELECT a.id FROM hive.shop.orders a JOIN hive.shop.customers a "
+            "ON a.customer_id = a.id WHERE a.dt = '2025-01-01'"
+        )
+    except OptimizeError:
+        result = None
+    assert result is not None, "duplicate alias must return a structured issue"
+    assert result["status"] == "issues", result
+    assert any("a" in issue["message"] for issue in result["issues"]), result

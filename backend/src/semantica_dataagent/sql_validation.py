@@ -11,7 +11,7 @@ from typing import Literal
 import sqlglot
 from sqlalchemy import func, select
 from sqlglot import exp
-from sqlglot.errors import ErrorLevel, ParseError
+from sqlglot.errors import ErrorLevel, OptimizeError, ParseError
 from sqlglot.optimizer.scope import traverse_scope
 
 from . import knowledge, project_context
@@ -411,9 +411,23 @@ def check_sql(sql, dialect, snapshot, partition_tables=None):
                 )
     pending_documents = []
     scope_outputs = {}
+    invalid_scope = False
     for scope in traverse_scope(tree):
         sources = {}
-        for alias, (_, source) in scope.selected_sources.items():
+        try:
+            selected_sources = scope.selected_sources
+        except OptimizeError as exc:
+            invalid_scope = True
+            result["issues"].append(
+                {
+                    "kind": "table",
+                    "message": str(exc),
+                    "suggestion": "为每个输入使用不同的表别名。",
+                }
+            )
+            scope_outputs[id(scope)] = {"fields": [], "derived_unknown": True}
+            continue
+        for alias, (_, source) in selected_sources.items():
             if isinstance(source, exp.Table):
                 sources[alias.lower()] = resolved.get(id(source))
             else:
@@ -664,7 +678,7 @@ def check_sql(sql, dialect, snapshot, partition_tables=None):
                     "suggestion": join_item["suggestion"],
                 }
             )
-    if partition_tables is not None:
+    if partition_tables is not None and not invalid_scope:
         from .query_api import _partition_issues
 
         _, _, problems = _partition_issues(tree, partition_tables)

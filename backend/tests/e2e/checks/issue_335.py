@@ -45,3 +45,15 @@ def check_ambiguous_using(ctx):
         len(result["joins"]) == 2 and result["joins"][1]["status"] != "supported",
         f"ambiguous USING was accepted: {result}",
     )
+
+
+def check_duplicate_alias_returns_issue(ctx):
+    sql = (
+        "SELECT a.id FROM shop.orders a JOIN shop.customers a ON a.id = a.id "
+        "WHERE a.dt = '2025-01-01'"
+    )
+    result = ctx.mcp_call("validate_sql", {"sql": sql})
+    ctx.require(
+        result.get("status") == "issues" and bool(result.get("issues")),
+        f"duplicate alias must produce a structured issue: {result}",
+    )
