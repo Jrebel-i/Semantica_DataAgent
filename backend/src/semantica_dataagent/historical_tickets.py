@@ -370,6 +370,23 @@ def check_eval_benchmark_leakage(
     )
 
 
+def check_ticket_benchmark_leakage(
+    project_id: str,
+    *,
+    content: str | None = None,
+    title: str = "",
+    sql: str = "",
+    dialect: str = "doris",
+) -> dict[str, Any] | None:
+    """Check the question and SQL that will actually be stored in a ticket."""
+    if content is not None:
+        parsed = _parse_ticket_markdown("", title, content, 0)
+        title, sql, dialect = parsed.title, parsed.sql_preview, parsed.dialect
+    return check_eval_benchmark_leakage(
+        project_id, question=title, sql=sql, dialect=dialect
+    )
+
+
 def collect_conversation_context(
     db, conversation_id: str, turn_id: int
 ) -> dict[str, Any]:
@@ -924,9 +941,10 @@ def create_historical_ticket(
         if not ok:
             raise HTTPException(422, detail=err or "reference_sql validation failed")
 
-    leak = check_eval_benchmark_leakage(
+    leak = check_ticket_benchmark_leakage(
         scope.project_id,
-        question=body.title,
+        content=body.content if body.content else None,
+        title=body.title,
         sql=body.reference_sql,
         dialect=body.dialect,
     )
@@ -947,6 +965,11 @@ def create_historical_ticket(
         )
     except ValueError as exc:
         raise HTTPException(422, detail=str(exc)) from None
+
+    if body.content and check_ticket_benchmark_leakage(
+        scope.project_id, content=body.content, title=slug
+    ):
+        raise HTTPException(409, detail="该工单与评测题集重合，禁止写入历史工单库")
 
     md_root, rel_dir = _tickets_rel_dir(scope.project_id)
     content = (
@@ -1075,9 +1098,9 @@ def update_historical_ticket(
                     422, detail=err or "reference_sql validation failed"
                 )
 
-        leak = check_eval_benchmark_leakage(
+        leak = check_ticket_benchmark_leakage(
             scope.project_id,
-            question=check_q,
+            title=check_q,
             sql=check_sql,
             dialect=check_dialect,
         )

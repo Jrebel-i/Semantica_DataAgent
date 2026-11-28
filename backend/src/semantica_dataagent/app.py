@@ -1618,6 +1618,23 @@ def upload_sources(
     category_root = source_category_root(scope)
     target, delete_root = source_upload_target(body, category_root)
     files = source_upload_files(body, target)
+    from .historical_tickets import _tickets_rel_dir, check_ticket_benchmark_leakage
+
+    ticket_dir = source.relative(_tickets_rel_dir(scope.project_id)[1])
+    for name, data in files.items():
+        try:
+            path = target / source.relative(name)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        if ticket_dir in path.parents:
+            try:
+                content = data.decode("utf-8")
+            except UnicodeDecodeError as exc:
+                raise HTTPException(422, "历史工单必须使用 UTF-8 编码") from exc
+            if check_ticket_benchmark_leakage(
+                scope.project_id, content=content, title=path.stem
+            ):
+                raise HTTPException(409, "该工单与评测题集重合，禁止写入历史工单库")
     with sessions()() as db:
         user = db.get(Token, digest(credentials.credentials))
         author = user.name
