@@ -384,12 +384,17 @@ def test_migration_preserves_existing_turns_and_can_downgrade(tmp_path):
             "INSERT INTO turns (id, conversation_id, sequence, question, status, answer, sql, citations, started_at) VALUES (1, 'i347', 1, 'old', 'completed', 'answer', '[]', '[]', '2026-01-01')"
         )
         before = db.execute("SELECT * FROM turns").fetchall()
+        columns_before = db.execute("PRAGMA table_info(turns)").fetchall()
     command.upgrade(cfg, "0051")
     with sqlite3.connect(path) as db:
         assert db.execute("SELECT * FROM turns").fetchall() == [before[0] + (None,)]
+        columns_after = db.execute("PRAGMA table_info(turns)").fetchall()
+        assert columns_after[:-1] == columns_before
+        assert columns_after[-1][1:5] == ("source", "VARCHAR", 0, None)
     command.downgrade(cfg, "0050")
     with sqlite3.connect(path) as db:
         assert db.execute("SELECT * FROM turns").fetchall() == before
+        assert db.execute("PRAGMA table_info(turns)").fetchall() == columns_before
 
 
 def test_langfuse_source_filters_eval_traces():
@@ -433,3 +438,98 @@ def test_langfuse_source_filters_eval_traces():
         )
     )
     assert [row.trace_id for row in found] == ["i347_online"]
+
+
+def test_feedback_uses_one_snapshot_when_eval_turn_arrives_during_validation(
+    client, monkeypatch
+):
+    import json
+
+    from semantica_dataagent import (
+        agent_runner,
+        corrections,
+        eval_questions,
+        historical_tickets,
+    )
+    from semantica_dataagent.db import Clarification, Conversation, Turn, sessions
+
+    c, admin = client
+    provider = _provider(c, admin)
+    monkeypatch.setitem(agent_runner.RUNNERS, "pi", CapturingRunner())
+    response = c.post(
+        "/api/v1/conversations/ask",
+        headers=_headers(admin),
+        json={
+            "question": "i347_online",
+            "agent": "pi",
+            "provider_id": provider["id"],
+            "model": "project-model",
+        },
+    )
+    assert response.status_code == 200
+    identifiers = _sse(response.text)[0][1]
+    with sessions().begin() as db:
+        db.get(Turn, identifiers["turn_id"]).source = None
+    captured = {}
+
+    def insert_during_validation(*args):
+        with sessions().begin() as db:
+            conv = db.get(Conversation, identifiers["conversation_id"])
+            db.add(
+                Turn(
+                    conversation_id=conv.id,
+                    sequence=2,
+                    question="i347_eval_secret",
+                    source="eval",
+                    status="completed",
+                    answer="i347_eval_answer",
+                    sql="[]",
+                    citations="[]",
+                )
+            )
+            db.add(
+                Clarification(
+                    owner_id=conv.owner_id,
+                    conversation_id=conv.id,
+                    questions=json.dumps([{"question": "i347_eval_clarification"}]),
+                    status="pending",
+                )
+            )
+        return True, None
+
+    def capture_synthesis(*args, **kwargs):
+        captured.update(kwargs)
+        return {
+            "title": "i347_ticket",
+            "target": "document:knowledge/historical-tickets/i347.md",
+            "patch": "i347_patch",
+            "reason": "i347_reason",
+            "synthesis_mode": "fallback",
+        }
+
+    monkeypatch.setattr(
+        eval_questions, "validate_sql_if_available", insert_during_validation
+    )
+    monkeypatch.setattr(
+        historical_tickets, "check_eval_benchmark_leakage", lambda *a, **kw: None
+    )
+    monkeypatch.setattr(
+        historical_tickets, "synthesize_historical_ticket", capture_synthesis
+    )
+    monkeypatch.setattr(
+        corrections,
+        "propose_in_project",
+        lambda *a, **kw: {
+            "proposal_id": "i347",
+            "status": "pending",
+            "target": kw["target"],
+        },
+    )
+    result = c.post(
+        f"/api/v1/conversations/{identifiers['conversation_id']}/turns/{identifiers['turn_id']}/feedback",
+        headers=_headers(admin),
+        json={"reference_sql": "SELECT 1"},
+    )
+    assert result.status_code == 201, result.text
+    assert captured["context_turns"][0]["question"] == "i347_online"
+    assert "i347_eval" not in json.dumps(captured, ensure_ascii=False)

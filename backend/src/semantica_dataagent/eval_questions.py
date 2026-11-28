@@ -17,6 +17,7 @@ import sqlglot
 import yaml
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+from sqlalchemy import text
 from sqlglot import exp
 
 from . import eval as eval_mod
@@ -914,8 +915,11 @@ def record_turn_feedback(
     requester: Annotated[Requester, Depends(rest_requester)],
     body: Annotated[TurnFeedbackRequest | None, Body()] = None,
 ):
+    from . import historical_tickets
+
     payload = body or TurnFeedbackRequest()
     with sessions()() as db:
+        db.execute(text("BEGIN"))
         conversation = db.get(Conversation, conversation_id)
         turn = db.get(Turn, turn_id)
         if (
@@ -925,14 +929,12 @@ def record_turn_feedback(
             or turn.conversation_id != conversation_id
         ):
             raise HTTPException(404, detail="Conversation or turn not found")
-        # Historical synthesis includes clarifications from the entire conversation.
-        # Reject mixed-source conversations too, so those cannot leak eval context.
-        if (
-            db.query(Turn.id)
-            .filter_by(conversation_id=conversation_id, source="eval")
-            .first()
-        ):
-            raise HTTPException(409, detail="含评测轮次的对话不能生成历史工单提案")
+        try:
+            conversation_context = historical_tickets.collect_conversation_context(
+                db, conversation_id, turn_id
+            )
+        except historical_tickets.EvalLeakageError as exc:
+            raise HTTPException(409, detail=str(exc)) from None
         sql_blocks = json.loads(turn.sql or "[]")
         events = (
             db.query(TurnEvent)
@@ -969,8 +971,6 @@ def record_turn_feedback(
         payload.caliber or ""
     ).strip() or f"对话确认口径：{turn_question.strip()}"
 
-    from . import historical_tickets
-
     try:
         saved = historical_tickets.propose_ticket_from_feedback(
             scope.project_id,
@@ -982,6 +982,7 @@ def record_turn_feedback(
             user_caliber=caliber,
             user_notes=payload.notes,
             requester=requester,
+            conversation_context=conversation_context,
         )
     except historical_tickets.EvalLeakageError as exc:
         raise HTTPException(409, detail=str(exc)) from None
