@@ -12,6 +12,7 @@ together with the identity so every tool reads the same project.
 """
 
 import os
+import time
 from contextlib import contextmanager
 from contextvars import ContextVar
 from threading import Lock
@@ -114,7 +115,7 @@ def current_suppress_trajectory() -> bool:
 
 
 _eval_lock = Lock()
-_eval_bindings: dict[str, tuple[str, str | None]] = {}
+_eval_bindings: dict[str, tuple[str, str | None, float]] = {}
 
 
 def _reset_after_fork() -> None:
@@ -128,12 +129,20 @@ if hasattr(os, "register_at_fork"):
 
 
 def register_eval_token(
-    token: str, project_id: str, generation: str | None = None
+    token: str,
+    project_id: str,
+    generation: str | None = None,
+    *,
+    ttl_seconds: float = 86400,
 ) -> None:
     """Bind an ephemeral evaluation bearer token to a target project and generation."""
     token_digest = digest(token)
     with _eval_lock:
-        _eval_bindings[token_digest] = (project_id, generation)
+        _eval_bindings[token_digest] = (
+            project_id,
+            generation,
+            time.monotonic() + ttl_seconds,
+        )
 
 
 def unregister_eval_token(token: str) -> None:
@@ -149,7 +158,13 @@ def resolve_eval_binding(token: str | None) -> tuple[str, str | None] | None:
         return None
     token_digest = digest(token)
     with _eval_lock:
-        return _eval_bindings.get(token_digest)
+        binding = _eval_bindings.get(token_digest)
+        if binding is None:
+            return None
+        if binding[2] <= time.monotonic():
+            _eval_bindings.pop(token_digest, None)
+            return None
+        return binding[:2]
 
 
 def current_project_context():

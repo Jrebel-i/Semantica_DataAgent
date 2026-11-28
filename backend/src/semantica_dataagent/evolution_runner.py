@@ -265,6 +265,8 @@ def _filter_and_scrub_conversations(
             continue
         if conv.project_id != project_id:
             continue
+        if conv.metadata.get("source") == "eval":
+            continue
         if not conv.trace_id or conv.trace_id in seen_ids:
             continue
         msgs: list[TraceMessage] = []

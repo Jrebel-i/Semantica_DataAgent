@@ -925,6 +925,14 @@ def record_turn_feedback(
             or turn.conversation_id != conversation_id
         ):
             raise HTTPException(404, detail="Conversation or turn not found")
+        # Historical synthesis includes clarifications from the entire conversation.
+        # Reject mixed-source conversations too, so those cannot leak eval context.
+        if (
+            db.query(Turn.id)
+            .filter_by(conversation_id=conversation_id, source="eval")
+            .first()
+        ):
+            raise HTTPException(409, detail="含评测轮次的对话不能生成历史工单提案")
         sql_blocks = json.loads(turn.sql or "[]")
         events = (
             db.query(TurnEvent)

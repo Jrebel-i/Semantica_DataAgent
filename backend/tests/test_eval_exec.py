@@ -132,6 +132,12 @@ def test_fake_agent_direct_clarification_and_query_plan(monkeypatch, tmp_path):
 
         def do_POST(self):
             body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            if self.path == "/api/v1/eval-tokens":
+                self._json(201, {"token": "i347_fake"})
+                return
+            if self.path == "/api/v1/eval-tokens/revoke":
+                self._json(200, {})
+                return
             requests.append((self.path, body))
             if self.path == "/api/v1/conversations/ask":
                 if body.get("conversation_id"):
