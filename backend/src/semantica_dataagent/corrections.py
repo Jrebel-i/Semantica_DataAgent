@@ -1305,6 +1305,15 @@ def _apply_proposal(
     ):
         doc_source_file = str(relative(row_target[len("ossie:") :]))
 
+    if row_kind == "document" and doc_source_file is not None:
+        from .historical_tickets import _tickets_rel_dir, check_ticket_benchmark_leakage
+
+        ticket_dir = _tickets_rel_dir(row_project_id)[1].rstrip("/") + "/"
+        if doc_source_file.startswith(ticket_dir) and check_ticket_benchmark_leakage(
+            row_project_id, content=effective_patch, title=Path(doc_source_file).stem
+        ):
+            raise HTTPException(409, "该工单与评测题集重合，禁止写入历史工单库")
+
     commit_message = (
         f"Auto-apply correction {proposal_id}"
         if auto_apply
