@@ -132,14 +132,15 @@ def test_fake_agent_direct_clarification_and_query_plan(monkeypatch, tmp_path):
 
         def do_POST(self):
             body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-            if self.path == "/api/v1/eval-tokens":
+            path = self.path.split("?", 1)[0]
+            if path == "/api/v1/eval-tokens":
                 self._json(201, {"token": "i347_fake"})
                 return
-            if self.path == "/api/v1/eval-tokens/revoke":
+            if path == "/api/v1/eval-tokens/revoke":
                 self._json(200, {})
                 return
-            requests.append((self.path, body))
-            if self.path == "/api/v1/conversations/ask":
+            requests.append((path, body))
+            if path == "/api/v1/conversations/ask":
                 if body.get("conversation_id"):
                     self._sse(
                         [
@@ -241,17 +242,15 @@ def test_fake_agent_direct_clarification_and_query_plan(monkeypatch, tmp_path):
                             ),
                         ]
                     )
-            elif self.path == "/api/v1/queries/plan":
+            elif path == "/api/v1/queries/plan":
                 if body["sql"].startswith("SELECT bad"):
                     self._json(422, {"detail": detail})
                     return
                 query_id = f"query-{len(plans)}"
                 plans[query_id] = body["sql"]
                 self._json(200, {"id": query_id, "execution_limit": 10})
-            elif self.path.startswith("/api/v1/queries/") and self.path.endswith(
-                "/execute"
-            ):
-                query_id = self.path.split("/")[4]
+            elif path.startswith("/api/v1/queries/") and path.endswith("/execute"):
+                query_id = path.split("/")[4]
                 assert query_id in plans
                 executed_sqls.append(plans[query_id])
                 self._json(

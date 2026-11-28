@@ -121,14 +121,15 @@ class FakeQuestionService:
 
             def do_POST(self):
                 body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-                if self.path == "/api/v1/eval-tokens":
+                path = self.path.split("?", 1)[0]
+                if path == "/api/v1/eval-tokens":
                     self._json(201, {"token": "i347-test-token"})
                     return
-                if self.path == "/api/v1/eval-tokens/revoke":
+                if path == "/api/v1/eval-tokens/revoke":
                     self._json(200, {})
                     return
-                service.asks.append((self.path, body))
-                if self.path == "/api/v1/conversations/ask":
+                service.asks.append((path, body))
+                if path == "/api/v1/conversations/ask":
                     question = body["question"]
                     conversation_id = body.get("conversation_id")
                     if conversation_id in service.follow_up_plan:
@@ -304,17 +305,15 @@ class FakeQuestionService:
                     if question in service.stream_error_questions:
                         events.append(("error", {"message": "fake stream error"}))
                     self._sse(events)
-                elif self.path == "/api/v1/queries/plan":
+                elif path == "/api/v1/queries/plan":
                     if body["sql"] in service.fail_sqls:
                         self._json(422, {"detail": "参考 SQL 无法执行"})
                         return
                     query_id = f"query-{len(service.plans)}"
                     service.plans[query_id] = body["sql"]
                     self._json(200, {"id": query_id, "execution_limit": 10})
-                elif self.path.startswith("/api/v1/queries/") and self.path.endswith(
-                    "/execute"
-                ):
-                    query_id = self.path.split("/")[4]
+                elif path.startswith("/api/v1/queries/") and path.endswith("/execute"):
+                    query_id = path.split("/")[4]
                     sql = service.plans[query_id]
                     service.executed.append(sql)
                     rows = [[1]] if sql == GOOD else [[1], [2]]
