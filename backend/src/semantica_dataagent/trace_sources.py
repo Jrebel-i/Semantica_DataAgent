@@ -469,6 +469,12 @@ class LangfuseTraceSource:
                         continue
                     if not _matches_project(raw_trace, query.project_id):
                         continue
+                    metadata = raw_trace.get("metadata")
+                    if (
+                        isinstance(metadata, Mapping)
+                        and metadata.get("source") == "eval"
+                    ):
+                        continue
                     trace_ts = _parse_timestamp(
                         raw_trace.get("timestamp")
                         or raw_trace.get("createdAt")

@@ -322,6 +322,7 @@ def install_contract(server):
             current_conversation_id,
             current_project_id,
             current_requester,
+            current_suppress_trajectory,
             current_turn_id,
         )
         from .telemetry import UNKNOWN_TOOL_NAME, submit, trace_id
@@ -332,6 +333,8 @@ def install_contract(server):
         trusted_name = name if name in tools else UNKNOWN_TOOL_NAME
 
         def _record_telemetry() -> None:
+            if current_suppress_trajectory():
+                return
             requester = current_requester()
             conversation_id = current_conversation_id()
             supplied_turn = current_turn_id()

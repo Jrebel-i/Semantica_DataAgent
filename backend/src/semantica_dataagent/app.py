@@ -290,6 +290,31 @@ def token_view(db, row: Token) -> TokenInfo:
     )
 
 
+class EvalTokenCreate(BaseModel):
+    project_id: str = Field(min_length=1, max_length=200)
+    ttl_seconds: int = Field(default=86400, ge=1, le=86400)
+
+
+class EvalTokenRevoke(BaseModel):
+    token: str = Field(min_length=1, max_length=256)
+
+
+@app.post("/api/v1/eval-tokens", status_code=201)
+def issue_eval_token(body: EvalTokenCreate, _: Annotated[str, Depends(admin)]):
+    from .mcp_context import register_eval_token
+
+    token = secrets.token_urlsafe(32)
+    register_eval_token(token, body.project_id, ttl_seconds=body.ttl_seconds)
+    return {"token": token}
+
+
+@app.post("/api/v1/eval-tokens/revoke", status_code=204)
+def revoke_eval_token(body: EvalTokenRevoke, _: Annotated[str, Depends(admin)]):
+    from .mcp_context import unregister_eval_token
+
+    unregister_eval_token(body.token)
+
+
 @app.post("/api/v1/tokens", response_model=TokenIssued, status_code=201)
 def create_token(body: TokenCreate, _: Annotated[str, Depends(admin)]):
     plaintext = secrets.token_urlsafe(32)

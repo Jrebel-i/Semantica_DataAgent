@@ -380,6 +380,8 @@ def collect_conversation_context(
         .order_by(Turn.sequence.asc(), Turn.id.asc())
         .all()
     )
+    if any(item.source == "eval" for item in all_turns):
+        raise EvalLeakageError("含评测轮次的对话不能生成历史工单提案")
     target = next((item for item in all_turns if item.id == turn_id), None)
     if target is None:
         return {"turn_count": 0, "turns": [], "clarifications": []}
@@ -659,8 +661,9 @@ def propose_ticket_from_feedback(
     user_caliber: str,
     user_notes: str,
     requester: Requester,
+    conversation_context: dict[str, Any],
 ) -> dict[str, Any]:
-    """Build multi-turn LLM-synthesized historical ticket proposal from a conversation turn."""
+    """Build a proposal from the already checked conversation snapshot."""
     existing = find_feedback_proposal_by_turn(project_id, conversation_id, turn_id)
     if existing is not None:
         trig = _parse_gate_trigger_evidence(existing.gate_report)
@@ -681,8 +684,7 @@ def propose_ticket_from_feedback(
             "该问答与评测题集（eval/questions.yaml）高度重合，为防止评测基准泄漏，禁止沉淀进历史工单库"
         )
 
-    with sessions()() as db:
-        conv_ctx = collect_conversation_context(db, conversation_id, turn_id)
+    conv_ctx = conversation_context
 
     synthesized = synthesize_historical_ticket(
         project_id,

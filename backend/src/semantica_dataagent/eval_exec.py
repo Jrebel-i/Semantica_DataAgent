@@ -4,6 +4,7 @@ import json
 import os
 import time
 from collections import Counter
+from contextlib import contextmanager
 from pathlib import Path
 from urllib.parse import quote, urlsplit
 
@@ -1100,6 +1101,22 @@ def run_report(args):
     return 0
 
 
+@contextmanager
+def _evaluation_session(client, project_id):
+    response = client.post(
+        "/api/v1/eval-tokens", json={"project_id": project_id or "default"}
+    )
+    response.raise_for_status()
+    token = response.json()["token"]
+    try:
+        client.headers["X-Dataagent-Eval-Token"] = token
+        yield
+    finally:
+        client.headers.pop("X-Dataagent-Eval-Token", None)
+        response = client.post("/api/v1/eval-tokens/revoke", json={"token": token})
+        response.raise_for_status()
+
+
 def run_cli(args):
     token = os.environ.get(args.token)
     if not token:
@@ -1145,11 +1162,14 @@ def run_cli(args):
     if args.max_queries < 0 or needed > args.max_queries:
         raise SystemExit("题目可能超过 --max-queries 上限")
     entries = []
-    with httpx.Client(
-        base_url=args.base_url,
-        headers={"Authorization": f"Bearer {token}"},
-        timeout=600,
-    ) as client:
+    with (
+        httpx.Client(
+            base_url=args.base_url,
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=600,
+        ) as client,
+        _evaluation_session(client, getattr(args, "project", None)),
+    ):
         for question in selected:
             collect_only = not question.answer_confirmed
             reference = (

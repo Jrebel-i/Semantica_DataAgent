@@ -121,6 +121,12 @@ class FakeQuestionService:
 
             def do_POST(self):
                 body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+                if self.path == "/api/v1/eval-tokens":
+                    self._json(201, {"token": "i347-test-token"})
+                    return
+                if self.path == "/api/v1/eval-tokens/revoke":
+                    self._json(200, {})
+                    return
                 service.asks.append((self.path, body))
                 if self.path == "/api/v1/conversations/ask":
                     question = body["question"]

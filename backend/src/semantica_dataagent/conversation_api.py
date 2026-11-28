@@ -762,6 +762,10 @@ async def _start_turn(
                 raise HTTPException(exc.status_code, exc.message) from None
         scope = resolve_project_scope(body.project, requester)
     project_id = scope.project_id
+    from .mcp_context import resolve_eval_binding
+
+    eval_binding = resolve_eval_binding(request.headers.get("x-dataagent-eval-token"))
+    source = "eval" if eval_binding and eval_binding[0] == project_id else "online"
     project_type = getattr(scope, "project_type", "warehouse") or "warehouse"
 
     if body.skill_name is not None and not bool(
@@ -863,6 +867,7 @@ async def _start_turn(
                 sequence=sequence,
                 question=body.question.strip(),
                 skill_name=skill_snapshot.name if skill_snapshot is not None else None,
+                source=source,
                 status="running",
                 answer="",
                 sql="[]",
@@ -908,6 +913,11 @@ async def _start_turn(
             mounted_skills=mounted_skills,
             skill_secrets=skill_secrets,
         )
+        if source == "eval":
+            from .mcp_context import register_eval_token, unregister_eval_token
+
+            register_eval_token(run_request.mcp_token, project_id)
+            secret_stack.callback(unregister_eval_token, run_request.mcp_token)
         return StreamingResponse(
             _stream(
                 run_request,
@@ -1015,6 +1025,7 @@ async def confirm_query(
         model = turn.model or conversation.model
         effort = turn.effort
         conversation_project_id = conversation.project_id
+        turn_source = turn.source
         project_row = db.get(Project, conversation_project_id)
         conversation_project_type = (
             project_row.type if project_row is not None else "warehouse"
@@ -1071,6 +1082,13 @@ async def confirm_query(
         project_type=conversation_project_type,
     )
 
+    cleanup_stack = contextlib.ExitStack()
+    if turn_source == "eval":
+        from .mcp_context import register_eval_token, unregister_eval_token
+
+        register_eval_token(run_request.mcp_token, conversation_project_id)
+        cleanup_stack.callback(unregister_eval_token, run_request.mcp_token)
+
     async def resumed():
         yield _sse(
             "query_result",
@@ -1085,6 +1103,7 @@ async def confirm_query(
             seq + 1,
             False,
             project_id=conversation_project_id,
+            cleanup_stack=cleanup_stack,
         ):
             yield chunk
 
@@ -1116,6 +1135,7 @@ async def _stream(
             project_id = conv.project_id if conv is not None else DEFAULT_PROJECT_ID
     observation_id = trace_id(conversation_id, turn_id)
     secrets = (
+        request.headers.get("x-dataagent-eval-token", ""),
         run_request.mcp_token,
         run_request.provider.api_key or "",
         *(v for v in (run_request.skill_secrets or {}).values() if v),
@@ -1125,11 +1145,18 @@ async def _stream(
         if include_conversation
         else []
     )
+    with sessions()() as db:
+        trace_turn = db.get(Turn, turn_id)
+        trace_source = (
+            trace_turn.source
+            if trace_turn and trace_turn.source == "eval"
+            else "online"
+        )
     trace_metadata = {
         "agent": runner.agent_id,
         "provider": run_request.provider.name,
         "model": run_request.model,
-        "source": "online",
+        "source": trace_source,
         "project_id": project_id,
         "traceId": observation_id,
     }
