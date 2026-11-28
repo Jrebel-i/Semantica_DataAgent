@@ -17,7 +17,7 @@ from typing import Any, Literal
 import httpx
 from cryptography.fernet import InvalidToken
 
-from . import knowledge, project_context, provider_probe
+from . import knowledge, project_context, provider_probe, semantic_overrides
 from .agent_profile_api import _catalog_set
 from .agent_types import ProviderConfig
 from .assistant_catalog import is_catalog_governed, resolve_system_default_llm
@@ -765,39 +765,181 @@ def _extract_added_lines(old_text: str, new_text: str) -> str:
     return "\n".join(added)
 
 
+def _dup_catalog(value: Any) -> str:
+    return str(value or "").strip().casefold()
+
+
+def _current_schema_index(
+    project_id: str,
+) -> tuple[semantic_overrides._SchemaIndex | None, str | None]:
+    return semantic_overrides._current_schema_index(project_id)
+
+
+def _resolve_dup_table(
+    schema_index: semantic_overrides._SchemaIndex | None,
+    catalog: Any,
+    database: Any,
+    name: Any,
+) -> tuple[str, tuple[str, str, str] | None]:
+    """Resolve one table ref through B2's candidate set.
+
+    Returns ``("resolved", key)`` for a unique physical table, ``("ambiguous",
+    None)`` when a catalog-less ref has several same-name candidates, and
+    ``("unavailable", None)`` when the index is missing or has no match.
+    """
+    if schema_index is None:
+        return "unavailable", None
+    db = str(database or "").strip()
+    table = str(name or "").strip()
+    if not db or not table:
+        return "unavailable", None
+    matches = schema_index.match_table(str(catalog or "").strip() or None, db, table)
+    if len(matches) == 1:
+        return "resolved", matches[0]
+    if len(matches) > 1:
+        return "ambiguous", None
+    return "unavailable", None
+
+
+def _table_identity(
+    schema_index: semantic_overrides._SchemaIndex | None,
+    catalog: Any,
+    database: Any,
+    name: Any,
+) -> tuple[str, tuple[Any, ...]] | None:
+    status, key = _resolve_dup_table(schema_index, catalog, database, name)
+    if status == "resolved":
+        return "resolved", key
+    if status == "ambiguous":
+        return None
+    db = str(database or "").strip().casefold()
+    table = str(name or "").strip().casefold()
+    if not db or not table:
+        return None
+    return "literal", (_dup_catalog(catalog), db, table)
+
+
+def _table_entry_identity(
+    schema_index: semantic_overrides._SchemaIndex | None,
+    key: Any,
+    entry: Mapping[str, Any],
+) -> tuple[str, tuple[Any, ...]] | None:
+    database = str(entry.get("database") or "").strip()
+    name = str(entry.get("name") or "").strip()
+    catalog = str(entry.get("catalog") or "").strip()
+    parts = [part.strip() for part in str(key or "").split(".") if part.strip()]
+    if not catalog and len(parts) == 3 and parts[-2:] == [database, name]:
+        catalog = parts[0]
+    return _table_identity(schema_index, catalog, database, name)
+
+
+def _field_entry_identity(
+    schema_index: semantic_overrides._SchemaIndex | None,
+    key: Any,
+    entry: Mapping[str, Any],
+) -> tuple[Any, ...] | None:
+    database = str(entry.get("database") or "").strip()
+    table = str(entry.get("table") or "").strip()
+    name = str(entry.get("name") or "").strip()
+    catalog = str(entry.get("catalog") or "").strip()
+    parts = [part.strip() for part in str(key or "").split(".") if part.strip()]
+    if (
+        not catalog
+        and len(parts) == 4
+        and parts[-3:-1] == [database, table]
+        and parts[-1] == name
+    ):
+        catalog = parts[0]
+    table_identity = _table_identity(schema_index, catalog, database, table)
+    if table_identity is None or not name:
+        return None
+    return (table_identity, name.casefold())
+
+
+def _entry_identity(
+    section: str,
+    schema_index: semantic_overrides._SchemaIndex | None,
+    key: Any,
+    entry: Mapping[str, Any],
+) -> tuple[Any, ...] | None:
+    if section == "tables":
+        return _table_entry_identity(schema_index, key, entry)
+    return _field_entry_identity(schema_index, key, entry)
+
+
 def _norm_rel_pair(
     entry: Mapping[str, Any],
-) -> tuple[str, tuple[str, ...], str, tuple[str, ...]] | None:
-    fdb = str(entry.get("from_database") or "").strip().lower()
-    ftbl = str(entry.get("from_table") or "").strip().lower()
-    tdb = str(entry.get("to_database") or "").strip().lower()
-    ttbl = str(entry.get("to_table") or "").strip().lower()
+    schema_index: semantic_overrides._SchemaIndex | None = None,
+) -> (
+    tuple[
+        tuple[Any, ...],
+        tuple[tuple[str, str], ...],
+        tuple[Any, ...],
+    ]
+    | None
+):
+    fcat = str(entry.get("from_catalog") or "").strip()
+    fdb = str(entry.get("from_database") or "").strip()
+    ftbl = str(entry.get("from_table") or "").strip()
+    tcat = str(entry.get("to_catalog") or "").strip()
+    tdb = str(entry.get("to_database") or "").strip()
+    ttbl = str(entry.get("to_table") or "").strip()
     fcols = tuple(
-        str(c).strip().lower()
+        str(c).strip().casefold()
         for c in (entry.get("from_columns") or ())
         if str(c).strip()
     )
     tcols = tuple(
-        str(c).strip().lower()
+        str(c).strip().casefold()
         for c in (entry.get("to_columns") or ())
         if str(c).strip()
     )
     if not (fdb and ftbl and tdb and ttbl and fcols and tcols):
         return None
-    return (f"{fdb}.{ftbl}", fcols, f"{tdb}.{ttbl}", tcols)
+    if len(fcols) != len(tcols):
+        return None
+    from_status, from_key = _resolve_dup_table(schema_index, fcat, fdb, ftbl)
+    to_status, to_key = _resolve_dup_table(schema_index, tcat, tdb, ttbl)
+    if from_status == "ambiguous" or to_status == "ambiguous":
+        return None
+    if from_status == "resolved" and to_status == "resolved":
+        from_id: tuple[Any, ...] = ("resolved", from_key)
+        to_id: tuple[Any, ...] = ("resolved", to_key)
+    else:
+        from_id = ("literal", (_dup_catalog(fcat), fdb.casefold(), ftbl.casefold()))
+        to_id = ("literal", (_dup_catalog(tcat), tdb.casefold(), ttbl.casefold()))
+    # Column position is arbitrary, but from/to positions pair up: reorder whole
+    # pairs instead of sorting each side independently.
+    pairs = tuple(sorted(zip(fcols, tcols, strict=True)))
+    reversed_pairs = tuple(sorted((to_col, from_col) for from_col, to_col in pairs))
+    forward = (from_id, pairs, to_id)
+    reverse = (to_id, reversed_pairs, from_id)
+    return min(forward, reverse)
 
 
 def _override_matches_existing(
-    existing_doc: Mapping[str, Any], candidate: Mapping[str, Any]
+    existing_doc: Mapping[str, Any],
+    candidate: Mapping[str, Any],
+    schema_index: semantic_overrides._SchemaIndex | None = None,
 ) -> bool:
     for section in ("tables", "fields"):
         cand_sec = candidate.get(section) or {}
         exist_sec = existing_doc.get(section) or {}
         for key, entry in cand_sec.items():
-            if key not in exist_sec:
+            if not isinstance(entry, Mapping):
                 return False
-            existing_entry = exist_sec[key]
-            if not isinstance(existing_entry, Mapping):
+            identity = _entry_identity(section, schema_index, key, entry)
+            existing_entry = None
+            for existing_key, candidate_entry in exist_sec.items():
+                if not isinstance(candidate_entry, Mapping):
+                    continue
+                existing_identity = _entry_identity(
+                    section, schema_index, existing_key, candidate_entry
+                )
+                if identity is not None and identity == existing_identity:
+                    existing_entry = candidate_entry
+                    break
+            if existing_entry is None:
                 return False
             for attr in ("comment", "instructions"):
                 val = str(entry.get(attr) or "").strip()
@@ -817,17 +959,18 @@ def _override_matches_existing(
             }
             if cand_syn and not cand_syn.issubset(exist_syn):
                 return False
-    for rkey, rentry in (candidate.get("relationships") or {}).items():
-        pair = _norm_rel_pair(rentry)
-        existing_pairs = {
-            _norm_rel_pair(v)
-            for v in (existing_doc.get("relationships") or {}).values()
-            if isinstance(v, Mapping)
-        }
-        if (
-            rkey not in (existing_doc.get("relationships") or {})
-            and pair not in existing_pairs
-        ):
+    existing_pairs = {
+        pair
+        for v in (existing_doc.get("relationships") or {}).values()
+        if isinstance(v, Mapping)
+        for pair in (_norm_rel_pair(v, schema_index),)
+        if pair is not None
+    }
+    for rentry in (candidate.get("relationships") or {}).values():
+        if not isinstance(rentry, Mapping):
+            return False
+        pair = _norm_rel_pair(rentry, schema_index)
+        if pair is None or pair not in existing_pairs:
             return False
     for mkey, mentry in (candidate.get("metrics") or {}).items():
         exist_metrics = existing_doc.get("metrics") or {}
@@ -885,19 +1028,23 @@ def _override_matches_existing(
     return True
 
 
-def _overrides_overlap(a: Mapping[str, Any], b: Mapping[str, Any]) -> bool:
+def _overrides_overlap(
+    a: Mapping[str, Any],
+    b: Mapping[str, Any],
+    schema_index: semantic_overrides._SchemaIndex | None = None,
+) -> bool:
     if json.dumps(a, sort_keys=True, ensure_ascii=False) == json.dumps(
         b, sort_keys=True, ensure_ascii=False
     ):
         return True
     for r_a in (a.get("relationships") or {}).values():
         if isinstance(r_a, Mapping):
-            pair_a = _norm_rel_pair(r_a)
+            pair_a = _norm_rel_pair(r_a, schema_index)
+            if pair_a is None:
+                continue
             for r_b in (b.get("relationships") or {}).values():
-                if (
-                    isinstance(r_b, Mapping)
-                    and pair_a
-                    and pair_a == _norm_rel_pair(r_b)
+                if isinstance(r_b, Mapping) and pair_a == _norm_rel_pair(
+                    r_b, schema_index
                 ):
                     return True
     for mkey_a, m_a in (a.get("metrics") or {}).items():
@@ -913,9 +1060,17 @@ def _overrides_overlap(a: Mapping[str, Any], b: Mapping[str, Any]) -> bool:
     for section in ("tables", "fields"):
         sec_a = a.get(section) or {}
         sec_b = b.get(section) or {}
-        for key in sec_a:
-            if key in sec_b:
-                ea, eb = sec_a[key], sec_b[key]
+        for key_a, ea in sec_a.items():
+            if not isinstance(ea, Mapping):
+                continue
+            identity_a = _entry_identity(section, schema_index, key_a, ea)
+            if identity_a is None:
+                continue
+            for key_b, eb in sec_b.items():
+                if not isinstance(eb, Mapping):
+                    continue
+                if _entry_identity(section, schema_index, key_b, eb) != identity_a:
+                    continue
                 text_a = _normalize_text_for_dup(
                     f"{ea.get('comment', '')} {ea.get('instructions', '')} {' '.join(ea.get('synonyms') or ())}"
                 )
@@ -942,6 +1097,7 @@ def check_duplicate_candidate(
     existing_docs: Sequence[Mapping[str, Any]] = (),
 ) -> DuplicateCheckResult:
     """Detect whether a candidate proposal duplicates existing knowledge or a pending proposal."""
+    schema_index: semantic_overrides._SchemaIndex | None = None
     if target_kind == "override" and structured_patch is not None:
         if existing_overrides is not None:
             base_doc = dict(existing_overrides)
@@ -966,13 +1122,18 @@ def check_duplicate_candidate(
                     "relationships": {},
                     "metrics": {},
                 }
+        if any(
+            structured_patch.get(section)
+            for section in ("tables", "fields", "relationships")
+        ):
+            schema_index, _ = _current_schema_index(project_id)
         try:
             current_yaml = dump_overrides_yaml(base_doc)
             merged_yaml = dump_overrides_yaml(
                 merge_overrides_doc(base_doc, structured_patch)
             )
             if current_yaml == merged_yaml or _override_matches_existing(
-                base_doc, structured_patch
+                base_doc, structured_patch, schema_index
             ):
                 return DuplicateCheckResult(
                     True,
@@ -1055,7 +1216,7 @@ def check_duplicate_candidate(
                 except ValueError:
                     other_sp = None
                 if isinstance(other_sp, Mapping) and _overrides_overlap(
-                    structured_patch, other_sp
+                    structured_patch, other_sp, schema_index
                 ):
                     return DuplicateCheckResult(
                         True,
@@ -1428,7 +1589,9 @@ def _scrub_json_value(value: Any) -> Any:
 
 
 def _check_intra_batch_duplicate(
-    candidate: SynthesizedProposal, accepted: Sequence[SynthesizedProposal]
+    candidate: SynthesizedProposal,
+    accepted: Sequence[SynthesizedProposal],
+    schema_index: semantic_overrides._SchemaIndex | None = None,
 ) -> DuplicateCheckResult:
     norm_patch = _normalize_text_for_dup(candidate.patch)
     norm_reason = _normalize_text_for_dup(candidate.reason)
@@ -1439,7 +1602,9 @@ def _check_intra_batch_duplicate(
             and prev.target_kind == "override"
             and candidate.structured_patch is not None
             and prev.structured_patch is not None
-            and _overrides_overlap(candidate.structured_patch, prev.structured_patch)
+            and _overrides_overlap(
+                candidate.structured_patch, prev.structured_patch, schema_index
+            )
         ):
             return DuplicateCheckResult(
                 True,
@@ -1622,6 +1787,8 @@ def synthesize_proposals(
     results: list[SynthesizedProposal] = []
     valid_count = 0
     batch_errors: list[Exception] = []
+    batch_schema_index: semantic_overrides._SchemaIndex | None = None
+    batch_schema_loaded = False
     for item in raw_items:
         try:
             candidate = _build_single_candidate(
@@ -1651,7 +1818,16 @@ def synthesize_proposals(
             continue
 
         if not candidate.is_duplicate and results:
-            batch_dup = _check_intra_batch_duplicate(candidate, results)
+            if (
+                candidate.target_kind == "override"
+                and candidate.structured_patch is not None
+                and not batch_schema_loaded
+            ):
+                batch_schema_index, _ = _current_schema_index(project_id)
+                batch_schema_loaded = True
+            batch_dup = _check_intra_batch_duplicate(
+                candidate, results, batch_schema_index
+            )
             if batch_dup.is_duplicate:
                 updated_gate = dict(candidate.gate_report)
                 updated_checks = [
