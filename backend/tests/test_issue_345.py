@@ -23,7 +23,12 @@ def _index(
                 "catalog": catalog,
                 "database": database,
                 "name": name,
-                "fields": [{"name": "id"}, {"name": "customer_id"}],
+                "fields": [
+                    {"name": "id"},
+                    {"name": "customer_id"},
+                    {"name": "region"},
+                    {"name": "region_id"},
+                ],
             }
             for catalog in catalogs
             for database, name in tables
@@ -116,6 +121,56 @@ def test_issue_345_relationship_column_order_is_normalized():
             {"relationships": {"b": right}},
             index,
         )
+        is True
+    )
+
+
+def test_issue_345_crossed_column_pairs_are_not_duplicates():
+    index = _index(("hive",))
+    left = _rel(
+        from_columns=["customer_id", "region_id"],
+        to_columns=["id", "region"],
+    )
+    crossed = _rel(
+        from_columns=["customer_id", "region_id"],
+        to_columns=["region", "id"],
+    )
+    left_doc = {"version": 1, "relationships": {"orders_customers": left}}
+    crossed_doc = {"version": 1, "relationships": {"orders_customers": crossed}}
+
+    assert knowledge_synthesizer._norm_rel_pair(
+        left, index
+    ) != knowledge_synthesizer._norm_rel_pair(crossed, index)
+    assert (
+        knowledge_synthesizer._overrides_overlap(left_doc, crossed_doc, index) is False
+    )
+    assert (
+        knowledge_synthesizer._override_matches_existing(left_doc, crossed_doc, index)
+        is False
+    )
+
+
+def test_issue_345_paired_column_reorder_is_duplicate():
+    index = _index(("hive",))
+    left = _rel(
+        from_columns=["customer_id", "region_id"],
+        to_columns=["id", "region"],
+    )
+    reordered = _rel(
+        from_columns=["region_id", "customer_id"],
+        to_columns=["region", "id"],
+    )
+    left_doc = {"version": 1, "relationships": {"orders_customers": left}}
+    reordered_doc = {"version": 1, "relationships": {"orders_customers": reordered}}
+
+    assert knowledge_synthesizer._norm_rel_pair(
+        left, index
+    ) == knowledge_synthesizer._norm_rel_pair(reordered, index)
+    assert (
+        knowledge_synthesizer._overrides_overlap(left_doc, reordered_doc, index) is True
+    )
+    assert (
+        knowledge_synthesizer._override_matches_existing(left_doc, reordered_doc, index)
         is True
     )
 
@@ -358,9 +413,11 @@ def _empty_sessions() -> _EmptySession:
     return _EmptySession()
 
 
-def _proposal(structured_patch: dict[str, Any]) -> Any:
+def _proposal(
+    structured_patch: dict[str, Any], *, target: str = "table:shop.orders"
+) -> Any:
     return knowledge_synthesizer.SynthesizedProposal(
-        target="table:shop.orders",
+        target=target,
         target_kind="override",
         resolved_path="overrides/semantic_overrides.yaml",
         is_new_file=False,
@@ -405,6 +462,97 @@ def test_issue_345_intra_batch_uses_schema_candidates():
         candidate, [previous], index
     )
     assert result.is_duplicate is True
+
+
+def test_issue_345_synthesize_proposals_batch_loads_schema_once(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    index = _index(("hive",))
+    load_count = 0
+
+    def fake_current_schema_index(_project_id: str) -> tuple[Any, None]:
+        nonlocal load_count
+        load_count += 1
+        return index, None
+
+    proposals = [
+        _proposal(
+            {
+                "version": 1,
+                "tables": {
+                    "hive.shop.orders": {
+                        "catalog": "hive",
+                        "database": "shop",
+                        "name": "orders",
+                        "comment": "订单主表",
+                    }
+                },
+            },
+            target="table:hive.shop.orders",
+        ),
+        _proposal(
+            {
+                "version": 1,
+                "tables": {
+                    "shop.orders": {
+                        "database": "shop",
+                        "name": "orders",
+                        "comment": "订单主表",
+                    }
+                },
+            },
+            target="table:shop.orders",
+        ),
+    ]
+    built = iter(proposals)
+    context = {
+        "values": {},
+        "generation": 1,
+        "all_documents": [],
+        "source_dir": None,
+        "project_type": "semantic",
+        "markdown_root": "/tmp",
+        "categories": [],
+        "tables": [],
+        "documents": [],
+        "existing_overrides": {
+            "version": 1,
+            "tables": {},
+            "fields": {},
+            "relationships": {},
+            "metrics": {},
+        },
+    }
+    monkeypatch.setattr(
+        knowledge_synthesizer, "resolve_llm_provider", lambda *args, **kwargs: None
+    )
+    monkeypatch.setattr(
+        knowledge_synthesizer,
+        "collect_project_context",
+        lambda *args, **kwargs: context,
+    )
+    monkeypatch.setattr(
+        knowledge_synthesizer,
+        "_build_single_candidate",
+        lambda *args, **kwargs: next(built),
+    )
+    monkeypatch.setattr(
+        knowledge_synthesizer, "_current_schema_index", fake_current_schema_index
+    )
+
+    results = knowledge_synthesizer.synthesize_proposals(
+        project_id="proj345",
+        source_type="discovery",
+        description="批内同表两种 key",
+        llm_fn=lambda _ctx: {"proposals": [{"a": 1}, {"a": 2}]},
+        allow_multi=True,
+    )
+
+    assert len(results) == 2
+    assert results[0].is_duplicate is False
+    assert results[1].is_duplicate is True
+    assert results[1].duplicate_of == "batch_proposal:table:hive.shop.orders"
+    assert load_count == 1
 
 
 def test_issue_345_duplicate_check_uses_schema_candidates(
