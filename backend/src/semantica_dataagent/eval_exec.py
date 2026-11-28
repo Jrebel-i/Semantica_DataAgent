@@ -293,7 +293,7 @@ def _ask(client, payload, project=None):
     return result
 
 
-def _execute(client, sql):
+def _execute(client, sql, project=None):
     started = time.monotonic()
 
     def failure(reason, detail=None):
@@ -305,7 +305,11 @@ def _execute(client, sql):
         }
 
     try:
-        plan = client.post("/api/v1/queries/plan", json={"sql": sql})
+        plan = client.post(
+            "/api/v1/queries/plan",
+            json={"sql": sql},
+            params={"project": project} if project is not None else None,
+        )
         if not plan.is_success:
             return failure(_failure(plan.status_code), _detail(plan))
         data = plan.json()
@@ -1150,7 +1154,7 @@ def run_cli(args):
         candidates if split == "all" else [q for q in candidates if q.split == split]
     )
     if args.only:
-        only = set(args.only.split(","))
+        only = set(only_ids)
         available = {question.id for question in selected}
         missing = only - available
         if missing:
@@ -1175,7 +1179,11 @@ def run_cli(args):
             reference = (
                 {"status": "skipped"}
                 if skip_reference or collect_only
-                else _execute(client, question.reference_sql)
+                else _execute(
+                    client,
+                    question.reference_sql,
+                    getattr(args, "project", None),
+                )
             )
             reference_truncated = bool(
                 reference.get("result", {}).get("truncated", False)
@@ -1185,7 +1193,7 @@ def run_cli(args):
                 answer = _answer(client, question, args, collect_only=collect_only)
                 sql = answer["sql"]
                 agent = (
-                    _execute(client, sql)
+                    _execute(client, sql, getattr(args, "project", None))
                     if sql
                     else {"status": "no_sql", "detail": None}
                 )
