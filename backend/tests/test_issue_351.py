@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 
+import httpx
 import pytest
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
@@ -119,6 +120,23 @@ def _plan_call(client):
     return next(call for call in client.calls if call[0] == "/api/v1/queries/plan")
 
 
+def _execute_call(client):
+    return next(
+        call
+        for call in client.calls
+        if call[0].startswith("/api/v1/queries/") and call[0].endswith("/execute")
+    )
+
+
+def _request_url(path, params):
+    return httpx.URL(path, params=params)
+
+
+def _plan_url(client):
+    path, kwargs, _ = _plan_call(client)
+    return _request_url(path, kwargs.get("params"))
+
+
 def _stored_project(plan_id):
     with sessions()() as db:
         row = db.get(QueryExecution, plan_id)
@@ -162,12 +180,16 @@ def test_execute_uses_project_for_plan_and_saved_plan_for_execution(
 
     _, plan_kwargs, plan_response = _plan_call(recording)
     assert plan_kwargs["params"] == {"project": project_a}
+    assert _plan_url(recording).params.get("project") == project_a
     plan_id = plan_response.json()["id"]
     assert _stored_project(plan_id) == project_a
     assert project_a in inspected_projects
     assert all(
         call["endpoint"] == "http://project-a.executor.test" for call in executor_calls
     )
+    _, execute_kwargs, _ = _execute_call(recording)
+    assert execute_kwargs["json"] == {}
+    assert "project" not in execute_kwargs["json"]
 
     executor_calls.clear()
     recording.calls.clear()
@@ -178,6 +200,7 @@ def test_execute_uses_project_for_plan_and_saved_plan_for_execution(
     assert result["status"] == "succeeded"
     _, plan_kwargs, plan_response = _plan_call(recording)
     assert plan_kwargs["params"] == {"project": project_b}
+    assert _plan_url(recording).params.get("project") == project_b
     assert _stored_project(plan_response.json()["id"]) == project_b
     assert project_b in inspected_projects
     assert all(
@@ -186,3 +209,49 @@ def test_execute_uses_project_for_plan_and_saved_plan_for_execution(
     assert not any(
         call["endpoint"] == "http://project-a.executor.test" for call in executor_calls
     )
+    _, execute_kwargs, _ = _execute_call(recording)
+    assert execute_kwargs["json"] == {}
+    assert "project" not in execute_kwargs["json"]
+
+
+def test_execute_without_project_omits_plan_project_and_execute_body(
+    project_env, monkeypatch
+):
+    client, admin, executor_calls = project_env
+    _enable_stub_executor(client, admin, "default", "http://default.executor.test")
+    monkeypatch.setattr(
+        knowledge,
+        "describe",
+        lambda **kwargs: [
+            {
+                "database": "shop",
+                "name": "orders",
+                "fields": [{"name": "id", "partition": False}],
+            }
+        ],
+    )
+    response = client.put(
+        "/api/v1/me/dtb-token",
+        headers=_headers(admin),
+        json={"token": "personal-token"},
+    )
+    assert response.status_code == 200, response.text
+    client.headers["Authorization"] = f"Bearer {admin}"
+
+    recording = _RecordingClient(client)
+    result = _execute(recording, "SELECT id FROM shop.orders")
+
+    _, plan_kwargs, plan_response = _plan_call(recording)
+    assert plan_kwargs.get("params") in (None, {})
+    plan_url = _plan_url(recording)
+    assert plan_url.query == b""
+    assert "project" not in plan_url.params
+    assert result["status"] == "succeeded"
+    assert _stored_project(plan_response.json()["id"]) == "default"
+    assert all(
+        call["endpoint"] == "http://default.executor.test" for call in executor_calls
+    )
+
+    _, execute_kwargs, _ = _execute_call(recording)
+    assert execute_kwargs["json"] == {}
+    assert "project" not in execute_kwargs["json"]
