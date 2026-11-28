@@ -243,9 +243,17 @@ def test_sql_tools_follow_the_uniform_registration_contract(monkeypatch):
 
 def test_validate_sql_returns_partition_issues_and_propose_explains_invalid_sql(
     monkeypatch,
+    tmp_path,
 ):
+    from cryptography.fernet import Fernet
+
     from semantica_dataagent import sql_validation
     from semantica_dataagent.app import create_mcp
+    from semantica_dataagent.cli import initialize
+
+    monkeypatch.setenv("DATAAGENT_DB_PATH", str(tmp_path / "app.db"))
+    monkeypatch.setenv("DATAAGENT_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    initialize()
 
     snapshot = sql_validation.Snapshot(
         [

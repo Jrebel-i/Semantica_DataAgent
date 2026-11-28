@@ -591,6 +591,11 @@ def test_validate_records_and_table_stage_distinguish_tables_by_catalog():
             self._settings = {}
             self.rows = []
             self.vectors = []
+            self.rebuilt_table_keys = set()
+            self.rebuilt_field_tables = set()
+            self.rebuilt_dim_tables = set()
+            self.rebuilt_doc_refs = set()
+            self.rebuilt_task_names = set()
 
         def execute(self, query, parameters):
             if "UNWIND $rows AS row" in query:
